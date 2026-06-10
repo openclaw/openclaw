@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
-import { registerContextEngineForOwner } from "./registry.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -16,7 +16,7 @@ import type {
  *
  * - ingest: no-op (SessionManager handles message persistence)
  * - assemble: pass-through (existing sanitize/validate/limit pipeline in attempt.ts handles this)
- * - compact: delegates to compactEmbeddedPiSessionDirect
+ * - compact: delegates to compactEmbeddedAgentSessionDirect
  */
 export class LegacyContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
@@ -40,6 +40,8 @@ export class LegacyContextEngine implements ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    availableTools?: Set<string>;
+    citationsMode?: MemoryCitationsMode;
     model?: string;
   }): Promise<AssembleResult> {
     // Pass-through: the existing sanitize -> validate -> limit -> repair pipeline
@@ -82,10 +84,4 @@ export class LegacyContextEngine implements ContextEngine {
   async dispose(): Promise<void> {
     // Nothing to clean up for legacy engine
   }
-}
-
-export function registerLegacyContextEngine(): void {
-  registerContextEngineForOwner("legacy", () => new LegacyContextEngine(), "core", {
-    allowSameOwnerRefresh: true,
-  });
 }

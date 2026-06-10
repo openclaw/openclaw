@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
@@ -31,11 +32,6 @@ type AgentsSetIdentityOptions = {
 };
 
 const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
-
-const coerceTrimmed = (value?: string) => {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-};
 
 async function loadIdentityFromFile(filePath: string): Promise<AgentIdentity | null> {
   try {
@@ -76,15 +72,15 @@ export async function agentsSetIdentityCommand(
   const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
   const baseHash = configSnapshot.hash;
 
-  const agentRaw = coerceTrimmed(opts.agent);
-  const nameRaw = coerceTrimmed(opts.name);
-  const emojiRaw = coerceTrimmed(opts.emoji);
-  const themeRaw = coerceTrimmed(opts.theme);
-  const avatarRaw = coerceTrimmed(opts.avatar);
+  const agentRaw = normalizeOptionalString(opts.agent);
+  const nameRaw = normalizeOptionalString(opts.name);
+  const emojiRaw = normalizeOptionalString(opts.emoji);
+  const themeRaw = normalizeOptionalString(opts.theme);
+  const avatarRaw = normalizeOptionalString(opts.avatar);
   const hasExplicitIdentity = Boolean(nameRaw || emojiRaw || themeRaw || avatarRaw);
 
-  const identityFileRaw = coerceTrimmed(opts.identityFile);
-  const workspaceRaw = coerceTrimmed(opts.workspace);
+  const identityFileRaw = normalizeOptionalString(opts.identityFile);
+  const workspaceRaw = normalizeOptionalString(opts.workspace);
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
 
   let identityFilePath: string | undefined;

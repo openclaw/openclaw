@@ -1,6 +1,7 @@
-import { loadConfig } from "../../config/config.js";
-import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-runtime.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { defaultRuntime } from "../../runtime.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
@@ -27,8 +28,11 @@ function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: Pruneab
   if (idleHours === 0 && maxAgeDays === 0) {
     return false;
   }
-  const idleMs = now - entry.lastUsedAtMs;
-  const ageMs = now - entry.createdAtMs;
+  const nowMs = asDateTimestampMs(now) ?? 0;
+  const lastUsedAtMs = asDateTimestampMs(entry.lastUsedAtMs) ?? 0;
+  const createdAtMs = asDateTimestampMs(entry.createdAtMs) ?? 0;
+  const idleMs = nowMs - lastUsedAtMs;
+  const ageMs = nowMs - createdAtMs;
   return (
     (idleHours > 0 && idleMs > idleHours * 60 * 60 * 1000) ||
     (maxAgeDays > 0 && ageMs > maxAgeDays * 24 * 60 * 60 * 1000)
@@ -53,17 +57,24 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
     }
     try {
       await params.removeRuntime(entry);
-    } catch {
-      // ignore prune failures
-    } finally {
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : JSON.stringify(error);
+      defaultRuntime.error?.(
+        `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
+      );
     }
   }
 }
 
 async function pruneSandboxContainers(cfg: SandboxConfig) {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
     cfg,
     read: readRegistry,
@@ -79,7 +90,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
 }
 
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   await pruneSandboxRegistryEntries<
     SandboxBrowserRegistryEntry & {
       backendId?: string;

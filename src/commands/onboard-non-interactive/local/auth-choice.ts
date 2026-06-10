@@ -1,12 +1,15 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import {
   formatDeprecatedNonInteractiveAuthChoiceError,
   isDeprecatedAuthChoice,
+  resolveDeprecatedAuthChoiceReplacement,
 } from "../../auth-choice-legacy.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
@@ -15,7 +18,7 @@ import {
   CustomApiError,
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
-} from "../../onboard-custom.js";
+} from "../../onboard-custom-config.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
@@ -32,16 +35,18 @@ export async function applyNonInteractiveAuthChoice(params: {
   baseConfig: OpenClawConfig;
 }): Promise<OpenClawConfig | null> {
   const { opts, runtime, baseConfig } = params;
-  const authChoice = normalizeApiKeyTokenProviderAuthChoice({
+  let authChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: params.authChoice,
     tokenProvider: opts.tokenProvider,
     config: params.nextConfig,
     env: process.env,
   });
-  let nextConfig = params.nextConfig;
+  const nextConfig = params.nextConfig;
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
-    runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
+    runtime.error(
+      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
     runtime.exit(1);
     return null;
   }
@@ -76,18 +81,19 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...input,
       secretInputMode: requestedSecretInputMode,
     });
-  const toApiKeyCredential = (params: {
+  const toApiKeyCredential = (paramsLocal: {
     provider: string;
     resolved: ResolvedNonInteractiveApiKey;
     email?: string;
     metadata?: Record<string, string>;
   }): ApiKeyCredential | null => {
-    const storeSecretRef = requestedSecretInputMode === "ref" && params.resolved.source === "env"; // pragma: allowlist secret
+    const storeSecretRef =
+      requestedSecretInputMode === "ref" && paramsLocal.resolved.source === "env"; // pragma: allowlist secret
     if (storeSecretRef) {
-      if (!params.resolved.envVarName) {
+      if (!paramsLocal.resolved.envVarName) {
         runtime.error(
           [
-            `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
+            `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
             "Set the provider API key env var and retry, or use --secret-input-mode plaintext.",
           ].join("\n"),
         );
@@ -96,46 +102,44 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
       return {
         type: "api_key",
-        provider: params.provider,
+        provider: paramsLocal.provider,
         keyRef: {
           source: "env",
           provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
             preferFirstProviderForSource: true,
           }),
-          id: params.resolved.envVarName,
+          id: paramsLocal.resolved.envVarName,
         },
-        ...(params.email ? { email: params.email } : {}),
-        ...(params.metadata ? { metadata: params.metadata } : {}),
+        ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
+        ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
       };
     }
     return {
       type: "api_key",
-      provider: params.provider,
-      key: params.resolved.key,
-      ...(params.email ? { email: params.email } : {}),
-      ...(params.metadata ? { metadata: params.metadata } : {}),
+      provider: paramsLocal.provider,
+      key: paramsLocal.resolved.key,
+      ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
+      ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
   };
   if (isDeprecatedAuthChoice(authChoice, { config: nextConfig, env: process.env })) {
-    runtime.error(
-      formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
-        config: nextConfig,
-        env: process.env,
-      })!,
-    );
-    runtime.exit(1);
-    return null;
-  }
-
-  if (authChoice === "setup-token") {
-    runtime.error(
-      [
-        'Auth choice "setup-token" requires interactive mode.',
-        'Use "--auth-choice token" with --token and --token-provider anthropic.',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
+    const replacement = resolveDeprecatedAuthChoiceReplacement(authChoice, {
+      config: nextConfig,
+      env: process.env,
+    });
+    if (replacement) {
+      runtime.log(replacement.message);
+      authChoice = replacement.normalized;
+    } else {
+      runtime.error(
+        formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
+          config: nextConfig,
+          env: process.env,
+        })!,
+      );
+      runtime.exit(1);
+      return null;
+    }
   }
 
   const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
@@ -156,13 +160,24 @@ export async function applyNonInteractiveAuthChoice(params: {
     return pluginProviderChoice;
   }
 
+  if (authChoice === "setup-token" || authChoice === "token") {
+    runtime.error(
+      [
+        `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
+        'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
   const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
     config: nextConfig,
     env: process.env,
   });
   if (deprecatedChoice) {
     runtime.error(
-      `"${authChoice as string}" is no longer supported. Use --auth-choice ${deprecatedChoice.choiceId} instead.`,
+      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(deprecatedChoice.choiceId)} instead.`,
     );
     runtime.exit(1);
     return null;
@@ -176,6 +191,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
         providerId: opts.customProviderId,
+        supportsImageInput: opts.customImageInput,
       });
       const resolvedProviderId = resolveCustomProviderId({
         config: nextConfig,
@@ -212,6 +228,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: customAuth.compatibility,
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
+        supportsImageInput: customAuth.supportsImageInput,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(
@@ -233,7 +250,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         runtime.exit(1);
         return null;
       }
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       runtime.error(`Invalid custom provider config: ${reason}`);
       runtime.exit(1);
       return null;
@@ -246,7 +263,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error("OAuth requires interactive mode.");
+    runtime.error(
+      authChoice === "oauth"
+        ? 'Auth choice "oauth" is no longer supported directly. Use "--auth-choice setup-token --token-provider anthropic" for Anthropic legacy token auth, or a provider-specific OAuth choice.'
+        : "OAuth requires interactive mode.",
+    );
     runtime.exit(1);
     return null;
   }

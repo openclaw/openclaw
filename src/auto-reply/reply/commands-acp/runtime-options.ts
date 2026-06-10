@@ -1,3 +1,6 @@
+import { resolveAcpSessionIdentifierLinesFromIdentity } from "@openclaw/acp-core/runtime/session-identifiers";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import {
   parseRuntimeTimeoutSecondsInput,
@@ -7,8 +10,8 @@ import {
   validateRuntimeModelInput,
   validateRuntimePermissionProfileInput,
 } from "../../../acp/control-plane/runtime-options.js";
-import { resolveAcpSessionIdentifierLinesFromIdentity } from "../../../acp/runtime/session-identifiers.js";
 import { findLatestTaskForRelatedSessionKeyForOwner } from "../../../tasks/task-owner-access.js";
+import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   ACP_CWD_USAGE,
@@ -131,6 +134,23 @@ export async function handleAcpStatusAction(
         backend: status.backend,
         identity: status.identity,
       });
+      const taskProgress = sanitizeTaskStatusText(linkedTask?.progressSummary);
+      const taskSummary = sanitizeTaskStatusText(linkedTask?.terminalSummary, {
+        errorContext: true,
+      });
+      const taskError = sanitizeTaskStatusText(linkedTask?.error, { errorContext: true });
+      const lastError = sanitizeTaskStatusText(status.lastError, { errorContext: true });
+      const runtimeSummary = sanitizeTaskStatusText(status.runtimeStatus?.summary, {
+        errorContext: true,
+      });
+      const runtimeDetails = sanitizeTaskStatusText(status.runtimeStatus?.details, {
+        errorContext: true,
+      });
+      const taskUpdatedAt =
+        typeof linkedTask?.lastEventAt === "number"
+          ? timestampMsToIsoString(linkedTask.lastEventAt)
+          : undefined;
+      const lastActivityAt = timestampMsToIsoString(status.lastActivityAt) ?? "n/a";
       const lines = [
         "ACP status:",
         "-----",
@@ -145,24 +165,18 @@ export async function handleAcpStatusAction(
               `taskId: ${linkedTask.taskId}`,
               `taskStatus: ${linkedTask.status}`,
               `delivery: ${linkedTask.deliveryStatus}`,
-              ...(linkedTask.progressSummary
-                ? [`taskProgress: ${linkedTask.progressSummary}`]
-                : []),
-              ...(linkedTask.terminalSummary ? [`taskSummary: ${linkedTask.terminalSummary}`] : []),
-              ...(linkedTask.error ? [`taskError: ${linkedTask.error}`] : []),
-              ...(typeof linkedTask.lastEventAt === "number"
-                ? [`taskUpdatedAt: ${new Date(linkedTask.lastEventAt).toISOString()}`]
-                : []),
+              ...(taskProgress ? [`taskProgress: ${taskProgress}`] : []),
+              ...(taskSummary ? [`taskSummary: ${taskSummary}`] : []),
+              ...(taskError ? [`taskError: ${taskError}`] : []),
+              ...(taskUpdatedAt ? [`taskUpdatedAt: ${taskUpdatedAt}`] : []),
             ]
           : []),
         `runtimeOptions: ${formatRuntimeOptionsText(status.runtimeOptions)}`,
         `capabilities: ${formatAcpCapabilitiesText(status.capabilities.controls)}`,
-        `lastActivityAt: ${new Date(status.lastActivityAt).toISOString()}`,
-        ...(status.lastError ? [`lastError: ${status.lastError}`] : []),
-        ...(status.runtimeStatus?.summary ? [`runtime: ${status.runtimeStatus.summary}`] : []),
-        ...(status.runtimeStatus?.details
-          ? [`runtimeDetails: ${JSON.stringify(status.runtimeStatus.details)}`]
-          : []),
+        `lastActivityAt: ${lastActivityAt}`,
+        ...(lastError ? [`lastError: ${lastError}`] : []),
+        ...(runtimeSummary ? [`runtime: ${runtimeSummary}`] : []),
+        ...(runtimeDetails ? [`runtimeDetails: ${runtimeDetails}`] : []),
       ];
       return stopWithText(lines.join("\n"));
     },
@@ -221,7 +235,7 @@ export async function handleAcpSetAction(
 
   return await withAcpCommandErrorBoundary({
     run: async () => {
-      const lowerKey = key.toLowerCase();
+      const lowerKey = normalizeLowercaseStringOrEmpty(key);
       if (lowerKey === "cwd") {
         const cwd = validateRuntimeCwdInput(value);
         const options = await getAcpSessionManager().updateSessionRuntimeOptions({

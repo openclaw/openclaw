@@ -1,10 +1,34 @@
 import { spawn } from "node:child_process";
 import type { VoiceCallConfig } from "../config.js";
 
-export type TailscaleSelfInfo = {
+type TailscaleSelfInfo = {
   dnsName: string | null;
   nodeId: string | null;
 };
+
+export const TAILSCALE_COMMAND_STDOUT_MAX_BYTES = 4 * 1024 * 1024;
+
+type TailscaleCommandStdout = {
+  bytes: number;
+  exceeded: boolean;
+  text: string;
+};
+
+export function appendTailscaleCommandStdout(
+  current: TailscaleCommandStdout,
+  data: Buffer | string,
+  maxBytes = TAILSCALE_COMMAND_STDOUT_MAX_BYTES,
+): TailscaleCommandStdout {
+  if (current.exceeded) {
+    return current;
+  }
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  const bytes = current.bytes + buffer.byteLength;
+  if (bytes > maxBytes) {
+    return { bytes, exceeded: true, text: "" };
+  }
+  return { bytes, exceeded: false, text: `${current.text}${buffer.toString("utf8")}` };
+}
 
 function runTailscaleCommand(
   args: string[],
@@ -12,28 +36,45 @@ function runTailscaleCommand(
 ): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
     const proc = spawn("tailscale", args, {
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "ignore"],
     });
 
-    let stdout = "";
+    let stdout: TailscaleCommandStdout = { bytes: 0, exceeded: false, text: "" };
+    let settled = false;
+    const finish = (result: { code: number; stdout: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
     proc.stdout.on("data", (data) => {
-      stdout += data;
+      stdout = appendTailscaleCommandStdout(stdout, data);
+      if (stdout.exceeded) {
+        proc.kill("SIGKILL");
+        finish({ code: -1, stdout: "" });
+      }
     });
 
-    const timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       proc.kill("SIGKILL");
-      resolve({ code: -1, stdout: "" });
+      finish({ code: -1, stdout: "" });
     }, timeoutMs);
 
+    proc.on("error", () => {
+      finish({ code: -1, stdout: "" });
+    });
+
     proc.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout });
+      finish({ code: code ?? -1, stdout: stdout.text });
     });
   });
 }
 
 export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {
-  const { code, stdout } = await runTailscaleCommand(["status", "--json"]);
+  const { code, stdout } = await runTailscaleCommand(["status", "--json", "--peers=false"]);
   if (code !== 0) {
     return null;
   }

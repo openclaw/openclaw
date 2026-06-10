@@ -1,21 +1,113 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
+import type { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() =>
+  vi.fn<typeof normalizeProviderModelIdWithRuntime>(({ provider, context }) => {
+    if (
+      provider === "google" &&
+      (context.modelId === "gemini-3-pro" || context.modelId === "gemini-3-pro-preview")
+    ) {
+      return "gemini-3.1-pro-preview";
+    }
+    return context.modelId;
+  }),
+);
+const pluginManifestRegistryMocks = vi.hoisted(() => ({
+  manifestRegistry: undefined as PluginManifestRegistry | undefined,
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  listOpenClawPluginManifestMetadata: vi.fn(),
+}));
+
+vi.mock("../agents/provider-model-normalization.runtime.js", () => {
+  return { normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock };
+});
+
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: (
+      params: Parameters<typeof actual.loadPluginManifestRegistryForInstalledIndex>[0],
+    ) => {
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex(params);
+      return (
+        pluginManifestRegistryMocks.manifestRegistry ??
+        actual.loadPluginManifestRegistryForInstalledIndex(params)
+      );
+    },
+  };
+});
+
+vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-metadata-scan.js")>();
+  return {
+    ...actual,
+    listOpenClawPluginManifestMetadata: (
+      params?: Parameters<typeof actual.listOpenClawPluginManifestMetadata>[0],
+    ) => {
+      pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata(params);
+      return actual.listOpenClawPluginManifestMetadata(params);
+    },
+  };
+});
+
+import { getGatewayModelPricingHealth } from "./model-pricing-cache-state.js";
 import {
-  __resetGatewayModelPricingCacheForTest,
+  resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
   getCachedGatewayModelPricing,
   refreshGatewayModelPricingCache,
+  startGatewayModelPricingRefresh,
 } from "./model-pricing-cache.js";
+
+type CachedModelPricing = NonNullable<ReturnType<typeof getCachedGatewayModelPricing>>;
+
+function requirePricing(
+  pricing: ReturnType<typeof getCachedGatewayModelPricing>,
+  label: string,
+): CachedModelPricing {
+  if (!pricing) {
+    throw new Error(`expected ${label} pricing`);
+  }
+  return pricing;
+}
+
+function requireTieredPricing(
+  pricing: CachedModelPricing,
+  label: string,
+): NonNullable<CachedModelPricing["tieredPricing"]> {
+  if (!pricing.tieredPricing) {
+    throw new Error(`expected ${label} tiered pricing`);
+  }
+  return pricing.tieredPricing;
+}
+
+function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSignal {
+  if (!signal) {
+    throw new Error("expected pricing fetch abort signal");
+  }
+  return signal;
+}
 
 describe("model-pricing-cache", () => {
   beforeEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
+    pluginManifestRegistryMocks.manifestRegistry = undefined;
+    pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
+    pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata.mockClear();
+    normalizeProviderModelIdWithRuntimeMock.mockClear();
   });
 
   afterEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
+    loggingState.rawConsole = null;
+    resetLogger();
   });
 
   it("collects configured model refs across defaults, aliases, overrides, and media tools", () => {
@@ -26,6 +118,7 @@ describe("model-pricing-cache", () => {
           imageModel: { primary: "google/gemini-3-pro" },
           compaction: { model: "opus" },
           heartbeat: { model: "xai/grok-4" },
+          subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
           models: {
             "openai/gpt-5.4": { alias: "gpt" },
             "anthropic/claude-opus-4-6": { alias: "opus" },
@@ -52,7 +145,6 @@ describe("model-pricing-cache", () => {
         mappings: [{ model: "zai/glm-5" }],
       },
       tools: {
-        subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
         media: {
           models: [{ provider: "google", model: "gemini-2.5-pro" }],
           image: {
@@ -71,21 +163,490 @@ describe("model-pricing-cache", () => {
       modelKey(ref.provider, ref.model),
     );
 
-    expect(refs).toEqual(
-      expect.arrayContaining([
-        "openai/gpt-5.4",
-        "anthropic/claude-sonnet-4-6",
-        "google/gemini-3-pro-preview",
-        "anthropic/claude-opus-4-6",
-        "xai/grok-4",
-        "openrouter/anthropic/claude-opus-4-6",
-        "openrouter/auto",
-        "zai/glm-5",
-        "anthropic/claude-haiku-4-5",
-        "google/gemini-2.5-pro",
-      ]),
-    );
+    for (const expectedRef of [
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3.1-pro-preview",
+      "anthropic/claude-opus-4-6",
+      "xai/grok-4",
+      "openrouter/anthropic/claude-opus-4-6",
+      "openrouter/auto",
+      "zai/glm-5",
+      "anthropic/claude-haiku-4-5",
+      "google/gemini-2.5-pro",
+    ]) {
+      expect(refs).toContain(expectedRef);
+    }
     expect(new Set(refs).size).toBe(refs.length);
+  });
+
+  it("collects manifest-owned web search plugin model refs without a hardcoded plugin list", () => {
+    const refs = collectConfiguredModelPricingRefs({
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                model: "tavily/search-preview",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig).map((ref) => modelKey(ref.provider, ref.model));
+
+    expect(refs).toContain("tavily/search-preview");
+  });
+
+  it("uses one installed manifest pass for pricing policies and configured web-search refs", async () => {
+    pluginManifestRegistryMocks.manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestRecord({
+          id: "search-plugin",
+          contracts: { webSearchProviders: ["search-plugin"] },
+        }),
+      ],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "local-search": {
+            baseUrl: "http://127.0.0.1:43210/v1",
+            api: "openai-completions",
+            models: [{ id: "search-model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).toHaveBeenCalledOnce();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("uses a provided metadata registry view without rebuilding manifest metadata", async () => {
+    const manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestRecord({
+          id: "search-plugin",
+          contracts: { webSearchProviders: ["search-plugin"] },
+        }),
+      ],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "local-search": {
+            baseUrl: "http://127.0.0.1:43210/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "search-model",
+                cost: { input: 0.2, output: 0.4 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({
+      config,
+      fetchImpl,
+      pluginMetadataSnapshot: {
+        index: {
+          plugins: [
+            {
+              pluginId: "search-plugin",
+              origin: "global",
+              enabled: true,
+              enabledByDefault: true,
+            },
+          ],
+        } as never,
+        manifestRegistry,
+      },
+    });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(
+      getCachedGatewayModelPricing({ provider: "local-search", model: "search-model" }),
+    ).toEqual({
+      input: 0.2,
+      output: 0.4,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("does not load plugin manifests for pricing when plugins are globally disabled", async () => {
+    const config = {
+      plugins: {
+        enabled: false,
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-local" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-local",
+                cost: { input: 0.12, output: 0.48 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).not.toHaveBeenCalled();
+    expect(pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "gpt-local" })).toEqual({
+      input: 0.12,
+      output: 0.48,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("skips remote pricing catalogs for local-only model providers", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/llama3.2:latest" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [{ id: "llama3.2:latest" }],
+          },
+          "my-local-gpu": {
+            baseUrl: "http://192.168.1.25:8000/v1",
+            api: "openai-completions",
+            models: [{ id: "qwen2.5-coder:7b" }],
+          },
+        },
+      },
+      tools: {
+        subagents: { model: { primary: "my-local-gpu/qwen2.5-coder:7b" } },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(
+      getCachedGatewayModelPricing({ provider: "ollama", model: "llama3.2:latest" }),
+    ).toBeUndefined();
+  });
+
+  it("records and clears remote pricing source failures for health surfaces", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const failingFetch = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        throw new TypeError("fetch failed");
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl: failingFetch });
+
+    const failedHealth = getGatewayModelPricingHealth();
+    expect(failedHealth.state).toBe("degraded");
+    expect(failedHealth.sources).toHaveLength(1);
+    expect(failedHealth.sources[0]?.source).toBe("openrouter");
+    expect(failedHealth.sources[0]?.state).toBe("degraded");
+    expect(failedHealth.sources[0]?.detail).toContain("OpenRouter pricing fetch failed");
+
+    const successfulFetch = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const body = url.includes("openrouter.ai") ? { data: [] } : {};
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl: successfulFetch });
+
+    expect(getGatewayModelPricingHealth()).toEqual({
+      state: "ok",
+      sources: [],
+    });
+  });
+
+  it("records malformed remote pricing catalog JSON as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response("{not json", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources).toHaveLength(1);
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.state).toBe("degraded");
+    expect(health.sources[0]?.detail).toContain("OpenRouter pricing response is malformed JSON");
+  });
+
+  it("records malformed pricing content-length headers as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", "Content-Length": "1e3" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources).toHaveLength(1);
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.detail).toContain("invalid content-length header: 1e3");
+  });
+
+  it("records and clears scheduled refresh rejections for health surfaces", async () => {
+    vi.useFakeTimers();
+    try {
+      const manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] };
+      let failManifestRead = false;
+      const pluginMetadataSnapshot = {
+        index: { plugins: [] } as never,
+        get manifestRegistry() {
+          if (failManifestRead) {
+            throw new Error("manifest metadata failed");
+          }
+          return manifestRegistry;
+        },
+      };
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "custom/gpt-remote" },
+          },
+        },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://models.example/v1",
+              api: "openai-completions",
+              models: [{ id: "gpt-remote" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return new Response(JSON.stringify(url.includes("openrouter.ai") ? { data: [] } : {}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+
+      failManifestRead = true;
+      await vi.runOnlyPendingTimersAsync();
+
+      const failedHealth = getGatewayModelPricingHealth();
+      expect(failedHealth.state).toBe("degraded");
+      expect(failedHealth.sources).toHaveLength(1);
+      expect(failedHealth.sources[0]?.source).toBe("refresh");
+      expect(failedHealth.sources[0]?.state).toBe("degraded");
+      expect(failedHealth.sources[0]?.detail).toBe(
+        "pricing refresh failed: Error: manifest metadata failed",
+      );
+
+      failManifestRead = false;
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("seeds pricing from explicit configured model cost without external catalog fetches", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-local" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-local",
+                name: "GPT Local",
+                reasoning: false,
+                input: ["text"],
+                contextWindow: 128000,
+                maxTokens: 8192,
+                cost: { input: 0.12, output: 0.48, cacheRead: 0.01, cacheWrite: 0.02 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "gpt-local" })).toEqual({
+      input: 0.12,
+      output: 0.48,
+      cacheRead: 0.01,
+      cacheWrite: 0.02,
+    });
   });
 
   it("loads openrouter pricing and maps provider aliases, wrappers, and anthropic dotted ids", async () => {
@@ -93,6 +654,7 @@ describe("model-pricing-cache", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-6" },
+          subagents: { model: { primary: "zai/glm-openrouter-test" } },
         },
         list: [
           {
@@ -101,17 +663,12 @@ describe("model-pricing-cache", () => {
           },
         ],
       },
-      hooks: {
-        mappings: [{ model: "xai/grok-4.20-experimental-beta-0304-reasoning" }],
-      },
-      tools: {
-        subagents: { model: { primary: "zai/glm-5" } },
-      },
     } as unknown as OpenClawConfig;
 
-    const fetchImpl = withFetchPreconnect(
-      async () =>
-        new Response(
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
           JSON.stringify({
             data: [
               {
@@ -132,14 +689,7 @@ describe("model-pricing-cache", () => {
                 },
               },
               {
-                id: "x-ai/grok-4.20-experimental-beta-0304-reasoning",
-                pricing: {
-                  prompt: "0.000002",
-                  completion: "0.00001",
-                },
-              },
-              {
-                id: "z-ai/glm-5",
+                id: "z-ai/glm-openrouter-test",
                 pricing: {
                   prompt: "0.000001",
                   completion: "0.000004",
@@ -151,8 +701,14 @@ describe("model-pricing-cache", () => {
             status: 200,
             headers: { "Content-Type": "application/json" },
           },
-        ),
-    );
+        );
+      }
+      // LiteLLM — return empty object (no tiered pricing for these models)
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
@@ -175,31 +731,14 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.3,
       cacheWrite: 0,
     });
-    expect(
-      getCachedGatewayModelPricing({
-        provider: "xai",
-        model: "grok-4.20-experimental-beta-0304-reasoning",
-      }),
-    ).toEqual({
-      input: 2,
-      output: 10,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
-    expect(getCachedGatewayModelPricing({ provider: "xai", model: "grok-4.20-reasoning" })).toEqual(
+    expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-openrouter-test" })).toEqual(
       {
-        input: 2,
-        output: 10,
+        input: 1,
+        output: 4,
         cacheRead: 0,
         cacheWrite: 0,
       },
     );
-    expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-5" })).toEqual({
-      input: 1,
-      output: 4,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
   });
 
   it("does not recurse forever for native openrouter auto refs", async () => {
@@ -211,9 +750,10 @@ describe("model-pricing-cache", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const fetchImpl = withFetchPreconnect(
-      async () =>
-        new Response(
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
           JSON.stringify({
             data: [
               {
@@ -229,8 +769,13 @@ describe("model-pricing-cache", () => {
             status: 200,
             headers: { "Content-Type": "application/json" },
           },
-        ),
-    );
+        );
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
 
     await expect(refreshGatewayModelPricingCache({ config, fetchImpl })).resolves.toBeUndefined();
     expect(
@@ -242,4 +787,507 @@ describe("model-pricing-cache", () => {
       cacheWrite: 0,
     });
   });
+
+  it("loads tiered pricing from LiteLLM and merges with OpenRouter flat pricing", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "volcengine/doubao-seed-2-0-pro" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        // OpenRouter does not have this model
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // LiteLLM catalog
+      return new Response(
+        JSON.stringify({
+          "volcengine/doubao-seed-2-0-pro": {
+            input_cost_per_token: 4.6e-7,
+            output_cost_per_token: 2.3e-6,
+            cache_creation_input_token_cost: 9.2e-7,
+            litellm_provider: "volcengine",
+            tiered_pricing: [
+              {
+                input_cost_per_token: 4.6e-7,
+                output_cost_per_token: 2.3e-6,
+                cache_creation_input_token_cost: 9.2e-8,
+                range: [0, 32000],
+              },
+              {
+                input_cost_per_token: 7e-7,
+                output_cost_per_token: 3.5e-6,
+                cache_creation_input_token_cost: 1.4e-7,
+                range: [32000, 128000],
+              },
+              {
+                input_cost_per_token: 1.4e-6,
+                output_cost_per_token: 7e-6,
+                cache_creation_input_token_cost: 2.8e-7,
+                range: [128000, 256000],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const pricing = getCachedGatewayModelPricing({
+      provider: "volcengine",
+      model: "doubao-seed-2-0-pro",
+    });
+    const cached = requirePricing(pricing, "volcengine doubao-seed-2-0-pro");
+    const tiers = requireTieredPricing(cached, "volcengine doubao-seed-2-0-pro");
+
+    expect(cached.input).toBeCloseTo(0.46);
+    expect(cached.output).toBeCloseTo(2.3);
+    expect(cached.cacheWrite).toBeCloseTo(0.92);
+    expect(tiers).toHaveLength(3);
+    expect(tiers[0]).toEqual({
+      input: expect.closeTo(0.46),
+      output: expect.closeTo(2.3),
+      cacheRead: 0,
+      cacheWrite: expect.closeTo(0.092),
+      range: [0, 32000],
+    });
+    expect(tiers[2].cacheWrite).toBeCloseTo(0.28);
+    expect(tiers[2].range).toEqual([128000, 256000]);
+  });
+
+  it("normalizes LiteLLM open-ended range [start] to [start, Infinity]", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "volcengine/doubao-open" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          "volcengine/doubao-open": {
+            input_cost_per_token: 4.6e-7,
+            output_cost_per_token: 2.3e-6,
+            litellm_provider: "volcengine",
+            tiered_pricing: [
+              {
+                input_cost_per_token: 4.6e-7,
+                output_cost_per_token: 2.3e-6,
+                range: [0, 32000],
+              },
+              {
+                input_cost_per_token: 7e-7,
+                output_cost_per_token: 3.5e-6,
+                cache_creation_input_token_cost: 1.4e-7,
+                range: [32000],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const pricing = getCachedGatewayModelPricing({
+      provider: "volcengine",
+      model: "doubao-open",
+    });
+    const tiers = requireTieredPricing(
+      requirePricing(pricing, "volcengine doubao-open"),
+      "volcengine doubao-open",
+    );
+
+    expect(tiers).toHaveLength(2);
+    expect(tiers[0].range).toEqual([0, 32000]);
+    expect(tiers[1].range).toEqual([32000, Infinity]);
+    expect(tiers[1].cacheWrite).toBeCloseTo(0.14);
+  });
+
+  it("merges OpenRouter flat pricing with LiteLLM tiered pricing", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "dashscope/qwen-plus" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "dashscope/qwen-plus",
+                pricing: {
+                  prompt: "0.0000004",
+                  completion: "0.0000024",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          "dashscope/qwen-plus": {
+            input_cost_per_token: 4e-7,
+            output_cost_per_token: 2.4e-6,
+            litellm_provider: "dashscope",
+            tiered_pricing: [
+              {
+                input_cost_per_token: 4e-7,
+                output_cost_per_token: 2.4e-6,
+                cache_creation_input_token_cost: 8e-8,
+                range: [0, 256000],
+              },
+              {
+                input_cost_per_token: 5e-7,
+                output_cost_per_token: 3e-6,
+                cache_creation_input_token_cost: 1e-7,
+                range: [256000, 1000000],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const pricing = getCachedGatewayModelPricing({
+      provider: "dashscope",
+      model: "qwen-plus",
+    });
+    const cached = requirePricing(pricing, "dashscope qwen-plus");
+    const tiers = requireTieredPricing(cached, "dashscope qwen-plus");
+
+    // OpenRouter base flat pricing is used
+    expect(cached.input).toBeCloseTo(0.4);
+    expect(cached.output).toBeCloseTo(2.4);
+    // LiteLLM tiered pricing is merged in
+    expect(tiers).toHaveLength(2);
+    expect(tiers[1].range).toEqual([256000, 1000000]);
+    expect(tiers[1].cacheWrite).toBeCloseTo(0.1);
+  });
+
+  it("falls back gracefully when LiteLLM fetch fails", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "anthropic/claude-opus-4.6",
+                pricing: {
+                  prompt: "0.000005",
+                  completion: "0.000025",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      // LiteLLM fails
+      return new Response("Internal Server Error", { status: 500 });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    // OpenRouter pricing still works
+    expect(
+      getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
+    ).toEqual({
+      input: 5,
+      output: 25,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("defers bootstrap refresh work until after the starter returns", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("openrouter.ai")) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await vi.dynamicImportSettled();
+    expect(fetchImpl).toHaveBeenCalled();
+    stop();
+  });
+
+  it("aborts in-flight bootstrap pricing fetches after stop", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const abortedUrls: string[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const url =
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            const signal = requireAbortSignal(init?.signal);
+            signal.addEventListener(
+              "abort",
+              () => {
+                abortedUrls.push(url);
+                reject(toLintErrorObject(signal.reason, "Non-Error rejection"));
+              },
+              { once: true },
+            );
+          }),
+      ),
+    );
+
+    try {
+      const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+      await vi.dynamicImportSettled();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      stop();
+      await vi.waitFor(() => expect(abortedUrls).toHaveLength(2));
+      await vi.dynamicImportSettled();
+
+      const scheduledDelays = setTimeoutSpy.mock.calls.map(([, delay]) => delay);
+      expect(scheduledDelays).not.toContain(24 * 60 * 60_000);
+      expect(
+        getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
+      ).toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("does not bootstrap remote pricing when pricing is disabled", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { pricing: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+    await vi.dynamicImportSettled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("does not refresh remote pricing when pricing is disabled", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { pricing: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("logs configured timeout seconds when pricing fetches time out", async () => {
+    const warnings: string[] = [];
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn((message: string) => warnings.push(message)),
+      error: vi.fn(),
+    };
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const timeoutError = new DOMException(
+      "The operation was aborted due to timeout",
+      "TimeoutError",
+    );
+    const fetchImpl = withFetchPreconnect(async () => {
+      throw timeoutError;
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      warnings.some((message) =>
+        message.includes(
+          "OpenRouter pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((message) =>
+        message.includes(
+          "LiteLLM pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats oversized LiteLLM catalog responses as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "kimi/kimi-k2.6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "moonshotai/kimi-k2.6",
+                pricing: {
+                  prompt: "0.00000095",
+                  completion: "0.000004",
+                  input_cache_read: "0.00000016",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": "6000000",
+        },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
+      input: 0.95,
+      output: 4,
+      cacheRead: 0.16,
+      cacheWrite: 0,
+    });
+  });
 });
+
+function createManifestRecord(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {
+  return {
+    id: "plugin",
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "global",
+    rootDir: "/tmp/plugin",
+    source: "/tmp/plugin/index.js",
+    manifestPath: "/tmp/plugin/openclaw.plugin.json",
+    ...overrides,
+  };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

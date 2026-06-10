@@ -91,7 +91,7 @@ export function installProcessWarningFilter(): void {
       process.emit("warning", emitted);
       return;
     }
-    return Reflect.apply(originalEmitWarning, process, args);
+    Reflect.apply(originalEmitWarning, process, args);
   }) as typeof process.emitWarning;
 
   process.emitWarning = wrappedEmitWarning;

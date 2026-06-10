@@ -1,7 +1,7 @@
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { describeMoonshotVideo } from "./media-understanding-provider.js";
 
@@ -19,36 +19,56 @@ describe("describeMoonshotVideo", () => {
       apiKey: "moonshot-test",
       timeoutMs: 1500,
       baseUrl: "https://api.moonshot.ai/v1/",
-      model: "kimi-k2.5",
+      model: "kimi-k2.6",
       headers: { "X-Trace": "1" },
       fetchFn,
     });
     const { url, init } = getRequest();
 
     expect(result.text).toBe("video ok");
-    expect(result.model).toBe("kimi-k2.5");
+    expect(result.model).toBe("kimi-k2.6");
     expect(url).toBe("https://api.moonshot.ai/v1/chat/completions");
-    expect(init?.method).toBe("POST");
-    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    if (!init) {
+      throw new Error("expected Moonshot request init");
+    }
+    expect(init.method).toBe("POST");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
-    const headers = new Headers(init?.headers);
+    const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe("Bearer moonshot-test");
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("x-trace")).toBe("1");
 
-    const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+    expect(init.body).toBeTypeOf("string");
+    if (typeof init.body !== "string") {
+      throw new Error("expected Moonshot JSON request body");
+    }
+    const body = JSON.parse(init.body) as {
       model?: string;
       messages?: Array<{
         content?: Array<{ type?: string; text?: string; video_url?: { url?: string } }>;
       }>;
     };
-    expect(body.model).toBe("kimi-k2.5");
-    expect(body.messages?.[0]?.content?.[0]).toMatchObject({
-      type: "text",
-      text: "Describe the video.",
-    });
-    expect(body.messages?.[0]?.content?.[1]?.type).toBe("video_url");
-    expect(body.messages?.[0]?.content?.[1]?.video_url?.url).toBe(
+    expect(body.model).toBe("kimi-k2.6");
+    const content = body.messages?.[0]?.content;
+    if (!content) {
+      throw new Error("expected Moonshot user content");
+    }
+    const [textContent] = content;
+    if (!textContent) {
+      throw new Error("expected Moonshot text content");
+    }
+    expect(textContent.type).toBe("text");
+    expect(textContent.text).toBe("Describe the video.");
+    const videoContent = content[1];
+    if (!videoContent) {
+      throw new Error("expected Moonshot video content");
+    }
+    expect(videoContent.type).toBe("video_url");
+    if (!videoContent.video_url) {
+      throw new Error("expected Moonshot video URL payload");
+    }
+    expect(videoContent.video_url.url).toBe(
       `data:video/mp4;base64,${Buffer.from("video-bytes").toString("base64")}`,
     );
   });
@@ -67,6 +87,6 @@ describe("describeMoonshotVideo", () => {
     });
 
     expect(result.text).toBe("reasoned answer");
-    expect(result.model).toBe("kimi-k2.5");
+    expect(result.model).toBe("kimi-k2.6");
   });
 });

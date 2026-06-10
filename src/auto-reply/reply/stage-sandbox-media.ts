@@ -2,22 +2,37 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { slugifySessionKey } from "../../agents/sandbox/shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { copyFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import {
-  isInboundPathAllowed,
-  resolveIMessageRemoteAttachmentRoots,
-} from "../../media/inbound-path-policy.js";
+import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
+export const SCP_STDERR_TAIL_CHARS = 16_384;
+
+// `staged` maps every absolute source path that was copied into the sandbox
+// (or remote cache) to its rewritten ctx path. Callers like chat.send's
+// prestage use this to detect partial failures: unstaged sources keep their
+// original absolute path in ctx.MediaPaths, so a length check against the
+// input cannot distinguish "everything staged" from "silently skipped some"
+// (e.g. the 5MB cap in STAGED_MEDIA_MAX_BYTES rejecting files that the
+// chat.send RPC already admitted under its 20MB cap).
+export type StageSandboxMediaResult = {
+  staged: ReadonlyMap<string, string>;
+};
+
+const EMPTY_STAGE_RESULT: StageSandboxMediaResult = { staged: new Map() };
 
 export async function stageSandboxMedia(params: {
   ctx: MsgContext;
@@ -25,12 +40,12 @@ export async function stageSandboxMedia(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   workspaceDir: string;
-}) {
+}): Promise<StageSandboxMediaResult> {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
   const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
   const rawPaths = resolveRawPaths(ctx);
   if (rawPaths.length === 0 || !sessionKey) {
-    return;
+    return EMPTY_STAGE_RESULT;
   }
 
   const sandbox = await ensureSandboxWorkspaceForSession({
@@ -41,18 +56,17 @@ export async function stageSandboxMedia(params: {
 
   // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy)
   const remoteMediaCacheDir = ctx.MediaRemoteHost
-    ? path.join(CONFIG_DIR, "media", "remote-cache", sessionKey)
+    ? path.join(CONFIG_DIR, "media", "remote-cache", slugifySessionKey(sessionKey))
     : null;
   const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir;
   if (!effectiveWorkspaceDir) {
-    return;
+    return EMPTY_STAGE_RESULT;
   }
 
   await fs.mkdir(effectiveWorkspaceDir, { recursive: true });
-  const remoteAttachmentRoots = resolveIMessageRemoteAttachmentRoots({
-    cfg,
-    accountId: ctx.AccountId,
-  });
+  const remoteAttachmentRoots = ctx.MediaRemoteHost
+    ? (resolveChannelRemoteInboundAttachmentRoots({ cfg, ctx }) ?? [])
+    : [];
 
   const usedNames = new Set<string>();
   const staged = new Map<string, string>(); // absolute source -> relative sandbox path
@@ -87,15 +101,16 @@ export async function stageSandboxMedia(params: {
           maxBytes: STAGED_MEDIA_MAX_BYTES,
         });
       } else {
+        const copySource = await fs.realpath(source).catch(() => source);
         await stageLocalFileIntoRoot({
-          sourcePath: source,
+          sourcePath: copySource,
           rootDir: effectiveWorkspaceDir,
           relativeDestPath: relativeDest,
           maxBytes: STAGED_MEDIA_MAX_BYTES,
         });
       }
     } catch (err) {
-      if (err instanceof SafeOpenError && err.code === "too-large") {
+      if (err instanceof FsSafeError && err.code === "too-large") {
         logVerbose(
           `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source}`,
         );
@@ -117,6 +132,8 @@ export async function stageSandboxMedia(params: {
     staged,
     hasPathsArray,
   });
+
+  return { staged };
 }
 
 async function stageLocalFileIntoRoot(params: {
@@ -125,10 +142,8 @@ async function stageLocalFileIntoRoot(params: {
   relativeDestPath: string;
   maxBytes?: number;
 }): Promise<void> {
-  await copyFileWithinRoot({
-    sourcePath: params.sourcePath,
-    rootDir: params.rootDir,
-    relativePath: params.relativeDestPath,
+  const root = await fsRoot(params.rootDir);
+  await root.copyIn(params.relativeDestPath, params.sourcePath, {
     maxBytes: params.maxBytes,
   });
 }
@@ -161,8 +176,8 @@ function resolveRawPaths(ctx: MsgContext): string[] {
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   return pathsFromArray && pathsFromArray.length > 0
     ? pathsFromArray
-    : ctx.MediaPath?.trim()
-      ? [ctx.MediaPath.trim()]
+    : normalizeOptionalString(ctx.MediaPath)
+      ? [normalizeOptionalString(ctx.MediaPath)!]
       : [];
 }
 
@@ -187,7 +202,7 @@ function resolveAbsolutePath(value: string): string | null {
 async function isAllowedSourcePath(params: {
   source: string;
   mediaRemoteHost?: string;
-  remoteAttachmentRoots: string[];
+  remoteAttachmentRoots: readonly string[];
 }): Promise<boolean> {
   if (params.mediaRemoteHost) {
     if (
@@ -201,21 +216,27 @@ async function isAllowedSourcePath(params: {
     }
     return true;
   }
+  const inboundReference = await resolveInboundMediaReference(params.source).catch(() => null);
+  if (inboundReference) {
+    return true;
+  }
   const mediaDir = getMediaDir();
+  const canonicalMediaDir = await fs.realpath(mediaDir).catch(() => mediaDir);
   if (
     !isInboundPathAllowed({
       filePath: params.source,
-      roots: [mediaDir],
+      roots: [mediaDir, canonicalMediaDir],
     })
   ) {
     logVerbose(`Blocking attempt to stage media from outside media directory: ${params.source}`);
     return false;
   }
   try {
+    const canonicalSource = await fs.realpath(params.source).catch(() => params.source);
     await assertSandboxPath({
-      filePath: params.source,
-      cwd: mediaDir,
-      root: mediaDir,
+      filePath: canonicalSource,
+      cwd: canonicalMediaDir,
+      root: canonicalMediaDir,
     });
     return true;
   } catch {
@@ -248,7 +269,7 @@ function rewriteStagedMediaPaths(params: {
   hasPathsArray: boolean;
 }): void {
   const rewriteIfStaged = (value: string | undefined): string | undefined => {
-    const raw = value?.trim();
+    const raw = normalizeOptionalString(value);
     if (!raw) {
       return value;
     }
@@ -299,7 +320,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   }
   return new Promise((resolve, reject) => {
     const child = spawn(
-      "/usr/bin/scp",
+      "scp",
       [
         "-o",
         "BatchMode=yes",
@@ -315,7 +336,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
     let stderr = "";
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
-      stderr += chunk;
+      stderr = appendScpStderrTail(stderr, chunk);
     });
 
     child.once("error", reject);
@@ -327,4 +348,16 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
       }
     });
   });
+}
+
+export function appendScpStderrTail(
+  current: string,
+  chunk: string,
+  maxChars = SCP_STDERR_TAIL_CHARS,
+): string {
+  const combined = `${current}${chunk}`;
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+  return combined.slice(-maxChars);
 }

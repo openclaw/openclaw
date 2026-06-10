@@ -11,8 +11,8 @@ const abs = (p: string) => path.resolve(p);
 const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
 
@@ -129,6 +129,26 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "darwin",
     });
     expect(updated[0]).toBe(appBinDir);
+  });
+
+  it("keeps the current runtime directory ahead of system PATH hardening", () => {
+    const tmp = abs("/tmp/openclaw-path/case-runtime-dir");
+    const nodeBinDir = path.join(tmp, "node-bin");
+    const nodeExec = path.join(nodeBinDir, "node");
+    setDir(tmp);
+    setDir(nodeBinDir);
+    setExe(nodeExec);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: nodeExec,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expect(updated[0]).toBe(nodeBinDir);
+    expect(updated.indexOf(nodeBinDir)).toBeLessThan(updated.indexOf("/usr/bin"));
   });
 
   it("is idempotent", () => {
@@ -324,5 +344,64 @@ describe("ensureOpenClawCliOnPath", () => {
     const { params, expectedPaths, anchor } = setup();
     const updated = bootstrapPath(params);
     expectPathsAfter(updated, anchor, expectedPaths);
+  });
+
+  it("does not append HOMEBREW_PREFIX from process env", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-homebrew-env-ignored");
+    const maliciousPrefix = path.join(tmp, "evil-brew");
+    const maliciousBin = path.join(maliciousPrefix, "bin");
+    const maliciousSbin = path.join(maliciousPrefix, "sbin");
+    setDir(maliciousBin);
+    setDir(maliciousSbin);
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.HOMEBREW_PREFIX = maliciousPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expect(updated).not.toContain(maliciousBin);
+    expect(updated).not.toContain(maliciousSbin);
+  });
+
+  it("does not probe Linuxbrew fallbacks on macOS unless already inherited", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-no-darwin-linuxbrew");
+    const homeLinuxbrewBin = path.join(tmp, ".linuxbrew", "bin");
+    const globalLinuxbrewBin = "/home/linuxbrew/.linuxbrew/bin";
+    setDir(path.join(tmp, ".linuxbrew"));
+    setDir(homeLinuxbrewBin);
+    setDir("/home");
+    setDir("/home/linuxbrew");
+    setDir("/home/linuxbrew/.linuxbrew");
+    setDir(globalLinuxbrewBin);
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expect(updated).not.toContain(homeLinuxbrewBin);
+    expect(updated).not.toContain(globalLinuxbrewBin);
+  });
+
+  it("keeps inherited Linuxbrew path entries on macOS", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-keep-darwin-linuxbrew");
+    const globalLinuxbrewBin = "/home/linuxbrew/.linuxbrew/bin";
+    resetBootstrapEnv(`${globalLinuxbrewBin}:/usr/bin:/bin`);
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expect(updated).toContain(globalLinuxbrewBin);
   });
 });

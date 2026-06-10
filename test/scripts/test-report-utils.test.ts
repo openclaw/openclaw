@@ -1,12 +1,26 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  collectVitestAssertionDurations,
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
+  runVitestJsonReport,
   tryReadJsonFile,
 } from "../../scripts/test-report-utils.mjs";
+
+const { spawnSyncMock } = vi.hoisted(() => ({
+  spawnSyncMock: vi.fn(),
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+  };
+});
 
 describe("scripts/test-report-utils normalizeTrackedRepoPath", () => {
   it("normalizes repo-local absolute paths to repo-relative slash paths", () => {
@@ -51,6 +65,31 @@ describe("scripts/test-report-utils collectVitestFileDurations", () => {
   });
 });
 
+describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
+  it("extracts per-test durations with normalized files", () => {
+    const report = {
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src", "alpha.test.ts"),
+          assertionResults: [
+            { duration: 25, fullName: "alpha fast", status: "passed" },
+            { duration: 0, fullName: "alpha zero", status: "passed" },
+          ],
+        },
+      ],
+    };
+
+    expect(collectVitestAssertionDurations(report, normalizeTrackedRepoPath)).toEqual([
+      {
+        file: "src/alpha.test.ts",
+        durationMs: 25,
+        fullName: "alpha fast",
+        status: "passed",
+      },
+    ]);
+  });
+});
+
 describe("scripts/test-report-utils tryReadJsonFile", () => {
   it("returns the fallback when the file is missing", () => {
     const missingPath = path.join(os.tmpdir(), `openclaw-missing-${Date.now()}.json`);
@@ -67,5 +106,41 @@ describe("scripts/test-report-utils tryReadJsonFile", () => {
     } finally {
       fs.unlinkSync(tempPath);
     }
+  });
+});
+
+describe("scripts/test-report-utils runVitestJsonReport", () => {
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+  });
+
+  it("launches Vitest through pnpm exec", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
+
+    expect(
+      runVitestJsonReport({
+        config: "test/vitest/vitest.unit.config.ts",
+        reportPath,
+      }),
+    ).toBe(reportPath);
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "pnpm",
+      [
+        "exec",
+        "vitest",
+        "run",
+        "--config",
+        "test/vitest/vitest.unit.config.ts",
+        "--reporter=json",
+        "--outputFile",
+        reportPath,
+      ],
+      {
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
   });
 });

@@ -1,7 +1,8 @@
-import { isIpInCidr } from "../shared/net/ip.js";
+import { isIpInCidr } from "@openclaw/net-policy/ip";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
 
-export type TailnetAddresses = {
+type TailnetAddresses = {
   ipv4: string[];
   ipv6: string[];
 };
@@ -34,7 +35,7 @@ export function listTailnetAddresses(): TailnetAddresses {
     }
   }
 
-  return { ipv4: [...new Set(ipv4)], ipv6: [...new Set(ipv6)] };
+  return { ipv4: uniqueStrings(ipv4), ipv6: uniqueStrings(ipv6) };
 }
 
 export function pickPrimaryTailnetIPv4(): string | undefined {

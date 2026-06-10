@@ -1,4 +1,6 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
+import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
@@ -22,15 +24,7 @@ function parseQueueCap(raw?: string): number | undefined {
   if (!raw) {
     return undefined;
   }
-  const num = Number(raw);
-  if (!Number.isFinite(num)) {
-    return undefined;
-  }
-  const cap = Math.floor(num);
-  if (cap < 1) {
-    return undefined;
-  }
-  return cap;
+  return parseStrictPositiveInteger(raw);
 }
 
 function parseQueueDirectiveArgs(raw: string): {
@@ -64,12 +58,18 @@ function parseQueueDirectiveArgs(raw: string): {
     i = res.nextIndex;
     return res.token;
   };
-  while (i < len) {
+  for (;;) {
+    if (i >= len) {
+      break;
+    }
     const token = takeToken();
     if (!token) {
       break;
     }
-    const lowered = token.trim().toLowerCase();
+    const lowered = normalizeOptionalLowercaseString(token);
+    if (!lowered) {
+      break;
+    }
     if (lowered === "default" || lowered === "reset" || lowered === "clear") {
       queueReset = true;
       consumed = i;
@@ -102,6 +102,10 @@ function parseQueueDirectiveArgs(raw: string): {
       rawMode = token;
       consumed = i;
       continue;
+    }
+    if (consumed === skipDirectiveArgPrefix(raw) && !queueReset && !hasOptions) {
+      rawMode = token;
+      consumed = i;
     }
     // Stop at first unrecognized token.
     break;

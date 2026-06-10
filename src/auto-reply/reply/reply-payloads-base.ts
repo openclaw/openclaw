@@ -1,16 +1,21 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
-import { createReplyToModeFilterForChannel } from "./reply-threading.js";
+import {
+  createReplyToModeFilterForChannel,
+  resolveImplicitCurrentMessageReplyAllowance,
+} from "./reply-threading.js";
 
 export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
-  const text = payload.text?.trim();
+  const text = normalizeOptionalString(payload.text);
   if (!text) {
     return payload.text;
   }
-  const question = payload.btw?.question?.trim();
+  const question = normalizeOptionalString(payload.btw?.question);
   if (!question) {
     return payload.text;
   }
@@ -20,36 +25,48 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
 
 function resolveReplyThreadingForPayload(params: {
   payload: ReplyPayload;
+  replyToMode?: ReplyToMode;
   implicitReplyToId?: string;
   currentMessageId?: string;
+  replyThreading?: ReplyThreadingPolicy;
 }): ReplyPayload {
-  const implicitReplyToId = params.implicitReplyToId?.trim() || undefined;
-  const currentMessageId = params.currentMessageId?.trim() || undefined;
+  const implicitReplyToId = normalizeOptionalString(params.implicitReplyToId);
+  const currentMessageId = normalizeOptionalString(params.currentMessageId);
+  const allowImplicitReplyToCurrentMessage = resolveImplicitCurrentMessageReplyAllowance(
+    params.replyToMode,
+    params.replyThreading,
+  );
 
   let resolved: ReplyPayload =
-    params.payload.replyToId || params.payload.replyToCurrent === false || !implicitReplyToId
+    params.payload.replyToId ||
+    params.payload.replyToCurrent === false ||
+    !implicitReplyToId ||
+    !allowImplicitReplyToCurrentMessage
       ? params.payload
-      : { ...params.payload, replyToId: implicitReplyToId };
+      : copyReplyPayloadMetadata(params.payload, {
+          ...params.payload,
+          replyToId: implicitReplyToId,
+        });
 
   if (typeof resolved.text === "string" && resolved.text.includes("[[")) {
     const { cleaned, replyToId, replyToCurrent, hasTag } = extractReplyToTag(
       resolved.text,
       currentMessageId,
     );
-    resolved = {
+    resolved = copyReplyPayloadMetadata(resolved, {
       ...resolved,
       text: cleaned ? cleaned : undefined,
       replyToId: replyToId ?? resolved.replyToId,
       replyToTag: hasTag || resolved.replyToTag,
       replyToCurrent: replyToCurrent || resolved.replyToCurrent,
-    };
+    });
   }
 
   if (resolved.replyToCurrent && !resolved.replyToId && currentMessageId) {
-    resolved = {
+    resolved = copyReplyPayloadMetadata(resolved, {
       ...resolved,
       replyToId: currentMessageId,
-    };
+    });
   }
 
   return resolved;
@@ -75,13 +92,20 @@ export function applyReplyThreading(params: {
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
+  replyThreading?: ReplyThreadingPolicy;
 }): ReplyPayload[] {
-  const { payloads, replyToMode, replyToChannel, currentMessageId } = params;
+  const { payloads, replyToMode, replyToChannel, currentMessageId, replyThreading } = params;
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
-  const implicitReplyToId = currentMessageId?.trim() || undefined;
+  const implicitReplyToId = normalizeOptionalString(currentMessageId);
   return payloads
     .map((payload) =>
-      resolveReplyThreadingForPayload({ payload, implicitReplyToId, currentMessageId }),
+      resolveReplyThreadingForPayload({
+        payload,
+        replyToMode,
+        implicitReplyToId,
+        currentMessageId,
+        replyThreading,
+      }),
     )
     .filter(isRenderablePayload)
     .map(applyReplyToMode);

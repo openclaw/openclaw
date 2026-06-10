@@ -1,7 +1,9 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 export type IMessageRpcError = {
@@ -37,12 +39,23 @@ type PendingRequest = {
   timer?: NodeJS.Timeout;
 };
 
+export const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
+
 function isTestEnv(): boolean {
   if (process.env.NODE_ENV === "test") {
     return true;
   }
-  const vitest = process.env.VITEST?.trim().toLowerCase();
+  const vitest = normalizeLowercaseStringOrEmpty(process.env.VITEST);
   return Boolean(vitest);
+}
+
+export function normalizeIMessageFullDiskAccessError(message: string): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(message);
+  if (!normalized.includes("full disk access") || !normalized.includes("chat.db")) {
+    return undefined;
+  }
+  return PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR;
 }
 
 export class IMessageRpcClient {
@@ -56,6 +69,7 @@ export class IMessageRpcClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private reader: Interface | null = null;
   private nextId = 1;
+  private publicProcessError: string | null = null;
 
   constructor(opts: IMessageRpcClientOptions = {}) {
     this.cliPath = opts.cliPath?.trim() || "imsg";
@@ -74,7 +88,7 @@ export class IMessageRpcClient {
     if (isTestEnv()) {
       throw new Error("Refusing to start imsg rpc in test environment; mock iMessage RPC client");
     }
-    const args = ["rpc"];
+    const args = ["rpc", "--json"];
     if (this.dbPath) {
       args.push("--db", this.dbPath);
     }
@@ -98,7 +112,9 @@ export class IMessageRpcClient {
         if (!line.trim()) {
           continue;
         }
-        this.runtime?.error?.(`imsg rpc: ${line.trim()}`);
+        const trimmed = line.trim();
+        this.recordProcessDiagnostic(trimmed);
+        this.runtime?.error?.(`imsg rpc: ${trimmed}`);
       }
     });
 
@@ -107,13 +123,14 @@ export class IMessageRpcClient {
       this.closedResolve?.();
     });
 
+    // Without this listener, async EPIPE from a dead child crashes the
+    // gateway via uncaughtException. (#75438)
+    child.stdin.on("error", (err) => {
+      this.failAll(err instanceof Error ? err : new Error(String(err)));
+    });
+
     child.on("close", (code, signal) => {
-      if (code !== 0 && code !== null) {
-        const reason = signal ? `signal ${signal}` : `code ${code}`;
-        this.failAll(new Error(`imsg rpc exited (${reason})`));
-      } else {
-        this.failAll(new Error("imsg rpc closed"));
-      }
+      this.failAll(this.buildCloseError(code, signal));
       this.closedResolve?.();
     });
   }
@@ -179,7 +196,21 @@ export class IMessageRpcClient {
       });
     });
 
-    this.child.stdin.write(line);
+    // Reject the specific pending request on write error (e.g. EPIPE)
+    // instead of letting it hang until timeout. (#75438)
+    this.child.stdin.write(line, (err) => {
+      if (err) {
+        const key = String(id);
+        const pending = this.pending.get(key);
+        if (pending) {
+          if (pending.timer) {
+            clearTimeout(pending.timer);
+          }
+          this.pending.delete(key);
+          pending.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    });
     return await response;
   }
 
@@ -188,7 +219,8 @@ export class IMessageRpcClient {
     try {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      this.recordProcessDiagnostic(line);
+      const detail = formatErrorMessage(err);
       this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
       return;
     }
@@ -233,6 +265,21 @@ export class IMessageRpcClient {
         params: parsed.params,
       });
     }
+  }
+
+  private recordProcessDiagnostic(line: string): void {
+    this.publicProcessError ??= normalizeIMessageFullDiskAccessError(line) ?? null;
+  }
+
+  private buildCloseError(code: number | null, signal: NodeJS.Signals | null): Error {
+    if (this.publicProcessError) {
+      return new Error(this.publicProcessError);
+    }
+    if (code !== 0 && code !== null) {
+      const reason = signal ? `signal ${signal}` : `code ${code}`;
+      return new Error(`imsg rpc exited (${reason})`);
+    }
+    return new Error("imsg rpc closed");
   }
 
   private failAll(err: Error) {

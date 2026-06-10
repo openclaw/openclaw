@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   getProviderUsageMocks,
-  getRunEmbeddedPiAgentMock,
+  getRunEmbeddedAgentMock,
   makeCfg,
   requireSessionStorePath,
   withTempHome,
-} from "./reply.triggers.trigger-handling.test-harness.js";
+} from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
@@ -18,13 +18,17 @@ async function readSessionStore(storePath: string): Promise<Record<string, unkno
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
-function pickFirstStoreEntry<T>(store: Record<string, unknown>): T | undefined {
-  const entries = Object.values(store) as T[];
+function pickFirstStoreEntry(store: Record<string, unknown>): unknown {
+  const entries = Object.values(store);
   return entries[0];
 }
 
 function getReplyFromConfigNow(getReplyFromConfig: () => GetReplyFromConfig): GetReplyFromConfig {
   return getReplyFromConfig();
+}
+
+function replyText(reply: Awaited<ReturnType<GetReplyFromConfig>>): string {
+  return (Array.isArray(reply) ? reply[0]?.text : reply?.text) ?? "";
 }
 
 function seedUsageSummary(): void {
@@ -52,7 +56,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
   describe("usage and status command handling", () => {
     it("shows status without invoking the agent", async () => {
       await withTempHome(async (home) => {
-        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
         const getReplyFromConfig = getReplyFromConfigNow(params.getReplyFromConfig);
         seedUsageSummary();
 
@@ -72,13 +76,13 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         const text = Array.isArray(res) ? res[0]?.text : res?.text;
         expect(text).toContain("Model:");
         expect(text).toContain("OpenClaw");
-        expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       });
     });
 
     it("cycles usage footer modes and persists the final selection", async () => {
       await withTempHome(async (home) => {
-        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
         const getReplyFromConfig = getReplyFromConfigNow(params.getReplyFromConfig);
         const cfg = makeCfg(home);
         cfg.session = { ...cfg.session, store: join(home, "usage-cycle.sessions.json") };
@@ -96,9 +100,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r0) ? r0[0]?.text : r0?.text) ?? "")).toContain(
-          "Usage footer: tokens",
-        );
+        expect(replyText(r0)).toContain("Usage footer: tokens");
 
         const r1 = await getReplyFromConfig(
           {
@@ -112,9 +114,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r1) ? r1[0]?.text : r1?.text) ?? "")).toContain(
-          "Usage footer: full",
-        );
+        expect(replyText(r1)).toContain("Usage footer: full");
 
         const r2 = await getReplyFromConfig(
           {
@@ -128,9 +128,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r2) ? r2[0]?.text : r2?.text) ?? "")).toContain(
-          "Usage footer: off",
-        );
+        expect(replyText(r2)).toContain("Usage footer: off");
 
         const r3 = await getReplyFromConfig(
           {
@@ -144,15 +142,13 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r3) ? r3[0]?.text : r3?.text) ?? "")).toContain(
-          "Usage footer: tokens",
-        );
+        expect(replyText(r3)).toContain("Usage footer: tokens");
 
         const finalStore = await readSessionStore(usageStorePath);
-        expect(pickFirstStoreEntry<{ responseUsage?: string }>(finalStore)?.responseUsage).toBe(
+        expect((pickFirstStoreEntry(finalStore) as { responseUsage?: string })?.responseUsage).toBe(
           "tokens",
         );
-        expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       });
     });
   });

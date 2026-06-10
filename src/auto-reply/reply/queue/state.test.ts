@@ -18,7 +18,7 @@ function makeRun(): FollowupRun["run"] {
     workspaceDir: "/tmp/workspace",
     config: {} as FollowupRun["run"]["config"],
     provider: "anthropic",
-    model: "claude-opus-4-5",
+    model: "claude-opus-4-6",
     authProfileId: "profile-a",
     authProfileIdSource: "user",
     timeoutMs: 30_000,
@@ -28,7 +28,7 @@ function makeRun(): FollowupRun["run"] {
 
 describe("refreshQueuedFollowupSession", () => {
   it("retargets queued runs to the persisted selection", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "queue" });
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     const lastRun = makeRun();
     const queuedRun: FollowupRun = {
       prompt: "queued message",
@@ -46,17 +46,44 @@ describe("refreshQueuedFollowupSession", () => {
       nextAuthProfileIdSource: undefined,
     });
 
-    expect(queue.lastRun).toMatchObject({
+    expect(queue.lastRun).toEqual({
+      ...makeRun(),
       provider: "openai",
       model: "gpt-4o",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(queue.items[0]?.run).toMatchObject({
+    expect(queue.items[0]?.run).toEqual({
+      ...makeRun(),
       provider: "openai",
       model: "gpt-4o",
       authProfileId: undefined,
       authProfileIdSource: undefined,
+    });
+  });
+
+  it("retargets queued runs with user model override source", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const queuedRun: FollowupRun = {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: { ...makeRun(), hasAutoFallbackProvenance: true },
+    };
+    queue.items.push(queuedRun);
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "ollama",
+      nextModel: "qwen3.5:27b",
+      nextModelOverrideSource: "user",
+    });
+
+    expect(queue.items[0]?.run).toEqual({
+      ...makeRun(),
+      provider: "ollama",
+      model: "qwen3.5:27b",
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
     });
   });
 });

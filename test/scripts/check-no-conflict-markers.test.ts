@@ -1,27 +1,16 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   findConflictMarkerLines,
   findConflictMarkersInFiles,
+  findConflictMarkersInTrackedFiles,
   listTrackedFiles,
 } from "../../scripts/check-no-conflict-markers.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-conflict-markers-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const { createTempDir } = createScriptTestHarness();
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -49,13 +38,15 @@ describe("check-no-conflict-markers", () => {
   it("ignores marker-like text when it is indented or inline", () => {
     expect(
       findConflictMarkerLines(
-        ["Example:", "  <<<<<<< HEAD", "const text = '======= not a conflict';"].join("\n"),
+        ["Example:", "  <<<<<<< HEAD", "const text = '======= not a conflict';", "========"].join(
+          "\n",
+        ),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("scans text files and skips binary files", () => {
-    const rootDir = makeTempDir();
+    const rootDir = createTempDir("openclaw-conflict-markers-");
     const textFile = path.join(rootDir, "CHANGELOG.md");
     const binaryFile = path.join(rootDir, "image.png");
     fs.writeFileSync(textFile, "<<<<<<< HEAD\nconflict\n>>>>>>> main\n");
@@ -72,7 +63,7 @@ describe("check-no-conflict-markers", () => {
   });
 
   it("finds conflict markers in tracked script files", () => {
-    const rootDir = makeTempDir();
+    const rootDir = createTempDir("openclaw-conflict-markers-");
     git(rootDir, "init", "-q");
     git(rootDir, "config", "user.email", "test@example.com");
     git(rootDir, "config", "user.name", "Test User");
@@ -91,7 +82,14 @@ describe("check-no-conflict-markers", () => {
     );
     git(rootDir, "add", "scripts/bundled-plugin-metadata-runtime.mjs");
 
-    const violations = findConflictMarkersInFiles(listTrackedFiles(rootDir));
+    expect(findConflictMarkersInFiles(listTrackedFiles(rootDir))).toEqual([
+      {
+        filePath: scriptFile,
+        lines: [1, 3, 5],
+      },
+    ]);
+
+    const violations = findConflictMarkersInTrackedFiles(rootDir);
 
     expect(violations).toEqual([
       {

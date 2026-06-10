@@ -1,5 +1,14 @@
-import type { OpenClawConfig } from "../config/config.js";
+import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { formatPortRangeHint } from "../cli/error-format.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
@@ -10,8 +19,6 @@ import {
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
-import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
 import {
@@ -23,6 +30,13 @@ import {
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
+
+function validateGatewayPortInput(value: unknown): string | undefined {
+  if (parsePort(value) === null) {
+    return formatPortRangeHint();
+  }
+  return undefined;
+}
 
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
@@ -36,11 +50,11 @@ export async function promptGatewayConfig(
     await text({
       message: "Gateway port",
       initialValue: String(resolveGatewayPort(cfg)),
-      validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+      validate: validateGatewayPortInput,
     }),
     runtime,
   );
-  const port = Number.parseInt(String(portRaw), 10);
+  const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
 
   let bind = guardCancel(
     await select({
@@ -86,14 +100,14 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    customBindHost = typeof input === "string" ? input : undefined;
+    customBindHost = readStringValue(input);
   }
 
   let authMode = guardCancel(
     await select({
-      message: "Gateway auth",
+      message: "Gateway access protection",
       options: [
-        { value: "token", label: "Token", hint: "Recommended default" },
+        { value: "token", label: "Token (recommended)", hint: "Recommended default" },
         { value: "password", label: "Password" },
         {
           value: "trusted-proxy",
@@ -127,14 +141,12 @@ export async function promptGatewayConfig(
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = Boolean(
-      guardCancel(
-        await confirm({
-          message: "Reset Tailscale serve/funnel on exit?",
-          initialValue: false,
-        }),
-        runtime,
-      ),
+    tailscaleResetOnExit = guardCancel(
+      await confirm({
+        message: "Reset Tailscale serve/funnel on exit?",
+        initialValue: false,
+      }),
+      runtime,
     );
   }
 
@@ -195,7 +207,7 @@ export async function promptGatewayConfig(
           initialValue: "OPENCLAW_GATEWAY_TOKEN",
           placeholder: "OPENCLAW_GATEWAY_TOKEN",
           validate: (value) => {
-            const candidate = String(value ?? "").trim();
+            const candidate = normalizeOptionalString(value) ?? "";
             if (!isValidEnvSecretRefId(candidate)) {
               return "Use an env var name like OPENCLAW_GATEWAY_TOKEN.";
             }
@@ -208,7 +220,7 @@ export async function promptGatewayConfig(
         }),
         runtime,
       );
-      const envVarName = String(envVar ?? "").trim();
+      const envVarName = normalizeOptionalString(envVar) ?? "";
       gatewayToken = {
         source: "env",
         provider: resolveDefaultSecretProviderAlias(cfg, "env", {
@@ -238,7 +250,7 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    gatewayPassword = String(password ?? "").trim();
+    gatewayPassword = normalizeOptionalString(password) ?? "";
   }
 
   if (authMode === "trusted-proxy") {
@@ -272,10 +284,7 @@ export async function promptGatewayConfig(
       runtime,
     );
     const requiredHeaders = requiredHeadersRaw
-      ? String(requiredHeadersRaw)
-          .split(",")
-          .map((h) => h.trim())
-          .filter(Boolean)
+      ? normalizeStringEntries(requiredHeadersRaw.split(","))
       : [];
 
     const allowUsersRaw = guardCancel(
@@ -285,19 +294,14 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    const allowUsers = allowUsersRaw
-      ? String(allowUsersRaw)
-          .split(",")
-          .map((u) => u.trim())
-          .filter(Boolean)
-      : [];
+    const allowUsers = allowUsersRaw ? normalizeStringEntries(allowUsersRaw.split(",")) : [];
 
     const trustedProxiesRaw = guardCancel(
       await text({
         message: "Trusted proxy IPs (comma-separated)",
         placeholder: "10.0.1.10,192.168.1.5",
         validate: (value) => {
-          if (!value || String(value).trim() === "") {
+          if (!normalizeOptionalString(value)) {
             return "At least one trusted proxy IP is required";
           }
           return undefined;
@@ -305,13 +309,10 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    trustedProxies = String(trustedProxiesRaw)
-      .split(",")
-      .map((ip) => ip.trim())
-      .filter(Boolean);
+    trustedProxies = normalizeStringEntries(trustedProxiesRaw.split(","));
 
     trustedProxyConfig = {
-      userHeader: String(userHeader).trim(),
+      userHeader: normalizeOptionalString(userHeader) ?? "",
       requiredHeaders: requiredHeaders.length > 0 ? requiredHeaders : undefined,
       allowUsers: allowUsers.length > 0 ? allowUsers : undefined,
     };

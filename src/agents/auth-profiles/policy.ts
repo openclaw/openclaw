@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../../config/types.secrets.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
@@ -61,7 +61,7 @@ function collectOAuthModeSecretRefViolations(params: {
   profileId: string;
   credential: AuthProfileCredential;
   defaults: SecretDefaults | undefined;
-  configuredMode?: "api_key" | "oauth" | "token";
+  configuredMode?: "api_key" | "aws-sdk" | "oauth" | "token";
   violations: OAuthSecretRefPolicyViolation[];
 }): void {
   if (params.configuredMode !== "oauth") {
@@ -95,7 +95,7 @@ function collectOAuthModeSecretRefViolations(params: {
   }
 }
 
-export function collectOAuthSecretRefPolicyViolations(params: {
+function collectOAuthSecretRefPolicyViolations(params: {
   store: AuthProfileStore;
   cfg?: OpenClawConfig;
   profileIds?: Iterable<string>;

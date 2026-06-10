@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 
-const EADDRINUSE_MAX_RETRIES = 4;
+const EADDRINUSE_MAX_RETRIES = 20;
 const EADDRINUSE_RETRY_INTERVAL_MS = 500;
 
 async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
@@ -22,7 +22,7 @@ export async function listenGatewayHttpServer(params: {
 }) {
   const { httpServer, bindHost, port } = params;
 
-  for (let attempt = 0; ; attempt++) {
+  for (const attempt of Array.from({ length: EADDRINUSE_MAX_RETRIES + 1 }, (_, index) => index)) {
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: NodeJS.ErrnoException) => {

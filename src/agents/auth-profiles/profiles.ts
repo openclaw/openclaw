@@ -1,15 +1,60 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { normalizeProviderId, normalizeProviderIdForAuth } from "../provider-id.js";
 import {
-  ensureAuthProfileStore,
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+import {
+  ensureAuthProfileStoreForLocalUpdate,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
+export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 
-export function dedupeProfileIds(profileIds: string[]): string[] {
-  return [...new Set(profileIds)];
+function findProviderAuthStateKey(
+  entries: Record<string, unknown> | undefined,
+  providerKey: string,
+): string | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const normalizedProviderKey = resolveProviderIdForAuth(providerKey);
+  return Object.keys(entries).find(
+    (key) => resolveProviderIdForAuth(key) === normalizedProviderKey,
+  );
+}
+
+function resetSuccessfulUsageStats(
+  existing: ProfileUsageStats | undefined,
+  lastUsed: number,
+): ProfileUsageStats {
+  return {
+    ...existing,
+    errorCount: 0,
+    blockedUntil: undefined,
+    blockedReason: undefined,
+    blockedSource: undefined,
+    blockedModel: undefined,
+    cooldownUntil: undefined,
+    cooldownReason: undefined,
+    cooldownModel: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+    lastUsed,
+  };
+}
+
+function updateSuccessfulUsageStatsEntry(
+  store: AuthProfileStore,
+  profileId: string,
+  lastUsed: number,
+): void {
+  store.usageStats = store.usageStats ?? {};
+  store.usageStats[profileId] = resetSuccessfulUsageStats(store.usageStats[profileId], lastUsed);
 }
 
 export async function setAuthProfileOrder(params: {
@@ -42,25 +87,96 @@ export async function setAuthProfileOrder(params: {
   });
 }
 
+export async function promoteAuthProfileInOrder(params: {
+  agentDir?: string;
+  provider: string;
+  profileId: string;
+  createIfMissing?: boolean;
+  createFromOrder?: string[];
+}): Promise<AuthProfileStore | null> {
+  const providerKey = resolveProviderIdForAuth(params.provider);
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    ...(params.createFromOrder
+      ? { saveOptions: { preserveOrderProfileIds: params.createFromOrder } }
+      : {}),
+    updater: (store) => {
+      const profile = store.profiles[params.profileId];
+      if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
+        return false;
+      }
+      const orderKey =
+        findProviderAuthStateKey(store.order, providerKey) ??
+        findNormalizedProviderKey(store.order, providerKey) ??
+        normalizeProviderId(providerKey);
+      const existing = store.order?.[orderKey];
+      if (!existing || existing.length === 0) {
+        if (!params.createIfMissing) {
+          return false;
+        }
+        const providerProfiles = dedupeProfileIds(
+          params.createFromOrder !== undefined
+            ? params.createFromOrder
+            : listProfilesForProvider(store, providerKey),
+        );
+        const next = dedupeProfileIds([
+          params.profileId,
+          ...providerProfiles.filter((profileId) => profileId !== params.profileId),
+        ]);
+        store.order = { ...store.order, [orderKey]: next };
+        return true;
+      }
+      const next = dedupeProfileIds([
+        params.profileId,
+        ...existing.filter((profileId) => profileId !== params.profileId),
+      ]);
+      if (
+        next.length === existing.length &&
+        next.every((profileId, idx) => profileId === existing[idx])
+      ) {
+        return false;
+      }
+      store.order = { ...store.order, [orderKey]: next };
+      return true;
+    },
+  });
+}
+
+function normalizeAuthProfileCredential(credential: AuthProfileCredential): AuthProfileCredential {
+  if (credential.type === "api_key") {
+    if (typeof credential.key !== "string") {
+      return credential;
+    }
+    const { key: _key, ...rest } = credential;
+    const key = normalizeSecretInput(credential.key);
+    return {
+      ...rest,
+      ...(key ? { key } : {}),
+    };
+  }
+  if (credential.type === "token") {
+    if (typeof credential.token !== "string") {
+      return credential;
+    }
+    const { token: _token, ...rest } = credential;
+    const token = normalizeSecretInput(credential.token);
+    return { ...rest, ...(token ? { token } : {}) };
+  }
+  return credential;
+}
+
 export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
 }): void {
-  const credential =
-    params.credential.type === "api_key"
-      ? {
-          ...params.credential,
-          ...(typeof params.credential.key === "string"
-            ? { key: normalizeSecretInput(params.credential.key) }
-            : {}),
-        }
-      : params.credential.type === "token"
-        ? { ...params.credential, token: normalizeSecretInput(params.credential.token) }
-        : params.credential;
-  const store = ensureAuthProfileStore(params.agentDir);
+  const credential = normalizeAuthProfileCredential(params.credential);
+  const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   store.profiles[params.profileId] = credential;
-  saveAuthProfileStore(store, params.agentDir);
+  saveAuthProfileStore(store, params.agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
 }
 
 export async function upsertAuthProfileWithLock(params: {
@@ -68,48 +184,116 @@ export async function upsertAuthProfileWithLock(params: {
   credential: AuthProfileCredential;
   agentDir?: string;
 }): Promise<AuthProfileStore | null> {
+  const credential = normalizeAuthProfileCredential(params.credential);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    saveOptions: {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    },
     updater: (store) => {
-      store.profiles[params.profileId] = params.credential;
+      store.profiles[params.profileId] = credential;
       return true;
     },
   });
 }
 
-export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
-  const providerKey = normalizeProviderIdForAuth(provider);
-  return Object.entries(store.profiles)
-    .filter(([, cred]) => normalizeProviderIdForAuth(cred.provider) === providerKey)
-    .map(([id]) => id);
+export async function removeProviderAuthProfilesWithLock(params: {
+  provider: string;
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = resolveProviderIdForAuth(params.provider);
+  const storeOrderKey = normalizeProviderId(params.provider);
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      const profileIds = listProfilesForProvider(store, params.provider);
+      let changed = false;
+      for (const profileId of profileIds) {
+        if (store.profiles[profileId]) {
+          delete store.profiles[profileId];
+          changed = true;
+        }
+        if (store.usageStats?.[profileId]) {
+          delete store.usageStats[profileId];
+          changed = true;
+        }
+      }
+      if (store.order?.[storeOrderKey]) {
+        delete store.order[storeOrderKey];
+        changed = true;
+        if (Object.keys(store.order).length === 0) {
+          store.order = undefined;
+        }
+      }
+      if (store.lastGood?.[providerKey]) {
+        delete store.lastGood[providerKey];
+        changed = true;
+        if (Object.keys(store.lastGood).length === 0) {
+          store.lastGood = undefined;
+        }
+      }
+      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
+        store.usageStats = undefined;
+      }
+      return changed;
+    },
+  });
 }
 
-export async function markAuthProfileGood(params: {
+export async function clearLastGoodProfileWithLock(params: {
+  provider: string;
+  profileId: string;
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = resolveProviderIdForAuth(params.provider);
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      const lastGoodKey = findProviderAuthStateKey(store.lastGood, providerKey);
+      if (!lastGoodKey || store.lastGood?.[lastGoodKey] !== params.profileId) {
+        return false;
+      }
+      delete store.lastGood[lastGoodKey];
+      if (Object.keys(store.lastGood).length === 0) {
+        store.lastGood = undefined;
+      }
+      return true;
+    },
+  });
+}
+
+export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;
   profileId: string;
   agentDir?: string;
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
+  const providerKey = resolveProviderIdForAuth(provider);
+  const lastUsed = Date.now();
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
-      if (!profile || profile.provider !== provider) {
+      if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
         return false;
       }
-      freshStore.lastGood = { ...freshStore.lastGood, [provider]: profileId };
+      freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
+      updateSuccessfulUsageStatsEntry(freshStore, profileId, lastUsed);
       return true;
     },
   });
   if (updated) {
     store.lastGood = updated.lastGood;
+    store.usageStats = updated.usageStats;
     return;
   }
   const profile = store.profiles[profileId];
-  if (!profile || profile.provider !== provider) {
+  if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
     return;
   }
-  store.lastGood = { ...store.lastGood, [provider]: profileId };
+  store.lastGood = { ...store.lastGood, [providerKey]: profileId };
+  updateSuccessfulUsageStatsEntry(store, profileId, lastUsed);
   saveAuthProfileStore(store, agentDir);
 }

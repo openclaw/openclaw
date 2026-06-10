@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendReactionsModule = await import("./send-reactions.js");
@@ -14,6 +14,7 @@ function createSignalAccountOverrideCfg(): OpenClawConfig {
   return {
     channels: {
       signal: {
+        account: "+15550002222",
         actions: { reactions: false },
         accounts: {
           work: { account: "+15550001111", actions: { reactions: true } },
@@ -32,7 +33,7 @@ describe("signalMessageActions", () => {
   it("lists actions based on configured accounts and reaction gates", () => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg: {} as OpenClawConfig })?.actions ?? [],
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       signalMessageActions.describeMessageTool?.({
@@ -46,6 +47,17 @@ describe("signalMessageActions", () => {
       signalMessageActions.describeMessageTool?.({ cfg: createSignalAccountOverrideCfg() })
         ?.actions,
     ).toEqual(["send", "react"]);
+  });
+
+  it("honors account-scoped reaction gates during discovery", () => {
+    const cfg = createSignalAccountOverrideCfg();
+
+    expect(
+      signalMessageActions.describeMessageTool?.({ cfg, accountId: "default" })?.actions,
+    ).toEqual(["send"]);
+    expect(signalMessageActions.describeMessageTool?.({ cfg, accountId: "work" })?.actions).toEqual(
+      ["send", "react"],
+    );
   });
 
   it("skips send for plugin dispatch", () => {
@@ -124,6 +136,12 @@ describe("signalMessageActions", () => {
 
     for (const testCase of cases) {
       sendReactionSignalMock.mockClear();
+      const expectedOptions = testCase.expectedOptions as {
+        accountId?: string;
+        groupId?: string;
+        targetAuthor?: string;
+        targetAuthorUuid?: string;
+      };
       await signalMessageActions.handleAction?.({
         channel: "signal",
         action: "react",
@@ -137,10 +155,13 @@ describe("signalMessageActions", () => {
         testCase.expectedRecipient,
         testCase.expectedTimestamp,
         testCase.expectedEmoji,
-        expect.objectContaining({
+        {
           cfg: testCase.cfg,
-          ...testCase.expectedOptions,
-        }),
+          accountId: expectedOptions.accountId,
+          groupId: expectedOptions.groupId,
+          targetAuthor: expectedOptions.targetAuthor,
+          targetAuthorUuid: expectedOptions.targetAuthorUuid,
+        },
       );
     }
   });
@@ -158,6 +179,16 @@ describe("signalMessageActions", () => {
         cfg,
       }),
     ).rejects.toThrow(/messageId.*required/);
+
+    await expect(
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "react",
+        params: { to: "+15559999999", messageId: "123abc", emoji: "✅" },
+        cfg,
+      }),
+    ).rejects.toThrow(/Invalid messageId/);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
 
     await expect(
       signalMessageActions.handleAction?.({

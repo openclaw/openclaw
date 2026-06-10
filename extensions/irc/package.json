@@ -1,14 +1,17 @@
 {
   "name": "@openclaw/irc",
-  "version": "2026.4.1-beta.1",
+  "version": "2026.6.2",
   "description": "OpenClaw IRC channel plugin",
   "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
     "install": {
-      "minHostVersion": ">=2026.4.1"
+      "minHostVersion": ">=2026.4.10"
     },
     "setupEntry": "./setup-entry.ts",
     "channel": {
@@ -22,7 +25,20 @@
       "aliases": [
         "internet-relay-chat"
       ],
-      "systemImage": "network"
+      "systemImage": "network",
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "IRC_HOST",
+            "IRC_NICK"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasIrcConfiguredState"
+      }
     }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
   }
 }

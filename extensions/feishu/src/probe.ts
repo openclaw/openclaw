@@ -1,3 +1,8 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
@@ -17,20 +22,19 @@ export type ProbeFeishuOptions = {
   abortSignal?: AbortSignal;
 };
 
-type FeishuBotInfoResponse = {
+type FeishuPingResponse = {
   code: number;
   msg?: string;
-  bot?: { bot_name?: string; open_id?: string };
-  data?: { bot?: { bot_name?: string; open_id?: string } };
+  data?: { pingBotInfo?: { botID?: string; botName?: string } };
 };
 
 type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
   request(params: {
-    method: "GET";
+    method: "POST";
     url: string;
-    data: Record<string, never>;
+    data: Record<string, unknown>;
     timeout: number;
-  }): Promise<FeishuBotInfoResponse>;
+  }): Promise<FeishuPingResponse>;
 };
 
 function setCachedProbeResult(
@@ -38,7 +42,12 @@ function setCachedProbeResult(
   result: FeishuProbeResult,
   ttlMs: number,
 ): FeishuProbeResult {
-  probeCache.set(cacheKey, { result, expiresAt: Date.now() + ttlMs });
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs);
+  if (expiresAt === undefined) {
+    probeCache.delete(cacheKey);
+    return result;
+  }
+  probeCache.set(cacheKey, { result, expiresAt });
   if (probeCache.size > MAX_PROBE_CACHE_SIZE) {
     const oldest = probeCache.keys().next().value;
     if (oldest !== undefined) {
@@ -74,18 +83,25 @@ export async function probeFeishu(
   // pollute each other's cache entry.
   const cacheKey = creds.accountId ?? `${creds.appId}:${creds.appSecret.slice(0, 8)}`;
   const cached = probeCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.result;
+  if (cached) {
+    const now = asDateTimestampMs(Date.now());
+    const expiresAt = asDateTimestampMs(cached.expiresAt);
+    if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
+      return cached.result;
+    }
+    probeCache.delete(cacheKey);
   }
 
   try {
     const client = createFeishuClient(creds) as FeishuRequestClient;
-    // Use bot/v3/info API to get bot information
-    const responseResult = await raceWithTimeoutAndAbort<FeishuBotInfoResponse>(
+    // Feishu-provided endpoint for OpenClaw, supported on both Feishu (CN)
+    // and Lark (international). No OAuth scopes required. Validates
+    // credentials and registers the app as an AI agent (智能体).
+    const responseResult = await raceWithTimeoutAndAbort<FeishuPingResponse>(
       client.request({
-        method: "GET",
-        url: "/open-apis/bot/v3/info",
-        data: {},
+        method: "POST",
+        url: "/open-apis/bot/v1/openclaw_bot/ping",
+        data: { needBotInfo: true },
         timeout: timeoutMs,
       }),
       {
@@ -134,14 +150,14 @@ export async function probeFeishu(
       );
     }
 
-    const bot = response.bot || response.data?.bot;
+    const botInfo = response.data?.pingBotInfo;
     return setCachedProbeResult(
       cacheKey,
       {
         ok: true,
         appId: creds.appId,
-        botName: bot?.bot_name,
-        botOpenId: bot?.open_id,
+        botName: botInfo?.botName,
+        botOpenId: botInfo?.botID,
       },
       PROBE_SUCCESS_TTL_MS,
     );
@@ -151,7 +167,7 @@ export async function probeFeishu(
       {
         ok: false,
         appId: creds.appId,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       },
       PROBE_ERROR_TTL_MS,
     );

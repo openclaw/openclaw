@@ -29,4 +29,10 @@ describe("anthropic vertex region helpers", () => {
       "global",
     );
   });
+
+  it("does not infer a Vertex region from custom proxy hosts", () => {
+    expect(
+      resolveAnthropicVertexRegionFromBaseUrl("https://proxy.example.com/google/aiplatform"),
+    ).toBeUndefined();
+  });
 });

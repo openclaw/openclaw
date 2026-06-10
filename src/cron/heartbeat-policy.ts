@@ -1,12 +1,16 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 
-export type HeartbeatDeliveryPayload = {
+type HeartbeatDeliveryPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  presentation?: unknown;
+  interactive?: unknown;
+  channelData?: unknown;
 };
 
+/** Returns whether delivery output contains only heartbeat acknowledgement text. */
 export function shouldSkipHeartbeatOnlyDelivery(
   payloads: HeartbeatDeliveryPayload[],
   ackMaxChars: number,
@@ -14,10 +18,10 @@ export function shouldSkipHeartbeatOnlyDelivery(
   if (payloads.length === 0) {
     return true;
   }
-  const hasAnyMedia = payloads.some(
-    (payload) => resolveSendableOutboundReplyParts(payload).hasMedia,
+  const hasAnyNonTextContent = payloads.some((payload) =>
+    hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true }),
   );
-  if (hasAnyMedia) {
+  if (hasAnyNonTextContent) {
     return false;
   }
   return payloads.some((payload) => {
@@ -29,6 +33,7 @@ export function shouldSkipHeartbeatOnlyDelivery(
   });
 }
 
+/** Returns whether an undelivered cron main-summary system event should be queued. */
 export function shouldEnqueueCronMainSummary(params: {
   summaryText: string | undefined;
   deliveryRequested: boolean;

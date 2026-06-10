@@ -1,37 +1,61 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
 
 export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   anthropic: "Claude",
+  deepseek: "DeepSeek",
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
   minimax: "MiniMax",
-  "openai-codex": "Codex",
+  openai: "OpenAI",
   xiaomi: "Xiaomi",
+  "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
 };
 
 export const usageProviders: UsageProviderId[] = [
   "anthropic",
+  "deepseek",
   "github-copilot",
   "google-gemini-cli",
   "minimax",
-  "openai-codex",
+  "openai",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ];
 
-export function resolveUsageProviderId(provider?: string | null): UsageProviderId | undefined {
+export function isOAuthOnlyUsageProvider(provider: UsageProviderId): boolean {
+  return provider === "openai";
+}
+
+export function resolveUsageProviderId(
+  provider?: string | null,
+  options?: { credentialType?: string | null },
+): UsageProviderId | undefined {
   if (!provider) {
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (
+    normalized === "openai" &&
+    (options?.credentialType === "oauth" || options?.credentialType === "token")
+  ) {
+    return "openai";
+  }
+  if (normalized === "openai") {
+    return undefined;
+  }
+  if (
+    normalized === "minimax-portal" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal-cn"
+  ) {
+    return "minimax";
+  }
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
     : undefined;
@@ -50,11 +74,12 @@ export const clampPercent = (value: number) =>
 
 export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
+  const timeoutMs = resolveTimerTimeoutMs(ms, 1);
   try {
     return await Promise.race([
       work,
       new Promise<T>((resolve) => {
-        timeout = setTimeout(() => resolve(fallback), ms);
+        timeout = setTimeout(() => resolve(fallback), timeoutMs);
       }),
     ]);
   } finally {
@@ -63,33 +88,3 @@ export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T):
     }
   }
 };
-
-export function resolveLegacyPiAgentAccessToken(
-  env: NodeJS.ProcessEnv,
-  providerIds: string[],
-): string | undefined {
-  try {
-    const authPath = path.join(
-      resolveRequiredHomeDir(env, os.homedir),
-      ".pi",
-      "agent",
-      "auth.json",
-    );
-    if (!fs.existsSync(authPath)) {
-      return undefined;
-    }
-    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
-      string,
-      { access?: string }
-    >;
-    for (const providerId of providerIds) {
-      const token = parsed[providerId]?.access;
-      if (typeof token === "string" && token.trim()) {
-        return token;
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}

@@ -1,3 +1,7 @@
+import {
+  parseFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 
@@ -20,11 +24,24 @@ export type CreateTypingCallbacksParams = {
   maxDurationMs?: number;
 };
 
+function resolvePositiveIntegerOption(value: number | undefined, fallback: number): number {
+  const parsed = parseFiniteNumber(value);
+  return parsed === undefined || parsed <= 0 ? fallback : Math.max(1, Math.floor(parsed));
+}
+
+function resolveKeepaliveIntervalMs(value: number | undefined): number {
+  return resolveTimerTimeoutMs(value, 3_000, 0);
+}
+
+function resolveDurationMsOption(value: number | undefined, fallback: number): number {
+  return resolveTimerTimeoutMs(value, fallback, 0);
+}
+
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
   const stop = params.stop;
-  const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
-  const maxConsecutiveFailures = Math.max(1, params.maxConsecutiveFailures ?? 2);
-  const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
+  const keepaliveIntervalMs = resolveKeepaliveIntervalMs(params.keepaliveIntervalMs);
+  const maxConsecutiveFailures = resolvePositiveIntegerOption(params.maxConsecutiveFailures, 2);
+  const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000); // Default 60s TTL
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
@@ -59,6 +76,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
         fireStop();
       }
     }, maxDurationMs);
+    ttlTimer.unref?.();
   };
 
   const clearTtlTimer = () => {
@@ -76,12 +94,15 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     startGuard.reset();
     keepaliveLoop.stop();
     clearTtlTimer();
-    await fireStart();
-    if (startGuard.isTripped()) {
-      return;
-    }
-    keepaliveLoop.start();
-    startTtlTimer(); // Start TTL safety timer
+    const startPromise = fireStart();
+    void startPromise.then(() => {
+      if (closed || startGuard.isTripped()) {
+        return;
+      }
+      keepaliveLoop.start();
+      startTtlTimer();
+    });
+    await Promise.resolve();
   };
 
   const fireStop = () => {
@@ -92,7 +113,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       return;
     }
     stopSent = true;
-    void stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
+    void stop().catch((err: unknown) => (params.onStopError ?? params.onStartError)(err));
   };
 
   return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };

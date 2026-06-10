@@ -1,20 +1,40 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
+  formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
   resolveCompletionCachePath,
+  resolveCompletionProfilePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
-} from "../cli/completion-cli.js";
+} from "../cli/completion-runtime.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type CompletionShell = "zsh" | "bash" | "fish" | "powershell";
+
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+
+function resolveCompletionReloadPath(shell: CompletionShell): string {
+  if (shell === "powershell") {
+    return resolveCompletionProfilePath("powershell");
+  }
+  return `~/.${shell === "zsh" ? "zshrc" : shell === "bash" ? "bashrc" : "config/fish/config.fish"}`;
+}
+
+function formatCompletionReloadNote(
+  shell: CompletionShell,
+  action: "installed" | "upgraded",
+): string {
+  const profilePath = resolveCompletionReloadPath(shell);
+  return `Shell completion ${action}. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`;
+}
 
 /** Generate the completion cache by spawning the CLI. */
 async function generateCompletionCache(): Promise<boolean> {
@@ -32,6 +52,7 @@ async function generateCompletionCache(): Promise<boolean> {
     cwd: root,
     env: process.env,
     encoding: "utf-8",
+    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
 
   return result.status === 0;
@@ -65,6 +86,66 @@ export async function checkShellCompletionStatus(
   };
 }
 
+export function shellCompletionStatusToHealthFindings(
+  status: ShellCompletionStatus,
+): readonly HealthFinding[] {
+  const checkId = "core/doctor/shell-completion";
+  const pathLocal = `shellCompletion.${status.shell}`;
+  if (status.usesSlowPattern) {
+    return [
+      {
+        checkId,
+        severity: "info",
+        message: `Your ${status.shell} profile uses slow dynamic completion (source <(...)).`,
+        path: pathLocal,
+        fixHint: "Run `openclaw doctor --fix` to upgrade to cached completion.",
+      },
+    ];
+  }
+  if (status.profileInstalled && !status.cacheExists) {
+    return [
+      {
+        checkId,
+        severity: "info",
+        message: `Shell completion is configured in your ${status.shell} profile but the cache is missing.`,
+        path: pathLocal,
+        fixHint: `Run \`openclaw completion --write-state\` or \`openclaw doctor --fix\` to regenerate ${status.cachePath}.`,
+      },
+    ];
+  }
+  return [];
+}
+
+export function shellCompletionStatusToRepairEffects(
+  status: ShellCompletionStatus,
+): readonly HealthRepairEffect[] {
+  const effects: HealthRepairEffect[] = [];
+  if (status.usesSlowPattern && !status.cacheExists) {
+    effects.push({
+      kind: "state",
+      action: "would-generate-completion-cache",
+      target: status.cachePath,
+      dryRunSafe: true,
+    });
+  }
+  if (status.usesSlowPattern) {
+    effects.push({
+      kind: "file",
+      action: "would-upgrade-shell-profile-completion",
+      target: status.shell,
+      dryRunSafe: false,
+    });
+  } else if (status.profileInstalled && !status.cacheExists) {
+    effects.push({
+      kind: "state",
+      action: "would-regenerate-completion-cache",
+      target: status.cachePath,
+      dryRunSafe: true,
+    });
+  }
+  return effects;
+}
+
 export type DoctorCompletionOptions = {
   nonInteractive?: boolean;
 };
@@ -76,7 +157,7 @@ export type DoctorCompletionOptions = {
  * - If no completion at all: prompt to install (with user confirmation)
  */
 export async function doctorShellCompletion(
-  runtime: RuntimeEnv,
+  _runtime: RuntimeEnv,
   prompter: DoctorPrompter,
   options: DoctorCompletionOptions = {},
 ): Promise<void> {
@@ -104,10 +185,7 @@ export async function doctorShellCompletion(
 
     // Upgrade profile to use cached file
     await installCompletion(status.shell, true, cliName);
-    note(
-      `Shell completion upgraded. Restart your shell or run: source ~/.${status.shell === "zsh" ? "zshrc" : status.shell === "bash" ? "bashrc" : "config/fish/config.fish"}`,
-      "Shell completion",
-    );
+    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
     return;
   }
 
@@ -154,10 +232,7 @@ export async function doctorShellCompletion(
 
       // Then install to profile
       await installCompletion(status.shell, true, cliName);
-      note(
-        `Shell completion installed. Restart your shell or run: source ~/.${status.shell === "zsh" ? "zshrc" : status.shell === "bash" ? "bashrc" : "config/fish/config.fish"}`,
-        "Shell completion",
-      );
+      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
     }
   }
 }

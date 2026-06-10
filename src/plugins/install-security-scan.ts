@@ -2,9 +2,8 @@ type InstallScanLogger = {
   warn?: (message: string) => void;
 };
 
-export type InstallSafetyOverrides = {
-  dangerouslyForceUnsafeInstall?: boolean;
-};
+export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
 export type InstallSecurityScanResult = {
   blocked?: {
@@ -17,7 +16,8 @@ export type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 
 export type SkillInstallSpecMetadata = {
   id?: string;
@@ -33,6 +33,12 @@ export type SkillInstallSpecMetadata = {
   extract?: boolean;
   stripComponents?: number;
   targetDir?: string;
+};
+
+export type PackageExecutableScanMetadata = {
+  runtimeExtensions?: readonly string[];
+  runtimeSetupEntry?: string;
+  setupEntry?: string;
 };
 
 async function loadInstallSecurityScanRuntime() {
@@ -59,6 +65,7 @@ export async function scanPackageInstallSource(
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
+    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;
@@ -70,6 +77,20 @@ export async function scanPackageInstallSource(
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
   return await scanPackageInstallSourceRuntime(params);
+}
+
+export async function scanInstalledPackageDependencyTree(params: {
+  additionalPackageDirs?: string[];
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  dangerouslyForceUnsafeInstall?: boolean;
+  dependencyScanRootDir?: string;
+  logger: InstallScanLogger;
+  packageDir: string;
+  pluginId: string;
+  trustedSourceLinkedOfficialInstall?: boolean;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const { scanInstalledPackageDependencyTreeRuntime } = await loadInstallSecurityScanRuntime();
+  return await scanInstalledPackageDependencyTreeRuntime(params);
 }
 
 export async function scanFileInstallSource(

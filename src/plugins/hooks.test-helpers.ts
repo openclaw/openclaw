@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -12,7 +13,7 @@ export function createMockPluginRegistry(
 ): PluginRegistry {
   const pluginIds =
     hooks.length > 0
-      ? [...new Set(hooks.map((hook) => hook.pluginId ?? "test-plugin"))]
+      ? uniqueStrings(hooks.map((hook) => hook.pluginId ?? "test-plugin"))
       : ["test-plugin"];
   return {
     plugins: pluginIds.map((pluginId) =>
@@ -35,14 +36,30 @@ export function createMockPluginRegistry(
     channels: [],
     channelSetups: [],
     providers: [],
+    embeddingProviders: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
+    musicGenerationProviders: [],
+    webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
+    codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
+    memoryEmbeddingProviders: [],
+    agentHarnesses: [],
     httpRoutes: [],
     gatewayHandlers: {},
     cliRegistrars: [],
+    textTransforms: [],
+    reloads: [],
+    nodeHostCommands: [],
+    securityAuditCollectors: [],
     services: [],
+    gatewayDiscoveryServices: [],
+    conversationBindingResolvedHandlers: [],
     commands: [],
     diagnostics: [],
   } as unknown as PluginRegistry;
@@ -63,23 +80,26 @@ export function addTestHook(params: {
   hookName: PluginHookRegistration["hookName"];
   handler: PluginHookRegistration["handler"];
   priority?: number;
+  timeoutMs?: number;
 }) {
   params.registry.typedHooks.push({
     pluginId: params.pluginId,
     hookName: params.hookName,
     handler: params.handler,
     priority: params.priority ?? 0,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     source: "test",
   } as PluginHookRegistration);
 }
 
-export function addTestHooks(
+function addTestHooks(
   registry: PluginRegistry,
   hooks: ReadonlyArray<{
     pluginId: string;
     hookName: PluginHookRegistration["hookName"];
     handler: PluginHookRegistration["handler"];
     priority?: number;
+    timeoutMs?: number;
   }>,
 ) {
   for (const hook of hooks) {
@@ -89,6 +109,7 @@ export function addTestHooks(
       hookName: hook.hookName,
       handler: hook.handler,
       ...(hook.priority !== undefined ? { priority: hook.priority } : {}),
+      ...(hook.timeoutMs !== undefined ? { timeoutMs: hook.timeoutMs } : {}),
     });
   }
 }

@@ -1,5 +1,5 @@
-import { clearActiveProgressLine } from "./terminal/progress-line.js";
-import { restoreTerminalState } from "./terminal/restore.js";
+import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
+import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 
 export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
@@ -101,14 +101,6 @@ export function createNonExitingRuntime(): OutputRuntimeEnv {
       throw new Error(`exit ${code}`);
     },
   };
-}
-
-export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {
-  if (hasRuntimeOutputWriter(runtime)) {
-    runtime.writeStdout(value);
-    return;
-  }
-  runtime.log(value);
 }
 
 export function writeRuntimeJson(

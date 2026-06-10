@@ -1,3 +1,4 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -7,9 +8,8 @@ import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../agents/pi-embedded-helpers.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { note } from "../terminal/note.js";
+} from "../agents/embedded-agent-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 function formatInt(value: number): string {
   return new Intl.NumberFormat("en-US").format(Math.max(0, Math.floor(value)));

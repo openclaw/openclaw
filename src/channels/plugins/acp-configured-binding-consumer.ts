@@ -1,4 +1,8 @@
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
   normalizeMode,
@@ -12,7 +16,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ConfiguredBindingRuleConfig,
   ConfiguredBindingTargetFactory,
@@ -26,8 +30,9 @@ function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgen
   cwd?: string;
   backend?: string;
 } {
+  const ownerAgentId = normalizeLowercaseStringOrEmpty(params.ownerAgentId);
   const agent = params.cfg.agents?.list?.find(
-    (entry) => entry.id?.trim().toLowerCase() === params.ownerAgentId.toLowerCase(),
+    (entry) => normalizeOptionalLowercaseString(entry.id) === ownerAgentId,
   );
   if (!agent || agent.runtime?.type !== "acp") {
     return {};

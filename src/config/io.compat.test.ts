@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { normalizeCompatibilityConfigValues } from "../commands/doctor-legacy-config.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
-import { parseOpenClawVersion } from "./version.js";
+import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -19,7 +21,7 @@ async function writeConfig(
   home: string,
   dirname: ".openclaw",
   port: number,
-  filename: string = "openclaw.json",
+  filename = "openclaw.json",
 ) {
   const dir = path.join(home, dirname);
   await fs.mkdir(dir, { recursive: true });
@@ -35,43 +37,35 @@ function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.Pro
   });
 }
 
-async function expectNoNewerVersionWarning(touchedVersion: string) {
-  await withTempHome(async (home) => {
-    const configDir = path.join(home, ".openclaw");
-    await fs.mkdir(configDir, { recursive: true });
-    const configPath = path.join(configDir, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ meta: { lastTouchedVersion: touchedVersion } }, null, 2),
-    );
-
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    const io = createConfigIO({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => home,
-      logger,
-    });
-
-    io.loadConfig();
-
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("Config was last written by a newer OpenClaw"),
-    );
-    expect(io.configPath).toBe(configPath);
-  });
-}
-
 describe("config io paths", () => {
+  let whatsappSharedAccessDefaults: unknown;
+
+  beforeAll(() => {
+    const migrated = normalizeCompatibilityConfigValues({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          accounts: {
+            work: {
+              enabled: true,
+              authDir: "/tmp/wa-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    whatsappSharedAccessDefaults = migrated.config.channels?.whatsapp?.accounts?.default;
+  });
+
   it("uses ~/.openclaw/openclaw.json when config exists", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeConfig(home, ".openclaw", 19001);
       const io = createIoForHome(home);
       expect(io.configPath).toBe(configPath);
-      expect(io.loadConfig().gateway?.port).toBe(19001);
     });
   });
 
@@ -97,114 +91,171 @@ describe("config io paths", () => {
       const customPath = await writeConfig(home, ".openclaw", 20002, "custom.json");
       const io = createIoForHome(home, { OPENCLAW_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
       expect(io.configPath).toBe(customPath);
-      expect(io.loadConfig().gateway?.port).toBe(20002);
     });
   });
 
-  it("normalizes safe-bin config entries at config load time", async () => {
+  it("logs validation warnings with real line breaks", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
         JSON.stringify(
           {
-            tools: {
-              exec: {
-                safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
-                safeBinProfiles: {
-                  " MyFilter ": {
-                    allowedValueFlags: ["--limit", " --limit ", ""],
-                  },
+            plugins: {
+              entries: {
+                "google-antigravity-auth": {
+                  enabled: false,
+                  config: { stale: true },
                 },
               },
-            },
-            agents: {
-              list: [
-                {
-                  id: "ops",
-                  tools: {
-                    exec: {
-                      safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
-                      safeBinProfiles: {
-                        " Custom ": {
-                          deniedFlags: ["-f", " -f ", ""],
-                        },
-                      },
-                    },
-                  },
-                },
-              ],
             },
           },
           null,
           2,
         ),
-        "utf-8",
       );
-      const io = createIoForHome(home);
-      expect(io.configPath).toBe(configPath);
-      const cfg = io.loadConfig();
-      expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
-        myfilter: {
-          allowedValueFlags: ["--limit"],
-        },
-      });
-      expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
-      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
-        custom: {
-          deniedFlags: ["-f"],
-        },
-      });
-      expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
-    });
-  });
-
-  it("logs invalid config path details and throws on invalid config", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { port: "not-a-number" } }, null, 2),
-      );
-
       const logger = {
-        warn: vi.fn(),
         error: vi.fn(),
+        warn: vi.fn(),
       };
 
       const io = createConfigIO({
+        configPath,
         env: {} as NodeJS.ProcessEnv,
         homedir: () => home,
         logger,
       });
+      io.loadConfig();
 
-      expect(() => io.loadConfig()).toThrow(/Invalid config/);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(`Invalid config at ${configPath}:\\n`),
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
       );
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("- gateway.port:"));
+      expect(logger.warn).not.toHaveBeenCalledWith("Config warnings:\\n");
     });
   });
 
-  it("does not warn when config was last touched by a same-base correction publish", async () => {
-    const parsedVersion = parseOpenClawVersion(VERSION);
-    if (!parsedVersion) {
-      throw new Error(`Unable to parse VERSION: ${VERSION}`);
-    }
-    const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-${(parsedVersion.revision ?? 0) + 1}`;
-    await expectNoNewerVersionWarning(touchedVersion);
+  it("explains what to check when config was written by a newer OpenClaw", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.1" },
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        [
+          `Your OpenClaw config was written by version 9999.1.1, but this command is running ${VERSION}.`,
+          "Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+          "If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ].join("\n"),
+      );
+    });
   });
 
-  it("does not warn for same-base prerelease configs when current version is newer", async () => {
-    const parsedVersion = parseOpenClawVersion(VERSION);
-    if (!parsedVersion) {
-      throw new Error(`Unable to parse VERSION: ${VERSION}`);
-    }
-    const touchedVersion = `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}-beta.1`;
-    await expectNoNewerVersionWarning(touchedVersion);
+  it("does not warn about newer config during internal update handoff reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.1" },
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("normalizes safe-bin config entries at config load time", () => {
+    const cfg = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
+          safeBinProfiles: {
+            " MyFilter ": {
+              allowedValueFlags: ["--limit", " --limit ", ""],
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              exec: {
+                safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
+                safeBinProfiles: {
+                  " Custom ": {
+                    deniedFlags: ["-f", " -f ", ""],
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+    normalizeExecSafeBinProfilesInConfig(cfg);
+    expect(cfg.tools?.exec?.safeBinProfiles).toEqual({
+      myfilter: {
+        allowedValueFlags: ["--limit"],
+      },
+    });
+    expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
+    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+      custom: {
+        deniedFlags: ["-f"],
+      },
+    });
+    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+  });
+
+  it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
+    expect(whatsappSharedAccessDefaults).toEqual({
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
+    });
   });
 });

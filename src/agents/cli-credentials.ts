@@ -2,6 +2,12 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -12,6 +18,8 @@ const log = createSubsystemLogger("agents/auth-profiles");
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
+const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
+const CODEX_CLI_FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
@@ -26,11 +34,13 @@ type CachedValue<T> = {
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
 let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
+let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
 export function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
   minimaxCliCache = null;
+  geminiCliCache = null;
 }
 
 export type ClaudeCliCredential =
@@ -55,6 +65,7 @@ export type CodexCliCredential = {
   refresh: string;
   expires: number;
   accountId?: string;
+  idToken?: string;
 };
 
 export type MiniMaxCliCredential = {
@@ -63,6 +74,16 @@ export type MiniMaxCliCredential = {
   access: string;
   refresh: string;
   expires: number;
+};
+
+export type GeminiCliCredential = {
+  type: "oauth";
+  provider: "google-gemini-cli";
+  access: string;
+  refresh: string;
+  expires: number;
+  accountId?: string;
+  email?: string;
 };
 
 type ClaudeCliFileOptions = {
@@ -114,12 +135,8 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   };
 }
 
-function resolveCodexCliAuthPath() {
-  return path.join(resolveCodexHomePath(), CODEX_CLI_AUTH_FILENAME);
-}
-
-function resolveCodexHomePath() {
-  const configured = process.env.CODEX_HOME;
+function resolveCodexHomePath(codexHome?: string) {
+  const configured = codexHome ?? process.env.CODEX_HOME;
   const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
   try {
     return fs.realpathSync.native(home);
@@ -131,6 +148,11 @@ function resolveCodexHomePath() {
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function resolveGeminiCliCredentialsPath(homeDir?: string) {
+  const baseDir = homeDir ?? resolveUserPath("~");
+  return path.join(baseDir, GEMINI_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
 function readFileMtimeMs(filePath: string): number | null {
@@ -185,6 +207,18 @@ function computeCodexKeychainAccount(codexHome: string) {
   return `cli|${hash.slice(0, 16)}`;
 }
 
+function resolveCodexKeychainParams(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}) {
+  return {
+    platform: options?.platform ?? process.platform,
+    execSyncImpl: options?.execSync ?? execSync,
+    codexHome: resolveCodexHomePath(options?.codexHome),
+  };
+}
+
 function decodeJwtExpiryMs(token: string): number | null {
   const parts = token.split(".");
   if (parts.length < 2) {
@@ -193,25 +227,41 @@ function decodeJwtExpiryMs(token: string): number | null {
   try {
     const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { exp?: unknown };
-    return typeof payload.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0
-      ? payload.exp * 1000
-      : null;
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
+      return null;
+    }
+    return asDateTimestampMs(payload.exp * 1000) ?? null;
   } catch {
     return null;
   }
 }
 
-function readCodexKeychainCredentials(options?: {
+function decodeJwtIdentityClaims(token: string): { sub?: string; email?: string } {
+  const parts = token.split(".");
+  if (parts.length < 2) {
+    return {};
+  }
+  try {
+    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payload = JSON.parse(payloadRaw) as { sub?: unknown; email?: unknown };
+    const sub = typeof payload.sub === "string" && payload.sub ? payload.sub : undefined;
+    const email = typeof payload.email === "string" && payload.email ? payload.email : undefined;
+    return { sub, email };
+  } catch {
+    return {};
+  }
+}
+
+function readCodexKeychainAuthRecord(options?: {
+  codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
-}): CodexCliCredential | null {
-  const platform = options?.platform ?? process.platform;
-  if (platform !== "darwin") {
+  allowKeychainPrompt?: boolean;
+}): Record<string, unknown> | null {
+  const { platform, execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
+  if (platform !== "darwin" || options?.allowKeychainPrompt === false) {
     return null;
   }
-  const execSyncImpl = options?.execSync ?? execSync;
-
-  const codexHome = resolveCodexHomePath();
   const account = computeCodexKeychainAccount(codexHome);
 
   try {
@@ -225,7 +275,29 @@ function readCodexKeychainCredentials(options?: {
     ).trim();
 
     const parsed = JSON.parse(secret) as Record<string, unknown>;
-    const tokens = parsed.tokens as Record<string, unknown> | undefined;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCodexFallbackExpiryMs(nowMs?: number): number | undefined {
+  const baseMs = nowMs === undefined ? undefined : Math.floor(nowMs);
+  return resolveExpiresAtMsFromDurationMs(CODEX_CLI_FALLBACK_EXPIRY_MS, { nowMs: baseMs });
+}
+
+function readCodexKeychainCredentials(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+  allowKeychainPrompt?: boolean;
+}): CodexCliCredential | null {
+  const parsed = readCodexKeychainAuthRecord(options);
+  if (!parsed) {
+    return null;
+  }
+  const tokens = parsed.tokens as Record<string, unknown> | undefined;
+  try {
     const accessToken = tokens?.access_token;
     const refreshToken = tokens?.refresh_token;
     if (typeof accessToken !== "string" || !accessToken) {
@@ -241,24 +313,28 @@ function readCodexKeychainCredentials(options?: {
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
         ? new Date(lastRefreshRaw).getTime()
         : Date.now();
-    const fallbackExpiry = Number.isFinite(lastRefresh)
-      ? lastRefresh + 60 * 60 * 1000
-      : Date.now() + 60 * 60 * 1000;
+    const fallbackExpiry =
+      resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs();
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+    if (expires === undefined) {
+      return null;
+    }
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
+    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
-      expires: new Date(expires).toISOString(),
+      expires: timestampMsToIsoString(expires),
     });
 
     return {
       type: "oauth",
-      provider: "openai-codex" as OAuthProvider,
+      provider: "openai" as OAuthProvider,
       access: accessToken,
       refresh: refreshToken,
       expires,
       accountId,
+      idToken,
     };
   } catch {
     return null;
@@ -300,6 +376,49 @@ function readPortalCliOauthCredentials<TProvider extends string>(
 function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
   const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
   return readPortalCliOauthCredentials(credPath, "minimax-portal");
+}
+
+function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCredential | null {
+  const credPath = resolveGeminiCliCredentialsPath(options?.homeDir);
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const data = raw as Record<string, unknown>;
+  const accessToken = data.access_token;
+  const refreshToken = data.refresh_token;
+  const expiresAt = data.expiry_date;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return null;
+  }
+
+  // Gemini CLI's login flow stores the openid id_token alongside the OAuth
+  // tokens. Decode it once here to lift the Google account identity (sub,
+  // email) onto the credential so the shared OAuth-identity encoder can key
+  // the auth epoch on stable, non-secret identity material — matching the
+  // Claude/Codex contract that #70132 codifies. Without this lift the encoder
+  // collapses to a provider-keyed constant and stale bindings can survive a
+  // re-login under a different Google account.
+  const idTokenRaw = data.id_token;
+  const identity =
+    typeof idTokenRaw === "string" && idTokenRaw ? decodeJwtIdentityClaims(idTokenRaw) : {};
+
+  return {
+    type: "oauth",
+    provider: "google-gemini-cli",
+    access: accessToken,
+    refresh: refreshToken,
+    expires: expiresAt,
+    ...(identity.email ? { email: identity.email } : {}),
+    ...(identity.sub ? { accountId: identity.sub } : {}),
+  };
 }
 
 function readClaudeCliKeychainCredentials(
@@ -345,6 +464,7 @@ export function readClaudeCliCredentials(options?: {
   return parseClaudeCliOauthCredential(data.claudeAiOauth);
 }
 
+/** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
 export function readClaudeCliCredentialsCached(options?: {
   allowKeychainPrompt?: boolean;
   ttlMs?: number;
@@ -352,14 +472,19 @@ export function readClaudeCliCredentialsCached(options?: {
   homeDir?: string;
   execSync?: ExecSyncFn;
 }): ClaudeCliCredential | null {
+  const platform = options?.platform ?? process.platform;
+  const ttlMs = options?.ttlMs ?? 0;
+  const credentialsPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+  const keychainIntent =
+    platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
+    ttlMs,
     cache: claudeCliCache,
-    cacheKey: resolveClaudeCliCredentialsPath(options?.homeDir),
+    cacheKey: `${credentialsPath}:${keychainIntent}`,
     read: () =>
       readClaudeCliCredentials({
         allowKeychainPrompt: options?.allowKeychainPrompt,
-        platform: options?.platform,
+        platform,
         homeDir: options?.homeDir,
         execSync: options?.execSync,
       }),
@@ -414,12 +539,12 @@ export function writeClaudeCliKeychainCredentials(
     );
 
     log.info("wrote refreshed credentials to claude cli keychain", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -456,12 +581,12 @@ export function writeClaudeCliFileCredentials(
 
     saveJsonFile(credPath, data);
     log.info("wrote refreshed credentials to claude cli file", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -488,10 +613,14 @@ export function writeClaudeCliCredentials(
 }
 
 export function readCodexCliCredentials(options?: {
+  codexHome?: string;
+  allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const keychain = readCodexKeychainCredentials({
+    codexHome: options?.codexHome,
+    allowKeychainPrompt: options?.allowKeychainPrompt,
     platform: options?.platform,
     execSync: options?.execSync,
   });
@@ -499,7 +628,7 @@ export function readCodexCliCredentials(options?: {
     return keychain;
   }
 
-  const authPath = resolveCodexCliAuthPath();
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const raw = loadJsonFile(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -521,37 +650,49 @@ export function readCodexCliCredentials(options?: {
     return null;
   }
 
-  let fallbackExpiry: number;
+  let fallbackExpiry: number | undefined;
   try {
     const stat = fs.statSync(authPath);
-    fallbackExpiry = stat.mtimeMs + 60 * 60 * 1000;
+    fallbackExpiry = resolveCodexFallbackExpiryMs(stat.mtimeMs);
   } catch {
-    fallbackExpiry = Date.now() + 60 * 60 * 1000;
+    fallbackExpiry = resolveCodexFallbackExpiryMs();
   }
   const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+  if (expires === undefined) {
+    return null;
+  }
 
   return {
     type: "oauth",
-    provider: "openai-codex" as OAuthProvider,
+    provider: "openai" as OAuthProvider,
     access: accessToken,
     refresh: refreshToken,
     expires,
     accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+    idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
   };
 }
 
 export function readCodexCliCredentialsCached(options?: {
+  codexHome?: string;
+  allowKeychainPrompt?: boolean;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
-  const authPath = resolveCodexCliAuthPath();
+  const platform = options?.platform ?? process.platform;
+  const ttlMs = options?.ttlMs ?? 0;
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const keychainIntent =
+    platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
+    ttlMs,
     cache: codexCliCache,
-    cacheKey: `${options?.platform ?? process.platform}|${authPath}`,
+    cacheKey: `${platform}|${authPath}:${keychainIntent}`,
     read: () =>
       readCodexCliCredentials({
+        codexHome: options?.codexHome,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
         platform: options?.platform,
         execSync: options?.execSync,
       }),
@@ -574,6 +715,23 @@ export function readMiniMaxCliCredentialsCached(options?: {
     read: () => readMiniMaxCliCredentials({ homeDir: options?.homeDir }),
     setCache: (next) => {
       minimaxCliCache = next;
+    },
+    readSourceFingerprint: () => readFileMtimeMs(credPath),
+  });
+}
+
+export function readGeminiCliCredentialsCached(options?: {
+  ttlMs?: number;
+  homeDir?: string;
+}): GeminiCliCredential | null {
+  const credPath = resolveGeminiCliCredentialsPath(options?.homeDir);
+  return readCachedCliCredential({
+    ttlMs: options?.ttlMs ?? 0,
+    cache: geminiCliCache,
+    cacheKey: credPath,
+    read: () => readGeminiCliCredentials({ homeDir: options?.homeDir }),
+    setCache: (next) => {
+      geminiCliCache = next;
     },
     readSourceFingerprint: () => readFileMtimeMs(credPath),
   });

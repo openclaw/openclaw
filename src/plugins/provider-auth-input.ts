@@ -1,16 +1,16 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  resolveSecretInputModeForEnvSelection,
-  type SecretInputModePromptCopy,
-} from "./provider-auth-mode.js";
+import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 import {
   extractEnvVarFromSourceLabel,
   promptSecretRefForSetup,
   resolveRefFallbackInput,
-  type SecretRefSetupPromptCopy,
 } from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
@@ -28,7 +28,7 @@ export {
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
 export function normalizeApiKeyInput(raw: string): string {
-  const trimmed = String(raw ?? "").trim();
+  const trimmed = normalizeStringifiedOptionalString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
@@ -76,18 +76,13 @@ export function formatApiKeyPreview(
 export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {
-  const normalized = String(tokenProvider ?? "")
-    .trim()
-    .toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalLowercaseString(tokenProvider);
 }
 
 export function normalizeSecretInputModeInput(
   secretInputMode: string | null | undefined,
 ): SecretInputMode | undefined {
-  const normalized = String(secretInputMode ?? "")
-    .trim()
-    .toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(secretInputMode);
   if (normalized === "plaintext" || normalized === "ref") {
     return normalized;
   }
@@ -215,9 +210,11 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
 
   const key = await params.prompter.text({
     message: params.promptMessage,
+    placeholder: "API key",
     validate: params.validate,
+    sensitive: true,
   });
-  const apiKey = params.normalize(String(key ?? ""));
+  const apiKey = params.normalize(key ?? "");
   await params.setCredential(apiKey, selectedMode);
   return apiKey;
 }

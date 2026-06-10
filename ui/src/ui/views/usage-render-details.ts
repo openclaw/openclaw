@@ -1,10 +1,12 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
+import { formatDateTimeMs, formatMs, formatTimeMs } from "../format.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
-import {
+import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
@@ -58,8 +60,7 @@ function renderSessionSummary(
     return html` <div class="usage-empty-block">${t("usage.details.noUsageData")}</div> `;
   }
 
-  const formatTs = (ts?: number): string =>
-    ts ? new Date(ts).toLocaleString() : t("usage.common.emptyValue");
+  const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
 
   const badges: string[] = [];
   if (session.channel) {
@@ -124,8 +125,10 @@ function renderSessionSummary(
         <div class="session-summary-title">${t("usage.overview.messages")}</div>
         <div class="stat-value session-summary-value">${usage.messageCounts?.total ?? 0}</div>
         <div class="session-summary-meta">
-          ${usage.messageCounts?.user ?? 0} ${t("usage.overview.user").toLowerCase()} ·
-          ${usage.messageCounts?.assistant ?? 0} ${t("usage.overview.assistant").toLowerCase()}
+          ${usage.messageCounts?.user ?? 0}
+          ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
+          ${usage.messageCounts?.assistant ?? 0}
+          ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}
         </div>
       </div>
       <div class="stat session-summary-card">
@@ -280,9 +283,10 @@ function renderSessionDetailPanel(
           ${usage
             ? html`
                 <span
-                  ><strong>${formatTokens(headerStats.totalTokens)}</strong> ${t(
-                    "usage.metrics.tokens",
-                  ).toLowerCase()}${cursorIndicator}</span
+                  ><strong>${formatTokens(headerStats.totalTokens)}</strong>
+                  ${normalizeLowercaseStringOrEmpty(
+                    t("usage.metrics.tokens"),
+                  )}${cursorIndicator}</span
                 >
                 <span><strong>${formatCost(headerStats.totalCost)}</strong>${cursorIndicator}</span>
               `
@@ -297,6 +301,15 @@ function renderSessionDetailPanel(
           ×
         </button>
       </div>
+      ${session.scope === "family" && session.includedSessionIds?.length
+        ? html`
+            <div class="usage-lineage-note">
+              ${t("usage.scope.familyIncluded", {
+                count: String(session.includedSessionIds.length),
+              })}
+            </div>
+          `
+        : nothing}
       <div class="session-detail-content">
         ${renderSessionSummary(
           session,
@@ -564,8 +577,8 @@ function renderTimeSeriesCompact(
           <!-- X axis labels (first and last) -->
           ${points.length > 0
             ? svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${new Date(points[0].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${new Date(points[points.length - 1].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(points[0].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(points[points.length - 1].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
           `
             : nothing}
           <!-- Bars -->
@@ -574,15 +587,18 @@ function renderTimeSeriesCompact(
             const x = padding.left + i * (barWidth + barGap);
             const bh = (val / maxValue) * chartHeight;
             const y = padding.top + chartHeight - bh;
-            const date = new Date(p.timestamp);
             const tooltipLines = [
-              date.toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
-              `${formatTokens(val)} ${t("usage.metrics.tokens").toLowerCase()}`,
+              formatDateTimeMs(
+                p.timestamp,
+                {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                },
+                "",
+              ),
+              `${formatTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
             ];
             if (breakdownByType) {
               tooltipLines.push(`Out ${formatTokens(p.output)}`);
@@ -731,13 +747,11 @@ function renderTimeSeriesCompact(
                 })}
               </span>
               ·
-              ${new Date(rangeStartTs).toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}–${new Date(rangeEndTs).toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              ${formatTimeMs(
+                rangeStartTs,
+                { hour: "2-digit", minute: "2-digit" },
+                "",
+              )}–${formatTimeMs(rangeEndTs, { hour: "2-digit", minute: "2-digit" }, "")}
               ·
               ${formatTokens(
                 filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite,
@@ -914,7 +928,7 @@ function renderContextPanel(
                     ${skillsTop.map(
                       (s) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono">${s.name}</span>
+                          <span class="mono" title=${s.name}>${s.name}</span>
                           <span class="muted">~${formatTokens(charsToTokens(s.blockChars))}</span>
                         </div>
                       `,
@@ -941,11 +955,13 @@ function renderContextPanel(
                   </div>
                   <div class="context-breakdown-list">
                     ${toolsTop.map(
-                      (t) => html`
+                      (tLocal) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono">${t.name}</span>
+                          <span class="mono" title=${tLocal.name}>${tLocal.name}</span>
                           <span class="muted"
-                            >~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span
+                            >~${formatTokens(
+                              charsToTokens(tLocal.summaryChars + tLocal.schemaChars),
+                            )}</span
                           >
                         </div>
                       `,
@@ -974,7 +990,7 @@ function renderContextPanel(
                     ${filesTop.map(
                       (f) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono">${f.name}</span>
+                          <span class="mono" title=${f.name}>${f.name}</span>
                           <span class="muted"
                             >~${formatTokens(charsToTokens(f.injectedChars))}</span
                           >
@@ -1034,7 +1050,7 @@ function renderSessionLogsCompact(
     `;
   }
 
-  const normalizedQuery = filters.query.trim().toLowerCase();
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query);
   const entries = logs.map((log) => {
     const toolInfo = parseToolSummary(log.content);
     const cleanContent = toolInfo.cleanContent || log.content;
@@ -1069,7 +1085,7 @@ function renderSessionLogsCompact(
       }
     }
     if (normalizedQuery) {
-      const haystack = entry.cleanContent.toLowerCase();
+      const haystack = normalizeLowercaseStringOrEmpty(entry.cleanContent);
       if (!haystack.includes(normalizedQuery)) {
         return false;
       }
@@ -1093,7 +1109,7 @@ function renderSessionLogsCompact(
         <span>
           ${t("usage.details.conversation")}
           <span class="session-logs-header-count">
-            (${displayedCount} ${t("usage.overview.messages").toLowerCase()})
+            (${displayedCount} ${normalizeLowercaseStringOrEmpty(t("usage.overview.messages"))})
           </span>
         </span>
         <button class="btn btn--sm" @click=${onToggleExpandedAll}>
@@ -1173,7 +1189,7 @@ function renderSessionLogsCompact(
             <div class="session-log-entry ${roleClass}">
               <div class="session-log-meta">
                 <span class="session-log-role">${roleLabel}</span>
-                <span>${new Date(log.timestamp).toLocaleString()}</span>
+                <span>${formatMs(log.timestamp)}</span>
                 ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
               </div>
               <div class="session-log-content">${cleanContent}</div>

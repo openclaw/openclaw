@@ -1,5 +1,6 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
-import type { AuthProfileCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 export type AuthCredentialReasonCode =
   | "ok"
@@ -8,19 +9,57 @@ export type AuthCredentialReasonCode =
   | "expired"
   | "unresolved_ref";
 
-export type TokenExpiryState = "missing" | "valid" | "expired" | "invalid_expires";
+export const DEFAULT_OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
-export function resolveTokenExpiryState(expires: unknown, now = Date.now()): TokenExpiryState {
+export type TokenExpiryState = "missing" | "valid" | "expiring" | "expired" | "invalid_expires";
+
+export function resolveTokenExpiryState(
+  expires: unknown,
+  now = Date.now(),
+  opts?: {
+    expiringWithinMs?: number;
+  },
+): TokenExpiryState {
   if (expires === undefined) {
     return "missing";
   }
   if (typeof expires !== "number") {
     return "invalid_expires";
   }
-  if (!Number.isFinite(expires) || expires <= 0) {
+  if (!Number.isFinite(expires) || expires <= 0 || expires > MAX_DATE_TIMESTAMP_MS) {
     return "invalid_expires";
   }
-  return now >= expires ? "expired" : "valid";
+  const remainingMs = expires - now;
+  if (remainingMs <= 0) {
+    return "expired";
+  }
+  const expiringWithinMs = Math.max(0, opts?.expiringWithinMs ?? 0);
+  if (expiringWithinMs > 0 && remainingMs <= expiringWithinMs) {
+    return "expiring";
+  }
+  return "valid";
+}
+
+export function hasUsableOAuthCredential(
+  credential: OAuthCredential | undefined,
+  opts?: {
+    now?: number;
+    refreshMarginMs?: number;
+  },
+): boolean {
+  if (!credential || credential.type !== "oauth") {
+    return false;
+  }
+  if (typeof credential.access !== "string" || credential.access.trim().length === 0) {
+    return false;
+  }
+  const now = opts?.now ?? Date.now();
+  const refreshMarginMs = Math.max(0, opts?.refreshMarginMs ?? DEFAULT_OAUTH_REFRESH_MARGIN_MS);
+  return (
+    resolveTokenExpiryState(credential.expires, now, {
+      expiringWithinMs: refreshMarginMs,
+    }) === "valid"
+  );
 }
 
 function hasConfiguredSecretRef(value: unknown): boolean {
@@ -68,6 +107,9 @@ export function evaluateStoredCredentialEligibility(params: {
     normalizeSecretInputString(credential.access) === undefined &&
     normalizeSecretInputString(credential.refresh) === undefined
   ) {
+    if (credential.oauthRef) {
+      return { eligible: false, reasonCode: "unresolved_ref" };
+    }
     return { eligible: false, reasonCode: "missing_credential" };
   }
   return { eligible: true, reasonCode: "ok" };

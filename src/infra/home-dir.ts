@@ -3,13 +3,50 @@ import path from "node:path";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed === "undefined" || trimmed === "null") {
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
     return undefined;
   }
   return trimmed;
+}
+
+function normalizeSafe(homedir: () => string): string | undefined {
+  try {
+    return normalize(homedir());
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveTermuxHome(env: NodeJS.ProcessEnv): string | undefined {
+  const prefix = normalize(env.PREFIX);
+  if (!prefix || !normalize(env.ANDROID_DATA)) {
+    return undefined;
+  }
+  if (!/(?:^|\/)com\.termux\/files\/usr\/?$/u.test(prefix.replace(/\\/gu, "/"))) {
+    return undefined;
+  }
+  return path.resolve(prefix, "..", "home");
+}
+
+function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
+  return (
+    normalize(env.HOME) ??
+    normalize(env.USERPROFILE) ??
+    resolveTermuxHome(env) ??
+    normalizeSafe(homedir)
+  );
+}
+
+function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
+  const explicitHome = normalize(env.OPENCLAW_HOME);
+  if (!explicitHome) {
+    return resolveRawOsHomeDir(env, homedir);
+  }
+  if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
+    const fallbackHome = resolveRawOsHomeDir(env, homedir);
+    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome) : undefined;
+  }
+  return explicitHome;
 }
 
 export function resolveEffectiveHomeDir(
@@ -27,43 +64,6 @@ export function resolveOsHomeDir(
   const raw = resolveRawOsHomeDir(env, homedir);
   return raw ? path.resolve(raw) : undefined;
 }
-
-function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
-  const explicitHome = normalize(env.OPENCLAW_HOME);
-  if (explicitHome) {
-    if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-      const fallbackHome = resolveRawOsHomeDir(env, homedir);
-      if (fallbackHome) {
-        return explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome);
-      }
-      return undefined;
-    }
-    return explicitHome;
-  }
-
-  return resolveRawOsHomeDir(env, homedir);
-}
-
-function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
-  const envHome = normalize(env.HOME);
-  if (envHome) {
-    return envHome;
-  }
-  const userProfile = normalize(env.USERPROFILE);
-  if (userProfile) {
-    return userProfile;
-  }
-  return normalizeSafe(homedir);
-}
-
-function normalizeSafe(homedir: () => string): string | undefined {
-  try {
-    return normalize(homedir());
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -118,6 +118,14 @@ export function resolveHomeRelativePath(
     return path.resolve(expanded);
   }
   return path.resolve(trimmed);
+}
+
+export function resolveUserPath(
+  input: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  return resolveHomeRelativePath(input, { env, homedir });
 }
 
 export function resolveOsHomeRelativePath(

@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
-import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -45,7 +47,7 @@ export type HookNpmIntegrityDriftParams = {
 
 const defaultLogger: HookInstallLogger = {};
 
-type HookInstallForwardParams = {
+type HookInstallForwardParams = InstallSafetyOverrides & {
   hooksDir?: string;
   timeoutMs?: number;
   logger?: HookInstallLogger;
@@ -60,6 +62,7 @@ type HookPathInstallParams = { path: string } & HookInstallForwardParams;
 
 function buildHookInstallForwardParams(params: HookInstallForwardParams): HookInstallForwardParams {
   return {
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     hooksDir: params.hooksDir,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
@@ -104,7 +107,7 @@ async function ensureOpenClawHooks(manifest: HookPackageManifest) {
   if (!Array.isArray(hooks)) {
     throw new Error("package.json missing openclaw.hooks");
   }
-  const list = hooks.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
+  const list = normalizeTrimmedStringList(hooks);
   if (list.length === 0) {
     throw new Error("package.json openclaw.hooks is empty");
   }
@@ -403,6 +406,7 @@ export async function installHooksFromArchive(
 
 export async function installHooksFromNpmSpec(params: {
   spec: string;
+  dangerouslyForceUnsafeInstall?: boolean;
   hooksDir?: string;
   timeoutMs?: number;
   logger?: HookInstallLogger;
@@ -452,6 +456,7 @@ export async function installHooksFromPath(
   }
   const { resolvedPath: resolved, stat } = pathResult;
   const forwardParams = buildHookInstallForwardParams({
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     hooksDir: params.hooksDir,
     timeoutMs: params.timeoutMs,
     logger: params.logger,

@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
+import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 export type OAuthProvider = string;
 
@@ -12,6 +13,8 @@ export type OAuthCredentials = {
   enterpriseUrl?: string;
   projectId?: string;
   accountId?: string;
+  chatgptPlanType?: string;
+  idToken?: string;
 };
 
 export type ApiKeyCredential = {
@@ -19,6 +22,8 @@ export type ApiKeyCredential = {
   provider: string;
   key?: string;
   keyRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
@@ -34,6 +39,8 @@ export type TokenCredential = {
   provider: string;
   token?: string;
   tokenRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
@@ -43,7 +50,13 @@ export type TokenCredential = {
 export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
+  oauthRef?: LegacyOAuthRef;
   clientId?: string;
+  /**
+   * OAuth refresh tokens are not portable by default. Provider-owned flows may
+   * set this only when copying refresh material across agents is known safe.
+   */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
 };
@@ -60,11 +73,21 @@ export type AuthProfileFailureReason =
   | "timeout"
   | "model_not_found"
   | "session_expired"
+  | "empty_response"
+  | "no_error_details"
+  | "unclassified"
   | "unknown";
+
+export type AuthProfileBlockedReason = "subscription_limit";
+export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
+  blockedUntil?: number;
+  blockedReason?: AuthProfileBlockedReason;
+  blockedSource?: AuthProfileBlockedSource;
+  blockedModel?: string;
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;
@@ -75,9 +98,7 @@ export type ProfileUsageStats = {
   lastFailureAt?: number;
 };
 
-export type AuthProfileStore = {
-  version: number;
-  profiles: Record<string, AuthProfileCredential>;
+export type AuthProfileState = {
   /**
    * Optional per-agent preferred profile order overrides.
    * This lets you lock/override auth rotation for a specific agent without
@@ -88,6 +109,23 @@ export type AuthProfileStore = {
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
 };
+
+export type AuthProfileSecretsStore = {
+  version: number;
+  profiles: Record<string, AuthProfileCredential>;
+};
+
+export type AuthProfileStateStore = {
+  version: number;
+} & AuthProfileState;
+
+export type AuthProfileStore = AuthProfileSecretsStore &
+  AuthProfileState & {
+    /** Runtime-only provenance for external OAuth profiles overlaid onto this store. */
+    runtimeExternalProfileIds?: string[];
+    /** True when the runtime external profile set was freshly resolved, even if empty. */
+    runtimeExternalProfileIdsAuthoritative?: boolean;
+  };
 
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;

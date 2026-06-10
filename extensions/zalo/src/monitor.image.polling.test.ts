@@ -1,25 +1,27 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createImageLifecycleCore,
   createImageUpdate,
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
-} from "../test-support/lifecycle-test-support.js";
+  settleAsyncWork,
+} from "./test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
   getZaloRuntimeMock,
-  loadLifecycleMonitorModule,
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
-} from "../test-support/monitor-mocks-test-support.js";
+} from "./test-support/monitor-mocks-test-support.js";
 
 describe("Zalo polling image handling", () => {
   const {
     core,
     finalizeInboundContextMock,
     recordInboundSessionMock,
-    fetchRemoteMediaMock,
+    readRemoteMediaBufferMock,
+    saveRemoteMediaMock,
     saveMediaBufferMock,
   } = createImageLifecycleCore();
 
@@ -28,7 +30,7 @@ describe("Zalo polling image handling", () => {
     getZaloRuntimeMock.mockReturnValue(core);
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await resetLifecycleTestState();
   });
 
@@ -40,7 +42,7 @@ describe("Zalo polling image handling", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -55,9 +57,12 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    await settleAsyncWork();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expectImageLifecycleDelivery({
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
       finalizeInboundContextMock,
       recordInboundSessionMock,
@@ -71,11 +76,15 @@ describe("Zalo polling image handling", () => {
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
-        result: createImageUpdate(),
+        result: createImageUpdate({
+          messageId: "msg-unauthorized-1",
+          userId: "user-unauthorized-1",
+          chatId: "chat-unauthorized-1",
+        }),
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -91,8 +100,9 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
-    expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
+    await settleAsyncWork();
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
     expect(finalizeInboundContextMock).not.toHaveBeenCalled();
     expect(recordInboundSessionMock).not.toHaveBeenCalled();

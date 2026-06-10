@@ -1,7 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import {
@@ -20,7 +22,6 @@ import {
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { startGatewayServer } from "./server.js";
 
 export async function getFreeGatewayPort(): Promise<number> {
@@ -56,32 +57,39 @@ export async function connectGatewayClient(params: {
     params.deviceIdentity ??
     loadOrCreateDeviceIdentity(
       (() => {
-        const safe =
-          `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`
-            .replace(/[^a-zA-Z0-9._-]+/g, "_")
-            .toLowerCase();
+        const safe = normalizeLowercaseStringOrEmpty(
+          `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
+            /[^a-zA-Z0-9._-]+/g,
+            "_",
+          ),
+        );
         return path.join(identityRoot, "test-device-identities", `${safe}.json`);
       })(),
     );
   return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
     let settled = false;
-    const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
+    const stop = (err?: Error, connectedClient?: InstanceType<typeof GatewayClient>) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
       if (err) {
+        void client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {
+          client?.stop();
+        });
         reject(err);
       } else {
-        resolve(client as InstanceType<typeof GatewayClient>);
+        resolve(connectedClient as InstanceType<typeof GatewayClient>);
       }
     };
-    const client = new GatewayClient({
+    const client: InstanceType<typeof GatewayClient> | undefined = new GatewayClient({
       url: params.url,
       token: params.token,
       deviceToken: params.deviceToken,
-      connectChallengeTimeoutMs: params.connectChallengeTimeoutMs ?? 0,
+      ...(params.connectChallengeTimeoutMs !== undefined
+        ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
+        : {}),
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
@@ -150,7 +158,9 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
     ws.on("message", handler);
     ws.once("close", closeHandler);
   });
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   const connectNonce = await connectNoncePromise;
   const identity = loadOrCreateDeviceIdentity();
   const signedAtMs = Date.now();

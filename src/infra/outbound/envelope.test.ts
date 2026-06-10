@@ -5,7 +5,7 @@ import type { OutboundDeliveryJson } from "./format.js";
 
 describe("buildOutboundResultEnvelope", () => {
   const delivery: OutboundDeliveryJson = {
-    channel: "telegram",
+    channel: "alpha",
     via: "direct",
     to: "123",
     messageId: "m1",
@@ -29,6 +29,25 @@ describe("buildOutboundResultEnvelope", () => {
         meta: { ok: true },
       },
     },
+    {
+      input: {
+        payloads: [],
+        delivery,
+        meta: { delivered: true },
+      },
+      expected: {
+        payloads: [],
+        meta: { delivered: true },
+        delivery,
+      },
+    },
+    {
+      input: {
+        delivery,
+        flattenDelivery: false,
+      },
+      expected: { delivery },
+    },
   ])("formats outbound envelope for %j", ({ input, expected }) => {
     const envelope = buildOutboundResultEnvelope(input);
     expect(envelope).toEqual(expected);
@@ -38,11 +57,11 @@ describe("buildOutboundResultEnvelope", () => {
   });
 
   it("normalizes reply payloads and keeps wrapped delivery when flattening is disabled", () => {
-    const payloads: ReplyPayload[] = [{ text: "hello" }];
+    const payloadsLocal: ReplyPayload[] = [{ text: "hello" }];
 
     expect(
       buildOutboundResultEnvelope({
-        payloads,
+        payloads: payloadsLocal,
         delivery,
         flattenDelivery: false,
       }),

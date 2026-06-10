@@ -35,6 +35,25 @@ describe("config env vars", () => {
     });
   });
 
+  it("skips non-string env.vars values from runtime JSON configs", async () => {
+    await withEnvOverride({ API_TOKEN: undefined, PORT: undefined, DEBUG: undefined }, async () => {
+      const cfg = JSON.parse(`{
+        "env": {
+          "vars": {
+            "API_TOKEN": "sk-test-123",
+            "PORT": 8080,
+            "DEBUG": true
+          }
+        }
+      }`);
+
+      expect(applyConfigEnvVars(cfg)).toBeUndefined();
+      expect(process.env.API_TOKEN).toBe("sk-test-123");
+      expect(process.env.PORT).toBeUndefined();
+      expect(process.env.DEBUG).toBeUndefined();
+    });
+  });
+
   it("can build a merged runtime env without mutating process.env", async () => {
     await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
       const merged = createConfigRuntimeEnv({
@@ -146,7 +165,7 @@ describe("config env vars", () => {
 
   it("returns empty record when the state-dir .env file is missing", async () => {
     await withTempHome(async (_home) => {
-      expect(readStateDirDotEnvVars(process.env)).toEqual({});
+      expect(readStateDirDotEnvVars(process.env)).toStrictEqual({});
     });
   });
 

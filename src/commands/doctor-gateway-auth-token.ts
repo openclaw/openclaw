@@ -1,22 +1,30 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 export { shouldRequireGatewayTokenForInstall } from "../gateway/auth-install-policy.js";
-import { readGatewayTokenEnv } from "../gateway/credentials.js";
-import { resolveConfiguredSecretInputWithFallback } from "../gateway/resolve-configured-secret-input-string.js";
+import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
+import { trimToUndefined } from "../gateway/credentials.js";
 
 export async function resolveGatewayAuthTokenForService(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  options: { allowExecSecretRefs?: boolean } = {},
 ): Promise<{ token?: string; unavailableReason?: string }> {
-  const resolved = await resolveConfiguredSecretInputWithFallback({
-    config: cfg,
-    env,
+  const tokenRef = resolveSecretInputRef({
     value: cfg.gateway?.auth?.token,
-    path: "gateway.auth.token",
+    defaults: cfg.secrets?.defaults,
+  }).ref;
+  if (tokenRef?.source === "exec" && options.allowExecSecretRefs !== true) {
+    const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+    return envToken ? { token: envToken } : {};
+  }
+  const resolved = await resolveGatewayAuthToken({
+    cfg,
+    env,
     unresolvedReasonStyle: "detailed",
-    readFallback: () => readGatewayTokenEnv(env),
+    envFallback: "always",
   });
-  if (resolved.value) {
-    return { token: resolved.value };
+  if (resolved.token) {
+    return { token: resolved.token };
   }
   if (!resolved.secretRefConfigured) {
     return {};

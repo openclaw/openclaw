@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
@@ -14,10 +15,13 @@ export type SpawnedToolContext = {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
+  agentMemberRoleIds?: string[];
   workspaceDir?: string;
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
 };
 
-export type NormalizedSpawnedRunMetadata = {
+type NormalizedSpawnedRunMetadata = {
   spawnedBy?: string;
   groupId?: string;
   groupChannel?: string;
@@ -25,23 +29,15 @@ export type NormalizedSpawnedRunMetadata = {
   workspaceDir?: string;
 };
 
-function normalizeOptionalText(value?: string | null): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 export function normalizeSpawnedRunMetadata(
   value?: SpawnedRunMetadata | null,
 ): NormalizedSpawnedRunMetadata {
   return {
-    spawnedBy: normalizeOptionalText(value?.spawnedBy),
-    groupId: normalizeOptionalText(value?.groupId),
-    groupChannel: normalizeOptionalText(value?.groupChannel),
-    groupSpace: normalizeOptionalText(value?.groupSpace),
-    workspaceDir: normalizeOptionalText(value?.workspaceDir),
+    spawnedBy: normalizeOptionalString(value?.spawnedBy),
+    groupId: normalizeOptionalString(value?.groupId),
+    groupChannel: normalizeOptionalString(value?.groupChannel),
+    groupSpace: normalizeOptionalString(value?.groupSpace),
+    workspaceDir: normalizeOptionalString(value?.workspaceDir),
   };
 }
 
@@ -49,10 +45,10 @@ export function mapToolContextToSpawnedRunMetadata(
   value?: SpawnedToolContext | null,
 ): Pick<NormalizedSpawnedRunMetadata, "groupId" | "groupChannel" | "groupSpace" | "workspaceDir"> {
   return {
-    groupId: normalizeOptionalText(value?.agentGroupId),
-    groupChannel: normalizeOptionalText(value?.agentGroupChannel),
-    groupSpace: normalizeOptionalText(value?.agentGroupSpace),
-    workspaceDir: normalizeOptionalText(value?.workspaceDir),
+    groupId: normalizeOptionalString(value?.agentGroupId),
+    groupChannel: normalizeOptionalString(value?.agentGroupChannel),
+    groupSpace: normalizeOptionalString(value?.agentGroupSpace),
+    workspaceDir: normalizeOptionalString(value?.workspaceDir),
   };
 }
 
@@ -62,7 +58,7 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   requesterSessionKey?: string;
   explicitWorkspaceDir?: string | null;
 }): string | undefined {
-  const explicit = normalizeOptionalText(params.explicitWorkspaceDir);
+  const explicit = normalizeOptionalString(params.explicitWorkspaceDir);
   if (explicit) {
     return explicit;
   }

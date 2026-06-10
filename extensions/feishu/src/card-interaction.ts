@@ -1,16 +1,11 @@
+import { isRecord } from "./comment-shared.js";
+
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";
 
-export type FeishuCardInteractionKind = "button" | "quick" | "meta";
-export type FeishuCardInteractionReason =
-  | "malformed"
-  | "stale"
-  | "wrong_user"
-  | "wrong_conversation";
+type FeishuCardInteractionKind = "button" | "quick" | "meta";
+type FeishuCardInteractionReason = "malformed" | "stale" | "wrong_user" | "wrong_conversation";
 
-export type FeishuCardInteractionMetadata = Record<
-  string,
-  string | number | boolean | null | undefined
->;
+type FeishuCardInteractionMetadata = Record<string, string | number | boolean | null | undefined>;
 
 export type FeishuCardInteractionEnvelope = {
   oc: typeof FEISHU_CARD_INTERACTION_VERSION;
@@ -27,7 +22,7 @@ export type FeishuCardInteractionEnvelope = {
   };
 };
 
-export type FeishuCardActionEventLike = {
+type FeishuCardActionEventLike = {
   operator: {
     open_id?: string;
   };
@@ -39,7 +34,7 @@ export type FeishuCardActionEventLike = {
   };
 };
 
-export type DecodedFeishuCardAction =
+type DecodedFeishuCardAction =
   | {
       kind: "structured";
       envelope: FeishuCardInteractionEnvelope;
@@ -52,10 +47,6 @@ export type DecodedFeishuCardAction =
       kind: "invalid";
       reason: FeishuCardInteractionReason;
     };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function isInteractionKind(value: unknown): value is FeishuCardInteractionKind {
   return value === "button" || value === "quick" || value === "meta";

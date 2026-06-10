@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
+
+vi.mock("../channel-capabilities.js", () => ({
+  getDoctorChannelCapabilities: (channelName?: string) => ({
+    dmAllowFromMode: "topOnly",
+    groupModel: channelName === "discord" ? "route" : "sender",
+    groupAllowFromFallbackToAllowFrom: channelName !== "imessage",
+    warnOnEmptyGroupSenderAllowlist: channelName !== "discord",
+  }),
+}));
+
+vi.mock("./channel-doctor.js", () => ({
+  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: ({
+    channelName,
+  }: {
+    channelName?: string;
+  }) => channelName === "zalouser",
+}));
 
 describe("doctor empty allowlist policy warnings", () => {
   it("warns when dm allowlist mode has no allowFrom entries", () => {
@@ -11,7 +28,7 @@ describe("doctor empty allowlist policy warnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('channels.signal.dmPolicy is "allowlist" but allowFrom is empty'),
+      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
   });
 
@@ -24,7 +41,7 @@ describe("doctor empty allowlist policy warnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining("this channel does not fall back to allowFrom"),
+      '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to channels.imessage.groupAllowFrom, or set groupPolicy to "open".',
     ]);
   });
 
@@ -36,7 +53,7 @@ describe("doctor empty allowlist policy warnings", () => {
       prefix: "channels.zalouser",
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("stays quiet for channels that do not use sender-based group allowlists", () => {
@@ -47,6 +64,6 @@ describe("doctor empty allowlist policy warnings", () => {
       prefix: "channels.discord",
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
   });
 });

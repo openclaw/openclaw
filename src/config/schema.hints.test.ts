@@ -1,16 +1,15 @@
+import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { FIELD_HELP } from "./schema.help.js";
-import { __test__, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
+import { testApi, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { collectMatchingSchemaPaths, mapSensitivePaths } = __test__;
+const { collectMatchingSchemaPaths, mapSensitivePaths } = testApi;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
-  "channels.bluebubbles",
   "channels.discord",
   "channels.imessage",
   "channels.irc",
@@ -49,6 +48,8 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.nostr.privateKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.nostr.accounts.default.privateKey")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.HF_HOME")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.MAX_TOKENS")).toBe(true);
   });
 });
 
@@ -168,6 +169,11 @@ describe("mapSensitivePaths", () => {
     expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.localService.env.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.request.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.request.proxy.tls.cert"]?.sensitive).toBe(true);
+    expect(hints["proxy.proxyUrl"]?.sensitive).toBe(true);
+    expect(hints["proxy.tls.caFile"]?.sensitive).toBeUndefined();
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });
 
@@ -193,5 +199,7 @@ describe("collectMatchingSchemaPaths", () => {
 
     expect(paths.has("mcp.servers.*.url")).toBe(true);
     expect(paths.has("models.providers.*.baseUrl")).toBe(true);
+    expect(paths.has("models.providers.*.request.proxy.url")).toBe(true);
+    expect(paths.has("tools.media.audio.request.proxy.url")).toBe(true);
   });
 });

@@ -1,16 +1,26 @@
 import { z } from "zod";
 import {
   hasConfiguredSecretInput,
+  isSecretRef,
+  coerceSecretRef,
+  resolveSecretInputString,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { buildSecretInputSchema } from "./secret-input-schema.js";
 
-export type { SecretInput } from "../config/types.secrets.js";
+export type {
+  SecretInput,
+  SecretInputStringResolution,
+  SecretInputStringResolutionMode,
+} from "../config/types.secrets.js";
 export {
   buildSecretInputSchema,
+  coerceSecretRef,
   hasConfiguredSecretInput,
+  isSecretRef,
+  resolveSecretInputString,
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
   normalizeSecretInputString,

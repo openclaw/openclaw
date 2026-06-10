@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallBlock,
   isToolResultBlock,
@@ -38,7 +40,7 @@ type TranscriptLikeMessage = Record<string, unknown>;
 type ToolNameRegistry = Map<string, string>;
 
 function resolveHistoryHomeDir(homeDir?: string): string {
-  return homeDir?.trim() || process.env.HOME || os.homedir();
+  return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
 }
 
 function resolveClaudeProjectsDir(homeDir?: string): string {
@@ -48,20 +50,18 @@ function resolveClaudeProjectsDir(homeDir?: string): string {
 export function resolveClaudeCliBindingSessionId(
   entry: SessionEntry | undefined,
 ): string | undefined {
-  const bindingSessionId = entry?.cliSessionBindings?.[CLAUDE_CLI_PROVIDER]?.sessionId?.trim();
+  const bindingSessionId = normalizeOptionalString(
+    entry?.cliSessionBindings?.[CLAUDE_CLI_PROVIDER]?.sessionId,
+  );
   if (bindingSessionId) {
     return bindingSessionId;
   }
-  const legacyMapSessionId = entry?.cliSessionIds?.[CLAUDE_CLI_PROVIDER]?.trim();
+  const legacyMapSessionId = normalizeOptionalString(entry?.cliSessionIds?.[CLAUDE_CLI_PROVIDER]);
   if (legacyMapSessionId) {
     return legacyMapSessionId;
   }
-  const legacyClaudeSessionId = entry?.claudeCliSessionId?.trim();
+  const legacyClaudeSessionId = normalizeOptionalString(entry?.claudeCliSessionId);
   return legacyClaudeSessionId || undefined;
-}
-
-function resolveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function resolveTimestampMs(value: unknown): number | undefined {
@@ -76,10 +76,10 @@ function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
-  const input = resolveFiniteNumber(raw.input_tokens);
-  const output = resolveFiniteNumber(raw.output_tokens);
-  const cacheRead = resolveFiniteNumber(raw.cache_read_input_tokens);
-  const cacheWrite = resolveFiniteNumber(raw.cache_creation_input_tokens);
+  const input = asFiniteNumber(raw.input_tokens);
+  const output = asFiniteNumber(raw.output_tokens);
+  const cacheRead = asFiniteNumber(raw.cache_read_input_tokens);
+  const cacheWrite = asFiniteNumber(raw.cache_creation_input_tokens);
   if (
     input === undefined &&
     output === undefined &&
@@ -97,7 +97,7 @@ function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
 }
 
 function cloneJsonValue<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  return structuredClone(value);
 }
 
 function normalizeClaudeCliContent(
@@ -117,8 +117,8 @@ function normalizeClaudeCliContent(
     const block = cloneJsonValue(item as ToolContentBlock);
     const type = typeof block.type === "string" ? block.type : "";
     if (type === "tool_use") {
-      const id = typeof block.id === "string" ? block.id.trim() : "";
-      const name = typeof block.name === "string" ? block.name.trim() : "";
+      const id = normalizeOptionalString(block.id) ?? "";
+      const name = normalizeOptionalString(block.name) ?? "";
       if (id && name) {
         toolNameRegistry.set(id, name);
       }
@@ -231,7 +231,7 @@ function parseClaudeCliHistoryEntry(
   const baseMeta = {
     importedFrom: CLAUDE_CLI_PROVIDER,
     cliSessionId,
-    ...(typeof entry.uuid === "string" && entry.uuid.trim() ? { externalId: entry.uuid } : {}),
+    ...(normalizeOptionalString(entry.uuid) ? { externalId: entry.uuid } : {}),
   };
 
   const content =
@@ -259,10 +259,8 @@ function parseClaudeCliHistoryEntry(
       content,
       api: "anthropic-messages",
       provider: CLAUDE_CLI_PROVIDER,
-      ...(typeof entry.message.model === "string" && entry.message.model.trim()
-        ? { model: entry.message.model }
-        : {}),
-      ...(typeof entry.message.stop_reason === "string" && entry.message.stop_reason.trim()
+      ...(normalizeOptionalString(entry.message.model) ? { model: entry.message.model } : {}),
+      ...(normalizeOptionalString(entry.message.stop_reason)
         ? { stopReason: entry.message.stop_reason }
         : {}),
       ...(resolveClaudeCliUsage(entry.message.usage)
@@ -278,6 +276,17 @@ export function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
+  const sessionId = params.cliSessionId.trim();
+  if (
+    !sessionId ||
+    sessionId === "." ||
+    sessionId === ".." ||
+    path.isAbsolute(sessionId) ||
+    sessionId.includes("/") ||
+    sessionId.includes("\\")
+  ) {
+    return undefined;
+  }
   const projectsDir = resolveClaudeProjectsDir(params.homeDir);
   let projectEntries: fs.Dirent[];
   try {
@@ -290,7 +299,12 @@ export function resolveClaudeCliSessionFilePath(params: {
     if (!entry.isDirectory()) {
       continue;
     }
-    const candidate = path.join(projectsDir, entry.name, `${params.cliSessionId}.jsonl`);
+    const projectDir = path.join(projectsDir, entry.name);
+    const candidate = path.resolve(projectDir, `${sessionId}.jsonl`);
+    const resolvedProjectDir = path.resolve(projectDir);
+    if (!candidate.startsWith(`${resolvedProjectDir}${path.sep}`)) {
+      continue;
+    }
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -331,4 +345,113 @@ export function readClaudeCliSessionMessages(params: {
     }
   }
   return coalesceClaudeCliToolMessages(messages);
+}
+
+type ClaudeCliCompactBoundaryEntry = {
+  type: "system";
+  subtype?: unknown;
+  content?: unknown;
+  timestamp?: unknown;
+  compactMetadata?: {
+    trigger?: unknown;
+    preTokens?: unknown;
+  };
+};
+
+type ClaudeCliSummaryEntry = {
+  type: "summary";
+  summary?: unknown;
+  leafUuid?: unknown;
+  timestamp?: unknown;
+};
+
+export type ClaudeCliFallbackSeed = {
+  summaryText?: string;
+  recentTurns: TranscriptLikeMessage[];
+};
+
+function isCompactBoundary(entry: ClaudeCliProjectEntry): boolean {
+  if (entry.type !== "system") {
+    return false;
+  }
+  const subtype = (entry as ClaudeCliCompactBoundaryEntry).subtype;
+  return typeof subtype === "string" && subtype === "compact_boundary";
+}
+
+function extractCompactBoundaryFallbackText(entry: ClaudeCliProjectEntry): string | undefined {
+  const content = (entry as ClaudeCliCompactBoundaryEntry).content;
+  return typeof content === "string" && content.trim() ? content.trim() : undefined;
+}
+
+function extractSummaryText(entry: ClaudeCliProjectEntry): string | undefined {
+  if (entry.type !== "summary") {
+    return undefined;
+  }
+  const summary = (entry as ClaudeCliSummaryEntry).summary;
+  return typeof summary === "string" && summary.trim() ? summary.trim() : undefined;
+}
+
+export function readClaudeCliFallbackSeed(params: {
+  cliSessionId: string;
+  homeDir?: string;
+}): ClaudeCliFallbackSeed | undefined {
+  const filePath = resolveClaudeCliSessionFilePath(params);
+  if (!filePath) {
+    return undefined;
+  }
+
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return undefined;
+  }
+
+  let pendingSummary: string | undefined;
+  let lastSummary: string | undefined;
+  let lastBoundaryFallback: string | undefined;
+  let windowedTurns: TranscriptLikeMessage[] = [];
+  const toolNameRegistry: ToolNameRegistry = new Map();
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    let parsed: ClaudeCliProjectEntry;
+    try {
+      parsed = JSON.parse(line) as ClaudeCliProjectEntry;
+    } catch {
+      continue;
+    }
+
+    const explicitSummary = extractSummaryText(parsed);
+    if (explicitSummary) {
+      pendingSummary = explicitSummary;
+      continue;
+    }
+
+    if (isCompactBoundary(parsed)) {
+      lastSummary = pendingSummary;
+      pendingSummary = undefined;
+      lastBoundaryFallback = extractCompactBoundaryFallbackText(parsed) ?? lastBoundaryFallback;
+      windowedTurns = [];
+      toolNameRegistry.clear();
+      continue;
+    }
+
+    const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry);
+    if (message) {
+      windowedTurns.push(message);
+    }
+  }
+
+  const recentTurns = coalesceClaudeCliToolMessages(windowedTurns);
+  const resolvedSummaryText = lastSummary ?? pendingSummary ?? lastBoundaryFallback;
+  if (!resolvedSummaryText && recentTurns.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(resolvedSummaryText ? { summaryText: resolvedSummaryText } : {}),
+    recentTurns,
+  };
 }

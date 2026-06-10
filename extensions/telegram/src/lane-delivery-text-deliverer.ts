@@ -1,42 +1,19 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  createPreviewMessageReceipt,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
+import {
+  isPotentialTruncatedFinal,
+  selectLongerFinalText,
+} from "openclaw/plugin-sdk/channel-outbound";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
-import {
-  isRecoverableTelegramNetworkError,
-  isSafeToRetrySendError,
-  isTelegramClientRejection,
-} from "./network-errors.js";
-
-const MESSAGE_NOT_MODIFIED_RE =
-  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
-const MESSAGE_NOT_FOUND_RE =
-  /400:\s*Bad Request:\s*message to edit not found|MESSAGE_ID_INVALID|message can't be edited/i;
-
-function extractErrorText(err: unknown): string {
-  return typeof err === "string"
-    ? err
-    : err instanceof Error
-      ? err.message
-      : typeof err === "object" && err && "description" in err
-        ? typeof err.description === "string"
-          ? err.description
-          : ""
-        : "";
-}
-
-function isMessageNotModifiedError(err: unknown): boolean {
-  return MESSAGE_NOT_MODIFIED_RE.test(extractErrorText(err));
-}
-
-/**
- * Returns true when Telegram rejects an edit because the target message can no
- * longer be resolved or edited. The caller still needs preview context to
- * decide whether to retain a different visible preview or fall back to send.
- */
-function isMissingPreviewMessageError(err: unknown): boolean {
-  return MESSAGE_NOT_FOUND_RE.test(extractErrorText(err));
-}
 
 export type LaneName = "answer" | "reasoning";
 
@@ -44,46 +21,51 @@ export type DraftLaneState = {
   stream: TelegramDraftStream | undefined;
   lastPartialText: string;
   hasStreamedMessage: boolean;
+  finalized: boolean;
 };
 
-export type ArchivedPreview = {
+type LanePreviewFinalizedDelivery = {
+  content: string;
+  promptContextContent?: string;
   messageId: number;
-  textSnapshot: string;
-  // Boundary-finalized previews should remain visible even if no matching
-  // final edit arrives; superseded previews can be safely deleted.
-  deleteIfUnused?: boolean;
+  buttonsAttached?: boolean;
+  receipt: MessageReceipt;
 };
 
-export type LanePreviewLifecycle = "transient" | "complete";
+type LanePreviewFinalizedDeliveryInput = Omit<LanePreviewFinalizedDelivery, "receipt"> & {
+  receipt?: MessageReceipt;
+};
 
 export type LaneDeliveryResult =
   | {
       kind: "preview-finalized";
-      delivery: {
-        content: string;
-        messageId?: number;
-      };
+      delivery: LanePreviewFinalizedDelivery;
     }
   | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" };
 
 type CreateLaneTextDelivererParams = {
   lanes: Record<LaneName, DraftLaneState>;
-  archivedAnswerPreviews: ArchivedPreview[];
-  activePreviewLifecycleByLane: Record<LaneName, LanePreviewLifecycle>;
-  retainPreviewOnCleanupByLane: Record<LaneName, boolean>;
   draftMaxChars: number;
   applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
-  sendPayload: (payload: ReplyPayload) => Promise<boolean>;
+  applyTextToFollowUpPayload?: (payload: ReplyPayload, text: string) => ReplyPayload;
+  splitFinalTextForStream?: (text: string) => readonly string[];
+  sendPayload: (
+    payload: ReplyPayload,
+    options?: { durable?: boolean; silent?: boolean },
+  ) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
-  editPreview: (params: {
+  clearDraftLane: (lane: DraftLaneState) => Promise<void>;
+  editStreamMessage: (params: {
     laneName: LaneName;
     messageId: number;
     text: string;
-    context: "final" | "update";
-    previewButtons?: TelegramInlineButtons;
+    buttons?: TelegramInlineButtons;
   }) => Promise<void>;
-  deletePreviewMessage: (messageId: number) => Promise<void>;
+  resolveFinalTextCandidate?: (params: {
+    finalText: string;
+    laneName: LaneName;
+  }) => Promise<string | undefined> | string | undefined;
   log: (message: string) => void;
   markDelivered: () => void;
 };
@@ -93,384 +75,379 @@ type DeliverLaneTextParams = {
   text: string;
   payload: ReplyPayload;
   infoKind: string;
-  previewButtons?: TelegramInlineButtons;
-  allowPreviewUpdateForNonFinal?: boolean;
-};
-
-type TryUpdatePreviewParams = {
-  lane: DraftLaneState;
-  laneName: LaneName;
-  text: string;
-  previewButtons?: TelegramInlineButtons;
-  stopBeforeEdit?: boolean;
-  updateLaneSnapshot?: boolean;
-  skipRegressive: "always" | "existingOnly";
-  context: "final" | "update";
-  previewMessageId?: number;
-  previewTextSnapshot?: string;
-};
-
-type PreviewEditResult = "edited" | "retained" | "regressive-skipped" | "fallback";
-
-type ConsumeArchivedAnswerPreviewParams = {
-  lane: DraftLaneState;
-  text: string;
-  payload: ReplyPayload;
-  previewButtons?: TelegramInlineButtons;
-  canEditViaPreview: boolean;
-};
-
-type PreviewUpdateContext = "final" | "update";
-type RegressiveSkipMode = "always" | "existingOnly";
-
-type ResolvePreviewTargetParams = {
-  lane: DraftLaneState;
-  previewMessageIdOverride?: number;
-  stopBeforeEdit: boolean;
-  context: PreviewUpdateContext;
-};
-
-type PreviewTargetResolution = {
-  hadPreviewMessage: boolean;
-  previewMessageId: number | undefined;
-  stopCreatesFirstPreview: boolean;
+  buttons?: TelegramInlineButtons;
 };
 
 function result(
   kind: LaneDeliveryResult["kind"],
-  delivery?: Extract<LaneDeliveryResult, { kind: "preview-finalized" }>["delivery"],
+  delivery?: LanePreviewFinalizedDeliveryInput,
 ): LaneDeliveryResult {
   if (kind === "preview-finalized") {
-    return { kind, delivery: delivery! };
+    const finalized = delivery!;
+    return {
+      kind,
+      delivery: {
+        ...finalized,
+        receipt: finalized.receipt ?? createPreviewMessageReceipt({ id: finalized.messageId }),
+      },
+    };
   }
   return { kind };
 }
 
-function shouldSkipRegressivePreviewUpdate(args: {
-  currentPreviewText: string | undefined;
-  text: string;
-  skipRegressive: RegressiveSkipMode;
-  hadPreviewMessage: boolean;
-}): boolean {
-  const currentPreviewText = args.currentPreviewText;
-  if (currentPreviewText === undefined) {
+function compactChunks(chunks: readonly string[]): string[] {
+  const out: string[] = [];
+  let whitespace = "";
+  for (const chunk of chunks) {
+    if (!chunk) {
+      continue;
+    }
+    if (chunk.trim().length === 0) {
+      whitespace += chunk;
+      continue;
+    }
+    out.push(`${whitespace}${chunk}`);
+    whitespace = "";
+  }
+  if (whitespace && out.length > 0) {
+    out[out.length - 1] = `${out[out.length - 1]}${whitespace}`;
+  }
+  return out;
+}
+
+function isDeliveredPrefix(params: { deliveredText: string | undefined; finalText: string }) {
+  if (!params.deliveredText || params.deliveredText.length === 0) {
     return false;
   }
   return (
-    currentPreviewText.startsWith(args.text) &&
-    args.text.length < currentPreviewText.length &&
-    (args.skipRegressive === "always" || args.hadPreviewMessage)
+    params.finalText === params.deliveredText || params.finalText.startsWith(params.deliveredText)
   );
 }
 
-function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTargetResolution {
-  const lanePreviewMessageId = params.lane.stream?.messageId();
-  const previewMessageId =
-    typeof params.previewMessageIdOverride === "number"
-      ? params.previewMessageIdOverride
-      : lanePreviewMessageId;
-  const hadPreviewMessage =
-    typeof params.previewMessageIdOverride === "number" || typeof lanePreviewMessageId === "number";
-  return {
-    hadPreviewMessage,
-    previewMessageId: typeof previewMessageId === "number" ? previewMessageId : undefined,
-    stopCreatesFirstPreview:
-      params.stopBeforeEdit && !hadPreviewMessage && params.context === "final",
-  };
-}
-
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
-  const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
-  const markActivePreviewComplete = (laneName: LaneName) => {
-    params.activePreviewLifecycleByLane[laneName] = "complete";
-    params.retainPreviewOnCleanupByLane[laneName] = true;
+  const followUpPayload = (payload: ReplyPayload, text: string) =>
+    params.applyTextToFollowUpPayload
+      ? params.applyTextToFollowUpPayload(payload, text)
+      : params.applyTextToPayload(payload, text);
+  const textOnlyPayload = (payload: ReplyPayload): ReplyPayload => {
+    const {
+      mediaUrl: _mediaUrl,
+      mediaUrls: _mediaUrls,
+      audioAsVoice: _audioAsVoice,
+      spokenText: _spokenText,
+      ...rest
+    } = payload;
+    return rest;
   };
-  const isDraftPreviewLane = (lane: DraftLaneState) => lane.stream?.previewMode?.() === "draft";
-  const canMaterializeDraftFinal = (
-    lane: DraftLaneState,
-    previewButtons?: TelegramInlineButtons,
-  ) => {
-    const hasPreviewButtons = Boolean(previewButtons && previewButtons.length > 0);
-    return (
-      isDraftPreviewLane(lane) &&
-      !hasPreviewButtons &&
-      typeof lane.stream?.materialize === "function"
-    );
-  };
-
-  const tryMaterializeDraftPreviewForFinal = async (args: {
-    lane: DraftLaneState;
-    laneName: LaneName;
-    text: string;
-  }): Promise<number | undefined> => {
-    const stream = args.lane.stream;
-    if (!stream || !isDraftPreviewLane(args.lane)) {
-      return undefined;
+  const mediaChannelData = (
+    channelData: ReplyPayload["channelData"],
+    options?: { stripButtons?: boolean },
+  ): ReplyPayload["channelData"] => {
+    if (!options?.stripButtons) {
+      return channelData;
     }
-    // Draft previews have no message_id to edit; materialize the final text
-    // into a real message and treat that as the finalized delivery.
-    stream.update(args.text);
-    const materializedMessageId = await stream.materialize?.();
-    if (typeof materializedMessageId !== "number") {
-      params.log(
-        `telegram: ${args.laneName} draft preview materialize produced no message id; falling back to standard send`,
-      );
-      return undefined;
+    const telegramData = channelData?.telegram;
+    if (!telegramData || typeof telegramData !== "object" || Array.isArray(telegramData)) {
+      return channelData;
     }
-    args.lane.lastPartialText = args.text;
-    params.markDelivered();
-    return materializedMessageId;
-  };
-
-  const tryEditPreviewMessage = async (args: {
-    laneName: LaneName;
-    messageId: number;
-    text: string;
-    context: "final" | "update";
-    previewButtons?: TelegramInlineButtons;
-    updateLaneSnapshot: boolean;
-    lane: DraftLaneState;
-    finalTextAlreadyLanded: boolean;
-    retainAlternatePreviewOnMissingTarget: boolean;
-  }): Promise<PreviewEditResult> => {
-    try {
-      await params.editPreview({
-        laneName: args.laneName,
-        messageId: args.messageId,
-        text: args.text,
-        previewButtons: args.previewButtons,
-        context: args.context,
-      });
-      if (args.updateLaneSnapshot) {
-        args.lane.lastPartialText = args.text;
-      }
-      params.markDelivered();
-      return "edited";
-    } catch (err) {
-      if (isMessageNotModifiedError(err)) {
-        params.log(
-          `telegram: ${args.laneName} preview ${args.context} edit returned "message is not modified"; treating as delivered`,
-        );
-        params.markDelivered();
-        return "edited";
-      }
-      if (args.context === "final") {
-        if (args.finalTextAlreadyLanded) {
-          params.log(
-            `telegram: ${args.laneName} preview final edit failed after stop flush; keeping existing preview (${String(err)})`,
-          );
-          params.markDelivered();
-          return "retained";
-        }
-        if (isSafeToRetrySendError(err)) {
-          params.log(
-            `telegram: ${args.laneName} preview final edit failed before reaching Telegram; falling back to standard send (${String(err)})`,
-          );
-          return "fallback";
-        }
-        if (isMissingPreviewMessageError(err)) {
-          if (args.retainAlternatePreviewOnMissingTarget) {
-            params.log(
-              `telegram: ${args.laneName} preview final edit target missing; keeping alternate preview without fallback (${String(err)})`,
-            );
-            params.markDelivered();
-            return "retained";
-          }
-          params.log(
-            `telegram: ${args.laneName} preview final edit target missing with no alternate preview; falling back to standard send (${String(err)})`,
-          );
-          return "fallback";
-        }
-        if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
-          params.log(
-            `telegram: ${args.laneName} preview final edit may have landed despite network error; keeping existing preview (${String(err)})`,
-          );
-          params.markDelivered();
-          return "retained";
-        }
-        if (isTelegramClientRejection(err)) {
-          params.log(
-            `telegram: ${args.laneName} preview final edit rejected by Telegram (client error); falling back to standard send (${String(err)})`,
-          );
-          return "fallback";
-        }
-        // Default: ambiguous error — prefer incomplete over duplicate
-        params.log(
-          `telegram: ${args.laneName} preview final edit failed with ambiguous error; keeping existing preview to avoid duplicate (${String(err)})`,
-        );
-        params.markDelivered();
-        return "retained";
-      }
-      params.log(
-        `telegram: ${args.laneName} preview ${args.context} edit failed; falling back to standard send (${String(err)})`,
-      );
-      return "fallback";
+    const { buttons: _buttons, ...telegramRest } = telegramData as Record<string, unknown>;
+    if (_buttons === undefined) {
+      return channelData;
     }
+    const next: Record<string, unknown> = { ...channelData };
+    if (Object.keys(telegramRest).length > 0) {
+      next.telegram = telegramRest;
+    } else {
+      delete next.telegram;
+    }
+    return Object.keys(next).length > 0 ? next : undefined;
   };
-
-  const tryUpdatePreviewForLane = async ({
-    lane,
-    laneName,
-    text,
-    previewButtons,
-    stopBeforeEdit = false,
-    updateLaneSnapshot = false,
-    skipRegressive,
-    context,
-    previewMessageId: previewMessageIdOverride,
-    previewTextSnapshot,
-  }: TryUpdatePreviewParams): Promise<PreviewEditResult> => {
-    const editPreview = (
-      messageId: number,
-      finalTextAlreadyLanded: boolean,
-      retainAlternatePreviewOnMissingTarget: boolean,
-    ) =>
-      tryEditPreviewMessage({
-        laneName,
-        messageId,
-        text,
-        context,
-        previewButtons,
-        updateLaneSnapshot,
-        lane,
-        finalTextAlreadyLanded,
-        retainAlternatePreviewOnMissingTarget,
-      });
-    const finalizePreview = (
-      previewMessageId: number,
-      finalTextAlreadyLanded: boolean,
-      hadPreviewMessage: boolean,
-      retainAlternatePreviewOnMissingTarget = false,
-    ): PreviewEditResult | Promise<PreviewEditResult> => {
-      const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
-      const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
-        currentPreviewText,
-        text,
-        skipRegressive,
-        hadPreviewMessage,
-      });
-      if (shouldSkipRegressive) {
-        params.markDelivered();
-        return "regressive-skipped";
-      }
-      return editPreview(
-        previewMessageId,
-        finalTextAlreadyLanded,
-        retainAlternatePreviewOnMissingTarget,
-      );
+  const withMediaChannelData = (
+    payload: ReplyPayload,
+    options?: { stripButtons?: boolean },
+  ): ReplyPayload => {
+    const channelData = mediaChannelData(payload.channelData, options);
+    if (channelData === payload.channelData) {
+      return payload;
+    }
+    if (channelData) {
+      return { ...payload, channelData };
+    }
+    const { channelData: _channelData, ...rest } = payload;
+    return rest;
+  };
+  const withFallbackTelegramButtons = (
+    payload: ReplyPayload,
+    buttons?: TelegramInlineButtons,
+  ): ReplyPayload => {
+    if (!buttons) {
+      return payload;
+    }
+    const channelData = payload.channelData ?? {};
+    const telegramData = channelData.telegram;
+    if (
+      telegramData &&
+      typeof telegramData === "object" &&
+      !Array.isArray(telegramData) &&
+      "buttons" in telegramData
+    ) {
+      return payload;
+    }
+    const telegramRest =
+      telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
+        ? (telegramData as Record<string, unknown>)
+        : {};
+    return {
+      ...payload,
+      channelData: {
+        ...channelData,
+        telegram: {
+          ...telegramRest,
+          buttons,
+        },
+      },
     };
-    if (!lane.stream) {
-      return "fallback";
+  };
+  const mediaOnlyPayload = (
+    payload: ReplyPayload,
+    text: string,
+    options?: { stripButtons?: boolean; fallbackButtons?: TelegramInlineButtons },
+  ): ReplyPayload => {
+    if (getReplyPayloadTtsSupplement(payload)) {
+      return withFallbackTelegramButtons(
+        withMediaChannelData(
+          buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text)),
+          options,
+        ),
+        options?.fallbackButtons,
+      );
     }
-    const previewTargetBeforeStop = resolvePreviewTarget({
-      lane,
-      previewMessageIdOverride,
-      stopBeforeEdit,
-      context,
-    });
-    if (previewTargetBeforeStop.stopCreatesFirstPreview) {
-      // Final stop() can create the first visible preview message.
-      // Prime pending text so the stop flush sends the final text snapshot.
-      lane.stream.update(text);
-      await params.stopDraftLane(lane);
-      const previewTargetAfterStop = resolvePreviewTarget({
-        lane,
-        stopBeforeEdit: false,
-        context,
-      });
-      if (typeof previewTargetAfterStop.previewMessageId !== "number") {
-        return "fallback";
-      }
-      return finalizePreview(previewTargetAfterStop.previewMessageId, true, false);
+    if (payload.audioAsVoice === true) {
+      const {
+        text: _text,
+        presentation: _presentation,
+        interactive: _interactive,
+        btw: _btw,
+        spokenText: _spokenText,
+        ...voicePayload
+      } = params.applyTextToPayload(payload, text);
+      return withFallbackTelegramButtons(
+        withMediaChannelData({ ...voicePayload, spokenText: text }, options),
+        options?.fallbackButtons,
+      );
     }
-    if (stopBeforeEdit) {
-      await params.stopDraftLane(lane);
-    }
-    const previewTargetAfterStop = resolvePreviewTarget({
-      lane,
-      previewMessageIdOverride,
-      stopBeforeEdit: false,
-      context,
-    });
-    if (typeof previewTargetAfterStop.previewMessageId !== "number") {
-      // Only retain for final delivery when a prior preview is already visible
-      // to the user — otherwise falling back is safer than silence. For updates,
-      // always fall back so the caller can attempt sendPayload without stale
-      // markDelivered() state.
-      if (context === "final" && lane.hasStreamedMessage && lane.stream?.sendMayHaveLanded?.()) {
-        params.log(
-          `telegram: ${laneName} preview send may have landed despite missing message id; keeping to avoid duplicate`,
-        );
-        params.markDelivered();
-        return "retained";
-      }
-      return "fallback";
-    }
-    const activePreviewMessageId = lane.stream?.messageId();
-    return finalizePreview(
-      previewTargetAfterStop.previewMessageId,
-      false,
-      previewTargetAfterStop.hadPreviewMessage,
-      typeof activePreviewMessageId === "number" &&
-        activePreviewMessageId !== previewTargetAfterStop.previewMessageId,
+    const {
+      text: _text,
+      presentation: _presentation,
+      interactive: _interactive,
+      btw: _btw,
+      ...rest
+    } = payload;
+    return withFallbackTelegramButtons(
+      withMediaChannelData(rest, options),
+      options?.fallbackButtons,
     );
   };
 
-  const consumeArchivedAnswerPreviewForFinal = async ({
-    lane,
-    text,
-    payload,
-    previewButtons,
-    canEditViaPreview,
-  }: ConsumeArchivedAnswerPreviewParams): Promise<LaneDeliveryResult | undefined> => {
-    const archivedPreview = params.archivedAnswerPreviews.shift();
-    if (!archivedPreview) {
+  const clearUnfinalizedStream = async (lane: DraftLaneState) => {
+    if (!lane.stream || lane.finalized) {
+      return;
+    }
+    await params.clearDraftLane(lane);
+    lane.lastPartialText = "";
+    lane.hasStreamedMessage = false;
+  };
+
+  const streamText = async (
+    laneName: LaneName,
+    lane: DraftLaneState,
+    text: string,
+    payload: ReplyPayload,
+    isFinal: boolean,
+    buttons?: TelegramInlineButtons,
+  ): Promise<LaneDeliveryResult | undefined> => {
+    const stream = lane.stream;
+    if (!stream || text.length === 0 || payload.isError) {
       return undefined;
     }
-    if (canEditViaPreview) {
-      const finalized = await tryUpdatePreviewForLane({
-        lane,
-        laneName: "answer",
-        text,
-        previewButtons,
-        stopBeforeEdit: false,
-        skipRegressive: "existingOnly",
-        context: "final",
-        previewMessageId: archivedPreview.messageId,
-        previewTextSnapshot: archivedPreview.textSnapshot,
+
+    const chunks =
+      text.length > params.draftMaxChars
+        ? compactChunks(params.splitFinalTextForStream?.(text) ?? [])
+        : [text];
+    const [firstChunk, ...remainingChunks] = chunks;
+    if (!firstChunk || firstChunk.length > params.draftMaxChars) {
+      return undefined;
+    }
+    const finalText = text.trimEnd();
+    const deliveredStreamTextBeforeUpdate = stream.lastDeliveredText?.();
+    const deliveredPrefixBeforeUpdate =
+      isFinal &&
+      deliveredStreamTextBeforeUpdate !== undefined &&
+      isDeliveredPrefix({
+        deliveredText: deliveredStreamTextBeforeUpdate,
+        finalText,
+      }) &&
+      deliveredStreamTextBeforeUpdate.length > firstChunk.trimEnd().length;
+    const finalizeDeliveredPrefix = async (
+      deliveredStreamText: string,
+      messageId: number,
+    ): Promise<LaneDeliveryResult> => {
+      lane.finalized = true;
+      params.markDelivered();
+      let buttonsAttached = false;
+      if (buttons) {
+        const deliveredChunks = compactChunks(
+          params.splitFinalTextForStream?.(deliveredStreamText) ?? [],
+        );
+        const currentChunk = deliveredChunks.at(-1);
+        if (currentChunk && currentChunk.length <= params.draftMaxChars) {
+          try {
+            await params.editStreamMessage({ laneName, messageId, text: currentChunk, buttons });
+            buttonsAttached = true;
+          } catch (err) {
+            params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
+          }
+        }
+      }
+      const suffix = finalText.slice(deliveredStreamText.length);
+      if (suffix.trim().length > 0) {
+        for (const chunk of compactChunks(params.splitFinalTextForStream?.(suffix) ?? [])) {
+          if (chunk.trim().length === 0) {
+            continue;
+          }
+          await params.sendPayload(followUpPayload(payload, chunk));
+        }
+      }
+      return result("preview-finalized", {
+        content: text,
+        promptContextContent: deliveredStreamText,
+        messageId,
+        buttonsAttached,
       });
-      if (finalized === "edited") {
-        return result("preview-finalized", {
-          content: text,
-          messageId: archivedPreview.messageId,
-        });
+    };
+
+    const retainedPreview =
+      isFinal && remainingChunks.length === 0 && isPotentialTruncatedFinal(text)
+        ? selectLongerFinalText({
+            finalText: text,
+            candidateTexts: [
+              await params.resolveFinalTextCandidate?.({ finalText: text, laneName }),
+              stream.lastDeliveredText?.(),
+              lane.lastPartialText,
+            ],
+          })
+        : undefined;
+    if (retainedPreview && (!buttons || retainedPreview.length <= params.draftMaxChars)) {
+      const previewText = retainedPreview;
+      lane.lastPartialText = previewText;
+      lane.hasStreamedMessage = true;
+      await params.stopDraftLane(lane);
+      const messageId = stream.messageId();
+      if (typeof messageId !== "number") {
+        if (stream.sendMayHaveLanded?.()) {
+          lane.finalized = true;
+          params.markDelivered();
+          return result("preview-retained");
+        }
+        return undefined;
       }
-      if (finalized === "regressive-skipped") {
-        return result("preview-finalized", {
-          content: archivedPreview.textSnapshot,
-          messageId: archivedPreview.messageId,
-        });
+      const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
+      if (
+        deliveredStreamTextAfterStop !== undefined &&
+        deliveredStreamTextAfterStop !== previewText
+      ) {
+        return undefined;
       }
-      if (finalized === "retained") {
-        params.retainPreviewOnCleanupByLane.answer = true;
+      let buttonsAttached = false;
+      if (buttons) {
+        try {
+          await params.editStreamMessage({ laneName, messageId, text: previewText, buttons });
+          buttonsAttached = true;
+        } catch (err) {
+          params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
+        }
+      }
+      for (const chunk of remainingChunks) {
+        if (chunk.trim().length === 0) {
+          continue;
+        }
+        await params.sendPayload(followUpPayload(payload, chunk));
+      }
+      lane.finalized = true;
+      params.markDelivered();
+      return result("preview-finalized", { content: previewText, messageId, buttonsAttached });
+    }
+
+    if (!deliveredPrefixBeforeUpdate) {
+      lane.lastPartialText = firstChunk;
+      lane.hasStreamedMessage = true;
+      lane.finalized = false;
+      stream.update(firstChunk);
+    }
+    if (isFinal) {
+      await params.stopDraftLane(lane);
+    } else {
+      await params.flushDraftLane(lane);
+    }
+
+    const messageId = stream.messageId();
+    if (typeof messageId !== "number") {
+      if (isFinal && stream.sendMayHaveLanded?.()) {
+        lane.finalized = true;
+        params.markDelivered();
         return result("preview-retained");
       }
+      return undefined;
     }
-    // Send the replacement message first, then clean up the old preview.
-    // This avoids the visual "disappear then reappear" flash.
-    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
-    // Once this archived preview is consumed by a fallback final send, delete it
-    // regardless of deleteIfUnused. That flag only applies to unconsumed boundaries.
-    if (delivered || archivedPreview.deleteIfUnused !== false) {
+
+    const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
+    if (
+      isFinal &&
+      deliveredStreamTextAfterStop !== undefined &&
+      deliveredStreamTextAfterStop !== firstChunk.trimEnd()
+    ) {
+      if (
+        isDeliveredPrefix({ deliveredText: deliveredStreamTextAfterStop, finalText }) &&
+        deliveredStreamTextAfterStop.length > firstChunk.trimEnd().length
+      ) {
+        return await finalizeDeliveredPrefix(deliveredStreamTextAfterStop, messageId);
+      }
+      return undefined;
+    }
+
+    if (deliveredPrefixBeforeUpdate && deliveredStreamTextAfterStop === undefined) {
+      return await finalizeDeliveredPrefix(deliveredStreamTextBeforeUpdate, messageId);
+    }
+
+    params.markDelivered();
+    let buttonsAttached = false;
+    if (buttons) {
       try {
-        await params.deletePreviewMessage(archivedPreview.messageId);
+        await params.editStreamMessage({ laneName, messageId, text: firstChunk, buttons });
+        buttonsAttached = true;
       } catch (err) {
-        params.log(
-          `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
-        );
+        params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
       }
     }
-    return delivered ? result("sent") : result("skipped");
+
+    if (isFinal) {
+      lane.finalized = true;
+      for (const chunk of remainingChunks) {
+        if (chunk.trim().length === 0) {
+          continue;
+        }
+        await params.sendPayload(followUpPayload(payload, chunk));
+      }
+      return result("preview-finalized", {
+        content: text,
+        promptContextContent: firstChunk,
+        messageId,
+        buttonsAttached,
+      });
+    }
+
+    return result("preview-updated");
   };
 
   return async ({
@@ -478,135 +455,63 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     text,
     payload,
     infoKind,
-    previewButtons,
-    allowPreviewUpdateForNonFinal = false,
+    buttons,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
     const reply = resolveSendableOutboundReplyParts(payload, { text });
-    const hasMedia = reply.hasMedia;
-    const canEditViaPreview =
-      !hasMedia && text.length > 0 && text.length <= params.draftMaxChars && !payload.isError;
-
-    if (infoKind === "final") {
-      // Transient previews must decide cleanup retention per final attempt.
-      // Completed previews intentionally stay retained so later extra payloads
-      // do not clear the already-finalized message.
-      if (params.activePreviewLifecycleByLane[laneName] === "transient") {
-        params.retainPreviewOnCleanupByLane[laneName] = false;
-      }
-      if (laneName === "answer") {
-        const archivedResult = await consumeArchivedAnswerPreviewForFinal({
-          lane,
-          text,
-          payload,
-          previewButtons,
-          canEditViaPreview,
-        });
-        if (archivedResult) {
-          return archivedResult;
-        }
-      }
-      if (canEditViaPreview && params.activePreviewLifecycleByLane[laneName] === "transient") {
-        await params.flushDraftLane(lane);
-        if (laneName === "answer") {
-          const archivedResultAfterFlush = await consumeArchivedAnswerPreviewForFinal({
-            lane,
-            text,
-            payload,
-            previewButtons,
-            canEditViaPreview,
-          });
-          if (archivedResultAfterFlush) {
-            return archivedResultAfterFlush;
-          }
-        }
-        if (canMaterializeDraftFinal(lane, previewButtons)) {
-          const materializedMessageId = await tryMaterializeDraftPreviewForFinal({
-            lane,
-            laneName,
-            text,
-          });
-          if (typeof materializedMessageId === "number") {
-            markActivePreviewComplete(laneName);
-            return result("preview-finalized", {
-              content: text,
-              messageId: materializedMessageId,
-            });
-          }
-        }
-        const previewMessageId = lane.stream?.messageId();
-        const finalized = await tryUpdatePreviewForLane({
-          lane,
-          laneName,
-          text,
-          previewButtons,
-          stopBeforeEdit: true,
-          skipRegressive: "existingOnly",
-          context: "final",
-        });
-        if (finalized === "edited") {
-          markActivePreviewComplete(laneName);
-          return result("preview-finalized", {
-            content: text,
-            messageId: previewMessageId ?? lane.stream?.messageId(),
-          });
-        }
-        if (finalized === "regressive-skipped") {
-          markActivePreviewComplete(laneName);
-          return result("preview-finalized", {
-            content: lane.lastPartialText,
-            messageId: previewMessageId ?? lane.stream?.messageId(),
-          });
-        }
-        if (finalized === "retained") {
-          markActivePreviewComplete(laneName);
-          return result("preview-retained");
-        }
-      } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {
-        params.log(
-          `telegram: preview final too long for edit (${text.length} > ${params.draftMaxChars}); falling back to standard send`,
-        );
-      }
-      await params.stopDraftLane(lane);
-      const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
-      return delivered ? result("sent") : result("skipped");
+    const isFinal = infoKind === "final";
+    const streamed = !reply.hasMedia
+      ? await streamText(laneName, lane, text, payload, isFinal, buttons)
+      : undefined;
+    if (streamed) {
+      return streamed;
     }
 
-    if (allowPreviewUpdateForNonFinal && canEditViaPreview) {
-      if (isDraftPreviewLane(lane)) {
-        // DM draft flow has no message_id to edit; updates are sent via sendMessageDraft.
-        // Only mark as updated when the draft flush actually emits an update.
-        const previewRevisionBeforeFlush = lane.stream?.previewRevision?.() ?? 0;
-        lane.stream?.update(text);
-        await params.flushDraftLane(lane);
-        const previewUpdated = (lane.stream?.previewRevision?.() ?? 0) > previewRevisionBeforeFlush;
-        if (!previewUpdated) {
-          params.log(
-            `telegram: ${laneName} draft preview update not emitted; falling back to standard send`,
-          );
-          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
-          return delivered ? result("sent") : result("skipped");
-        }
-        lane.lastPartialText = text;
-        params.markDelivered();
-        return result("preview-updated");
-      }
-      const updated = await tryUpdatePreviewForLane({
-        lane,
+    if (
+      isFinal &&
+      reply.hasMedia &&
+      lane.stream &&
+      lane.hasStreamedMessage &&
+      !lane.finalized &&
+      text.trim().length > 0
+    ) {
+      const finalizedPreview = await streamText(
         laneName,
+        lane,
         text,
-        previewButtons,
-        stopBeforeEdit: false,
-        updateLaneSnapshot: true,
-        skipRegressive: "always",
-        context: "update",
-      });
-      if (updated === "edited" || updated === "regressive-skipped") {
-        return result("preview-updated");
+        textOnlyPayload(payload),
+        true,
+        buttons,
+      );
+      if (finalizedPreview) {
+        const stripButtons =
+          finalizedPreview.kind === "preview-finalized" &&
+          finalizedPreview.delivery.buttonsAttached === true;
+        const mediaText =
+          finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
+        await params.sendPayload(
+          mediaOnlyPayload(payload, mediaText, {
+            stripButtons,
+            fallbackButtons: stripButtons ? undefined : buttons,
+          }),
+          {
+            durable: true,
+          },
+        );
+        return finalizedPreview;
       }
     }
 
-    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+    if (isFinal) {
+      await clearUnfinalizedStream(lane);
+    }
+
+    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text), {
+      durable: isFinal,
+    });
+    if (delivered && isFinal) {
+      lane.finalized = true;
+    }
     return delivered ? result("sent") : result("skipped");
   };
 }

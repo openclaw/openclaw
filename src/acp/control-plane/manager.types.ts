@@ -1,17 +1,3 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type {
-  SessionAcpIdentity,
-  AcpSessionRuntimeOptions,
-  SessionAcpMeta,
-  SessionEntry,
-} from "../../config/sessions/types.js";
-import type { AcpRuntimeError } from "../runtime/errors.js";
-import { requireAcpRuntimeBackend } from "../runtime/registry.js";
-import {
-  listAcpSessionEntries,
-  readAcpSessionEntry,
-  upsertAcpSessionMeta,
-} from "../runtime/session-meta.js";
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -20,7 +6,21 @@ import type {
   AcpRuntimePromptMode,
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
-} from "../runtime/types.js";
+} from "@openclaw/acp-core/runtime/types";
+import type {
+  SessionAcpIdentity,
+  AcpSessionRuntimeOptions,
+  SessionAcpMeta,
+  SessionEntry,
+} from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AcpRuntimeError } from "../runtime/errors.js";
+import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../runtime/registry.js";
+import {
+  listAcpSessionEntries,
+  readAcpSessionEntry,
+  upsertAcpSessionMeta,
+} from "../runtime/session-meta.js";
 
 export type AcpSessionResolution =
   | {
@@ -44,6 +44,7 @@ export type AcpInitializeSessionInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
+  runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   cwd?: string;
   backendId?: string;
 };
@@ -61,13 +62,20 @@ export type AcpRunTurnInput = {
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
+  onLifecycle?: (event: AcpTurnLifecycleEvent) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
+};
+
+export type AcpTurnLifecycleEvent = {
+  type: "prompt_submitted";
+  at: number;
 };
 
 export type AcpCloseSessionInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: string;
+  discardPersistentState?: boolean;
   clearMeta?: boolean;
   allowBackendUnavailable?: boolean;
   requireAcpSession?: boolean;
@@ -135,13 +143,62 @@ export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
   readSessionEntry: typeof readAcpSessionEntry;
   upsertSessionMeta: typeof upsertAcpSessionMeta;
+  getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
 };
+
+export type WriteManagerSessionMeta = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  mutate: (
+    current: SessionAcpMeta | undefined,
+    entry: SessionEntry | undefined,
+  ) => SessionAcpMeta | null | undefined;
+  failOnError?: boolean;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+}) => Promise<SessionEntry | null>;
+
+export type ResolveManagerSession = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}) => AcpSessionResolution;
+
+export type EnsureManagerRuntimeHandle = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  meta: SessionAcpMeta;
+}) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
+
+export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  meta: SessionAcpMeta;
+  runtimeStatus?: AcpRuntimeStatus;
+  failOnStatusError: boolean;
+}) => Promise<{
+  handle: AcpRuntimeHandle;
+  meta: SessionAcpMeta;
+  runtimeStatus?: AcpRuntimeStatus;
+}>;
+
+export type SetManagerSessionState = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  state: SessionAcpMeta["state"];
+  lastError?: string;
+  clearLastError?: boolean;
+}) => Promise<void>;
+
+export type WithManagerSessionActor = <T>(sessionKey: string, op: () => Promise<T>) => Promise<T>;
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
   readSessionEntry: readAcpSessionEntry,
   upsertSessionMeta: upsertAcpSessionMeta,
+  getRuntimeBackend: getAcpRuntimeBackend,
   requireRuntimeBackend: requireAcpRuntimeBackend,
 };
 

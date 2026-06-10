@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type {
@@ -35,7 +39,7 @@ function matchCompiledBindingConversation(params: {
 }
 
 export function resolveCompiledBindingChannel(raw: string): ConfiguredBindingChannel | null {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   return normalized ? (normalized as ConfiguredBindingChannel) : null;
 }
 
@@ -54,7 +58,7 @@ export function toConfiguredBindingConversationRef(conversation: ConversationRef
     channel,
     accountId: normalizeAccountId(conversation.accountId),
     conversationId,
-    parentConversationId: conversation.parentConversationId?.trim() || undefined,
+    parentConversationId: normalizeOptionalString(conversation.parentConversationId),
   };
 }
 

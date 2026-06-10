@@ -1,6 +1,10 @@
-import { normalizeChatChannelId } from "../../../channels/registry.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatChannelId } from "../../../channels/ids.js";
 import { listRouteBindings } from "../../../config/bindings.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,
@@ -24,7 +28,7 @@ function normalizeBindingChannelKey(raw?: string | null): string {
   if (normalized) {
     return normalized;
   }
-  return (raw ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(raw);
 }
 
 function collectChannelsMissingDefaultAccount(
@@ -87,7 +91,7 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
         continue;
       }
 
-      const rawAccountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+      const rawAccountId = normalizeOptionalString(match.accountId) ?? "";
       if (!rawAccountId) {
         continue;
       }

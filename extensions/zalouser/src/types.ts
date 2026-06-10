@@ -1,3 +1,4 @@
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { Style } from "./zca-constants.js";
 
 export type ZcaFriend = {
@@ -45,6 +46,9 @@ export type ZaloInboundMessage = {
   wasExplicitlyMentioned?: boolean;
   canResolveExplicitMention?: boolean;
   implicitMention?: boolean;
+  quotedGlobalMsgId?: string;
+  quotedOwnerId?: string;
+  quotedBody?: string;
   eventMessage?: ZaloEventMessage;
   raw: unknown;
 };
@@ -71,6 +75,7 @@ export type ZaloSendOptions = {
 export type ZaloSendResult = {
   ok: boolean;
   messageId?: string;
+  receipt: MessageReceipt;
   error?: string;
 };
 
@@ -85,10 +90,9 @@ export type ZaloAuthStatus = {
   message: string;
 };
 
-export type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
+type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
 
 export type ZalouserGroupConfig = {
-  allow?: boolean;
   enabled?: boolean;
   requireMention?: boolean;
   tools?: ZalouserToolConfig;

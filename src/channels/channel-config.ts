@@ -1,3 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+
 export type ChannelMatchSource = "direct" | "parent" | "wildcard";
 
 export type ChannelEntryMatch<T> = {
@@ -32,29 +35,14 @@ export function resolveChannelMatchConfig<
 }
 
 export function normalizeChannelSlug(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(value)
     .replace(/^#/, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
 
 export function buildChannelKeyCandidates(...keys: Array<string | undefined | null>): string[] {
-  const seen = new Set<string>();
-  const candidates: string[] = [];
-  for (const key of keys) {
-    if (typeof key !== "string") {
-      continue;
-    }
-    const trimmed = key.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    candidates.push(trimmed);
-  }
-  return candidates;
+  return normalizeUniqueSingleOrTrimmedStringList(keys);
 }
 
 export function resolveChannelEntryMatch<T>(params: {
@@ -65,14 +53,14 @@ export function resolveChannelEntryMatch<T>(params: {
   const entries = params.entries ?? {};
   const match: ChannelEntryMatch<T> = {};
   for (const key of params.keys) {
-    if (!Object.prototype.hasOwnProperty.call(entries, key)) {
+    if (!Object.hasOwn(entries, key)) {
       continue;
     }
     match.entry = entries[key];
     match.key = key;
     break;
   }
-  if (params.wildcardKey && Object.prototype.hasOwnProperty.call(entries, params.wildcardKey)) {
+  if (params.wildcardKey && Object.hasOwn(entries, params.wildcardKey)) {
     match.wildcardEntry = entries[params.wildcardKey];
     match.wildcardKey = params.wildcardKey;
   }

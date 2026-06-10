@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
@@ -61,7 +62,7 @@ function createHookPackUpdateIntegrityDriftHandler(params: {
     params.logger.warn?.(
       `Integrity drift for hook pack "${params.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
     );
-    return true;
+    return false;
   };
 }
 
@@ -175,9 +176,7 @@ export async function updateNpmInstalledHookPacks(params: {
       spec: effectiveSpec,
       installPath: result.targetDir,
       version: nextVersion,
-      resolvedName: result.npmResolution?.name,
-      resolvedSpec: result.npmResolution?.resolvedSpec,
-      integrity: result.npmResolution?.integrity,
+      ...buildNpmResolutionFields(result.npmResolution),
       hooks: result.hooks,
     });
     changed = true;

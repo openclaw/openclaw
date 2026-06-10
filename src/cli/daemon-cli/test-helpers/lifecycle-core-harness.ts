@@ -39,14 +39,19 @@ export function resetLifecycleRuntimeLogs() {
 }
 
 export function resetLifecycleServiceMocks() {
-  service.stage.mockClear();
-  service.isLoaded.mockClear();
-  service.readCommand.mockClear();
-  service.readRuntime.mockClear();
-  service.restart.mockClear();
+  service.stage.mockReset();
+  service.install.mockReset();
+  service.uninstall.mockReset();
+  service.stop.mockReset();
+  service.isLoaded.mockReset();
+  service.readCommand.mockReset();
+  service.readRuntime.mockReset();
+  service.restart.mockReset();
   service.isLoaded.mockResolvedValue(true);
   service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
   service.readRuntime.mockResolvedValue({ status: "running" });
+  service.stop.mockResolvedValue(undefined);
+  service.uninstall.mockResolvedValue(undefined);
   service.restart.mockResolvedValue({ outcome: "completed" });
 }
 

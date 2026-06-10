@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const DEFAULT_SKIPPED_DIR_NAMES = new Set(["node_modules", "dist", "coverage"]);
+const DEFAULT_SKIPPED_DIR_NAMES = new Set(["node_modules", "dist", "coverage", ".generated"]);
 
 export function isCodeFile(filePath: string): boolean {
   if (filePath.endsWith(".d.ts")) {
@@ -26,7 +26,7 @@ export function collectFilesSync(
     if (!current) {
       continue;
     }
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {

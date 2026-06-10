@@ -1,5 +1,5 @@
-import { rmSync } from "node:fs";
-import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -7,12 +7,19 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ResolvedTtsConfig } from "./tts.js";
-
-const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+import type { OpenClawConfig } from "../config/types.js";
+import { completeSimple } from "../llm/stream.js";
+import type { TextContent } from "../llm/types.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import type { ResolvedTtsConfig } from "./tts-types.js";
+export {
+  normalizeApplyTextNormalization,
+  normalizeLanguageCode,
+  normalizeSeed,
+  requireInRange,
+  scheduleCleanup,
+} from "./tts-provider-helpers.js";
 
 type SummarizeTextDeps = {
   completeSimple: typeof completeSimple;
@@ -32,47 +39,6 @@ function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
   };
 }
 
-export function requireInRange(value: number, min: number, max: number, label: string): void {
-  if (!Number.isFinite(value) || value < min || value > max) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
-  }
-}
-
-export function normalizeLanguageCode(code?: string): string | undefined {
-  const trimmed = code?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (!/^[a-z]{2}$/.test(normalized)) {
-    throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
-  }
-  return normalized;
-}
-
-export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
-  const trimmed = mode?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "auto" || normalized === "on" || normalized === "off") {
-    return normalized;
-  }
-  throw new Error("applyTextNormalization must be one of: auto, on, off");
-}
-
-export function normalizeSeed(seed?: number): number | undefined {
-  if (seed == null) {
-    return undefined;
-  }
-  const next = Math.floor(seed);
-  if (!Number.isFinite(next) || next < 0 || next > 4_294_967_295) {
-    throw new Error("seed must be between 0 and 4294967295");
-  }
-  return next;
-}
-
 type SummarizeResult = {
   summary: string;
   latencyMs: number;
@@ -90,7 +56,7 @@ function resolveSummaryModelRef(
   config: ResolvedTtsConfig,
 ): SummaryModelSelection {
   const defaultRef = resolveDefaultModelForAgent({ cfg });
-  const override = config.summaryModel?.trim();
+  const override = normalizeOptionalString(config.summaryModel);
   if (!override) {
     return { ref: defaultRef, source: "default" };
   }
@@ -140,7 +106,8 @@ export async function summarizeText(
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+    const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
     try {
       const res = await deps.completeSimple(
@@ -192,18 +159,4 @@ export async function summarizeText(
     }
     throw err;
   }
-}
-
-export function scheduleCleanup(
-  tempDir: string,
-  delayMs: number = TEMP_FILE_CLEANUP_DELAY_MS,
-): void {
-  const timer = setTimeout(() => {
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
-  }, delayMs);
-  timer.unref();
 }

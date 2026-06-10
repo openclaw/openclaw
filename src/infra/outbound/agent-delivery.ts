@@ -1,6 +1,8 @@
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -9,6 +11,8 @@ import {
   normalizeMessageChannel,
   type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import { resolveOutboundSessionRoute } from "./outbound-session.js";
 import type { OutboundTargetResolution } from "./targets.js";
 import {
   resolveOutboundTarget,
@@ -47,15 +51,11 @@ export function resolveAgentDeliveryPlan(params: {
   /** Turn-source `threadId` — paired with `turnSourceChannel`. */
   turnSourceThreadId?: string | number;
 }): AgentDeliveryPlan {
-  const requestedRaw =
-    typeof params.requestedChannel === "string" ? params.requestedChannel.trim() : "";
+  const requestedRaw = normalizeOptionalString(params.requestedChannel) ?? "";
   const normalizedRequested = requestedRaw ? normalizeMessageChannel(requestedRaw) : undefined;
   const requestedChannel = normalizedRequested || "last";
 
-  const explicitTo =
-    typeof params.explicitTo === "string" && params.explicitTo.trim()
-      ? params.explicitTo.trim()
-      : undefined;
+  const explicitTo = normalizeOptionalString(params.explicitTo) ?? undefined;
 
   // Resolve turn-source channel for cross-channel safety.
   const normalizedTurnSource = params.turnSourceChannel
@@ -65,10 +65,7 @@ export function resolveAgentDeliveryPlan(params: {
     normalizedTurnSource && isDeliverableMessageChannel(normalizedTurnSource)
       ? normalizedTurnSource
       : undefined;
-  const turnSourceTo =
-    typeof params.turnSourceTo === "string" && params.turnSourceTo.trim()
-      ? params.turnSourceTo.trim()
-      : undefined;
+  const turnSourceTo = normalizeOptionalString(params.turnSourceTo) ?? undefined;
   const turnSourceAccountId = normalizeAccountId(params.turnSourceAccountId);
   const turnSourceThreadId =
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
@@ -133,6 +130,67 @@ export function resolveAgentDeliveryPlan(params: {
     resolvedAccountId,
     resolvedThreadId: baseDelivery.threadId,
     deliveryTargetMode,
+  };
+}
+
+export async function resolveAgentDeliveryPlanWithSessionRoute(
+  params: Parameters<typeof resolveAgentDeliveryPlan>[0] & {
+    cfg: OpenClawConfig;
+    agentId: string;
+    currentSessionKey?: string;
+  },
+): Promise<AgentDeliveryPlan> {
+  const plan = resolveAgentDeliveryPlan(params);
+  if (
+    !params.wantsDelivery ||
+    !plan.resolvedTo ||
+    !isDeliverableMessageChannel(plan.resolvedChannel) ||
+    !resolveOutboundChannelPlugin({
+      channel: plan.resolvedChannel,
+      cfg: params.cfg,
+      allowBootstrap: true,
+    })?.messaging?.resolveOutboundSessionRoute
+  ) {
+    return plan;
+  }
+  const normalizedTarget = resolveOutboundTarget({
+    channel: plan.resolvedChannel,
+    to: plan.resolvedTo,
+    cfg: params.cfg,
+    accountId: plan.resolvedAccountId,
+    mode: plan.deliveryTargetMode ?? "explicit",
+  });
+  if (!normalizedTarget.ok) {
+    return plan;
+  }
+  const explicitThreadId =
+    params.explicitThreadId != null && params.explicitThreadId !== ""
+      ? params.explicitThreadId
+      : undefined;
+  const route = await (async () => {
+    try {
+      return await resolveOutboundSessionRoute({
+        cfg: params.cfg,
+        channel: plan.resolvedChannel as ChannelId,
+        agentId: params.agentId,
+        accountId: plan.resolvedAccountId,
+        target: normalizedTarget.to,
+        currentSessionKey: params.currentSessionKey,
+        threadId: plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
+      });
+    } catch {
+      return null;
+    }
+  })();
+  if (!route) {
+    return plan;
+  }
+  return {
+    ...plan,
+    resolvedTo: route.to,
+    resolvedThreadId:
+      route.threadId ??
+      (plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId),
   };
 }
 

@@ -1,22 +1,45 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeModelRef } from "../agents/model-selection.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
+
+export type CachedPricingTier = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** [startTokens, endTokens) — half-open interval on the input token axis. */
+  range: [number, number];
+};
 
 export type CachedModelPricing = {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Optional tiered pricing tiers sourced from LiteLLM or local config. */
+  tieredPricing?: CachedPricingTier[];
+};
+
+export type GatewayModelPricingHealthSource = "openrouter" | "litellm" | "bootstrap" | "refresh";
+
+export type GatewayModelPricingHealth = {
+  state: "ok" | "degraded" | "disabled";
+  sources: Array<{
+    source: GatewayModelPricingHealthSource;
+    state: "ok" | "degraded";
+    lastFailureAt?: number;
+    detail?: string;
+  }>;
+  lastFailureAt?: number;
+  detail?: string;
 };
 
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
-
-const WRAPPER_PROVIDERS = new Set([
-  "cloudflare-ai-gateway",
-  "kilocode",
-  "openrouter",
-  "vercel-ai-gateway",
-]);
+const sourceFailures = new Map<
+  GatewayModelPricingHealthSource,
+  { lastFailureAt: number; detail: string }
+>();
 
 function modelPricingCacheKey(provider: string, model: string): string {
   const providerId = normalizeProviderId(provider);
@@ -24,19 +47,11 @@ function modelPricingCacheKey(provider: string, model: string): string {
   if (!providerId || !modelId) {
     return "";
   }
-  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
     ? modelId
     : `${providerId}/${modelId}`;
-}
-
-function shouldNormalizeCachedPricingLookup(provider: string): boolean {
-  const normalized = normalizeProviderId(provider);
-  return (
-    normalized === "anthropic" ||
-    normalized === "openrouter" ||
-    normalized === "xai" ||
-    WRAPPER_PROVIDERS.has(normalized)
-  );
 }
 
 export function replaceGatewayModelPricingCache(
@@ -50,6 +65,59 @@ export function replaceGatewayModelPricingCache(
 export function clearGatewayModelPricingCacheState(): void {
   cachedPricing = new Map();
   cachedAt = 0;
+  clearGatewayModelPricingFailures();
+}
+
+export function recordGatewayModelPricingSourceFailure(
+  source: GatewayModelPricingHealthSource,
+  detail: string,
+  failedAt = Date.now(),
+): void {
+  sourceFailures.set(source, {
+    lastFailureAt: failedAt,
+    detail,
+  });
+}
+
+export function clearGatewayModelPricingSourceFailure(
+  source: GatewayModelPricingHealthSource,
+): void {
+  sourceFailures.delete(source);
+}
+
+export function clearGatewayModelPricingFailures(): void {
+  sourceFailures.clear();
+}
+
+export function getGatewayModelPricingHealth(params?: {
+  enabled?: boolean;
+}): GatewayModelPricingHealth {
+  if (params?.enabled === false) {
+    return {
+      state: "disabled",
+      sources: [],
+    };
+  }
+  const sources: GatewayModelPricingHealth["sources"] = Array.from(sourceFailures.entries())
+    .map(([source, failure]) => ({
+      source,
+      state: "degraded" as const,
+      lastFailureAt: failure.lastFailureAt,
+      detail: failure.detail,
+    }))
+    .toSorted((left, right) => left.source.localeCompare(right.source));
+  const latest = sources.reduce<(typeof sources)[number] | undefined>((current, source) => {
+    if (!current || (source.lastFailureAt ?? 0) > (current.lastFailureAt ?? 0)) {
+      return source;
+    }
+    return current;
+  }, undefined);
+  return {
+    state: sources.length > 0 ? "degraded" : "ok",
+    sources,
+    ...(latest?.lastFailureAt ? { lastFailureAt: latest.lastFailureAt } : {}),
+    ...(latest?.detail ? { detail: latest.detail } : {}),
+  };
 }
 
 export function getCachedGatewayModelPricing(params: {
@@ -66,11 +134,11 @@ export function getCachedGatewayModelPricing(params: {
   if (direct) {
     return direct;
   }
-  if (!shouldNormalizeCachedPricingLookup(provider)) {
-    return undefined;
-  }
   const normalized = normalizeModelRef(provider, model);
   const normalizedKey = modelPricingCacheKey(normalized.provider, normalized.model);
+  if (normalizedKey === key) {
+    return undefined;
+  }
   return normalizedKey ? cachedPricing.get(normalizedKey) : undefined;
 }
 
@@ -86,11 +154,34 @@ export function getGatewayModelPricingCacheMeta(): {
   };
 }
 
-export function __resetGatewayModelPricingCacheForTest(): void {
+function stablePricingValue(value: unknown): string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? JSON.stringify(value) : JSON.stringify(String(value));
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stablePricingValue(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .toSorted()
+    .map((key) => `${JSON.stringify(key)}:${stablePricingValue(record[key])}`)
+    .join(",")}}`;
+}
+
+export function getGatewayModelPricingCacheFingerprint(): string {
+  const entries = Array.from(cachedPricing.entries()).toSorted(([a], [b]) => a.localeCompare(b));
+  return stablePricingValue(entries);
+}
+
+export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
 }
 
-export function __setGatewayModelPricingForTest(
+export function setGatewayModelPricingForTest(
   entries: Array<{ provider: string; model: string; pricing: CachedModelPricing }>,
 ): void {
   replaceGatewayModelPricingCache(

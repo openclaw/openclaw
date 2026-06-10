@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
@@ -18,7 +18,7 @@ const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
   getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
-type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
+type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
 
 function createMonitorRuntime() {
   return {
@@ -38,7 +38,6 @@ function createAutoAbortController() {
   const abortController = new AbortController();
   streamMock.mockImplementation(async () => {
     abortController.abort();
-    return;
   });
   return abortController;
 }
@@ -46,18 +45,28 @@ function createAutoAbortController() {
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
     config: config as OpenClawConfig,
-    waitForTransportReady: waitForTransportReadyMock as any,
+    waitForTransportReady:
+      waitForTransportReadyMock as MonitorSignalProviderOptions["waitForTransportReady"],
     ...opts,
   });
 }
 
+function requireWaitForTransportReadyOptions(): Record<string, unknown> {
+  const [call] = waitForTransportReadyMock.mock.calls;
+  if (!call) {
+    throw new Error("expected waitForTransportReady call");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("expected waitForTransportReady options");
+  }
+  return options as Record<string, unknown>;
+}
+
 function expectWaitForTransportReadyTimeout(timeoutMs: number) {
   expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-  expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      timeoutMs,
-    }),
-  );
+  const options = requireWaitForTransportReadyOptions();
+  expect(options.timeoutMs).toBe(timeoutMs);
 }
 
 describe("monitorSignalProvider autostart", () => {
@@ -73,17 +82,19 @@ describe("monitorSignalProvider autostart", () => {
     });
 
     expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "signal daemon",
-        timeoutMs: 30_000,
-        logAfterMs: 10_000,
-        logIntervalMs: 10_000,
-        pollIntervalMs: 150,
-        runtime,
-        abortSignal: expect.any(AbortSignal),
-      }),
-    );
+    const options = requireWaitForTransportReadyOptions();
+    expect(options).toEqual({
+      label: "signal daemon",
+      timeoutMs: 30_000,
+      logAfterMs: 10_000,
+      logIntervalMs: 10_000,
+      pollIntervalMs: 150,
+      runtime,
+      abortSignal: options.abortSignal,
+      check: options.check,
+    });
+    expect(options.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(typeof options.check).toBe("function");
   });
 
   it("uses startupTimeoutMs override when provided", async () => {
@@ -100,6 +111,42 @@ describe("monitorSignalProvider autostart", () => {
     });
 
     expectWaitForTransportReadyTimeout(90_000);
+  });
+
+  it("passes channels.signal.configPath to signal-cli daemon startup", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig({ configPath: "~/.openclaw/signal-cli" });
+    const abortController = createAutoAbortController();
+
+    await runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: SIGNAL_BASE_URL,
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configPath: "~/.openclaw/signal-cli",
+      }),
+    );
+  });
+
+  it("omits configPath when channels.signal.configPath is blank", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig({ configPath: " " });
+    const abortController = createAutoAbortController();
+
+    await runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: SIGNAL_BASE_URL,
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    const [daemonOpts] = spawnSignalDaemonMock.mock.calls[0] ?? [];
+    expect(daemonOpts).toBeDefined();
+    expect(daemonOpts).not.toHaveProperty("configPath");
   });
 
   it("caps startupTimeoutMs at 2 minutes", async () => {
@@ -130,12 +177,18 @@ describe("monitorSignalProvider autostart", () => {
       async (params: { abortSignal?: AbortSignal | null }) => {
         await new Promise<void>((_resolve, reject) => {
           if (params.abortSignal?.aborted) {
-            reject(params.abortSignal.reason);
+            reject(toLintErrorObject(params.abortSignal.reason, "Non-Error rejection"));
             return;
           }
           params.abortSignal?.addEventListener(
             "abort",
-            () => reject(params.abortSignal?.reason ?? new Error("aborted")),
+            () =>
+              reject(
+                toLintErrorObject(
+                  params.abortSignal?.reason ?? new Error("aborted"),
+                  "Non-Error rejection",
+                ),
+              ),
             { once: true },
           );
         });
@@ -156,7 +209,7 @@ describe("monitorSignalProvider autostart", () => {
     setSignalAutoStartConfig();
     const abortController = new AbortController();
     let exited = false;
-    let resolveExit!: (value: SignalDaemonExitEvent) => void;
+    let resolveExit: ((value: SignalDaemonExitEvent) => void) | undefined;
     const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
       resolveExit = resolve;
     });
@@ -165,6 +218,9 @@ describe("monitorSignalProvider autostart", () => {
         return;
       }
       exited = true;
+      if (!resolveExit) {
+        throw new Error("Expected signal daemon exit resolver to be initialized");
+      }
       resolveExit({ source: "process", code: null, signal: "SIGTERM" });
     });
     spawnSignalDaemonMock.mockReturnValueOnce(
@@ -188,3 +244,17 @@ describe("monitorSignalProvider autostart", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

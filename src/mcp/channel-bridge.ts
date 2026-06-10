@@ -1,23 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
-import { GatewayClient } from "../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
-import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../gateway/method-scopes.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayClient } from "../gateway/client.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type {
   ApprovalDecision,
   ApprovalKind,
   ChatHistoryResult,
   ClaudeChannelMode,
-  ClaudePermissionRequest,
   ConversationDescriptor,
   PendingApproval,
   QueueEvent,
+  SessionDescribeResult,
   SessionListResult,
   SessionMessagePayload,
   WaitFilter,
@@ -30,6 +30,11 @@ type PendingWaiter = {
   timeout: NodeJS.Timeout | null;
 };
 
+type PendingApprovalEntry = {
+  approval: PendingApproval;
+  trackedAtMs: number;
+};
+
 type ServerNotification = {
   method: string;
   params?: Record<string, unknown>;
@@ -37,6 +42,9 @@ type ServerNotification = {
 
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
+const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
+const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
+const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
 
 export class OpenClawChannelBridge {
   private gateway: GatewayClient | null = null;
@@ -44,13 +52,15 @@ export class OpenClawChannelBridge {
   private readonly claudeChannelMode: ClaudeChannelMode;
   private readonly queue: QueueEvent[] = [];
   private readonly pendingWaiters = new Set<PendingWaiter>();
-  private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>();
-  private readonly pendingApprovals = new Map<string, PendingApproval>();
+  private readonly pendingClaudePermissions = new Map<string, number>();
+  private readonly pendingApprovals = new Map<string, PendingApprovalEntry>();
+  private pendingSweepInterval: NodeJS.Timeout | null = null;
   private server: McpServer | null = null;
   private cursor = 0;
   private closed = false;
   private ready = false;
   private started = false;
+  private retryingInitialConnect = false;
   private readonly readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -84,56 +94,72 @@ export class OpenClawChannelBridge {
       return;
     }
     this.started = true;
-    const connection = buildGatewayConnectionDetails({
+    const [
+      { resolveGatewayClientBootstrap },
+      { GatewayClient: GatewayClientCtor },
+      { startGatewayClientWhenEventLoopReady },
+      { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
+      { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
+    ] = await Promise.all([
+      import("../gateway/client-bootstrap.js"),
+      import("../gateway/client.js"),
+      import("../gateway/client-start-readiness.js"),
+      import("../gateway/method-scopes.js"),
+      import("../../packages/gateway-protocol/src/client-info.js"),
+    ]);
+    const bootstrap = await resolveGatewayClientBootstrap({
       config: this.cfg,
-      url: this.params.gatewayUrl,
-    });
-    const gatewayUrlOverrideSource =
-      connection.urlSource === "cli --url"
-        ? "cli"
-        : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
-          ? "env"
-          : undefined;
-    const creds = await resolveGatewayConnectionAuth({
-      config: this.cfg,
+      gatewayUrl: this.params.gatewayUrl,
       explicitAuth: {
         token: this.params.gatewayToken,
         password: this.params.gatewayPassword,
       },
       env: process.env,
-      urlOverride: gatewayUrlOverrideSource ? connection.url : undefined,
-      urlOverrideSource: gatewayUrlOverrideSource,
     });
     if (this.closed) {
       this.resolveReadyOnce();
       return;
     }
 
-    this.gateway = new GatewayClient({
-      url: connection.url,
-      token: creds.token,
-      password: creds.password,
+    this.gateway = new GatewayClientCtor({
+      url: bootstrap.url,
+      token: bootstrap.auth.token,
+      password: bootstrap.auth.password,
+      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+      requestTimeoutMs: 180_000,
       onEvent: (event) => {
         void this.handleGatewayEvent(event);
       },
       onHelloOk: () => {
+        this.retryingInitialConnect = false;
         void this.handleHelloOk();
       },
       onConnectError: (error) => {
-        this.rejectReadyOnce(error instanceof Error ? error : new Error(String(error)));
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        if (shouldRetryInitialMcpGatewayConnect(normalizedError)) {
+          this.retryingInitialConnect = true;
+          return;
+        }
+        this.rejectReadyOnce(normalizedError);
       },
       onClose: (code, reason) => {
-        if (!this.ready && !this.closed) {
+        if (!this.ready && !this.closed && !this.retryingInitialConnect) {
           this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
         }
+        this.retryingInitialConnect = false;
       },
     });
-    this.gateway.start();
+    const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
+      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+    });
+    if (!readiness.ready) {
+      this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+    }
     await this.readyPromise;
   }
 
@@ -147,6 +173,12 @@ export class OpenClawChannelBridge {
     }
     this.closed = true;
     this.resolveReadyOnce();
+    if (this.pendingSweepInterval) {
+      clearInterval(this.pendingSweepInterval);
+      this.pendingSweepInterval = null;
+    }
+    this.pendingClaudePermissions.clear();
+    this.pendingApprovals.clear();
     for (const waiter of this.pendingWaiters) {
       if (waiter.timeout) {
         clearTimeout(waiter.timeout);
@@ -167,18 +199,20 @@ export class OpenClawChannelBridge {
     includeLastMessage?: boolean;
   }): Promise<ConversationDescriptor[]> {
     await this.waitUntilReady();
-    const response = await this.requestGateway<SessionListResult>("sessions.list", {
+    const response: SessionListResult = await this.requestGateway("sessions.list", {
       limit: params?.limit ?? 50,
       search: params?.search,
       includeDerivedTitles: params?.includeDerivedTitles ?? true,
       includeLastMessage: params?.includeLastMessage ?? true,
     });
-    const requestedChannel = toText(params?.channel)?.toLowerCase();
+    const requestedChannel = normalizeOptionalLowercaseString(params?.channel);
     return (response.sessions ?? [])
       .map(toConversation)
       .filter((conversation): conversation is ConversationDescriptor => Boolean(conversation))
       .filter((conversation) =>
-        requestedChannel ? conversation.channel.toLowerCase() === requestedChannel : true,
+        requestedChannel
+          ? normalizeLowercaseStringOrEmpty(conversation.channel) === requestedChannel
+          : true,
       );
   }
 
@@ -187,10 +221,13 @@ export class OpenClawChannelBridge {
     if (!normalizedSessionKey) {
       return null;
     }
-    const conversations = await this.listConversations({ limit: 500, includeLastMessage: true });
-    return (
-      conversations.find((conversation) => conversation.sessionKey === normalizedSessionKey) ?? null
-    );
+    await this.waitUntilReady();
+    const response: SessionDescribeResult = await this.requestGateway("sessions.describe", {
+      key: normalizedSessionKey,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+    return response.session ? toConversation(response.session) : null;
   }
 
   async readMessages(
@@ -198,8 +235,8 @@ export class OpenClawChannelBridge {
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
     await this.waitUntilReady();
-    const response = await this.requestGateway<ChatHistoryResult>("chat.history", {
-      sessionKey,
+    const response: ChatHistoryResult = await this.requestGateway("sessions.get", {
+      key: sessionKey,
       limit,
     });
     return response.messages ?? [];
@@ -225,9 +262,12 @@ export class OpenClawChannelBridge {
   }
 
   listPendingApprovals(): PendingApproval[] {
-    return [...this.pendingApprovals.values()].toSorted((a, b) => {
-      return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
-    });
+    this.sweepPendingExpired();
+    return [...this.pendingApprovals.values()]
+      .map((entry) => entry.approval)
+      .toSorted((a, b) => {
+        return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
+      });
   }
 
   async respondToApproval(params: {
@@ -282,11 +322,11 @@ export class OpenClawChannelBridge {
     description: string;
     inputPreview: string;
   }): Promise<void> {
-    this.pendingClaudePermissions.set(params.requestId, {
-      toolName: params.toolName,
-      description: params.description,
-      inputPreview: params.inputPreview,
-    });
+    if (this.closed) {
+      return;
+    }
+    this.pendingClaudePermissions.set(params.requestId, Date.now());
+    this.ensurePendingSweeper();
     this.enqueue({
       cursor: this.nextCursor(),
       type: "claude_permission_request",
@@ -373,20 +413,60 @@ export class OpenClawChannelBridge {
   }
 
   private trackApproval(kind: ApprovalKind, payload: Record<string, unknown>): void {
+    if (this.closed) {
+      return;
+    }
     const id = normalizeApprovalId(payload.id);
     if (!id) {
       return;
     }
     this.pendingApprovals.set(id, {
-      kind,
-      id,
-      request:
-        payload.request && typeof payload.request === "object"
-          ? (payload.request as Record<string, unknown>)
-          : undefined,
-      createdAtMs: typeof payload.createdAtMs === "number" ? payload.createdAtMs : undefined,
-      expiresAtMs: typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : undefined,
+      approval: {
+        kind,
+        id,
+        request:
+          payload.request && typeof payload.request === "object"
+            ? (payload.request as Record<string, unknown>)
+            : undefined,
+        createdAtMs: typeof payload.createdAtMs === "number" ? payload.createdAtMs : undefined,
+        expiresAtMs: typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : undefined,
+      },
+      trackedAtMs: Date.now(),
     });
+    this.ensurePendingSweeper();
+  }
+
+  private ensurePendingSweeper(): void {
+    if (this.pendingSweepInterval || this.closed) {
+      return;
+    }
+    this.pendingSweepInterval = setInterval(() => {
+      this.sweepPendingExpired();
+    }, PENDING_SWEEP_INTERVAL_MS);
+    this.pendingSweepInterval.unref();
+  }
+
+  private sweepPendingExpired(now: number = Date.now()): void {
+    for (const [id, createdAtMs] of this.pendingClaudePermissions) {
+      if (now - createdAtMs >= PENDING_CLAUDE_PERMISSION_TTL_MS) {
+        this.pendingClaudePermissions.delete(id);
+      }
+    }
+    for (const [id, entry] of this.pendingApprovals) {
+      const expiry =
+        entry.approval.expiresAtMs ?? entry.trackedAtMs + PENDING_APPROVAL_DEFAULT_TTL_MS;
+      if (now >= expiry) {
+        this.pendingApprovals.delete(id);
+      }
+    }
+    if (
+      this.pendingSweepInterval &&
+      this.pendingClaudePermissions.size === 0 &&
+      this.pendingApprovals.size === 0
+    ) {
+      clearInterval(this.pendingSweepInterval);
+      this.pendingSweepInterval = null;
+    }
   }
 
   private resolveTrackedApproval(payload: Record<string, unknown>): void {
@@ -460,14 +540,16 @@ export class OpenClawChannelBridge {
     const text = extractFirstTextBlock(payload.message);
     const permissionMatch = text ? CLAUDE_PERMISSION_REPLY_RE.exec(text) : null;
     if (permissionMatch) {
-      const requestId = permissionMatch[2]?.toLowerCase();
+      const requestId = normalizeOptionalLowercaseString(permissionMatch[2]);
       if (requestId && this.pendingClaudePermissions.has(requestId)) {
         this.pendingClaudePermissions.delete(requestId);
         await this.sendNotification({
           method: "notifications/claude/channel/permission",
           params: {
             request_id: requestId,
-            behavior: permissionMatch[1]?.toLowerCase().startsWith("y") ? "allow" : "deny",
+            behavior: normalizeLowercaseStringOrEmpty(permissionMatch[1]).startsWith("y")
+              ? "allow"
+              : "deny",
           },
         });
         return;
@@ -517,4 +599,19 @@ export class OpenClawChannelBridge {
     }
     return Boolean(conversation);
   }
+}
+
+export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
+  if (
+    error.name === "GatewayClientRequestError" &&
+    "retryable" in error &&
+    typeof error.retryable === "boolean"
+  ) {
+    return error.retryable;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway request timeout for connect") ||
+    message.includes("gateway connect challenge timeout")
+  );
 }

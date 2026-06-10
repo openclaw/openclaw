@@ -1,61 +1,47 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard, DmPolicy } from "openclaw/plugin-sdk/setup";
 import {
-  createTopLevelChannelParsedAllowFromPrompt,
-  createTopLevelChannelDmPolicy,
+  createSetupTranslator,
   createStandardChannelSetupStatus,
+  createTopLevelChannelDmPolicy,
+  createTopLevelChannelParsedAllowFromPrompt,
+  formatDocsLink,
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
-  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
-import { resolveNostrAccount } from "./types.js";
+import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
+import {
+  buildNostrSetupPatch,
+  createNostrSetupAdapter,
+  parseRelayUrls,
+} from "./setup-adapter.js";
+import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
+
+const t = createSetupTranslator();
 
 const channel = "nostr" as const;
-
 const NOSTR_SETUP_HELP_LINES = [
-  "Use a Nostr private key in nsec or 64-character hex format.",
-  "Relay URLs are optional. Leave blank to keep the default relay set.",
-  "Env vars supported: NOSTR_PRIVATE_KEY (default account only).",
+  t("wizard.nostr.helpPrivateKeyFormat"),
+  t("wizard.nostr.helpRelaysOptional"),
+  t("wizard.nostr.helpEnvVars"),
   `Docs: ${formatDocsLink("/channels/nostr", "channels/nostr")}`,
 ];
 
 const NOSTR_ALLOW_FROM_HELP_LINES = [
-  "Allowlist Nostr DMs by npub or hex pubkey.",
-  "Examples:",
+  t("wizard.nostr.allowlistIntro"),
+  t("wizard.nostr.examples"),
   "- npub1...",
   "- nostr:npub1...",
   "- 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  "Multiple entries: comma-separated.",
+  t("wizard.nostr.multipleEntries"),
   `Docs: ${formatDocsLink("/channels/nostr", "channels/nostr")}`,
 ];
-
-function parseRelayUrls(raw: string): { relays: string[]; error?: string } {
-  const entries = splitSetupEntries(raw);
-  const relays: string[] = [];
-  for (const entry of entries) {
-    try {
-      const parsed = new URL(entry);
-      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-        return { relays: [], error: `Relay must use ws:// or wss:// (${entry})` };
-      }
-    } catch {
-      return { relays: [], error: `Invalid relay URL: ${entry}` };
-    }
-    relays.push(entry);
-  }
-  return { relays: [...new Set(relays)] };
-}
 
 function parseNostrAllowFrom(raw: string): { entries: string[]; error?: string } {
   return parseSetupEntriesWithParser(raw, (entry) => {
@@ -70,10 +56,10 @@ function parseNostrAllowFrom(raw: string): { entries: string[]; error?: string }
 
 const promptNostrAllowFrom = createTopLevelChannelParsedAllowFromPrompt({
   channel,
-  defaultAccountId: DEFAULT_ACCOUNT_ID,
-  noteTitle: "Nostr allowlist",
+  defaultAccountId: resolveDefaultNostrAccountId,
+  noteTitle: t("wizard.nostr.allowlistTitle"),
   noteLines: NOSTR_ALLOW_FROM_HELP_LINES,
-  message: "Nostr allowFrom",
+  message: t("wizard.nostr.allowFromPrompt"),
   placeholder: "npub1..., 0123abcd...",
   parseEntries: parseNostrAllowFrom,
   mergeEntries: ({ existing, parsed }) => mergeAllowFromEntries(existing, parsed),
@@ -84,72 +70,33 @@ const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   channel,
   policyKey: "channels.nostr.dmPolicy",
   allowFromKey: "channels.nostr.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.nostr?.dmPolicy ?? "pairing",
+  getCurrent: (cfg) => (cfg.channels?.nostr?.dmPolicy as DmPolicy | undefined) ?? "pairing",
   promptAllowFrom: promptNostrAllowFrom,
 });
 
-export const nostrSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-  applyAccountName: ({ cfg, name }) =>
-    patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      patch: name?.trim() ? { name: name.trim() } : {},
-    }),
-  validateInput: ({ input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      privateKey?: string;
-      relayUrls?: string;
-    };
-    if (!typedInput.useEnv) {
-      const privateKey = typedInput.privateKey?.trim();
-      if (!privateKey) {
-        return "Nostr requires --private-key or --use-env.";
-      }
-      try {
-        getPublicKeyFromPrivate(privateKey);
-      } catch {
-        return "Nostr private key must be valid nsec or 64-character hex.";
-      }
+export const nostrSetupAdapter = createNostrSetupAdapter({
+  resolveAccountId: (cfg, accountId) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
+  validatePrivateKey: (privateKey) => {
+    try {
+      getPublicKeyFromPrivate(privateKey);
+      return true;
+    } catch {
+      return false;
     }
-    if (typedInput.relayUrls?.trim()) {
-      return parseRelayUrls(typedInput.relayUrls).error ?? null;
-    }
-    return null;
   },
-  applyAccountConfig: ({ cfg, input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      privateKey?: string;
-      relayUrls?: string;
-    };
-    const relayResult = typedInput.relayUrls?.trim()
-      ? parseRelayUrls(typedInput.relayUrls)
-      : { relays: [] };
-    return patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      enabled: true,
-      clearFields: typedInput.useEnv ? ["privateKey"] : undefined,
-      patch: {
-        ...(typedInput.useEnv ? {} : { privateKey: typedInput.privateKey?.trim() }),
-        ...(relayResult.relays.length > 0 ? { relays: relayResult.relays } : {}),
-      },
-    });
-  },
-};
+});
 
 export const nostrSetupWizard: ChannelSetupWizard = {
   channel,
-  resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
+  resolveAccountIdForConfigure: ({ accountOverride, defaultAccountId }) =>
+    accountOverride?.trim() || defaultAccountId,
   resolveShouldPromptAccountIds: () => false,
   status: createStandardChannelSetupStatus({
     channelLabel: "Nostr",
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs private key",
-    configuredHint: "configured",
-    unconfiguredHint: "needs private key",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsPrivateKey"),
+    configuredHint: t("wizard.channels.statusConfigured"),
+    unconfiguredHint: t("wizard.channels.statusNeedsPrivateKey"),
     configuredScore: 1,
     unconfiguredScore: 0,
     includeStatusLine: true,
@@ -160,23 +107,23 @@ export const nostrSetupWizard: ChannelSetupWizard = {
     },
   }),
   introNote: {
-    title: "Nostr setup",
+    title: t("wizard.nostr.setupTitle"),
     lines: NOSTR_SETUP_HELP_LINES,
   },
   envShortcut: {
-    prompt: "NOSTR_PRIVATE_KEY detected. Use env var?",
+    prompt: t("wizard.nostr.privateKeyEnvPrompt"),
     preferredEnvVar: "NOSTR_PRIVATE_KEY",
     isAvailable: ({ cfg, accountId }) =>
       accountId === DEFAULT_ACCOUNT_ID &&
       Boolean(process.env.NOSTR_PRIVATE_KEY?.trim()) &&
       !hasConfiguredSecretInput(resolveNostrAccount({ cfg, accountId }).config.privateKey),
-    apply: async ({ cfg }) =>
+    apply: async ({ cfg, accountId }) =>
       patchTopLevelChannelConfigSection({
         cfg,
         channel,
         enabled: true,
         clearFields: ["privateKey"],
-        patch: {},
+        patch: buildNostrSetupPatch(accountId, {}),
       }),
   },
   credentials: [
@@ -185,11 +132,11 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       providerHint: channel,
       credentialLabel: "private key",
       preferredEnvVar: "NOSTR_PRIVATE_KEY",
-      helpTitle: "Nostr private key",
+      helpTitle: t("wizard.nostr.privateKeyTitle"),
       helpLines: NOSTR_SETUP_HELP_LINES,
-      envPrompt: "NOSTR_PRIVATE_KEY detected. Use env var?",
-      keepPrompt: "Nostr private key already configured. Keep it?",
-      inputPrompt: "Nostr private key (nsec... or hex)",
+      envPrompt: t("wizard.nostr.privateKeyEnvPrompt"),
+      keepPrompt: t("wizard.nostr.privateKeyKeep"),
+      inputPrompt: t("wizard.nostr.privateKeyInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
         const account = resolveNostrAccount({ cfg, accountId });
@@ -200,48 +147,51 @@ export const nostrSetupWizard: ChannelSetupWizard = {
           envValue: process.env.NOSTR_PRIVATE_KEY?.trim(),
         };
       },
-      applyUseEnv: async ({ cfg }) =>
+      applyUseEnv: async ({ cfg, accountId }) =>
         patchTopLevelChannelConfigSection({
           cfg,
           channel,
           enabled: true,
           clearFields: ["privateKey"],
-          patch: {},
+          patch: buildNostrSetupPatch(accountId, {}),
         }),
-      applySet: async ({ cfg, resolvedValue }) =>
+      applySet: async ({ cfg, accountId, resolvedValue }) =>
         patchTopLevelChannelConfigSection({
           cfg,
           channel,
           enabled: true,
-          patch: { privateKey: resolvedValue },
+          patch: buildNostrSetupPatch(accountId, { privateKey: resolvedValue }),
         }),
     },
   ],
   textInputs: [
     {
       inputKey: "relayUrls",
-      message: "Relay URLs (comma-separated, optional)",
+      message: t("wizard.nostr.relayUrlsPrompt"),
       placeholder: DEFAULT_RELAYS.join(", "),
       required: false,
       applyEmptyValue: true,
-      helpTitle: "Nostr relays",
-      helpLines: ["Use ws:// or wss:// relay URLs.", "Leave blank to keep the default relay set."],
+      helpTitle: t("wizard.nostr.relaysTitle"),
+      helpLines: [t("wizard.nostr.relaysWsOnly"), t("wizard.nostr.helpRelaysOptional")],
       currentValue: ({ cfg, accountId }) => {
         const account = resolveNostrAccount({ cfg, accountId });
-        const relays =
-          cfg.channels?.nostr?.relays && cfg.channels.nostr.relays.length > 0 ? account.relays : [];
+        const configuredRelays = cfg.channels?.nostr?.relays as string[] | undefined;
+        const relays = configuredRelays && configuredRelays.length > 0 ? account.relays : [];
         return relays.join(", ");
       },
-      keepPrompt: (value) => `Relay URLs set (${value}). Keep them?`,
+      keepPrompt: (value) => t("wizard.nostr.relayUrlsKeep", { value }),
       validate: ({ value }) => parseRelayUrls(value).error,
-      applySet: async ({ cfg, value }) => {
+      applySet: async ({ cfg, accountId, value }) => {
         const relayResult = parseRelayUrls(value);
         return patchTopLevelChannelConfigSection({
           cfg,
           channel,
           enabled: true,
           clearFields: relayResult.relays.length > 0 ? undefined : ["relays"],
-          patch: relayResult.relays.length > 0 ? { relays: relayResult.relays } : {},
+          patch: buildNostrSetupPatch(
+            accountId,
+            relayResult.relays.length > 0 ? { relays: relayResult.relays } : {},
+          ),
         });
       },
     },

@@ -1,14 +1,46 @@
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { buildAllowedModelSet } from "../../agents/model-selection.js";
-import { loadConfig } from "../../config/config.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateModelsListParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import {
+  loadModelCatalogForBrowse,
+  type ModelCatalogBrowseView,
+} from "../../agents/model-catalog-browse.js";
+import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+type ModelsListView = ModelCatalogBrowseView;
+
+let loggedSlowModelsListCatalog = false;
+
+// Unknown views are rejected by protocol validation first; this helper keeps the
+// handler default explicit for older clients that omit the field.
+function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
+  return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
+}
+
+// Runtime-only model params are useful inside provider routing, but exposing
+// them here would leak provider invocation details into the Control UI API.
+function omitRuntimeModelParams(entry: ModelCatalogEntry): ModelCatalogEntry {
+  const { params: _params, ...rest } = entry as ModelCatalogEntry & {
+    params?: Record<string, unknown>;
+  };
+  return rest;
+}
+
+function omitRuntimeModelParamsFromCatalog(catalog: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.map(omitRuntimeModelParams);
+}
+
+// The gateway model list is a browse API, not an auth probe. It reuses the
+// current runtime catalog snapshot and applies visibility rules without doing
+// extra runtime discovery on each request.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {
     if (!validateModelsListParams(params)) {
@@ -23,15 +55,38 @@ export const modelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const catalog = await context.loadGatewayModelCatalog();
-      const cfg = loadConfig();
-      const { allowedCatalog } = buildAllowedModelSet({
+      const cfg = context.getRuntimeConfig();
+      const workspaceDir =
+        resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
+        resolveDefaultAgentWorkspaceDir();
+      const view = resolveModelsListView(params);
+      const catalog = await loadModelCatalogForBrowse({
+        cfg,
+        view,
+        loadCatalog: context.loadGatewayModelCatalog,
+        onTimeout: (timeoutMs) => {
+          if (loggedSlowModelsListCatalog) {
+            return;
+          }
+          loggedSlowModelsListCatalog = true;
+          context.logGateway.debug(
+            `models.list continuing without model catalog after ${timeoutMs}ms`,
+          );
+        },
+      });
+      if (view === "all") {
+        respond(true, { models: omitRuntimeModelParamsFromCatalog(catalog) }, undefined);
+        return;
+      }
+      const models = await resolveVisibleModelCatalog({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
+        workspaceDir,
+        view,
+        runtimeAuthDiscovery: false,
       });
-      const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
-      respond(true, { models }, undefined);
+      respond(true, { models: omitRuntimeModelParamsFromCatalog(models) }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }

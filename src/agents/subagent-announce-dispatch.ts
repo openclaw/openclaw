@@ -1,36 +1,47 @@
-export type SubagentDeliveryPath = "queued" | "steered" | "direct" | "none";
+type SubagentDeliveryPath = "steered" | "direct" | "none";
+export type SubagentAnnounceDeliveryFailureReason =
+  | "completion_handoff_pending"
+  | "generated_media_missing"
+  | "message_tool_delivery_missing"
+  | "requester_abandoned"
+  | "visible_reply_missing";
 
-export type SubagentAnnounceQueueOutcome = "steered" | "queued" | "none" | "dropped";
+type SubagentAnnounceSteerOutcome =
+  | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
+  | { status: "none" | "dropped" };
 
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
+  deliveredAt?: number;
+  enqueuedAt?: number;
+  reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
+  terminal?: boolean;
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
-export type SubagentAnnounceDispatchPhase = "queue-primary" | "direct-primary" | "queue-fallback";
+type SubagentAnnounceDispatchPhase = "steer-primary" | "direct-primary" | "steer-fallback";
 
-export type SubagentAnnounceDispatchPhaseResult = {
+type SubagentAnnounceDispatchPhaseResult = {
   phase: SubagentAnnounceDispatchPhase;
   delivered: boolean;
   path: SubagentDeliveryPath;
+  deliveredAt?: number;
+  enqueuedAt?: number;
+  reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
 };
 
-export function mapQueueOutcomeToDeliveryResult(
-  outcome: SubagentAnnounceQueueOutcome,
+export function mapSteerOutcomeToDeliveryResult(
+  outcome: SubagentAnnounceSteerOutcome,
 ): SubagentAnnounceDeliveryResult {
-  if (outcome === "steered") {
+  if (outcome.status === "steered") {
     return {
       delivered: true,
       path: "steered",
-    };
-  }
-  if (outcome === "queued") {
-    return {
-      delivered: true,
-      path: "queued",
+      deliveredAt: outcome.deliveredAt,
+      enqueuedAt: outcome.enqueuedAt,
     };
   }
   return {
@@ -42,7 +53,7 @@ export function mapQueueOutcomeToDeliveryResult(
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
   signal?: AbortSignal;
-  queue: () => Promise<SubagentAnnounceQueueOutcome>;
+  steer: () => Promise<SubagentAnnounceSteerOutcome>;
   direct: () => Promise<SubagentAnnounceDeliveryResult>;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const phases: SubagentAnnounceDispatchPhaseResult[] = [];
@@ -54,6 +65,9 @@ export async function runSubagentAnnounceDispatch(params: {
       phase,
       delivered: result.delivered,
       path: result.path,
+      deliveredAt: result.deliveredAt,
+      enqueuedAt: result.enqueuedAt,
+      ...(result.reason ? { reason: result.reason } : {}),
       error: result.error,
     });
   };
@@ -70,14 +84,14 @@ export async function runSubagentAnnounceDispatch(params: {
   }
 
   if (!params.expectsCompletionMessage) {
-    const primaryQueueOutcome = await params.queue();
-    const primaryQueue = mapQueueOutcomeToDeliveryResult(primaryQueueOutcome);
-    appendPhase("queue-primary", primaryQueue);
-    if (primaryQueue.delivered) {
-      return withPhases(primaryQueue);
+    const primarySteerOutcome = await params.steer();
+    const primarySteer = mapSteerOutcomeToDeliveryResult(primarySteerOutcome);
+    appendPhase("steer-primary", primarySteer);
+    if (primarySteer.delivered) {
+      return withPhases(primarySteer);
     }
-    if (primaryQueueOutcome === "dropped") {
-      return withPhases(primaryQueue);
+    if (primarySteerOutcome.status === "dropped") {
+      return withPhases(primarySteer);
     }
 
     const primaryDirect = await params.direct();
@@ -87,7 +101,7 @@ export async function runSubagentAnnounceDispatch(params: {
 
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
-  if (primaryDirect.delivered) {
+  if (primaryDirect.delivered || primaryDirect.terminal) {
     return withPhases(primaryDirect);
   }
 
@@ -95,11 +109,11 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(primaryDirect);
   }
 
-  const fallbackQueueOutcome = await params.queue();
-  const fallbackQueue = mapQueueOutcomeToDeliveryResult(fallbackQueueOutcome);
-  appendPhase("queue-fallback", fallbackQueue);
-  if (fallbackQueue.delivered) {
-    return withPhases(fallbackQueue);
+  const fallbackSteerOutcome = await params.steer();
+  const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
+  appendPhase("steer-fallback", fallbackSteer);
+  if (fallbackSteer.delivered) {
+    return withPhases(fallbackSteer);
   }
 
   return withPhases(primaryDirect);

@@ -1,26 +1,21 @@
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import {
+  readRemoteMediaBuffer,
+  MAX_IMAGE_BYTES,
+  saveRemoteMedia,
+} from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { downloadMedia, extractImageBlocks } from "./media.js";
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return {
-    ...actual,
-    fetchRemoteMedia: vi.fn(),
-    saveMediaBuffer: vi.fn(),
-  };
-});
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  MAX_IMAGE_BYTES: 6 * 1024 * 1024,
+  readRemoteMediaBuffer: vi.fn(),
+  saveRemoteMedia: vi.fn(),
+}));
+
+const readRemoteMediaBufferMock = vi.mocked(readRemoteMediaBuffer);
+const saveRemoteMediaMock = vi.mocked(saveRemoteMedia);
 
 describe("tlon monitor media", () => {
-  async function loadMediaModule() {
-    const mediaRuntime = await import("openclaw/plugin-sdk/media-runtime");
-    const mediaModule = await import("./media.js");
-    return {
-      fetchRemoteMedia: vi.mocked(mediaRuntime.fetchRemoteMedia),
-      saveMediaBuffer: vi.mocked(mediaRuntime.saveMediaBuffer),
-      ...mediaModule,
-    };
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -31,8 +26,7 @@ describe("tlon monitor media", () => {
     vi.restoreAllMocks();
   });
 
-  it("caps extracted images at eight per message", async () => {
-    const { extractImageBlocks } = await loadMediaModule();
+  it("caps extracted images at eight per message", () => {
     const content = Array.from({ length: 10 }, (_, index) => ({
       block: { image: { src: `https://example.com/${index}.png`, alt: `image-${index}` } },
     }));
@@ -46,14 +40,7 @@ describe("tlon monitor media", () => {
   });
 
   it("stores fetched media through the shared inbound media store with the image cap", async () => {
-    const { downloadMedia, fetchRemoteMedia, saveMediaBuffer } = await loadMediaModule();
-
-    fetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("image-data"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    });
-    saveMediaBuffer.mockResolvedValue({
+    saveRemoteMediaMock.mockResolvedValue({
       id: "photo---uuid.png",
       path: "/tmp/openclaw/media/inbound/photo---uuid.png",
       size: "image-data".length,
@@ -62,21 +49,15 @@ describe("tlon monitor media", () => {
 
     const result = await downloadMedia("https://example.com/photo.png");
 
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/photo.png",
-        maxBytes: MAX_IMAGE_BYTES,
-        readIdleTimeoutMs: 30_000,
-        requestInit: { method: "GET" },
-      }),
-    );
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      Buffer.from("image-data"),
-      "image/png",
-      "inbound",
-      MAX_IMAGE_BYTES,
-      "photo.png",
-    );
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
+      url: "https://example.com/photo.png",
+      maxBytes: MAX_IMAGE_BYTES,
+      readIdleTimeoutMs: 30_000,
+      ssrfPolicy: undefined,
+      requestInit: { method: "GET" },
+    });
     expect(result).toEqual({
       localPath: "/tmp/openclaw/media/inbound/photo---uuid.png",
       contentType: "image/png",
@@ -85,9 +66,7 @@ describe("tlon monitor media", () => {
   });
 
   it("returns null when the fetch exceeds the image cap", async () => {
-    const { downloadMedia, fetchRemoteMedia, saveMediaBuffer } = await loadMediaModule();
-
-    fetchRemoteMedia.mockRejectedValue(
+    saveRemoteMediaMock.mockRejectedValue(
       new Error(
         `Failed to fetch media from https://example.com/photo.png: payload exceeds maxBytes ${MAX_IMAGE_BYTES}`,
       ),
@@ -96,6 +75,6 @@ describe("tlon monitor media", () => {
     const result = await downloadMedia("https://example.com/photo.png");
 
     expect(result).toBeNull();
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
   });
 });

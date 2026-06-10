@@ -1,32 +1,116 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
-import { loadBundledPluginTestApiSync } from "../../../test/helpers/plugins/bundled-plugin-public-surface.js";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  __testing,
-  createTelegramThreadBindingManager,
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+    "openclaw/plugin-sdk/acp-runtime",
+  );
+  readAcpSessionEntryMock.mockImplementation(actual.readAcpSessionEntry);
+  return {
+    ...actual,
+    readAcpSessionEntry: readAcpSessionEntryMock,
+  };
+});
+
+import {
+  TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+  TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+  testing,
+  createTelegramThreadBindingManager as createTelegramThreadBindingManagerImpl,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
+  setTelegramThreadBindingStoreForTest,
 } from "./thread-bindings.js";
 
+type ThreadBindingStoreEntry = ReturnType<
+  ReturnType<typeof createTelegramThreadBindingManagerImpl>["listBindings"]
+>[number];
+
+const TELEGRAM_THREAD_BINDINGS_TEST_CFG = {
+  channels: {
+    telegram: {
+      token: "test-token",
+    },
+  },
+} as OpenClawConfig;
+
+type TelegramThreadBindingManagerParams = Parameters<
+  typeof createTelegramThreadBindingManagerImpl
+>[0];
+
+function createTelegramThreadBindingManager(
+  params: Omit<TelegramThreadBindingManagerParams, "cfg">,
+) {
+  return createTelegramThreadBindingManagerImpl({
+    cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+    ...params,
+  });
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 describe("telegram thread bindings", () => {
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let stateDirOverride: string | undefined;
+  let threadBindingStore: PluginStateSyncKeyedStore<ThreadBindingStoreEntry>;
+
+  function createThreadBindingStore(): PluginStateSyncKeyedStore<ThreadBindingStoreEntry> {
+    return createPluginStateSyncKeyedStoreForTests("telegram", {
+      namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+      maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+    });
+  }
+
+  function storedBindings(): ThreadBindingStoreEntry[] {
+    return threadBindingStore.entries().map((entry) => entry.value);
+  }
 
   beforeEach(async () => {
-    await __testing.resetTelegramThreadBindingsForTests();
+    resetPluginStateStoreForTests({ closeDatabase: false });
+    threadBindingStore = createThreadBindingStore();
+    threadBindingStore.clear();
+    setTelegramThreadBindingStoreForTest(threadBindingStore);
+    readAcpSessionEntryMock.mockReset();
+    const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+      "openclaw/plugin-sdk/acp-runtime",
+    );
+    readAcpSessionEntryMock.mockImplementation(acpRuntime.readAcpSessionEntry);
+    await testing.resetTelegramThreadBindingsForTests();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
+    setTelegramThreadBindingStoreForTest(undefined);
+    resetPluginStateStoreForTests();
     if (stateDirOverride) {
-      delete process.env.OPENCLAW_STATE_DIR;
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
       stateDirOverride = undefined;
+    }
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
   });
 
@@ -66,8 +150,8 @@ describe("telegram thread bindings", () => {
       enableSweeper: false,
     });
 
-    await expect(
-      getSessionBindingService().bind({
+    const error = await getSessionBindingService()
+      .bind({
         targetSessionKey: "agent:main:subagent:child-1",
         targetKind: "subagent",
         conversation: {
@@ -76,10 +160,12 @@ describe("telegram thread bindings", () => {
           conversationId: "77",
         },
         placement: "child",
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CREATE_FAILED",
-    });
+      })
+      .then(
+        () => undefined,
+        (bindError: unknown) => bindError,
+      );
+    expect((error as { code?: unknown } | undefined)?.code).toBe("BINDING_CREATE_FAILED");
   });
 
   it("rejects child placement when parentConversationId is also a bare topic ID", async () => {
@@ -89,8 +175,8 @@ describe("telegram thread bindings", () => {
       enableSweeper: false,
     });
 
-    await expect(
-      getSessionBindingService().bind({
+    const error = await getSessionBindingService()
+      .bind({
         targetSessionKey: "agent:main:acp:child-acp-1",
         targetKind: "session",
         conversation: {
@@ -100,10 +186,12 @@ describe("telegram thread bindings", () => {
           parentConversationId: "99",
         },
         placement: "child",
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CREATE_FAILED",
-    });
+      })
+      .then(
+        () => undefined,
+        (bindError: unknown) => bindError,
+      );
+    expect((error as { code?: unknown } | undefined)?.code).toBe("BINDING_CREATE_FAILED");
   });
 
   it("shares binding state across distinct module instances", async () => {
@@ -115,16 +203,20 @@ describe("telegram thread bindings", () => {
       import.meta.url,
       "./thread-bindings.js?scope=shared-b",
     );
+    bindingsA.setTelegramThreadBindingStoreForTest(threadBindingStore);
+    bindingsB.setTelegramThreadBindingStoreForTest(threadBindingStore);
 
-    await bindingsA.__testing.resetTelegramThreadBindingsForTests();
+    await bindingsA.testing.resetTelegramThreadBindingsForTests();
 
     try {
       const managerA = bindingsA.createTelegramThreadBindingManager({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
         accountId: "shared-runtime",
         persist: false,
         enableSweeper: false,
       });
       const managerB = bindingsB.createTelegramThreadBindingManager({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
         accountId: "shared-runtime",
         persist: false,
         enableSweeper: false,
@@ -149,7 +241,9 @@ describe("telegram thread bindings", () => {
           ?.getByConversationId("-100200300:topic:44")?.targetSessionKey,
       ).toBe("agent:main:subagent:child-shared");
     } finally {
-      await bindingsA.__testing.resetTelegramThreadBindingsForTests();
+      await bindingsA.testing.resetTelegramThreadBindingsForTests();
+      bindingsA.setTelegramThreadBindingStoreForTest(undefined);
+      bindingsB.setTelegramThreadBindingStoreForTest(undefined);
     }
   });
 
@@ -172,7 +266,9 @@ describe("telegram thread bindings", () => {
       },
     });
     const original = manager.listBySessionKey("agent:main:subagent:child-1")[0];
-    expect(original).toBeDefined();
+    if (!original) {
+      throw new Error("expected original subagent thread binding");
+    }
 
     const idleUpdated = setTelegramThreadBindingIdleTimeoutBySessionKey({
       accountId: "work",
@@ -195,14 +291,6 @@ describe("telegram thread bindings", () => {
     expect(manager.listBySessionKey("agent:main:subagent:child-1")[0]?.maxAgeMs).toBe(
       6 * 60 * 60 * 1000,
     );
-  });
-
-  it("exposes the reset helper through the bundled test api", async () => {
-    const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
-      resetTelegramThreadBindingsForTests: () => Promise<void>;
-    }>("telegram");
-
-    await expect(resetTelegramThreadBindingsForTests()).resolves.toBeUndefined();
   });
 
   it("does not persist lifecycle updates when manager persistence is disabled", async () => {
@@ -238,12 +326,9 @@ describe("telegram thread bindings", () => {
       maxAgeMs: 2 * 60 * 60 * 1000,
     });
 
-    const statePath = path.join(
-      resolveStateDir(process.env, os.homedir),
-      "telegram",
-      "thread-bindings-no-persist.json",
+    expect(storedBindings().filter((binding) => binding.accountId === "no-persist")).toStrictEqual(
+      [],
     );
-    expect(fs.existsSync(statePath)).toBe(false);
   });
 
   it("persists unbinds before restart so removed bindings do not come back", async () => {
@@ -271,7 +356,7 @@ describe("telegram thread bindings", () => {
       reason: "test-detach",
     });
 
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "default",
@@ -280,6 +365,180 @@ describe("telegram thread bindings", () => {
     });
 
     expect(reloaded.getByConversationId("8460800771")).toBeUndefined();
+  });
+
+  it("persists bindings with json-clean metadata", async () => {
+    createTelegramThreadBindingManager({
+      accountId: "metadata",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:metadata-child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "metadata",
+        conversationId: "metadata-thread",
+      },
+      metadata: {
+        retained: "yes",
+        omitted: undefined,
+      },
+    });
+
+    await testing.resetTelegramThreadBindingsForTests();
+
+    const reloaded = createTelegramThreadBindingManager({
+      accountId: "metadata",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    expect(reloaded.getByConversationId("metadata-thread")?.metadata).toStrictEqual({
+      retained: "yes",
+    });
+    expect(
+      storedBindings().find((binding) => binding.accountId === "metadata")?.metadata,
+    ).toStrictEqual({
+      retained: "yes",
+    });
+  });
+
+  it("starts with empty bindings when the plugin-state store cannot be read", () => {
+    setTelegramThreadBindingStoreForTest({
+      ...threadBindingStore,
+      entries() {
+        throw new Error("state unavailable");
+      },
+    });
+
+    const manager = createTelegramThreadBindingManager({
+      accountId: "read-failure",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    expect(manager.listBindings()).toStrictEqual([]);
+  });
+
+  it("cleans up stale ACP bindings before restart routing can reuse them", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:acp:stale-1",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "cleanup-me",
+      },
+    });
+
+    await testing.resetTelegramThreadBindingsForTests();
+    readAcpSessionEntryMock.mockReturnValue({
+      cfg: {} as never,
+      storePath: "/tmp/acp-store.json",
+      sessionKey: "agent:main:acp:stale-1",
+      storeSessionKey: "agent:main:acp:stale-1",
+      entry: undefined,
+      acp: undefined,
+      storeReadFailed: false,
+    });
+
+    const reloaded = createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    expect(reloaded.getByConversationId("cleanup-me")).toBeUndefined();
+    await testing.resetTelegramThreadBindingsForTests();
+    expect(storedBindings().map((binding) => binding.conversationId)).not.toContain("cleanup-me");
+  });
+
+  it("keeps plugin-owned bindings when ACP cleanup runs on startup", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "plugin-binding:openclaw-codex-app-server:still-valid",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "plugin-binding-convo",
+      },
+    });
+
+    await testing.resetTelegramThreadBindingsForTests();
+
+    const reloaded = createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    expect(reloaded.getByConversationId("plugin-binding-convo")?.targetSessionKey).toBe(
+      "plugin-binding:openclaw-codex-app-server:still-valid",
+    );
+    expect(readAcpSessionEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps ACP bindings when the session store cannot be read during startup cleanup", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:acp:read-failed",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "keep-on-read-failure",
+      },
+    });
+
+    await testing.resetTelegramThreadBindingsForTests();
+    readAcpSessionEntryMock.mockReturnValue({
+      cfg: {} as never,
+      storePath: "/tmp/acp-store.json",
+      sessionKey: "agent:main:acp:read-failed",
+      storeSessionKey: "agent:main:acp:read-failed",
+      entry: undefined,
+      acp: undefined,
+      storeReadFailed: true,
+    });
+
+    const reloaded = createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: true,
+      enableSweeper: false,
+    });
+
+    expect(reloaded.getByConversationId("keep-on-read-failure")?.targetSessionKey).toBe(
+      "agent:main:acp:read-failed",
+    );
   });
 
   it("flushes pending lifecycle update persists before test reset", async () => {
@@ -310,16 +569,52 @@ describe("telegram thread bindings", () => {
       idleTimeoutMs: 90_000,
     });
 
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
 
-    const statePath = path.join(
-      resolveStateDir(process.env, os.homedir),
-      "telegram",
-      "thread-bindings-persist-reset.json",
-    );
-    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
-      bindings?: Array<{ idleTimeoutMs?: number }>;
+    expect(
+      storedBindings().find((binding) => binding.accountId === "persist-reset")?.idleTimeoutMs,
+    ).toBe(90_000);
+  });
+
+  it("does not leak unhandled rejections when a persist write fails", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
     };
-    expect(persisted.bindings?.[0]?.idleTimeoutMs).toBe(90_000);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const manager = createTelegramThreadBindingManager({
+        accountId: "persist-failure",
+        persist: true,
+        enableSweeper: false,
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "agent:main:subagent:child-persist-failure",
+        targetKind: "subagent",
+        conversation: {
+          channel: "telegram",
+          accountId: "persist-failure",
+          conversationId: "-100200300:topic:100",
+        },
+      });
+
+      setTelegramThreadBindingStoreForTest({
+        ...threadBindingStore,
+        register() {
+          throw new Error("persist boom");
+        },
+      });
+      manager.touchConversation("-100200300:topic:100");
+
+      await testing.resetTelegramThreadBindingsForTests();
+      await flushMicrotasks();
+      expect(unhandled).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 });

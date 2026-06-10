@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -12,11 +13,11 @@ const normalizeAccountIdCache = new Map<string, string>();
 const normalizeOptionalAccountIdCache = new Map<string, string | undefined>();
 
 function canonicalizeAccountId(value: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (VALID_ID_RE.test(value)) {
-    return value.toLowerCase();
+    return normalized;
   }
-  return value
-    .toLowerCase()
+  return normalized
     .replace(INVALID_CHARS_RE, "-")
     .replace(LEADING_DASH_RE, "")
     .replace(TRAILING_DASH_RE, "")

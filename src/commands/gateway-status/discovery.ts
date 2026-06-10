@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import {
   buildGatewayDiscoveryTarget,
@@ -8,11 +9,11 @@ export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | nu
   if (typeof rawUrl !== "string") {
     return null;
   }
-  const trimmed = rawUrl.trim();
+  const trimmed = normalizeOptionalString(rawUrl) ?? "";
   if (!trimmed) {
     return null;
   }
-  let host: string | null = null;
+  let host: string | null;
   try {
     host = new URL(trimmed).hostname || null;
   } catch {
@@ -21,20 +22,16 @@ export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | nu
   if (!host) {
     return null;
   }
-  const user = process.env.USER?.trim() || "";
+  const user = normalizeOptionalString(process.env.USER) ?? "";
   return user ? `${user}@${host}` : host;
 }
 
-export function buildSshTarget(input: {
-  user?: string;
-  host?: string;
-  port?: number;
-}): string | null {
-  const host = input.host?.trim() ?? "";
+function buildSshTarget(input: { user?: string; host?: string; port?: number }): string | null {
+  const host = normalizeOptionalString(input.host) ?? "";
   if (!host) {
     return null;
   }
-  const user = input.user?.trim() ?? "";
+  const user = normalizeOptionalString(input.user) ?? "";
   const base = user ? `${user}@${host}` : host;
   const port = input.port ?? 22;
   if (port && port !== 22) {
@@ -75,7 +72,7 @@ export async function resolveSshTarget(params: {
   }
   const identityFile =
     params.identity ??
-    config.identityFiles.find((entry) => entry.trim().length > 0)?.trim() ??
+    config.identityFiles.find((entry) => normalizeOptionalString(entry)) ??
     undefined;
   return { target, identity: identityFile };
 }

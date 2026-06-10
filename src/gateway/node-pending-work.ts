@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 
-export const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
+const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];
 
-export const NODE_PENDING_WORK_PRIORITIES = ["default", "normal", "high"] as const;
+const NODE_PENDING_WORK_PRIORITIES = ["default", "normal", "high"] as const;
 export type NodePendingWorkPriority = (typeof NODE_PENDING_WORK_PRIORITIES)[number];
 
-export type NodePendingWorkItem = {
+type NodePendingWorkItem = {
   id: string;
   type: NodePendingWorkType;
   priority: NodePendingWorkPriority;
@@ -58,9 +64,16 @@ function getOrCreateState(nodeId: string): NodePendingWorkState {
 }
 
 function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
+  const validNowMs = asDateTimestampMs(nowMs);
+  if (validNowMs === undefined) {
+    return false;
+  }
   let changed = false;
   for (const [id, item] of state.itemsById) {
-    if (item.expiresAtMs !== null && item.expiresAtMs <= nowMs) {
+    if (
+      item.expiresAtMs !== null &&
+      !isFutureDateTimestampMs(item.expiresAtMs, { nowMs: validNowMs })
+    ) {
       state.itemsById.delete(id);
       changed = true;
     }
@@ -69,6 +82,12 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
     state.revision += 1;
   }
   return changed;
+}
+
+function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
+  if (state.itemsById.size === 0) {
+    stateByNodeId.delete(nodeId);
+  }
 }
 
 function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
@@ -89,9 +108,16 @@ function makeBaselineStatusItem(nowMs: number): NodePendingWorkItem {
     id: DEFAULT_STATUS_ITEM_ID,
     type: "status.request",
     priority: DEFAULT_STATUS_PRIORITY,
-    createdAtMs: nowMs,
+    createdAtMs: resolveDateTimestampMs(nowMs),
     expiresAtMs: null,
   };
+}
+
+function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number | null {
+  if (typeof expiresInMs !== "number" || !Number.isFinite(expiresInMs)) {
+    return null;
+  }
+  return resolveExpiresAtMsFromDurationMs(Math.max(1_000, Math.trunc(expiresInMs)), { nowMs }) ?? 0;
 }
 
 export function enqueueNodePendingWork(params: {
@@ -105,7 +131,8 @@ export function enqueueNodePendingWork(params: {
   if (!nodeId) {
     throw new Error("nodeId required");
   }
-  const nowMs = Date.now();
+  const rawNowMs = Date.now();
+  const nowMs = resolveDateTimestampMs(rawNowMs);
   const state = getOrCreateState(nodeId);
   pruneExpired(state, nowMs);
   const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
@@ -117,10 +144,7 @@ export function enqueueNodePendingWork(params: {
     type: params.type,
     priority: params.priority ?? DEFAULT_PRIORITY,
     createdAtMs: nowMs,
-    expiresAtMs:
-      typeof params.expiresInMs === "number" && Number.isFinite(params.expiresInMs)
-        ? nowMs + Math.max(1_000, Math.trunc(params.expiresInMs))
-        : null,
+    expiresAtMs: resolvePendingWorkExpiresAtMs(params.expiresInMs, rawNowMs),
     ...(params.payload ? { payload: params.payload } : {}),
   };
   state.itemsById.set(item.id, item);
@@ -133,12 +157,13 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   if (!normalizedNodeId) {
     return { revision: 0, items: [], hasMore: false };
   }
-  const nowMs = opts.nowMs ?? Date.now();
+  const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
   const state = stateByNodeId.get(normalizedNodeId);
-  const revision = state?.revision ?? 0;
   if (state) {
     pruneExpired(state, nowMs);
+    pruneStateIfEmpty(normalizedNodeId, state);
   }
+  const revision = state?.revision ?? 0;
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
   const explicitItems = state ? sortedItems(state) : [];
   const items = explicitItems.slice(0, maxItems);
@@ -181,6 +206,7 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
   if (removedItemIds.length > 0) {
     state.revision += 1;
   }
+  pruneStateIfEmpty(nodeId, state);
   return { revision: state.revision, removedItemIds };
 }
 

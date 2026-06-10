@@ -1,10 +1,12 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { auditSandboxToolPolicyBlock } from "../tool-policy-audit.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   classifyToolAgainstSandboxToolPolicy,
@@ -128,8 +130,9 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
   toolName: string;
+  audit?: boolean;
 }): string | undefined {
-  const tool = params.toolName.trim().toLowerCase();
+  const tool = normalizeOptionalLowercaseString(params.toolName);
   if (!tool) {
     return undefined;
   }
@@ -148,6 +151,20 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   );
   if (!blockedByDeny && !blockedByAllow) {
     return undefined;
+  }
+
+  const blockingSource = blockedByDeny
+    ? runtime.toolPolicy.sources.deny
+    : runtime.toolPolicy.sources.allow;
+  if (params.audit === true) {
+    auditSandboxToolPolicyBlock({
+      toolName: tool,
+      ruleType: blockedByDeny ? "deny" : "allow",
+      ruleSource: blockingSource.source,
+      configKey: blockingSource.key,
+      policy: runtime.toolPolicy,
+      mode: runtime.mode,
+    });
   }
 
   const reasons: string[] = [];

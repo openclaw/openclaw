@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const editSlackMessageMock = vi.fn();
 
@@ -9,7 +9,7 @@ vi.mock("../../actions.js", () => ({
 }));
 
 let finalizeSlackPreviewEdit: typeof import("./preview-finalize.js").finalizeSlackPreviewEdit;
-let __testing: typeof import("./preview-finalize.js").__testing;
+let testing: typeof import("./preview-finalize.js").testing;
 
 function createClient(overrides?: {
   historyMessages?: Array<Record<string, unknown>>;
@@ -24,10 +24,12 @@ function createClient(overrides?: {
 }
 
 describe("finalizeSlackPreviewEdit", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ finalizeSlackPreviewEdit, testing } = await import("./preview-finalize.js"));
+  });
+
+  beforeEach(() => {
     editSlackMessageMock.mockReset();
-    ({ finalizeSlackPreviewEdit, __testing } = await import("./preview-finalize.js"));
   });
 
   it("treats a thrown edit as success when history readback already matches", async () => {
@@ -68,13 +70,14 @@ describe("finalizeSlackPreviewEdit", () => {
 
     expect(
       client.conversations.replies as unknown as ReturnType<typeof vi.fn>,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        ts: "170000.111",
-        latest: "171234.567",
-      }),
-    );
+    ).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      channel: "C123",
+      ts: "170000.111",
+      latest: "171234.567",
+      inclusive: true,
+      limit: 100,
+    });
   });
 
   it("rethrows when readback does not match the expected final text", async () => {
@@ -94,16 +97,53 @@ describe("finalizeSlackPreviewEdit", () => {
     ).rejects.toThrow("socket closed");
   });
 
-  it("requires matching blocks when finalizing a blocks-only edit", async () => {
+  it("requires matching blocks when finalizing a blocks-only edit", () => {
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Done*" } }] as const;
 
     expect(
-      __testing.buildExpectedSlackEditText({
+      testing.buildExpectedSlackEditText({
         text: "",
         blocks: blocks as unknown as Parameters<
-          typeof __testing.buildExpectedSlackEditText
+          typeof testing.buildExpectedSlackEditText
         >[0]["blocks"],
       }),
     ).toBe("*Done*");
+  });
+
+  it("matches truncated fallback text for long blocks-only edit readback", async () => {
+    const longContextText = "a".repeat(3000);
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+        ],
+      },
+    ] as const;
+    const expectedText = testing.buildExpectedSlackEditText({
+      text: "",
+      blocks: blocks as unknown as Parameters<
+        typeof testing.buildExpectedSlackEditText
+      >[0]["blocks"],
+    });
+    const client = createClient({
+      historyMessages: [{ ts: "171234.567", text: expectedText, blocks }],
+    });
+
+    expect(expectedText).toHaveLength(8000);
+    await expect(
+      testing.didSlackPreviewEditApplyAfterError({
+        client,
+        token: "xoxb-test",
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "",
+        blocks: blocks as unknown as Parameters<
+          typeof testing.didSlackPreviewEditApplyAfterError
+        >[0]["blocks"],
+      }),
+    ).resolves.toBe(true);
   });
 });

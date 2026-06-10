@@ -1,6 +1,12 @@
+import {
+  createMessageReceiptFromOutboundResults,
+  verifyChannelMessageAdapterCapabilityProofs,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { signalPlugin } from "./channel.js";
-import * as clientModule from "./client.js";
+import * as clientModule from "./client-adapter.js";
 import { classifySignalCliLogLine } from "./daemon.js";
 import {
   looksLikeUuid,
@@ -10,7 +16,13 @@ import {
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
 import { clearSignalRuntime } from "./runtime.js";
-import { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./setup-core.js";
+import {
+  normalizeSignalAccountInput,
+  parseSignalAllowFromEntries,
+  signalDmPolicy,
+} from "./setup-core.js";
+
+const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -91,14 +103,13 @@ describe("probeSignal", () => {
     };
 
     const expected = await probeSignal("http://127.0.0.1:8080", 1000);
-    await expect(signalPlugin.status!.probeAccount!(params)).resolves.toEqual(
-      expect.objectContaining({
-        ok: expected.ok,
-        status: expected.status,
-        error: expected.error,
-        version: expected.version,
-      }),
-    );
+    const result = await signalPlugin.status!.probeAccount!(params);
+
+    expect(result.ok).toBe(expected.ok);
+    expect(result.status).toBe(expected.status);
+    expect(result.error).toBe(expected.error);
+    expect(result.version).toBe(expected.version);
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
   it("extracts version from {version} result", async () => {
@@ -129,6 +140,74 @@ describe("probeSignal", () => {
     expect(res.status).toBe(503);
     expect(res.version).toBe(null);
   });
+
+  it("setup status lines use the selected account cliPath", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-signal-cli",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: { signal: "work" },
+    });
+
+    expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
+
+  it("setup status uses configured defaultAccount for omitted cliPath lookup", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/root-signal-cli",
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-signal-cli",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            defaultAccount: "work",
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              alerts: {
+                cliPath: "/tmp/alerts-signal-cli",
+              },
+              work: {
+                cliPath: "",
+                account: "",
+                httpHost: "",
+                httpUrl: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+  });
 });
 
 describe("signal outbound", () => {
@@ -141,6 +220,119 @@ describe("signal outbound", () => {
 
     expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
   });
+
+  it("preserves the local approval prompt suppressor through attached-result composition", () => {
+    const suppressor = signalPlugin.outbound?.shouldSuppressLocalPayloadPrompt;
+    if (!suppressor) {
+      throw new Error("signal outbound approval suppressor unavailable");
+    }
+
+    expect(
+      suppressor({
+        cfg: {
+          channels: {
+            signal: {
+              enabled: true,
+              allowFrom: ["+15551230000"],
+            },
+          },
+          approvals: {
+            exec: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        accountId: "default",
+        payload: {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "exec-1",
+              approvalSlug: "exec-1",
+              approvalKind: "exec",
+              sessionKey: "agent:main:signal:+15551230000",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("declares message adapter durable text and media with receipt proofs", async () => {
+    const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
+      const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";
+      return {
+        messageId,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "signal", messageId }],
+          kind: opts.mediaUrl ? "media" : "text",
+        }),
+      };
+    });
+    const deps = { signal: send };
+
+    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "signal",
+      adapter: signalPlugin.message!,
+      proofs: {
+        text: async () => {
+          const result = await signalPlugin.message?.send?.text?.({
+            cfg: {} as OpenClawConfig,
+            to: "signal:+15555550123",
+            text: "hello",
+            deps,
+          } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+            deps: typeof deps;
+          });
+          expect(send).toHaveBeenCalledWith("signal:+15555550123", "hello", {
+            cfg: {},
+            maxBytes: undefined,
+            accountId: undefined,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["signal-text-1"]);
+        },
+        media: async () => {
+          const result = await signalPlugin.message?.send?.media?.({
+            cfg: {} as OpenClawConfig,
+            to: "signal:+15555550123",
+            text: "image",
+            mediaUrl: "https://example.com/image.png",
+            deps,
+          } as Parameters<NonNullable<typeof signalPlugin.message.send.media>>[0] & {
+            deps: typeof deps;
+          });
+          expect(send).toHaveBeenCalledWith("signal:+15555550123", "image", {
+            cfg: {},
+            mediaUrl: "https://example.com/image.png",
+            maxBytes: undefined,
+            accountId: undefined,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["signal-media-1"]);
+        },
+      },
+    });
+
+    expect(proofResults).toEqual([
+      { capability: "text", status: "verified" },
+      { capability: "media", status: "verified" },
+      { capability: "poll", status: "not_declared" },
+      { capability: "payload", status: "not_declared" },
+      { capability: "silent", status: "not_declared" },
+      { capability: "replyTo", status: "not_declared" },
+      { capability: "thread", status: "not_declared" },
+      { capability: "nativeQuote", status: "not_declared" },
+      { capability: "messageSendingHooks", status: "not_declared" },
+      { capability: "batch", status: "not_declared" },
+      { capability: "reconcileUnknownSend", status: "not_declared" },
+      { capability: "afterSendSuccess", status: "not_declared" },
+      { capability: "afterCommit", status: "not_declared" },
+    ]);
+  });
 });
 
 describe("classifySignalCliLogLine", () => {
@@ -149,9 +341,9 @@ describe("classifySignalCliLogLine", () => {
     expect(classifySignalCliLogLine("DEBUG Something")).toBe("log");
   });
 
-  it("treats WARN/ERROR as error", () => {
-    expect(classifySignalCliLogLine("WARN  Something")).toBe("error");
-    expect(classifySignalCliLogLine("WARNING Something")).toBe("error");
+  it("treats routine warnings as logs and errors as error state", () => {
+    expect(classifySignalCliLogLine("WARN  Something")).toBe("log");
+    expect(classifySignalCliLogLine("WARNING Something")).toBe("log");
     expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
   });
 
@@ -217,5 +409,85 @@ describe("signal setup parsing", () => {
       entries: [],
       error: "Invalid entry: invalid",
     });
+  });
+
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      signalDmPolicy.getCurrent(
+        {
+          channels: {
+            signal: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  account: "+15555550123",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(signalDmPolicy.resolveConfigKeys?.({ channels: { signal: {} } }, "work")).toEqual({
+      policyKey: "channels.signal.accounts.work.dmPolicy",
+      allowFromKey: "channels.signal.accounts.work.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
+    expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.signal.accounts.work.dmPolicy",
+      allowFromKey: "channels.signal.accounts.work.allowFrom",
+    });
+
+    const next = signalDmPolicy.setPolicy(cfg, "open");
+    expect(next.channels?.signal?.dmPolicy).toBe("disabled");
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
+  });
+
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
+            },
+          },
+        },
+      },
+    };
+
+    const next = signalDmPolicy.setPolicy(cfg, "open", "work");
+
+    expect(next.channels?.signal?.dmPolicy).toBeUndefined();
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });

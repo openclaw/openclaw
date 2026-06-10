@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "./chat-type.js";
 
@@ -7,10 +8,10 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = chatType === "direct";
 
-  const senderId = ctx.SenderId?.trim() || "";
-  const senderName = ctx.SenderName?.trim() || "";
-  const senderUsername = ctx.SenderUsername?.trim() || "";
-  const senderE164 = ctx.SenderE164?.trim() || "";
+  const senderId = normalizeOptionalString(ctx.SenderId) || "";
+  const senderName = normalizeOptionalString(ctx.SenderName) || "";
+  const senderUsername = normalizeOptionalString(ctx.SenderUsername) || "";
+  const senderE164 = normalizeOptionalString(ctx.SenderE164) || "";
 
   if (!isDirect) {
     if (!senderId && !senderName && !senderUsername && !senderE164) {

@@ -1,4 +1,8 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AzAccessToken, AzAccount } from "./shared.js";
 import { COGNITIVE_SERVICES_RESOURCE } from "./shared.js";
 
@@ -33,19 +37,23 @@ function summarizeAzErrorMessage(raw: string): string {
 }
 
 function buildAzCommandError(error: Error, stderr: string, stdout: string): Error {
-  const details = summarizeAzErrorMessage(`${String(stderr ?? "")} ${String(stdout ?? "")}`);
+  const details = summarizeAzErrorMessage(`${stderr ?? ""} ${stdout ?? ""}`);
   return new Error(details ? `${error.message}: ${details}` : error.message);
 }
 
 export function execAz(args: string[]): string {
-  return execFileSync("az", args, {
-    encoding: "utf-8",
-    timeout: 30_000,
-    shell: process.platform === "win32",
-  }).trim();
+  return (
+    normalizeOptionalString(
+      execFileSync("az", args, {
+        encoding: "utf-8",
+        timeout: 30_000,
+        shell: process.platform === "win32",
+      }),
+    ) ?? ""
+  );
 }
 
-export async function execAzAsync(args: string[]): Promise<string> {
+async function execAzAsync(args: string[]): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     execFile(
       "az",
@@ -57,10 +65,10 @@ export async function execAzAsync(args: string[]): Promise<string> {
       },
       (error, stdout, stderr) => {
         if (error) {
-          reject(buildAzCommandError(error, String(stderr ?? ""), String(stdout ?? "")));
+          reject(buildAzCommandError(error, stderr ?? "", stdout ?? ""));
           return;
         }
-        resolve(String(stdout).trim());
+        resolve(normalizeStringifiedOptionalString(stdout) ?? "");
       },
     );
   });
@@ -77,7 +85,7 @@ export function isAzCliInstalled(): boolean {
 
 export function getLoggedInAccount(): AzAccount | null {
   try {
-    return JSON.parse(execAz(["account", "show", "--output", "json"])) as AzAccount;
+    return parseAzJson(execAz(["account", "show", "--output", "json"]), "account") as AzAccount;
   } catch {
     return null;
   }
@@ -85,12 +93,21 @@ export function getLoggedInAccount(): AzAccount | null {
 
 export function listSubscriptions(): AzAccount[] {
   try {
-    const subs = JSON.parse(
+    const subs = parseAzJson(
       execAz(["account", "list", "--output", "json", "--all"]),
+      "subscriptions",
     ) as AzAccount[];
     return subs.filter((sub) => sub.state === "Enabled");
   } catch {
     return [];
+  }
+}
+
+function parseAzJson(raw: string, label: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`Azure CLI returned malformed ${label} JSON.`);
   }
 }
 
@@ -117,13 +134,16 @@ function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
 }
 
 export function getAccessTokenResult(params?: AccessTokenParams): AzAccessToken {
-  return JSON.parse(execAz(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(execAz(buildAccessTokenArgs(params)), "access token") as AzAccessToken;
 }
 
 export async function getAccessTokenResultAsync(
   params?: AccessTokenParams,
 ): Promise<AzAccessToken> {
-  return JSON.parse(await execAzAsync(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(
+    await execAzAsync(buildAccessTokenArgs(params)),
+    "access token",
+  ) as AzAccessToken;
 }
 
 export async function azLoginDeviceCode(): Promise<void> {
@@ -177,7 +197,7 @@ export async function azLoginDeviceCodeWithOptions(params: {
         resolve();
         return;
       }
-      const output = [...stderrChunks, ...stdoutChunks].join("").trim();
+      const output = normalizeOptionalString([...stderrChunks, ...stdoutChunks].join("")) ?? "";
       reject(
         new Error(
           output

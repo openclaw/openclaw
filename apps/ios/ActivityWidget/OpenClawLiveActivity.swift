@@ -5,81 +5,92 @@ import WidgetKit
 struct OpenClawLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: OpenClawActivityAttributes.self) { context in
-            lockScreenView(context: context)
+            self.lockScreenView(context: context)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    statusDot(state: context.state)
+                    self.statusDot(state: context.state)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.state.statusText)
-                        .font(.subheadline)
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    trailingView(state: context.state)
+                    self.trailingView(state: context.state)
                 }
             } compactLeading: {
-                statusDot(state: context.state)
+                self.statusDot(state: context.state)
             } compactTrailing: {
-                Text(context.state.statusText)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .frame(maxWidth: 64)
+                self.compactStatusIcon(state: context.state)
             } minimal: {
-                statusDot(state: context.state)
+                self.statusDot(state: context.state)
             }
         }
     }
 
-    @ViewBuilder
     private func lockScreenView(context: ActivityViewContext<OpenClawActivityAttributes>) -> some View {
-        HStack(spacing: 8) {
-            statusDot(state: context.state)
-                .frame(width: 10, height: 10)
+        HStack(spacing: 10) {
+            self.statusIcon(state: context.state)
+                .frame(width: 30, height: 30)
+                .background(.thinMaterial, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text("OpenClaw")
                     .font(.subheadline.bold())
+                    .lineLimit(1)
                 Text(context.state.statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             Spacer()
-            trailingView(state: context.state)
+            self.trailingView(state: context.state)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
+    }
+
+    private func trailingView(state: OpenClawActivityAttributes.ContentState) -> some View {
+        self.statusIcon(state: state)
+            .font(.system(size: 16, weight: .semibold))
+            .frame(width: 28, height: 28)
+    }
+
+    private func statusDot(state: OpenClawActivityAttributes.ContentState) -> some View {
+        Circle()
+            .fill(self.dotColor(state: state))
+            .frame(width: 6, height: 6)
+    }
+
+    private func compactStatusIcon(state: OpenClawActivityAttributes.ContentState) -> some View {
+        self.statusIcon(state: state)
+            .font(.system(size: 12, weight: .semibold))
+            .frame(width: 18, height: 18)
     }
 
     @ViewBuilder
-    private func trailingView(state: OpenClawActivityAttributes.ContentState) -> some View {
+    private func statusIcon(state: OpenClawActivityAttributes.ContentState) -> some View {
         if state.isConnecting {
-            ProgressView().controlSize(.small)
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.cyan)
         } else if state.isDisconnected {
             Image(systemName: "wifi.slash")
                 .foregroundStyle(.red)
         } else if state.isIdle {
-            Image(systemName: "antenna.radiowaves.left.and.right")
+            Image(systemName: "checkmark")
                 .foregroundStyle(.green)
         } else {
-            Text(state.startedAt, style: .timer)
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
         }
-    }
-
-    @ViewBuilder
-    private func statusDot(state: OpenClawActivityAttributes.ContentState) -> some View {
-        Circle()
-            .fill(dotColor(state: state))
-            .frame(width: 6, height: 6)
     }
 
     private func dotColor(state: OpenClawActivityAttributes.ContentState) -> Color {
         if state.isDisconnected { return .red }
-        if state.isConnecting { return .gray }
+        if state.isConnecting { return .cyan }
         if state.isIdle { return .green }
-        return .blue
+        return .orange
     }
 }

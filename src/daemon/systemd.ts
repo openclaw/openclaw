@@ -1,7 +1,21 @@
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveStateDir } from "../config/paths.js";
+import {
+  isUnresolvedShellReference,
+  readStateDirDotEnvFromStateDir,
+} from "../config/state-dir-dotenv.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import {
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -12,21 +26,24 @@ import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import {
+  hasEnvironmentFileSource,
+  hasInlineEnvironmentSource,
+  isEnvironmentFileOnlySource,
+  readManagedServiceEnvKeysFromEnvironment,
+} from "./service-managed-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceControlArgs,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
+  GatewayServiceEnvironmentValueSource,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
 } from "./service-types.js";
-import {
-  enableSystemdUserLinger,
-  readSystemdUserLingerStatus,
-  type SystemdUserLingerStatus,
-} from "./systemd-linger.js";
+import { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -35,8 +52,13 @@ import {
 import {
   buildSystemdUnit,
   parseSystemdEnvAssignment,
+  parseSystemdEnvAssignments,
   parseSystemdExecStart,
+  renderSystemdEnvAssignment,
 } from "./systemd-unit.js";
+
+const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
+const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = toPosixPath(resolveHomeDir(env));
@@ -59,8 +81,86 @@ export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPath(env);
 }
 
+const SYSTEM_SYSTEMD_UNIT_DIRS = [
+  "/etc/systemd/system",
+  "/usr/lib/systemd/system",
+  "/lib/systemd/system",
+] as const;
+
+async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string | null> {
+  const serviceFile = `${resolveSystemdServiceName(env)}.service`;
+  for (const dir of SYSTEM_SYSTEMD_UNIT_DIRS) {
+    const candidate = path.posix.join(dir, serviceFile);
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+export type InstalledSystemdGatewayScope = {
+  scope: SystemdUnitScope;
+  unitName: string;
+  unitPath: string;
+};
+
+async function findMarkerOwnedSystemSystemdUnit(): Promise<{
+  unitName: string;
+  unitPath: string;
+} | null> {
+  const { findSystemGatewayServices } = await import("./inspect.js");
+  let services: Awaited<ReturnType<typeof findSystemGatewayServices>>;
+  try {
+    services = await findSystemGatewayServices();
+  } catch {
+    return null;
+  }
+  for (const svc of services) {
+    if (
+      svc.platform !== "linux" ||
+      svc.scope !== "system" ||
+      svc.marker !== "openclaw" ||
+      !svc.label?.endsWith(".service")
+    ) {
+      continue;
+    }
+    const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
+    const unitPath = match?.[1]?.trim();
+    if (unitPath) {
+      return { unitName: svc.label, unitPath };
+    }
+  }
+  return null;
+}
+
+export async function findInstalledSystemdGatewayScope(
+  env: GatewayServiceEnv,
+): Promise<InstalledSystemdGatewayScope | null> {
+  const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
+  let userPath: string | null;
+  try {
+    userPath = resolveSystemdUnitPath(env);
+  } catch {
+    userPath = null;
+  }
+  if (userPath) {
+    try {
+      await fs.access(userPath);
+      return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
+    } catch {}
+  }
+  const systemPath = await findSystemSystemdUnitPath(env);
+  if (systemPath) {
+    return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
+  }
+  const owned = await findMarkerOwnedSystemSystemdUnit();
+  return owned ? { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath } : null;
+}
+
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
-export type { SystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
@@ -108,10 +208,10 @@ export async function readSystemdServiceExecStart(
       ...inlineEnvironment,
       ...environmentFromFiles.environment,
     };
-    const mergedEnvironmentSources = {
-      ...buildEnvironmentValueSources(inlineEnvironment, "inline"),
-      ...buildEnvironmentValueSources(environmentFromFiles.environment, "file"),
-    };
+    const mergedEnvironmentSources = mergeEnvironmentValueSources(
+      inlineEnvironment,
+      environmentFromFiles.environment,
+    );
     const programArguments = parseSystemdExecStart(execStart);
     return {
       programArguments,
@@ -130,8 +230,162 @@ export async function readSystemdServiceExecStart(
 function buildEnvironmentValueSources(
   environment: Record<string, string>,
   source: "inline" | "file",
-): Record<string, "inline" | "file"> {
+): Record<string, GatewayServiceEnvironmentValueSource> {
   return Object.fromEntries(Object.keys(environment).map((key) => [key, source]));
+}
+
+function mergeEnvironmentValueSources(
+  inlineEnvironment: Record<string, string>,
+  fileEnvironment: Record<string, string>,
+): Record<string, GatewayServiceEnvironmentValueSource> {
+  const sources = buildEnvironmentValueSources(inlineEnvironment, "inline");
+  for (const key of Object.keys(fileEnvironment)) {
+    sources[key] = Object.hasOwn(inlineEnvironment, key) ? "inline-and-file" : "file";
+  }
+  return sources;
+}
+
+function normalizeSystemdEnvironmentKey(key: string): string | null {
+  return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
+}
+
+function readSystemdEnvironmentValueSource(params: {
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+  key: string;
+}): GatewayServiceEnvironmentValueSource | undefined {
+  const normalizedKey = normalizeSystemdEnvironmentKey(params.key);
+  if (!normalizedKey) {
+    return undefined;
+  }
+  for (const [rawKey, source] of Object.entries(params.environmentValueSources ?? {})) {
+    if (normalizeSystemdEnvironmentKey(rawKey) === normalizedKey) {
+      return source;
+    }
+  }
+  return undefined;
+}
+
+function collectSystemdInlineManagedKeys(params: {
+  environment?: GatewayServiceEnv;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+}): Set<string> {
+  const keys = readManagedServiceEnvKeysFromEnvironment(params.environment);
+  for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
+    if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    const key = normalizeSystemdEnvironmentKey(rawKey);
+    if (!key) {
+      continue;
+    }
+    const source = readSystemdEnvironmentValueSource({
+      environmentValueSources: params.environmentValueSources,
+      key: rawKey,
+    });
+    if (hasInlineEnvironmentSource(source) && !hasEnvironmentFileSource(source)) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function collectSystemdFileManagedKeys(params: {
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+}): Set<string> {
+  const keys = new Set<string>();
+  for (const [rawKey, source] of Object.entries(params.environmentValueSources ?? {})) {
+    const key = normalizeSystemdEnvironmentKey(rawKey);
+    if (key && isEnvironmentFileOnlySource(source)) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function collectSystemdFileBackedEnvironment(params: {
+  environment?: GatewayServiceEnv;
+  fileManagedKeys: ReadonlySet<string>;
+}): Record<string, string> {
+  if (params.fileManagedKeys.size === 0) {
+    return {};
+  }
+  const environment: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(params.environment ?? {})) {
+    if (typeof rawValue !== "string" || !rawValue.trim()) {
+      continue;
+    }
+    const key = normalizeSystemdEnvironmentKey(rawKey);
+    if (key && params.fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
+      environment[rawKey] = rawValue;
+    }
+  }
+  return environment;
+}
+
+function sanitizeSystemdUnitBackupContent(params: {
+  content: string;
+  fileManagedKeys: ReadonlySet<string>;
+}): string {
+  if (params.fileManagedKeys.size === 0) {
+    return params.content;
+  }
+  const sanitizedLines: string[] = [];
+  for (const rawLine of params.content.split("\n")) {
+    const line = rawLine.trim();
+    if (!line.startsWith("Environment=")) {
+      sanitizedLines.push(rawLine);
+      continue;
+    }
+    const assignments = parseSystemdEnvAssignments(line.slice("Environment=".length).trim());
+    if (assignments.length === 0) {
+      sanitizedLines.push(rawLine);
+      continue;
+    }
+    const keptAssignments = assignments.filter(({ key }) => {
+      const normalizedKey = normalizeSystemdEnvironmentKey(key);
+      return !normalizedKey || !params.fileManagedKeys.has(normalizedKey);
+    });
+    if (keptAssignments.length === assignments.length) {
+      sanitizedLines.push(rawLine);
+      continue;
+    }
+    if (keptAssignments.length === 0) {
+      continue;
+    }
+    const leadingWhitespace = rawLine.match(/^\s*/)?.[0] ?? "";
+    sanitizedLines.push(
+      `${leadingWhitespace}Environment=${keptAssignments
+        .map(({ key, value }) => renderSystemdEnvAssignment(key, value))
+        .join(" ")}`,
+    );
+  }
+  return sanitizedLines.join("\n");
+}
+
+function resolveSystemdEnvironmentFilePath(params: {
+  stateDir: string;
+  environment?: GatewayServiceEnv;
+}): string {
+  const serviceKind = params.environment?.OPENCLAW_SERVICE_KIND?.trim();
+  const filename =
+    serviceKind === "node" ? SYSTEMD_NODE_DOTENV_FILENAME : SYSTEMD_GATEWAY_DOTENV_FILENAME;
+  return path.join(params.stateDir, filename);
+}
+
+function resolveLegacyNodeSystemdEnvironmentFilePath(params: {
+  stateDir: string;
+  environment?: GatewayServiceEnv;
+}): string | null {
+  if (params.environment?.OPENCLAW_SERVICE_KIND?.trim() !== "node") {
+    return null;
+  }
+  const legacyPath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
+  const currentPath = resolveSystemdEnvironmentFilePath(params);
+  return legacyPath === currentPath ? null : legacyPath;
+}
+
+function isNodeSystemdEnvironment(env: GatewayServiceEnv): boolean {
+  return env.OPENCLAW_SERVICE_KIND?.trim() === "node";
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -140,9 +394,7 @@ function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {
-  return splitArgsPreservingQuotes(raw, { escapeMode: "backslash" })
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }));
 }
 
 function parseEnvironmentFileLine(rawLine: string): { key: string; value: string } | null {
@@ -217,12 +469,16 @@ async function resolveSystemdEnvironmentFiles(params: {
   return { environment: resolved };
 }
 
-export type SystemdServiceInfo = {
+type SystemdServiceInfo = {
   activeState?: string;
   subState?: string;
   mainPid?: number;
   execMainStatus?: number;
   execMainCode?: string;
+  unit?: string;
+  killMode?: string;
+  tasksCurrent?: number;
+  memoryCurrent?: number;
 };
 
 export function parseSystemdShow(output: string): SystemdServiceInfo {
@@ -254,13 +510,40 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   if (execMainCode) {
     info.execMainCode = execMainCode;
   }
+  const unit = entries.id;
+  if (unit) {
+    info.unit = unit;
+  }
+  const killMode = entries.killmode;
+  if (killMode) {
+    info.killMode = killMode;
+  }
+  const tasksCurrentValue = entries.taskscurrent;
+  if (tasksCurrentValue) {
+    const tasksCurrent = parseStrictNonNegativeInteger(tasksCurrentValue);
+    if (tasksCurrent !== undefined) {
+      info.tasksCurrent = tasksCurrent;
+    }
+  }
+  const memoryCurrentValue = entries.memorycurrent;
+  if (memoryCurrentValue) {
+    const memoryCurrent = parseStrictNonNegativeInteger(memoryCurrentValue);
+    if (memoryCurrent !== undefined) {
+      info.memoryCurrent = memoryCurrent;
+    }
+  }
   return info;
 }
 
+export type SystemdUnitScope = "system" | "user";
+
 async function execSystemctl(
   args: string[],
+  env?: GatewayServiceEnv,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execFileUtf8("systemctl", args);
+  return await execFileUtf8("systemctl", args, {
+    env: env ? resolveSystemctlProcessEnv(env) : process.env,
+  });
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
@@ -276,7 +559,7 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("disabled") ||
     normalized.includes("static") ||
@@ -285,6 +568,18 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
     normalized.includes("failed to get unit file state")
+  );
+}
+
+function isSystemdUnitMissingDetail(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    (normalized.includes("unit file") && normalized.includes("does not exist")) ||
+    normalized.includes("not-found") ||
+    normalized.includes("could not be found")
   );
 }
 
@@ -298,7 +593,7 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.startsWith("command failed: systemctl") &&
     normalized.includes(" is-enabled ") &&
@@ -316,7 +611,7 @@ export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   if (!detail) {
     return false;
   }
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
 }
 
@@ -324,20 +619,78 @@ function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
 
-function resolveSystemctlMachineScopeUser(env: GatewayServiceEnv): string | null {
-  const sudoUser = env.SUDO_USER?.trim();
-  if (sudoUser && sudoUser !== "root") {
-    return sudoUser;
-  }
-  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
+function readSystemctlEnvUser(env: GatewayServiceEnv): string | null {
+  return env.USER?.trim() || env.LOGNAME?.trim() || null;
+}
+
+function readSystemctlEffectiveUser(): string | null {
   try {
     return os.userInfo().username;
   } catch {
     return null;
   }
+}
+
+function readSystemctlEffectiveUid(): number | null {
+  if (typeof process.geteuid !== "function") {
+    return null;
+  }
+  try {
+    return process.geteuid();
+  } catch {
+    return null;
+  }
+}
+
+function resolveSystemctlProcessEnv(env: GatewayServiceEnv): NodeJS.ProcessEnv {
+  const processEnv = { ...process.env, ...env };
+  if (processEnv.XDG_RUNTIME_DIR?.trim() && processEnv.DBUS_SESSION_BUS_ADDRESS?.trim()) {
+    return processEnv;
+  }
+
+  const uid = readSystemctlEffectiveUid();
+  if (uid === null || uid === 0) {
+    return processEnv;
+  }
+
+  const runtimeDir = processEnv.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
+  const busPath = path.posix.join(runtimeDir, "bus");
+  if (!fsSync.existsSync(busPath)) {
+    return processEnv;
+  }
+
+  return {
+    ...processEnv,
+    XDG_RUNTIME_DIR: runtimeDir,
+    DBUS_SESSION_BUS_ADDRESS: processEnv.DBUS_SESSION_BUS_ADDRESS?.trim() || `unix:path=${busPath}`,
+  };
+}
+
+function isNonRootUser(user: string | null): user is string {
+  return Boolean(user && user !== "root");
+}
+
+function resolveSystemctlUserScope(env: GatewayServiceEnv): {
+  machineUser: string | null;
+  preferMachineScope: boolean;
+} {
+  const sudoUser = env.SUDO_USER?.trim() || null;
+  const envUser = readSystemctlEnvUser(env);
+  const effectiveUid = readSystemctlEffectiveUid();
+  const effectiveUser = readSystemctlEffectiveUser();
+  const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
+  const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+  const machineUser = isSudoToRoot
+    ? sudoUser
+    : isNonRootUser(envUser)
+      ? envUser
+      : isNonRootUser(sudoUser)
+        ? sudoUser
+        : effectiveUser || envUser || sudoUser || null;
+  return {
+    machineUser,
+    preferMachineScope: isSudoToRoot,
+  };
 }
 
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
@@ -349,25 +702,34 @@ function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
 }
 
 function shouldFallbackToMachineUserScope(detail: string): boolean {
-  return isSystemdUserBusUnavailableDetail(detail);
+  if (!isSystemdUserBusUnavailableDetail(detail)) {
+    return false;
+  }
+  // "Permission denied" means the bus socket exists but this process cannot connect to it.
+  // The machine-scope approach targets the same bus infrastructure and will also fail,
+  // so do not trigger the fallback in this case.
+  return !detail.toLowerCase().includes("permission denied");
 }
 
 async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const machineUser = resolveSystemctlMachineScopeUser(env);
-  const sudoUser = env.SUDO_USER?.trim();
+  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
 
-  // Under sudo, prefer the invoking non-root user's scope directly.
-  if (sudoUser && sudoUser !== "root" && machineUser) {
+  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
+  if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
-      return await execSystemctl([...machineScopeArgs, ...args]);
+      // Do not fall through to bare --user: under sudo that can target root's user manager.
+      return await execSystemctl([...machineScopeArgs, ...args], env);
     }
   }
 
-  const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
+  const directResult = await execSystemctl(
+    [...resolveSystemctlDirectUserScopeArgs(), ...args],
+    env,
+  );
   if (directResult.code === 0) {
     return directResult;
   }
@@ -381,7 +743,7 @@ async function execSystemctlUser(
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await execSystemctl([...machineScopeArgs, ...args]);
+  return await execSystemctl([...machineScopeArgs, ...args], env);
 }
 
 export async function isSystemdUserServiceAvailable(
@@ -396,6 +758,20 @@ export async function isSystemdUserServiceAvailable(
     return false;
   }
   return !isSystemdUserScopeUnavailable(detail);
+}
+
+export async function isSystemdUnitActive(
+  env: GatewayServiceEnv,
+  unitName: string,
+  scope: SystemdUnitScope = "user",
+): Promise<boolean> {
+  const normalizedUnit = unitName.trim();
+  if (!normalizedUnit) {
+    return false;
+  }
+  const args = ["is-active", "--quiet", normalizedUnit];
+  const res = scope === "system" ? await execSystemctl(args) : await execSystemctlUser(env, args);
+  return res.code === 0;
 }
 
 async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {
@@ -421,33 +797,222 @@ async function writeSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
+  environmentValueSources,
   description,
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
   await assertSystemdAvailable(env);
 
   const unitPath = resolveSystemdUnitPath(env);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  const fileManagedKeys = collectSystemdFileManagedKeys({
+    environmentValueSources,
+  });
 
   // Preserve user customizations: back up existing unit file before overwriting.
   let backedUp = false;
   try {
-    await fs.access(unitPath);
     const backupPath = `${unitPath}.bak`;
-    await fs.copyFile(unitPath, backupPath);
+    const existingUnit = await fs.readFile(unitPath, "utf8");
+    const existingStat = await fs.stat(unitPath);
+    const backupMode = existingStat.mode & 0o777 || 0o600;
+    const backupUnit = sanitizeSystemdUnitBackupContent({
+      content: existingUnit,
+      fileManagedKeys,
+    });
+    await fs.writeFile(backupPath, backupUnit, { encoding: "utf8", mode: backupMode });
+    await fs.chmod(backupPath, backupMode);
     backedUp = true;
   } catch {
     // File does not exist yet — nothing to back up.
   }
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
+    readStateDirDotEnvFromStateDir(stateDir);
+  const stateDirDotEnvVars = Object.fromEntries(
+    Object.entries(stateDirDotEnvEntries).filter(([key, value]) => {
+      const inlineValue = environment?.[key];
+      if (typeof inlineValue !== "string") {
+        return true;
+      }
+      return inlineValue.trim() === value.trim();
+    }),
+  );
+  const inlineManagedKeys = collectSystemdInlineManagedKeys({
+    environment,
+    environmentValueSources,
+  });
+  const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
+    stateDir,
+    dotenvVars: stateDirDotEnvVars,
+    inlineManagedKeys,
+    fileManagedKeys,
+    skippedManagedKeys: skippedShellReferenceKeys,
+    fileBackedEnvironment: collectSystemdFileBackedEnvironment({
+      environment,
+      fileManagedKeys,
+    }),
+    environment,
+  });
+  const environmentSansDotEnvEntries = Object.fromEntries(
+    Object.entries(environment ?? {}).filter(([key, value]) => {
+      if (typeof value !== "string") {
+        return false;
+      }
+      const source = readSystemdEnvironmentValueSource({
+        environmentValueSources,
+        key,
+      });
+      if (hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) {
+        return false;
+      }
+      const normalizedKey = normalizeSystemdEnvironmentKey(key);
+      if (
+        normalizedKey &&
+        environmentFileResult.environmentKeys.has(normalizedKey) &&
+        !inlineManagedKeys.has(normalizedKey)
+      ) {
+        return false;
+      }
+      const stateDirValue = stateDirDotEnvVars[key];
+      if (typeof stateDirValue !== "string") {
+        return true;
+      }
+      return value.trim() !== stateDirValue.trim();
+    }),
+  );
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: environmentSansDotEnvEntries,
+    environmentFiles: environmentFileResult.environmentFiles,
   });
   await fs.writeFile(unitPath, unit, "utf8");
   return { unitPath, backedUp };
+}
+
+async function writeSystemdGatewayEnvironmentFile(params: {
+  stateDir: string;
+  dotenvVars: Record<string, string>;
+  /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
+   *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
+  inlineManagedKeys?: ReadonlySet<string>;
+  /** File-managed keys that should be written from current environment values or removed when absent. */
+  fileManagedKeys?: ReadonlySet<string>;
+  /** State-dir .env keys OpenClaw previously managed but is now skipping (unresolved shell
+   *  references). A prior re-stage may have written a stale literal value for them; drop it so
+   *  the regenerated env file no longer carries the obsolete reference. */
+  skippedManagedKeys?: Iterable<string>;
+  fileBackedEnvironment?: Record<string, string>;
+  environment?: GatewayServiceEnv;
+}): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
+  const incoming = { ...params.dotenvVars, ...params.fileBackedEnvironment };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (/[\r\n]/.test(value)) {
+      throw new Error(
+        `state-dir .env contains a multiline value for ${key}; systemd EnvironmentFile values must be single-line`,
+      );
+    }
+  }
+  const envFilePath = resolveSystemdEnvironmentFilePath({
+    stateDir: params.stateDir,
+    environment: params.environment,
+  });
+
+  // Read existing env files first so we can preserve operator-added secrets
+  // (e.g. provider API keys) across upgrades and re-stages. Node units used
+  // to share gateway.systemd.env, so migrate those entries into node.systemd.env.
+  // OpenClaw-managed keys (identified by inlineManagedKeys) are excluded: a stale
+  // file copy would override the fresh inline Environment= value because systemd's
+  // EnvironmentFile takes precedence over inline Environment= directives.
+  const existing: Record<string, string> = {};
+  const legacyNodeEnvFilePath = resolveLegacyNodeSystemdEnvironmentFilePath({
+    stateDir: params.stateDir,
+    environment: params.environment,
+  });
+  for (const sourceEnvFilePath of [legacyNodeEnvFilePath, envFilePath]) {
+    if (!sourceEnvFilePath) {
+      continue;
+    }
+    try {
+      Object.assign(existing, await readSystemdEnvironmentFile(sourceEnvFilePath));
+    } catch {
+      // File does not exist yet — nothing to preserve.
+    }
+  }
+  const managedKeysToDrop = new Set([
+    ...(params.inlineManagedKeys ?? []),
+    ...(params.fileManagedKeys ?? []),
+    ...[...(params.skippedManagedKeys ?? [])].flatMap((key) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  ]);
+  const operatorOnly = Object.fromEntries(
+    Object.entries(existing).filter(([key, value]) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      if (normalized && managedKeysToDrop.has(normalized)) {
+        return false;
+      }
+      return !isUnresolvedShellReference(value);
+    }),
+  );
+  const merged = { ...operatorOnly, ...incoming };
+  const environmentKeys = new Set(
+    Object.keys(merged).flatMap((key) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
+
+  // If the merged result is empty there is nothing to write and no file needed.
+  if (Object.keys(merged).length === 0) {
+    await fs.rm(envFilePath, { force: true }).catch(() => undefined);
+    return { environmentFiles: [], environmentKeys };
+  }
+
+  const content = Object.entries(merged)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+  await fs.mkdir(path.dirname(envFilePath), { recursive: true });
+  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(envFilePath, 0o600);
+  return { environmentFiles: [envFilePath], environmentKeys };
+}
+
+async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): Promise<void> {
+  if (!isNodeSystemdEnvironment(env)) {
+    return;
+  }
+  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const envFilePath = resolveSystemdEnvironmentFilePath({
+    stateDir,
+    environment: env,
+  });
+  let existing: Record<string, string>;
+  try {
+    existing = await readSystemdEnvironmentFile(envFilePath);
+  } catch {
+    return;
+  }
+  const managedKeys = new Set([normalizeSystemdEnvironmentKey("OPENCLAW_GATEWAY_TOKEN")]);
+  const remaining = Object.fromEntries(
+    Object.entries(existing).filter(([key]) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      return !normalized || !managedKeys.has(normalized);
+    }),
+  );
+  if (Object.keys(remaining).length === 0) {
+    await fs.rm(envFilePath, { force: true });
+    return;
+  }
+  const content = Object.entries(remaining)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(envFilePath, 0o600);
 }
 
 export async function stageSystemdService({
@@ -477,21 +1042,44 @@ export async function stageSystemdService({
 }
 
 async function activateSystemdService(params: { env: GatewayServiceEnv }) {
-  const serviceName = resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(params.env);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctlUser(params.env, ["daemon-reload"]);
+  const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
+  const throwActivationFailure = (
+    action: "daemon-reload" | "enable" | "restart",
+    result: { stdout: string; stderr: string },
+  ): never => {
+    const detail = readSystemctlDetail(result);
+    if (isSystemdUserScopeUnavailable(detail)) {
+      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+    }
+    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+  };
+  const reload = await reloadSystemd();
   if (reload.code !== 0) {
-    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
+    throwActivationFailure("daemon-reload", reload);
   }
 
-  const enable = await execSystemctlUser(params.env, ["enable", unitName]);
+  const runAfterReloadRetry = async (action: "enable" | "restart") => {
+    const result = await execSystemctlUser(params.env, [action, unitName]);
+    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+      return result;
+    }
+    const retryReload = await reloadSystemd();
+    if (retryReload.code !== 0) {
+      throwActivationFailure("daemon-reload", retryReload);
+    }
+    return await execSystemctlUser(params.env, [action, unitName]);
+  };
+
+  const enable = await runAfterReloadRetry("enable");
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
+    throwActivationFailure("enable", enable);
   }
 
-  const restart = await execSystemctlUser(params.env, ["restart", unitName]);
+  const restart = await runAfterReloadRetry("restart");
   if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throwActivationFailure("restart", restart);
   }
 }
 
@@ -526,17 +1114,38 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable(env);
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 
   const unitPath = resolveSystemdUnitPath(env);
+  let removed = false;
   try {
     await fs.unlink(unitPath);
+    removed = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    // Unit file was already absent; still clean generated node env state below.
+  }
+  await removeNodeSystemdManagedEnvironmentKeys(env);
+  if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
-  } catch {
+  } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }
+}
+
+function isRunningAsRoot(): boolean {
+  if (typeof process.geteuid === "function") {
+    try {
+      return process.geteuid() === 0;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 async function runSystemdServiceAction(params: {
@@ -546,9 +1155,22 @@ async function runSystemdServiceAction(params: {
   label: string;
 }) {
   const env = params.env ?? process.env;
+  const installed = await findInstalledSystemdGatewayScope(env);
+  const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  if (installed?.scope === "system") {
+    if (!isRunningAsRoot()) {
+      throw new Error(
+        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
+      );
+    }
+    const res = await execSystemctl([params.action, unitName], env);
+    if (res.code !== 0) {
+      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    }
+    params.stdout.write(`${formatLine(params.label, unitName)}\n`);
+    return;
+  }
   await assertSystemdAvailable(env);
-  const serviceName = resolveSystemdServiceName(env);
-  const unitName = `${serviceName}.service`;
   const res = await execSystemctlUser(env, [params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
@@ -583,18 +1205,14 @@ export async function restartSystemdService({
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
-  try {
-    await fs.access(resolveSystemdUnitPath(env));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
+  const installed = await findInstalledSystemdGatewayScope(env);
+  if (!installed) {
+    return false;
   }
-
-  const serviceName = resolveSystemdServiceName(env);
-  const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, ["is-enabled", unitName]);
+  const res =
+    installed.scope === "system"
+      ? await execSystemctl(["is-enabled", installed.unitName], env)
+      : await execSystemctlUser(env, ["is-enabled", installed.unitName]);
   if (res.code === 0) {
     return true;
   }
@@ -608,26 +1226,32 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
-  try {
-    await assertSystemdAvailable(env);
-  } catch (err) {
-    return {
-      status: "unknown",
-      detail: err instanceof Error ? err.message : String(err),
-    };
+  const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
+  if (installed?.scope !== "system") {
+    try {
+      await assertSystemdAvailable(env);
+    } catch (err) {
+      return {
+        status: "unknown",
+        detail: formatErrorMessage(err),
+      };
+    }
   }
-  const serviceName = resolveSystemdServiceName(env);
-  const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, [
+  const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  const showArgs = [
     "show",
     unitName,
     "--no-page",
     "--property",
-    "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
-  ]);
+    "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+  ];
+  const res =
+    installed?.scope === "system"
+      ? await execSystemctl(showArgs, env)
+      : await execSystemctlUser(env, showArgs);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("not found");
+    const missing = normalizeLowercaseStringOrEmpty(detail).includes("not found");
     return {
       status: missing ? "stopped" : "unknown",
       detail: detail || undefined,
@@ -635,7 +1259,7 @@ export async function readSystemdServiceRuntime(
     };
   }
   const parsed = parseSystemdShow(res.stdout || "");
-  const activeState = parsed.activeState?.toLowerCase();
+  const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
   const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
   return {
     status,
@@ -644,9 +1268,15 @@ export async function readSystemdServiceRuntime(
     pid: parsed.mainPid,
     lastExitStatus: parsed.execMainStatus,
     lastExitReason: parsed.execMainCode,
+    systemd: {
+      unit: parsed.unit ?? unitName,
+      killMode: parsed.killMode,
+      tasksCurrent: parsed.tasksCurrent,
+      memoryCurrent: parsed.memoryCurrent,
+    },
   };
 }
-export type LegacySystemdUnit = {
+type LegacySystemdUnit = {
   name: string;
   unitPath: string;
   enabled: boolean;
@@ -661,7 +1291,7 @@ async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
   return !isSystemctlMissing(readSystemctlDetail(res));
 }
 
-export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
+async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
   const results: LegacySystemdUnit[] = [];
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {

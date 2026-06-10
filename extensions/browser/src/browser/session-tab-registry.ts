@@ -1,17 +1,31 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserCloseTab } from "./client.js";
 
-export type TrackedSessionBrowserTab = {
+type TrackedSessionBrowserTab = {
   sessionKey: string;
   targetId: string;
   baseUrl?: string;
   profile?: string;
   trackedAt: number;
+  lastUsedAt: number;
 };
+
+type SessionBrowserTabIdentityParams = {
+  sessionKey?: string;
+  targetId?: string;
+  baseUrl?: string;
+  profile?: string;
+};
+
+type TrackedSessionBrowserTabIdentity = Omit<TrackedSessionBrowserTab, "trackedAt" | "lastUsedAt">;
 
 const trackedTabsBySession = new Map<string, Map<string, TrackedSessionBrowserTab>>();
 
 function normalizeSessionKey(raw: string): string {
-  return raw.trim().toLowerCase();
+  return normalizeOptionalLowercaseString(raw) ?? "";
 }
 
 function normalizeTargetId(raw: string): string {
@@ -19,11 +33,7 @@ function normalizeTargetId(raw: string): string {
 }
 
 function normalizeProfile(raw?: string): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed.toLowerCase() : undefined;
+  return normalizeOptionalLowercaseString(raw);
 }
 
 function normalizeBaseUrl(raw?: string): string | undefined {
@@ -38,8 +48,41 @@ function toTrackedTabId(params: { targetId: string; baseUrl?: string; profile?: 
   return `${params.targetId}\u0000${params.baseUrl ?? ""}\u0000${params.profile ?? ""}`;
 }
 
+function resolveTrackedTabIdentity(
+  params: SessionBrowserTabIdentityParams,
+): TrackedSessionBrowserTabIdentity | undefined {
+  const sessionKeyRaw = params.sessionKey?.trim();
+  const targetIdRaw = params.targetId?.trim();
+  if (!sessionKeyRaw || !targetIdRaw) {
+    return undefined;
+  }
+  return {
+    sessionKey: normalizeSessionKey(sessionKeyRaw),
+    targetId: normalizeTargetId(targetIdRaw),
+    baseUrl: normalizeBaseUrl(params.baseUrl),
+    profile: normalizeProfile(params.profile),
+  };
+}
+
+function trackedTabsForIdentity(
+  identity: TrackedSessionBrowserTabIdentity,
+): Map<string, TrackedSessionBrowserTab> | undefined {
+  return trackedTabsBySession.get(identity.sessionKey);
+}
+
+function deleteTrackedTab(identity: TrackedSessionBrowserTabIdentity): void {
+  const trackedForSession = trackedTabsForIdentity(identity);
+  if (!trackedForSession) {
+    return;
+  }
+  trackedForSession.delete(toTrackedTabId(identity));
+  if (trackedForSession.size === 0) {
+    trackedTabsBySession.delete(identity.sessionKey);
+  }
+}
+
 function isIgnorableCloseError(err: unknown): boolean {
-  const message = String(err).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(String(err));
   return (
     message.includes("tab not found") ||
     message.includes("target closed") ||
@@ -48,62 +91,58 @@ function isIgnorableCloseError(err: unknown): boolean {
   );
 }
 
-export function trackSessionBrowserTab(params: {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-}): void {
-  const sessionKeyRaw = params.sessionKey?.trim();
-  const targetIdRaw = params.targetId?.trim();
-  if (!sessionKeyRaw || !targetIdRaw) {
+export function trackSessionBrowserTab(params: SessionBrowserTabIdentityParams): void {
+  const identity = resolveTrackedTabIdentity(params);
+  if (!identity) {
     return;
   }
-  const sessionKey = normalizeSessionKey(sessionKeyRaw);
-  const targetId = normalizeTargetId(targetIdRaw);
-  const baseUrl = normalizeBaseUrl(params.baseUrl);
-  const profile = normalizeProfile(params.profile);
+  const now = Date.now();
   const tracked: TrackedSessionBrowserTab = {
-    sessionKey,
-    targetId,
-    baseUrl,
-    profile,
-    trackedAt: Date.now(),
+    ...identity,
+    trackedAt: now,
+    lastUsedAt: now,
   };
   const trackedId = toTrackedTabId(tracked);
-  let trackedForSession = trackedTabsBySession.get(sessionKey);
+  let trackedForSession = trackedTabsBySession.get(identity.sessionKey);
   if (!trackedForSession) {
     trackedForSession = new Map();
-    trackedTabsBySession.set(sessionKey, trackedForSession);
+    trackedTabsBySession.set(identity.sessionKey, trackedForSession);
   }
-  trackedForSession.set(trackedId, tracked);
+  const existing = trackedForSession.get(trackedId);
+  trackedForSession.set(trackedId, {
+    ...tracked,
+    trackedAt: existing?.trackedAt ?? tracked.trackedAt,
+  });
 }
 
-export function untrackSessionBrowserTab(params: {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-}): void {
-  const sessionKeyRaw = params.sessionKey?.trim();
-  const targetIdRaw = params.targetId?.trim();
-  if (!sessionKeyRaw || !targetIdRaw) {
+export function touchSessionBrowserTab(
+  params: SessionBrowserTabIdentityParams & { now?: number },
+): void {
+  const identity = resolveTrackedTabIdentity(params);
+  if (!identity) {
     return;
   }
-  const sessionKey = normalizeSessionKey(sessionKeyRaw);
-  const trackedForSession = trackedTabsBySession.get(sessionKey);
+  const trackedForSession = trackedTabsForIdentity(identity);
   if (!trackedForSession) {
     return;
   }
-  const trackedId = toTrackedTabId({
-    targetId: normalizeTargetId(targetIdRaw),
-    baseUrl: normalizeBaseUrl(params.baseUrl),
-    profile: normalizeProfile(params.profile),
-  });
-  trackedForSession.delete(trackedId);
-  if (trackedForSession.size === 0) {
-    trackedTabsBySession.delete(sessionKey);
+  const trackedId = toTrackedTabId(identity);
+  const tracked = trackedForSession.get(trackedId);
+  if (!tracked) {
+    return;
   }
+  trackedForSession.set(trackedId, {
+    ...tracked,
+    lastUsedAt: params.now ?? Date.now(),
+  });
+}
+
+export function untrackSessionBrowserTab(params: SessionBrowserTabIdentityParams): void {
+  const identity = resolveTrackedTabIdentity(params);
+  if (!identity) {
+    return;
+  }
+  deleteTrackedTab(identity);
 }
 
 function takeTrackedTabsForSessionKeys(
@@ -139,13 +178,12 @@ function takeTrackedTabsForSessionKeys(
   return tabs;
 }
 
-export async function closeTrackedBrowserTabsForSessions(params: {
-  sessionKeys: Array<string | undefined>;
+async function closeTrackedTabs(params: {
+  tabs: TrackedSessionBrowserTab[];
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
   onWarn?: (message: string) => void;
 }): Promise<number> {
-  const tabs = takeTrackedTabsForSessionKeys(params.sessionKeys);
-  if (tabs.length === 0) {
+  if (params.tabs.length === 0) {
     return 0;
   }
   const closeTab =
@@ -156,7 +194,7 @@ export async function closeTrackedBrowserTabsForSessions(params: {
       });
     });
   let closed = 0;
-  for (const tab of tabs) {
+  for (const tab of params.tabs) {
     try {
       await closeTab({
         targetId: tab.targetId,
@@ -173,11 +211,109 @@ export async function closeTrackedBrowserTabsForSessions(params: {
   return closed;
 }
 
-export function __resetTrackedSessionBrowserTabsForTests(): void {
+export async function closeTrackedBrowserTabsForSessions(params: {
+  sessionKeys: Array<string | undefined>;
+  closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
+  onWarn?: (message: string) => void;
+}): Promise<number> {
+  return await closeTrackedTabs({
+    tabs: takeTrackedTabsForSessionKeys(params.sessionKeys),
+    closeTab: params.closeTab,
+    onWarn: params.onWarn,
+  });
+}
+
+function takeStaleTrackedTabs(params: {
+  now: number;
+  idleMs?: number;
+  maxTabsPerSession?: number;
+  sessionFilter?: (sessionKey: string) => boolean;
+}): TrackedSessionBrowserTab[] {
+  const tabsToClose: TrackedSessionBrowserTab[] = [];
+  const takenIdsBySession = new Map<string, Set<string>>();
+  const mark = (sessionKey: string, trackedId: string, tracked: TrackedSessionBrowserTab): void => {
+    let takenForSession = takenIdsBySession.get(sessionKey);
+    if (!takenForSession) {
+      takenForSession = new Set();
+      takenIdsBySession.set(sessionKey, takenForSession);
+    }
+    if (takenForSession.has(trackedId)) {
+      return;
+    }
+    takenForSession.add(trackedId);
+    tabsToClose.push(tracked);
+  };
+
+  for (const [sessionKey, trackedForSession] of trackedTabsBySession) {
+    if (params.sessionFilter && !params.sessionFilter(sessionKey)) {
+      continue;
+    }
+    const entries = [...trackedForSession.entries()].toSorted(
+      (a, b) => a[1].lastUsedAt - b[1].lastUsedAt || a[1].trackedAt - b[1].trackedAt,
+    );
+    if (params.idleMs && params.idleMs > 0) {
+      for (const [trackedId, tracked] of entries) {
+        if (params.now - tracked.lastUsedAt >= params.idleMs) {
+          mark(sessionKey, trackedId, tracked);
+        }
+      }
+    }
+
+    const remainingEntries = entries.filter(
+      ([trackedId]) => !takenIdsBySession.get(sessionKey)?.has(trackedId),
+    );
+    if (
+      params.maxTabsPerSession &&
+      params.maxTabsPerSession > 0 &&
+      remainingEntries.length > params.maxTabsPerSession
+    ) {
+      const excess = remainingEntries.length - params.maxTabsPerSession;
+      for (const [trackedId, tracked] of remainingEntries.slice(0, excess)) {
+        mark(sessionKey, trackedId, tracked);
+      }
+    }
+  }
+
+  for (const [sessionKey, trackedIds] of takenIdsBySession) {
+    const trackedForSession = trackedTabsBySession.get(sessionKey);
+    if (!trackedForSession) {
+      continue;
+    }
+    for (const trackedId of trackedIds) {
+      trackedForSession.delete(trackedId);
+    }
+    if (trackedForSession.size === 0) {
+      trackedTabsBySession.delete(sessionKey);
+    }
+  }
+  return tabsToClose;
+}
+
+export async function sweepTrackedBrowserTabs(params: {
+  now?: number;
+  idleMs?: number;
+  maxTabsPerSession?: number;
+  sessionFilter?: (sessionKey: string) => boolean;
+  closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
+  onWarn?: (message: string) => void;
+}): Promise<number> {
+  return await closeTrackedTabs({
+    tabs: takeStaleTrackedTabs({
+      now: params.now ?? Date.now(),
+      idleMs: params.idleMs,
+      maxTabsPerSession: params.maxTabsPerSession,
+      sessionFilter: params.sessionFilter,
+    }),
+    closeTab: params.closeTab,
+    onWarn: params.onWarn,
+  });
+}
+
+export function resetTrackedSessionBrowserTabsForTests(): void {
   trackedTabsBySession.clear();
 }
 
-export function __countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
+export function countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
   if (typeof sessionKey === "string" && sessionKey.trim()) {
     return trackedTabsBySession.get(normalizeSessionKey(sessionKey))?.size ?? 0;
   }

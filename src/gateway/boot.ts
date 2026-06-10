@@ -1,10 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+  escapeInternalRuntimeContextDelimiters,
+} from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommand } from "../commands/agent.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -13,8 +18,11 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
+import { clearBootEchoContextForSession, setBootEchoContextForSession } from "./boot-echo-guard.js";
 
 function generateBootSessionId(): string {
   const now = new Date();
@@ -40,17 +48,34 @@ export type BootRunResult =
   | { status: "failed"; reason: string };
 
 function buildBootPrompt(content: string) {
+  // Wrap BOOT.md content in internal-runtime-context delimiters so any
+  // verbatim model echo (final reply or message-tool send) is removed by
+  // the existing `stripInternalRuntimeContext` pathway. Mirrors the
+  // runtime-context-prompt pattern from `e918e5f75c fix: hide runtime
+  // context from submitted prompts`. The notice tells the model the
+  // wrapped content is internal and should not be repeated to users.
+  // Fixes #53732.
+  const safeContent = escapeInternalRuntimeContextDelimiters(content);
   return [
     "You are running a boot check. Follow BOOT.md instructions exactly.",
     "",
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+    "",
     "BOOT.md:",
-    content,
+    safeContent,
+    INTERNAL_RUNTIME_CONTEXT_END,
     "",
     "If BOOT.md asks you to send a message, use the message tool (action=send with channel + target).",
     "Use the `target` field (not `to`) for message tool destinations.",
     `After sending with the message tool, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
     `If nothing needs attention, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
   ].join("\n");
+}
+
+function resolveBootSessionKey(sessionKey: string): string {
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  return `agent:${agentId}:boot`;
 }
 
 async function loadBootFile(
@@ -73,7 +98,7 @@ async function loadBootFile(
   }
 }
 
-function snapshotMainSessionMapping(params: {
+function snapshotSessionMapping(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): SessionMappingSnapshot {
@@ -98,7 +123,7 @@ function snapshotMainSessionMapping(params: {
       entry: structuredClone(entry),
     };
   } catch (err) {
-    log.debug("boot: could not snapshot main session mapping", {
+    log.debug("boot: could not snapshot session mapping", {
       sessionKey: params.sessionKey,
       error: String(err),
     });
@@ -111,7 +136,7 @@ function snapshotMainSessionMapping(params: {
   }
 }
 
-async function restoreMainSessionMapping(
+async function restoreSessionMapping(
   snapshot: SessionMappingSnapshot,
 ): Promise<string | undefined> {
   if (!snapshot.canRestore) {
@@ -131,7 +156,7 @@ async function restoreMainSessionMapping(
     );
     return undefined;
   } catch (err) {
-    return err instanceof Error ? err.message : String(err);
+    return formatErrorMessage(err);
   }
 }
 
@@ -150,7 +175,7 @@ export async function runBootOnce(params: {
   try {
     result = await loadBootFile(params.workspaceDir);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     log.error(`boot: failed to read ${BOOT_FILENAME}: ${message}`);
     return { status: "failed", reason: message };
   }
@@ -159,16 +184,24 @@ export async function runBootOnce(params: {
     return { status: "skipped", reason: result.status };
   }
 
-  const sessionKey = params.agentId
+  const mainSessionKey = params.agentId
     ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
     : resolveMainSessionKey(params.cfg);
+  const sessionKey = resolveBootSessionKey(mainSessionKey);
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
-  const mappingSnapshot = snapshotMainSessionMapping({
+  const mappingSnapshot = snapshotSessionMapping({
     cfg: params.cfg,
     sessionKey,
   });
 
+  // Register the boot prompt for the message-tool echo guard so the
+  // tool layer can drop fallback-model echoes that copy substantial
+  // BOOT.md content without preserving the wrapper markers above.
+  // Always cleared in finally so a failed run does not leave a stale
+  // entry that mis-fires on an unrelated subsequent run reusing the
+  // same session key. Refs #53732.
+  setBootEchoContextForSession(sessionKey, message);
   let agentFailure: string | undefined;
   try {
     await agentCommand(
@@ -177,19 +210,21 @@ export async function runBootOnce(params: {
         sessionKey,
         sessionId,
         deliver: false,
-        senderIsOwner: true,
+        suppressPromptPersistence: true,
       },
       bootRuntime,
       params.deps,
     );
   } catch (err) {
-    agentFailure = err instanceof Error ? err.message : String(err);
+    agentFailure = formatErrorMessage(err);
     log.error(`boot: agent run failed: ${agentFailure}`);
+  } finally {
+    clearBootEchoContextForSession(sessionKey);
   }
 
-  const mappingRestoreFailure = await restoreMainSessionMapping(mappingSnapshot);
+  const mappingRestoreFailure = await restoreSessionMapping(mappingSnapshot);
   if (mappingRestoreFailure) {
-    log.error(`boot: failed to restore main session mapping: ${mappingRestoreFailure}`);
+    log.error(`boot: failed to restore session mapping: ${mappingRestoreFailure}`);
   }
 
   if (!agentFailure && !mappingRestoreFailure) {

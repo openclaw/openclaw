@@ -1,12 +1,26 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+
+export const ACCESS_GROUP_ALLOW_FROM_PREFIX = "accessGroup:";
+
+export function parseAccessGroupAllowFromEntry(entry: string): string | null {
+  const trimmed = entry.trim();
+  if (!trimmed.startsWith(ACCESS_GROUP_ALLOW_FROM_PREFIX)) {
+    return null;
+  }
+  const name = trimmed.slice(ACCESS_GROUP_ALLOW_FROM_PREFIX.length).trim();
+  return name.length > 0 ? name : null;
+}
+
 export function mergeDmAllowFromSources(params: {
   allowFrom?: Array<string | number>;
   storeAllowFrom?: Array<string | number>;
   dmPolicy?: string;
 }): string[] {
-  const storeEntries = params.dmPolicy === "allowlist" ? [] : (params.storeAllowFrom ?? []);
-  return [...(params.allowFrom ?? []), ...storeEntries]
-    .map((value) => String(value).trim())
-    .filter(Boolean);
+  const storeEntries =
+    params.dmPolicy === "allowlist" || params.dmPolicy === "open"
+      ? []
+      : (params.storeAllowFrom ?? []);
+  return normalizeStringEntries([...(params.allowFrom ?? []), ...storeEntries]);
 }
 
 export function resolveGroupAllowFromSources(params: {
@@ -23,12 +37,12 @@ export function resolveGroupAllowFromSources(params: {
     : params.fallbackToAllowFrom === false
       ? []
       : (params.allowFrom ?? []);
-  return scoped.map((value) => String(value).trim()).filter(Boolean);
+  return normalizeStringEntries(scoped);
 }
 
 export function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
-    if (typeof value !== "undefined") {
+    if (value !== undefined) {
       return value;
     }
   }

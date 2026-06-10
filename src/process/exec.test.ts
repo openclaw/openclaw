@@ -3,21 +3,92 @@ import { EventEmitter } from "node:events";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
-import { attachChildProcessBridge } from "./child-process-bridge.js";
-import {
-  resolveCommandEnv,
-  resolveProcessExitCode,
-  runCommandWithTimeout,
-  shouldSpawnWithShell,
-} from "./exec.js";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
+let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
+let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
+let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
+let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
+
+async function loadExecModules(options?: { mockSpawn?: boolean }) {
+  vi.resetModules();
+  if (options?.mockSpawn) {
+    vi.doMock("node:child_process", async () => {
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      return {
+        ...actual,
+        spawn: spawnMock,
+      };
+    });
+  } else {
+    vi.doUnmock("node:child_process");
+  }
+  ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
+  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, shouldSpawnWithShell } =
+    await import("./exec.js"));
+}
 
 describe("runCommandWithTimeout", () => {
-  beforeEach(() => {
+  function createSilentIdleArgv(): string[] {
+    return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
+  }
+
+  function createKilledChild(signal: NodeJS.Signals = "SIGKILL"): ChildProcess {
+    const child = new EventEmitter() as EventEmitter & ChildProcess;
+    child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
+    child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
+    child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
+    child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
+    child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
+    let killed = false;
+    let exitCode: number | null = null;
+    let signalCode: NodeJS.Signals | null = null;
+    Object.defineProperties(child, {
+      pid: {
+        configurable: true,
+        enumerable: true,
+        get: () => 1234,
+      },
+      killed: {
+        configurable: true,
+        enumerable: true,
+        get: () => killed,
+      },
+      exitCode: {
+        configurable: true,
+        enumerable: true,
+        get: () => exitCode,
+      },
+      signalCode: {
+        configurable: true,
+        enumerable: true,
+        get: () => signalCode,
+      },
+    });
+    child.kill = vi.fn((receivedSignal?: NodeJS.Signals) => {
+      const resolvedSignal = receivedSignal ?? signal;
+      killed = true;
+      exitCode = null;
+      signalCode = resolvedSignal;
+      child.emit("exit", null, resolvedSignal);
+      child.emit("close", null, resolvedSignal);
+      return true;
+    }) as ChildProcess["kill"];
+    return child;
+  }
+
+  beforeEach(async () => {
     vi.useRealTimers();
+    spawnMock.mockReset();
+    await loadExecModules();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.doUnmock("node:child_process");
   });
 
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
@@ -29,7 +100,7 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
-  it("merges custom env with base env and drops undefined values", async () => {
+  it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
       baseEnv: {
@@ -47,7 +118,43 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
-  it("suppresses npm fund prompts for npm argv", async () => {
+  it("collapses case-insensitive duplicate env keys on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: {
+        Path: "C:\\base\\bin",
+        OPENCLAW_BASE_ENV: "base",
+      },
+      env: {
+        PATH: "C:\\override\\bin",
+        OPENCLAW_TEST_ENV: "ok",
+      },
+    });
+
+    expect(resolved.Path).toBeUndefined();
+    expect(resolved.PATH).toBe("C:\\override\\bin");
+    expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
+    expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
+  });
+
+  it("preserves case-distinct env keys outside Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "linux",
+      baseEnv: {
+        Path: "/base/bin",
+      },
+      env: {
+        PATH: "/override/bin",
+      },
+    });
+
+    expect(resolved.Path).toBe("/base/bin");
+    expect(resolved.PATH).toBe("/override/bin");
+  });
+
+  it("suppresses npm fund prompts for npm argv", () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],
       baseEnv: {},
@@ -85,18 +192,45 @@ describe("runCommandWithTimeout", () => {
     ).toBeNull();
   });
 
+  it("does not spawn when the abort signal is already aborted", async () => {
+    await loadExecModules({ mockSpawn: true });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      timeoutMs: 2_000,
+      signal: controller.signal,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      killed: false,
+      termination: "signal",
+      noOutputTimedOut: false,
+    });
+    expect(result.code).not.toBe(0);
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
-    { timeout: 15_000 },
+    { timeout: 5_000 },
     async () => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-        {
-          timeoutMs: 2_000,
-          noOutputTimeoutMs: 200,
-        },
-      );
+      vi.useFakeTimers();
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 2_000,
+        noOutputTimeoutMs: 200,
+      });
 
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
       expect(result.code).not.toBe(0);
@@ -105,18 +239,35 @@ describe("runCommandWithTimeout", () => {
 
   it.runIf(process.platform !== "win32")(
     "reports global timeout termination when overall timeout elapses",
-    { timeout: 15_000 },
+    { timeout: 5_000 },
     async () => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-        {
-          timeoutMs: 200,
-        },
-      );
+      vi.useFakeTimers();
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 200,
+      });
 
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
       expect(result.code).not.toBe(0);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "swallows stdin EPIPE when child exits before input is consumed (#75438)",
+    { timeout: 5_000 },
+    async () => {
+      await loadExecModules();
+      const result = await runCommandWithTimeout([process.execPath, "-e", "process.exit(0)"], {
+        timeoutMs: 3_000,
+        input: "this input will EPIPE because the child ignores stdin\n",
+      });
+      expect(result.code).toBe(0);
     },
   );
 });

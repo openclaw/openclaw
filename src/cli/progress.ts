@@ -1,11 +1,15 @@
 import { spinner } from "@clack/prompts";
-import { createOscProgressController, supportsOscProgress } from "osc-progress";
+import {
+  createOscProgressController,
+  supportsOscProgress,
+} from "../../packages/terminal-core/src/osc-progress.js";
 import {
   clearActiveProgressLine,
   registerActiveProgressLine,
   unregisterActiveProgressLine,
-} from "../terminal/progress-line.js";
-import { theme } from "../terminal/theme.js";
+} from "../../packages/terminal-core/src/progress-line.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const DEFAULT_DELAY_MS = 0;
 let activeProgress = 0;
@@ -33,6 +37,15 @@ export type ProgressTotalsUpdate = {
   label?: string;
 };
 
+export function shouldUseInteractiveProgressSpinner(params: {
+  fallback?: ProgressOptions["fallback"];
+  streamIsTty?: boolean;
+  stdinIsRaw?: boolean;
+}): boolean {
+  const spinnerRequested = params.fallback === undefined || params.fallback === "spinner";
+  return spinnerRequested && params.streamIsTty === true && params.stdinIsRaw !== true;
+}
+
 const noopReporter: ProgressReporter = {
   setLabel: () => {},
   setPercent: () => {},
@@ -55,10 +68,18 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     return noopReporter;
   }
 
-  const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
+  const delayMs = resolveTimerTimeoutMs(options.delayMs, DEFAULT_DELAY_MS, 0);
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
-  const allowSpinner = isTty && (options.fallback === undefined || options.fallback === "spinner");
+  const stdinIsRaw = process.stdin.isRaw;
+  const allowSpinner = shouldUseInteractiveProgressSpinner({
+    fallback: options.fallback,
+    streamIsTty: isTty,
+    stdinIsRaw,
+  });
   const allowLine = isTty && options.fallback === "line";
+  if (isTty && stdinIsRaw && (options.fallback === undefined || options.fallback === "spinner")) {
+    return noopReporter;
+  }
 
   let started = false;
   let label = options.label;
@@ -81,7 +102,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
-  const spin = allowSpinner ? spinner() : null;
+  const spin = allowSpinner ? spinner({ output: stream }) : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {
@@ -180,6 +201,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       timer = null;
     }
     if (!started) {
+      if (isTty) {
+        unregisterActiveProgressLine(stream);
+      }
       activeProgress = Math.max(0, activeProgress - 1);
       return;
     }

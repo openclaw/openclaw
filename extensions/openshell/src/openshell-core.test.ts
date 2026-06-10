@@ -1,75 +1,43 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSandboxTestContext } from "openclaw/plugin-sdk/testing";
+import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
+import {
+  createSandboxBrowserConfig,
+  createSandboxPruneConfig,
+  createSandboxSshConfig,
+  createSandboxTestContext,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import {
+  applyGatewayEndpointToSshConfig,
   buildExecRemoteCommand,
+  buildValidatedExecRemoteCommand,
   buildOpenShellBaseArgv,
   resolveOpenShellCommand,
-  setBundledOpenShellCommandResolverForTest,
+  runOpenShellCli,
   shellEscape,
 } from "./cli.js";
-import { createOpenShellPluginConfigSchema, resolveOpenShellPluginConfig } from "./config.js";
+import { resolveOpenShellPluginConfig } from "./config.js";
 
 const cliMocks = vi.hoisted(() => ({
   runOpenShellCli: vi.fn(),
 }));
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
-
-describe("openshell plugin config", () => {
-  it("applies defaults", () => {
-    expect(resolveOpenShellPluginConfig(undefined)).toEqual({
-      mode: "mirror",
-      command: "openshell",
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      from: "openclaw",
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
-      remoteWorkspaceDir: "/sandbox",
-      remoteAgentWorkspaceDir: "/agent",
-      timeoutMs: 120_000,
-    });
-  });
-
-  it("accepts remote mode", () => {
-    expect(resolveOpenShellPluginConfig({ mode: "remote" }).mode).toBe("remote");
-  });
-
-  it("rejects relative remote paths", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "sandbox",
-      }),
-    ).toThrow("OpenShell remote path must be absolute");
-  });
-
-  it("rejects unknown mode", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        mode: "bogus",
-      }),
-    ).toThrow("mode must be one of mirror, remote");
-  });
-
-  it("keeps the runtime json schema in sync with the manifest config schema", () => {
-    const manifest = JSON.parse(
-      fsSync.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { configSchema?: unknown };
-
-    expect(createOpenShellPluginConfigSchema().jsonSchema).toEqual(manifest.configSchema);
-  });
-});
+let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
 
 describe("openshell cli helpers", () => {
+  const originalEnv = { ...process.env };
+
   afterEach(() => {
-    setBundledOpenShellCommandResolverForTest();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
   });
 
   it("builds base argv with gateway overrides", () => {
@@ -87,18 +55,17 @@ describe("openshell cli helpers", () => {
     ]);
   });
 
-  it("prefers the bundled openshell command when available", () => {
-    setBundledOpenShellCommandResolverForTest(() => "/tmp/node_modules/.bin/openshell");
+  it("uses the configured NVIDIA OpenShell CLI command directly", () => {
     const config = resolveOpenShellPluginConfig(undefined);
 
-    expect(resolveOpenShellCommand("openshell")).toBe("/tmp/node_modules/.bin/openshell");
-    expect(buildOpenShellBaseArgv(config)).toEqual(["/tmp/node_modules/.bin/openshell"]);
+    expect(resolveOpenShellCommand("openshell")).toBe("openshell");
+    expect(buildOpenShellBaseArgv(config)).toEqual(["openshell"]);
   });
 
-  it("falls back to the PATH command when no bundled openshell is present", () => {
-    setBundledOpenShellCommandResolverForTest(() => null);
-
-    expect(resolveOpenShellCommand("openshell")).toBe("openshell");
+  it("preserves an explicit NVIDIA OpenShell CLI path", () => {
+    expect(resolveOpenShellCommand("/opt/openshell/bin/openshell")).toBe(
+      "/opt/openshell/bin/openshell",
+    );
   });
 
   it("shell escapes single quotes", () => {
@@ -117,23 +84,97 @@ describe("openshell cli helpers", () => {
     expect(command).toContain(`'TOKEN=abc 123'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
   });
+
+  it("uses the shared SSH exec command preflight", () => {
+    expect(() =>
+      buildValidatedExecRemoteCommand({
+        command: 'workflow run <workflow-id> "<task>"',
+        env: {},
+      }),
+    ).toThrow(/unresolved placeholder token <workflow-id>/);
+  });
+
+  it("passes direct gateway endpoints to openshell commands without registration", async () => {
+    const calls: string[][] = [];
+    const openshellCommand = await makeExecutable({
+      name: "openshell",
+      script: ["#!/bin/sh", `printf '%s\\n' "$*" >> "__LOG__"`, "exit 0"].join("\n"),
+    });
+
+    await runOpenShellCli({
+      context: {
+        sandboxName: "demo",
+        config: resolveOpenShellPluginConfig({
+          command: openshellCommand,
+          gateway: "alice",
+          gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
+        }),
+      },
+      args: ["sandbox", "get", "demo"],
+    });
+
+    const log = await fs.readFile(process.env.OPEN_SHELL_CLI_TEST_LOG as string, "utf8");
+    for (const line of log.trim().split("\n")) {
+      calls.push(line.split(" "));
+    }
+    expect(calls[0]).toEqual([
+      "--gateway",
+      "alice",
+      "--gateway-endpoint",
+      "http://openshell.openshell-alice.svc.cluster.local:8080",
+      "sandbox",
+      "get",
+      "demo",
+    ]);
+  });
+
+  it("adds direct gateway endpoints to generated ssh proxy configs", () => {
+    const configText = [
+      "Host openshell-demo",
+      "    User sandbox",
+      "    ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo",
+      "",
+    ].join("\n");
+
+    expect(
+      applyGatewayEndpointToSshConfig({
+        configText,
+        gatewayEndpoint: "http://openshell.openshell-alice.svc.cluster.local:8080",
+      }),
+    ).toContain(
+      "ProxyCommand /usr/local/bin/openshell ssh-proxy --gateway-name alice --name demo --server 'http://openshell.openshell-alice.svc.cluster.local:8080'",
+    );
+  });
+
+  it("leaves ssh proxy configs with an explicit endpoint unchanged", () => {
+    const configText =
+      "Host openshell-demo\n    ProxyCommand openshell ssh-proxy --gateway-name alice --name demo --server 'http://existing'\n";
+
+    expect(
+      applyGatewayEndpointToSshConfig({
+        configText,
+        gatewayEndpoint: "http://replacement",
+      }),
+    ).toBe(configText);
+  });
 });
 
 describe("openshell backend manager", () => {
   beforeAll(async () => {
-    vi.resetModules();
-    vi.doMock("./cli.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./cli.js")>();
+    vi.doMock("./cli.js", async () => {
+      const actual = await vi.importActual<typeof import("./cli.js")>("./cli.js");
       return {
         ...actual,
         runOpenShellCli: cliMocks.runOpenShellCli,
       };
     });
-    ({ createOpenShellSandboxBackendManager } = await import("./backend.js"));
+    ({ createOpenShellSandboxBackendFactory, createOpenShellSandboxBackendManager } =
+      await import("./backend.js"));
   });
 
   afterAll(() => {
     vi.doUnmock("./cli.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -185,13 +226,15 @@ describe("openshell backend manager", () => {
       actualConfigLabel: "custom-source",
       configLabelMatch: true,
     });
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "openshell",
+      from: "custom-source",
+    });
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
-      context: expect.objectContaining({
+      context: {
         sandboxName: "openclaw-session-1234",
-        config: expect.objectContaining({
-          from: "custom-source",
-        }),
-      }),
+        config: expectedConfig,
+      },
       args: ["sandbox", "get", "openclaw-session-1234"],
     });
   });
@@ -224,25 +267,96 @@ describe("openshell backend manager", () => {
       config: {},
     });
 
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "/usr/local/bin/openshell",
+      gateway: "lab",
+    });
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
-      context: expect.objectContaining({
+      context: {
         sandboxName: "openclaw-session-5678",
-        config: expect.objectContaining({
-          command: "/usr/local/bin/openshell",
-          gateway: "lab",
-        }),
-      }),
+        config: expectedConfig,
+      },
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
+  });
+
+  it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "openshell",
+      }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await expect(
+      backend.buildExecSpec({
+        command: "workflow install <name>",
+        env: {},
+        usePty: false,
+      }),
+    ).rejects.toThrow(/unresolved placeholder token <name>/);
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
   });
 });
 
 const tempDirs: string[] = [];
 
+function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"] {
+  return {
+    mode: "all",
+    backend: "openshell",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: "/tmp/openclaw-sandboxes",
+    docker: {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      binds: [],
+      env: {},
+    },
+    ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
+    browser: createSandboxBrowserConfig(),
+    tools: { allow: ["*"], deny: [] },
+    prune: createSandboxPruneConfig(),
+  };
+}
+
 async function makeTempDir(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+async function makeExecutable(params: { name: string; script: string }): Promise<string> {
+  const dir = await makeTempDir("openclaw-openshell-bin-");
+  const file = path.join(dir, params.name);
+  const logPath = path.join(dir, "openshell.log");
+  await fs.writeFile(file, params.script.replaceAll("__LOG__", logPath), { mode: 0o755 });
+  await fs.chmod(file, 0o755);
+  process.env.OPEN_SHELL_CLI_TEST_LOG = logPath;
+  return file;
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 afterEach(async () => {
@@ -269,220 +383,6 @@ function createMirrorBackendMock(): OpenShellSandboxBackend {
   } as unknown as OpenShellSandboxBackend;
 }
 
-function translateRemotePath(value: string, roots: { workspace: string; agent: string }) {
-  if (value === "/sandbox" || value.startsWith("/sandbox/")) {
-    return path.join(roots.workspace, value.slice("/sandbox".length));
-  }
-  if (value === "/agent" || value.startsWith("/agent/")) {
-    return path.join(roots.agent, value.slice("/agent".length));
-  }
-  return value;
-}
-
-async function runLocalShell(params: {
-  script: string;
-  args?: string[];
-  stdin?: Buffer | string;
-  allowFailure?: boolean;
-  roots: { workspace: string; agent: string };
-}) {
-  const translatedArgs = (params.args ?? []).map((arg) => translateRemotePath(arg, params.roots));
-  const stdinBuffer =
-    params.stdin === undefined
-      ? undefined
-      : Buffer.isBuffer(params.stdin)
-        ? params.stdin
-        : Buffer.from(params.stdin);
-  const result = await emulateRemoteShell({
-    script: params.script,
-    args: translatedArgs,
-    stdin: stdinBuffer,
-    allowFailure: params.allowFailure,
-  });
-  return {
-    ...result,
-    stdout: Buffer.from(rewriteLocalPaths(result.stdout.toString("utf8"), params.roots), "utf8"),
-  };
-}
-
-function createRemoteBackendMock(roots: {
-  workspace: string;
-  agent: string;
-}): OpenShellSandboxBackend {
-  return {
-    id: "openshell",
-    runtimeId: "openshell-test",
-    runtimeLabel: "openshell-test",
-    workdir: "/sandbox",
-    env: {},
-    mode: "remote",
-    remoteWorkspaceDir: "/sandbox",
-    remoteAgentWorkspaceDir: "/agent",
-    buildExecSpec: vi.fn(),
-    runShellCommand: vi.fn(),
-    runRemoteShellScript: vi.fn(
-      async (params) =>
-        await runLocalShell({
-          ...params,
-          roots,
-        }),
-    ),
-    syncLocalPathToRemote: vi.fn().mockResolvedValue(undefined),
-  } as unknown as OpenShellSandboxBackend;
-}
-
-function rewriteLocalPaths(value: string, roots: { workspace: string; agent: string }) {
-  return value.replaceAll(roots.workspace, "/sandbox").replaceAll(roots.agent, "/agent");
-}
-
-async function emulateRemoteShell(params: {
-  script: string;
-  args: string[];
-  stdin?: Buffer;
-  allowFailure?: boolean;
-}): Promise<{ stdout: Buffer; stderr: Buffer; code: number }> {
-  try {
-    if (params.script === 'set -eu\ncat -- "$1"') {
-      return { stdout: await fs.readFile(params.args[0] ?? ""), stderr: Buffer.alloc(0), code: 0 };
-    }
-
-    if (
-      params.script === 'if [ -e "$1" ] || [ -L "$1" ]; then printf "1\\n"; else printf "0\\n"; fi'
-    ) {
-      const target = params.args[0] ?? "";
-      const exists = await pathExistsOrSymlink(target);
-      return { stdout: Buffer.from(exists ? "1\n" : "0\n"), stderr: Buffer.alloc(0), code: 0 };
-    }
-
-    if (params.script.includes('canonical=$(readlink -f -- "$cursor")')) {
-      const canonical = await resolveCanonicalPath(params.args[0] ?? "", params.args[1] === "1");
-      return { stdout: Buffer.from(`${canonical}\n`), stderr: Buffer.alloc(0), code: 0 };
-    }
-
-    if (params.script.includes('stats=$(stat -c "%F|%h" -- "$1")')) {
-      const target = params.args[0] ?? "";
-      if (!(await pathExistsOrSymlink(target))) {
-        return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
-      }
-      const stats = await fs.lstat(target);
-      return {
-        stdout: Buffer.from(`${describeKind(stats)}|${String(stats.nlink)}\n`),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      };
-    }
-
-    if (params.script.includes('stat -c "%F|%s|%Y" -- "$1"')) {
-      const target = params.args[0] ?? "";
-      const stats = await fs.lstat(target);
-      return {
-        stdout: Buffer.from(
-          `${describeKind(stats)}|${String(stats.size)}|${String(Math.trunc(stats.mtimeMs / 1000))}\n`,
-        ),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      };
-    }
-
-    if (params.script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'")) {
-      const stdout = (await applyMutation(params.args, params.stdin)) ?? Buffer.alloc(0);
-      return { stdout, stderr: Buffer.alloc(0), code: 0 };
-    }
-
-    throw new Error(`unsupported remote shell script: ${params.script}`);
-  } catch (error) {
-    if (!params.allowFailure) {
-      throw error;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    return { stdout: Buffer.alloc(0), stderr: Buffer.from(message), code: 1 };
-  }
-}
-
-async function pathExistsOrSymlink(target: string) {
-  try {
-    await fs.lstat(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function describeKind(stats: fsSync.Stats) {
-  if (stats.isDirectory()) {
-    return "directory";
-  }
-  if (stats.isFile()) {
-    return "regular file";
-  }
-  return "other";
-}
-
-async function resolveCanonicalPath(target: string, allowFinalSymlink: boolean) {
-  let suffix = "";
-  let cursor = target;
-  if (allowFinalSymlink && (await isSymlink(target))) {
-    cursor = path.dirname(target);
-  }
-  while (!(await pathExistsOrSymlink(cursor))) {
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
-    }
-    suffix = `${path.posix.sep}${path.basename(cursor)}${suffix}`;
-    cursor = parent;
-  }
-  const canonical = await fs.realpath(cursor);
-  return `${canonical}${suffix}`;
-}
-
-async function isSymlink(target: string) {
-  try {
-    return (await fs.lstat(target)).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-async function applyMutation(args: string[], stdin?: Buffer): Promise<Buffer | void> {
-  const operation = args[0];
-  if (operation === "read") {
-    const [root, relativeParent, basename] = args.slice(1);
-    return await fs.readFile(path.join(root ?? "", relativeParent ?? "", basename ?? ""));
-  }
-  if (operation === "write") {
-    const [root, relativeParent, basename, mkdir] = args.slice(1);
-    const parent = path.join(root ?? "", relativeParent ?? "");
-    if (mkdir === "1") {
-      await fs.mkdir(parent, { recursive: true });
-    }
-    await fs.writeFile(path.join(parent, basename ?? ""), stdin ?? Buffer.alloc(0));
-    return;
-  }
-  if (operation === "mkdirp") {
-    const [root, relativePath] = args.slice(1);
-    await fs.mkdir(path.join(root ?? "", relativePath ?? ""), { recursive: true });
-    return;
-  }
-  if (operation === "remove") {
-    const [root, relativeParent, basename, recursive, force] = args.slice(1);
-    const target = path.join(root ?? "", relativeParent ?? "", basename ?? "");
-    await fs.rm(target, { recursive: recursive === "1", force: force !== "0" });
-    return;
-  }
-  if (operation === "rename") {
-    const [srcRoot, srcParent, srcBase, dstRoot, dstParent, dstBase, mkdir] = args.slice(1);
-    const source = path.join(srcRoot ?? "", srcParent ?? "", srcBase ?? "");
-    const destinationParent = path.join(dstRoot ?? "", dstParent ?? "");
-    if (mkdir === "1") {
-      await fs.mkdir(destinationParent, { recursive: true });
-    }
-    await fs.rename(source, path.join(destinationParent, dstBase ?? ""));
-    return;
-  }
-  throw new Error(`unknown mutation operation: ${operation}`);
-}
-
 describe("openshell fs bridges", () => {
   it("writes locally and syncs the file to the remote workspace", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
@@ -505,9 +405,170 @@ describe("openshell fs bridges", () => {
     });
 
     expect(await fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8")).toBe("hello");
-    expect(backend.syncLocalPathToRemote).toHaveBeenCalledWith(
+    expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledWith(
       path.join(workspaceDir, "nested", "file.txt"),
       "/sandbox/nested/file.txt",
+    );
+  });
+
+  it("rejects symlink-parent writes instead of escaping the local mount root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.symlink(outsideDir, path.join(workspaceDir, "alias"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.writeFile({
+        filePath: "alias/escape.txt",
+        data: "owned",
+        mkdir: true,
+      }),
+    ).rejects.toThrow("Sandbox path escapes allowed mounts");
+    await expectPathMissing(path.join(outsideDir, "escape.txt"));
+    await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
+    expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+  });
+
+  it("rejects writes whose final target is a symlink inside the local mount root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const linkedTarget = path.join(workspaceDir, "existing.txt");
+    await fs.writeFile(linkedTarget, "keep", "utf8");
+    await fs.symlink("existing.txt", path.join(workspaceDir, "link.txt"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.writeFile({
+        filePath: "link.txt",
+        data: "owned",
+        mkdir: true,
+      }),
+    ).rejects.toThrow("Sandbox boundary checks failed");
+    await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("existing.txt");
+    await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe("keep");
+    expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+  });
+
+  it("rejects a parent symlink that lands outside the sandbox root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
+    await fs.symlink(outsideDir, path.join(workspaceDir, "subdir"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+      "Sandbox boundary checks failed",
+    );
+  });
+
+  it("reads regular files through the shared safe fs root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "subdir", "secret.txt"), "inside", "utf8");
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
+      Buffer.from("inside"),
+    );
+  });
+
+  it("rejects reads of a symlinked leaf", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
+    await fs.symlink(
+      path.join(outsideDir, "secret.txt"),
+      path.join(workspaceDir, "subdir", "secret.txt"),
+    );
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+      "Sandbox boundary checks failed",
+    );
+  });
+
+  it("rejects hardlinked files inside the sandbox root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
+    await fs.link(
+      path.join(outsideDir, "secret.txt"),
+      path.join(workspaceDir, "subdir", "secret.txt"),
+    );
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+      "Sandbox boundary checks failed",
     );
   });
 
@@ -531,67 +592,5 @@ describe("openshell fs bridges", () => {
     const resolved = bridge.resolvePath({ filePath: "/agent/note.txt" });
     expect(resolved.hostPath).toBe(path.join(agentWorkspaceDir, "note.txt"));
     expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
-  });
-
-  it("writes, reads, renames, and removes files without local host paths", async () => {
-    const workspaceDir = await makeTempDir("openclaw-openshell-remote-local-");
-    const remoteWorkspaceDir = await makeTempDir("openclaw-openshell-remote-workspace-");
-    const remoteAgentDir = await makeTempDir("openclaw-openshell-remote-agent-");
-    const remoteWorkspaceRealDir = await fs.realpath(remoteWorkspaceDir);
-    const remoteAgentRealDir = await fs.realpath(remoteAgentDir);
-    const backend = createRemoteBackendMock({
-      workspace: remoteWorkspaceRealDir,
-      agent: remoteAgentRealDir,
-    });
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        backendId: "openshell",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        containerWorkdir: "/sandbox",
-      },
-    });
-
-    const { createOpenShellRemoteFsBridge } = await import("./remote-fs-bridge.js");
-    const bridge = createOpenShellRemoteFsBridge({ sandbox, backend });
-    await bridge.writeFile({
-      filePath: "nested/file.txt",
-      data: "hello",
-      mkdir: true,
-    });
-
-    expect(await fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "file.txt"), "utf8")).toBe(
-      "hello",
-    );
-    expect(await fs.readdir(workspaceDir)).toEqual([]);
-
-    const resolved = bridge.resolvePath({ filePath: "nested/file.txt" });
-    expect(resolved.hostPath).toBeUndefined();
-    expect(resolved.containerPath).toBe("/sandbox/nested/file.txt");
-    expect(await bridge.readFile({ filePath: "nested/file.txt" })).toEqual(Buffer.from("hello"));
-    expect(await bridge.stat({ filePath: "nested/file.txt" })).toEqual(
-      expect.objectContaining({
-        type: "file",
-        size: 5,
-      }),
-    );
-
-    await bridge.rename({
-      from: "nested/file.txt",
-      to: "nested/renamed.txt",
-    });
-    await expect(
-      fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "file.txt"), "utf8"),
-    ).rejects.toBeDefined();
-    expect(
-      await fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "renamed.txt"), "utf8"),
-    ).toBe("hello");
-
-    await bridge.remove({
-      filePath: "nested/renamed.txt",
-    });
-    await expect(
-      fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "renamed.txt"), "utf8"),
-    ).rejects.toBeDefined();
   });
 });

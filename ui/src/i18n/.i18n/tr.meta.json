@@ -1,0 +1,32 @@
+{
+  "fallbackKeys": [
+    "workboard.detailAddNote",
+    "workboard.detailAutomation",
+    "workboard.detailAutomationBoard",
+    "workboard.detailAutomationSkills",
+    "workboard.detailAutomationSummary",
+    "workboard.detailAutomationTenant",
+    "workboard.detailAutomationWorkspace",
+    "workboard.detailDiagnostics",
+    "workboard.detailNoNotes",
+    "workboard.detailNotePlaceholder",
+    "workboard.detailOperatorNotes",
+    "workboard.detailProof",
+    "workboard.detailRun",
+    "workboard.detailTask",
+    "workboard.detailTitle",
+    "workboard.detailUpdated",
+    "workboard.detailUpdatedValue",
+    "workboard.detailWorkerLogs",
+    "workboard.detailWorkerProtocol",
+    "workboard.viewDetails"
+  ],
+  "generatedAt": "2026-06-01T02:32:31.272Z",
+  "locale": "tr",
+  "model": "claude-opus-4-8",
+  "provider": "anthropic",
+  "sourceHash": "59589c3b29f7126995ed4763e88b763702a7c20b1791b4e16c62b394bca02d45",
+  "totalKeys": 1304,
+  "translatedKeys": 1284,
+  "workflow": 1
+}

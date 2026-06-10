@@ -8,18 +8,17 @@ import type {
   TimedFileInfo,
   VideoFileInfo,
 } from "../sdk.js";
-import { applyMatrixFormatting } from "./formatting.js";
-import {
-  type MatrixMediaContent,
-  type MatrixMediaInfo,
-  type MatrixMediaMsgType,
-  type MatrixRelation,
-  type MediaKind,
+import type {
+  MatrixMediaContent,
+  MatrixMediaInfo,
+  MatrixMediaMsgType,
+  MatrixRelation,
+  MediaKind,
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
 
-export function buildMatrixMediaInfo(params: {
+function buildMatrixMediaInfo(params: {
   size: number;
   mimetype?: string;
   durationMs?: number;
@@ -103,7 +102,6 @@ export function buildMediaContent(params: {
   if (params.relation) {
     base["m.relates_to"] = params.relation;
   }
-  applyMatrixFormatting(base, params.body);
   return base;
 }
 

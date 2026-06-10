@@ -1,25 +1,37 @@
 import { hashTextSha256 } from "./hash.js";
 import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
+export const SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH = "explicit-config-env-v1";
+
 type SandboxHashInput = {
   docker: SandboxDockerConfig;
+  dockerEnvPolicyEpoch?: string;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  readOnlyWorkspaceSkillMounts?: readonly string[];
 };
 
 type SandboxBrowserHashInput = {
   docker: SandboxDockerConfig;
+  dockerEnvPolicyEpoch?: string;
   browser: Pick<
     SandboxBrowserConfig,
-    "cdpPort" | "cdpSourceRange" | "vncPort" | "noVncPort" | "headless" | "enableNoVnc"
+    | "cdpPort"
+    | "cdpSourceRange"
+    | "vncPort"
+    | "noVncPort"
+    | "headless"
+    | "enableNoVnc"
+    | "autoStartTimeoutMs"
   >;
   securityEpoch: string;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  readOnlyWorkspaceSkillMounts?: readonly string[];
 };
 
 function normalizeForHash(value: unknown): unknown {

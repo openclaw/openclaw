@@ -1,36 +1,52 @@
 ---
-summary: "Compatibility note for the mistakenly documented `openclaw flows` command"
+summary: "Redirect: flow commands live under `openclaw tasks flow`"
 read_when:
-  - You encounter openclaw flows in older release notes, issue threads, or search results
-  - You want to know what command replaced openclaw flows
-title: "flows"
+  - You encounter `openclaw flows` in older docs or release notes
+  - You want a quick TaskFlow inspection reference
+title: "Flows (redirect)"
 ---
 
-# `openclaw flows`
+# `openclaw tasks flow`
 
-`openclaw flows` is **not** a current OpenClaw CLI command.
+There is no top-level `openclaw flows` command. Durable TaskFlow inspection lives under `openclaw tasks flow`.
 
-Some older release notes and docs mistakenly documented a `flows` command surface. The supported operator surface is [`openclaw tasks`](/automation/tasks).
+## Subcommands
 
 ```bash
-openclaw tasks list
-openclaw tasks show <lookup>
-openclaw tasks cancel <lookup>
+openclaw tasks flow list   [--json] [--status <name>]
+openclaw tasks flow show   <lookup> [--json]
+openclaw tasks flow cancel <lookup>
 ```
 
-## Use instead
+| Subcommand | Description                | Arguments / options                                                                   |
+| ---------- | -------------------------- | ------------------------------------------------------------------------------------- |
+| `list`     | List tracked TaskFlows.    | `--json` machine-readable output; `--status <name>` filter (see status values below). |
+| `show`     | Show one TaskFlow.         | `<lookup>` flow id or owner key; `--json` machine-readable output.                    |
+| `cancel`   | Cancel a running TaskFlow. | `<lookup>` flow id or owner key.                                                      |
 
-- `openclaw tasks list` — list tracked background tasks
-- `openclaw tasks show <lookup>` — inspect one task by task id, run id, or session key
-- `openclaw tasks cancel <lookup>` — cancel a running background task
-- `openclaw tasks notify <lookup> <policy>` — change task notification behavior
-- `openclaw tasks audit` — surface stale or broken task runs
+`<lookup>` accepts either a flow id (returned by `list` / `show`) or the flow's owner key (the stable identifier the owning subsystem uses to track the flow).
 
-## Why this page exists
+### Status filter values
 
-This page stays in place so existing links from older changelog entries, issue threads, and search results have a clear correction instead of a dead end.
+`--status` on `list` accepts one of:
+
+`queued`, `running`, `waiting`, `blocked`, `succeeded`, `failed`, `cancelled`, `lost`
+
+## Examples
+
+```bash
+openclaw tasks flow list
+openclaw tasks flow list --status running
+openclaw tasks flow list --json
+openclaw tasks flow show flow_abc123
+openclaw tasks flow show flow_abc123 --json
+openclaw tasks flow cancel flow_abc123
+```
+
+For full TaskFlow concepts and authoring see [TaskFlow](/automation/taskflow). For the parent `tasks` command see [tasks CLI reference](/cli/tasks).
 
 ## Related
 
-- [Background Tasks](/automation/tasks) — detached work ledger
-- [CLI reference](/cli/index) — full command tree
+- [CLI reference](/cli)
+- [Automation](/automation)
+- [TaskFlow](/automation/taskflow)

@@ -1,16 +1,14 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { build } from "tsdown";
+import {
+  buildPluginSdkEntrySources,
+  pluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
+} from "./lib/plugin-sdk-entries.mjs";
 
 const RUNTIME_SHIMS: Partial<Record<string, string>> = {
-  "secret-input-runtime": [
-    "export {",
-    "  hasConfiguredSecretInput,",
-    "  normalizeResolvedSecretInputString,",
-    "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
-    "",
-  ].join("\n"),
   "webhook-path": [
     "/** Normalize webhook paths into the canonical registry form used by route lookup. */",
     "export function normalizeWebhookPath(raw) {",
@@ -45,54 +43,90 @@ const RUNTIME_SHIMS: Partial<Record<string, string>> = {
   ].join("\n"),
 };
 
-const TYPE_SHIMS: Partial<Record<string, string>> = {
-  "secret-input-runtime": [
-    "export {",
-    "  hasConfiguredSecretInput,",
-    "  normalizeResolvedSecretInputString,",
-    "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
-    "",
-  ].join("\n"),
-};
-
-const GENERATED_FACADE_TYPE_MAP_SOURCE = path.join(
-  process.cwd(),
-  "dist/plugin-sdk/src/generated/plugin-sdk-facade-type-map.generated.d.ts",
-);
-const GENERATED_FACADE_TYPE_MAP_DIST_PREFIX = "../../../extensions/";
-
-function rewriteFacadeTypeMapSpecifier(specifier: string): string {
-  if (!specifier.startsWith("@openclaw/")) {
-    return specifier;
+function isBareImportSpecifier(id: string): boolean {
+  if (
+    id === "@openclaw/llm-core" ||
+    id.startsWith("@openclaw/llm-core/") ||
+    id === "@openclaw/model-catalog-core/model-catalog-types" ||
+    id.startsWith("@openclaw/normalization-core/") ||
+    id.startsWith("@openclaw/media-core/") ||
+    id.startsWith("@openclaw/acp-core/")
+  ) {
+    return false;
   }
-  return `${GENERATED_FACADE_TYPE_MAP_DIST_PREFIX}${specifier.slice("@openclaw/".length)}`;
+  return !id.startsWith(".") && !id.startsWith("/") && !/^[A-Za-z]:[\\/]/u.test(id);
 }
 
-function rewriteGeneratedFacadeTypeMapDts(): void {
-  if (!fs.existsSync(GENERATED_FACADE_TYPE_MAP_SOURCE)) {
+function removeExistingFlatDeclarations(outDir: string): void {
+  if (!fs.existsSync(outDir)) {
     return;
   }
-  const source = fs.readFileSync(GENERATED_FACADE_TYPE_MAP_SOURCE, "utf8");
-  const rewritten = source.replace(/@openclaw\/([a-z0-9-]+\/[^")\s]+)/g, (_match, suffix: string) =>
-    rewriteFacadeTypeMapSpecifier(`@openclaw/${suffix}`),
-  );
-  if (rewritten !== source) {
-    fs.writeFileSync(GENERATED_FACADE_TYPE_MAP_SOURCE, rewritten, "utf8");
+  for (const entry of fs.readdirSync(outDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+    fs.rmSync(path.join(outDir, entry.name), { force: true });
   }
 }
 
-// `tsc` emits declarations under `dist/plugin-sdk/src/plugin-sdk/*` because the source lives
-// at `src/plugin-sdk/*` and `rootDir` is `.` (repo root, to support cross-src/extensions refs).
-//
-// Our package export map points subpath `types` at `dist/plugin-sdk/<entry>.d.ts`, so we
-// generate stable entry d.ts files that re-export the real declarations.
+function copyFlatDeclarations(fromDir: string, toDir: string): void {
+  fs.mkdirSync(toDir, { recursive: true });
+  for (const entry of fs.readdirSync(fromDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+    fs.copyFileSync(path.join(fromDir, entry.name), path.join(toDir, entry.name));
+  }
+}
+
+const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
+const flatDeclarationTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
+const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
+  ? pluginSdkEntrypoints
+  : publicPluginSdkEntrypoints;
+const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
+
+try {
+  await build({
+    clean: true,
+    config: false,
+    deps: { neverBundle: (id) => isBareImportSpecifier(id) },
+    dts: true,
+    entry: buildPluginSdkEntrySources(flatDeclarationEntrypoints),
+    failOnWarn: false,
+    fixedExtension: false,
+    format: "esm",
+    logLevel: "error",
+    outDir: flatDeclarationTempDir,
+    outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
+    platform: "node",
+    report: false,
+    tsconfig: "tsconfig.plugin-sdk.dts.json",
+  });
+
+  removeExistingFlatDeclarations(distPluginSdkDir);
+  copyFlatDeclarations(flatDeclarationTempDir, distPluginSdkDir);
+} finally {
+  fs.rmSync(flatDeclarationTempDir, { recursive: true, force: true });
+}
+
+// The root npm package ships flat bundled declarations under `dist/plugin-sdk`.
+// The private workspace package keeps source-shaped declaration paths for local
+// package-boundary projects, so bridge them back to the packaged flat entries.
 for (const entry of pluginSdkEntrypoints) {
-  const typeOut = path.join(process.cwd(), `dist/plugin-sdk/${entry}.d.ts`);
-  fs.mkdirSync(path.dirname(typeOut), { recursive: true });
+  if (!flatDeclarationEntrypointSet.has(entry)) {
+    continue;
+  }
+
+  const packageTypeOut = path.join(
+    process.cwd(),
+    `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
+  );
+  fs.mkdirSync(path.dirname(packageTypeOut), { recursive: true });
   fs.writeFileSync(
-    typeOut,
-    TYPE_SHIMS[entry] ?? `export * from "./src/plugin-sdk/${entry}.js";\n`,
+    packageTypeOut,
+    `export * from "../../../../../dist/plugin-sdk/${entry}.js";\n`,
     "utf8",
   );
 
@@ -105,4 +139,6 @@ for (const entry of pluginSdkEntrypoints) {
   fs.writeFileSync(runtimeOut, runtimeShim, "utf8");
 }
 
-rewriteGeneratedFacadeTypeMapDts();
+const stampPath = path.join(process.cwd(), "dist/plugin-sdk/.boundary-entry-shims.stamp");
+fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+fs.writeFileSync(stampPath, `${new Date().toISOString()}\n`, "utf8");

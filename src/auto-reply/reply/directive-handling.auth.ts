@@ -1,9 +1,12 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
+  isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
   resolveAuthStorePathForDisplay,
 } from "../../agents/auth-profiles.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileOrder,
@@ -11,8 +14,9 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
 
@@ -39,14 +43,19 @@ function formatExpirationLabel(
   formatUntil: (timestampMs: number) => string,
   compactExpiredPrefix = " expired",
 ) {
-  if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0) {
+  const timestampMs = asDateTimestampMs(expires);
+  if (timestampMs === undefined || timestampMs <= 0) {
     return "";
   }
-  return expires <= now ? compactExpiredPrefix : ` exp ${formatUntil(expires)}`;
+  return timestampMs <= now ? compactExpiredPrefix : ` exp ${formatUntil(timestampMs)}`;
 }
 
 function formatFlagsSuffix(flags: string[]) {
   return flags.length > 0 ? ` (${flags.join(", ")})` : "";
+}
+
+function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential["type"] {
+  return value === "api_key" || value === "oauth" || value === "token";
 }
 
 export const resolveAuthLabel = async (
@@ -55,12 +64,29 @@ export const resolveAuthLabel = async (
   modelsPath: string,
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
+  workspaceDir?: string,
+  options?: { acceptedProfileTypes?: readonly AuthProfileCredential["type"][] },
 ): Promise<{ label: string; source: string }> => {
   const formatPath = (value: string) => shortenHomePath(value);
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  const order = resolveAuthProfileOrder({ cfg, store, provider });
+  const rawOrder = resolveAuthProfileOrder({ cfg, store, provider });
+  const acceptedProfileTypes = options?.acceptedProfileTypes
+    ? new Set(options.acceptedProfileTypes)
+    : undefined;
+  const order = acceptedProfileTypes
+    ? rawOrder.filter((profileId) => {
+        const profile = store.profiles[profileId];
+        if (profile) {
+          return acceptedProfileTypes.has(profile.type);
+        }
+        const configuredMode = cfg.auth?.profiles?.[profileId]?.mode;
+        return isStoredAuthProfileType(configuredMode)
+          ? acceptedProfileTypes.has(configuredMode)
+          : true;
+      })
+    : rawOrder;
   const providerKey = normalizeProviderId(provider);
   const lastGood = findNormalizedProviderValue(store.lastGood, providerKey);
   const nextProfileId = order[0];
@@ -76,6 +102,13 @@ export const resolveAuthLabel = async (
       }
       const profile = store.profiles[profileId];
       const configProfile = cfg.auth?.profiles?.[profileId];
+      const configOnlyAwsSdk = !profile
+        ? isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId })
+        : false;
+      const more = order.length > 1 ? ` (+${order.length - 1})` : "";
+      if (configOnlyAwsSdk) {
+        return { label: `${profileId} aws-sdk${more}`, source: "" };
+      }
       const missing =
         !profile ||
         (configProfile?.provider && configProfile.provider !== profile.provider) ||
@@ -83,7 +116,6 @@ export const resolveAuthLabel = async (
           configProfile.mode !== profile.type &&
           !(configProfile.mode === "oauth" && profile.type === "token"));
 
-      const more = order.length > 1 ? ` (+${order.length - 1})` : "";
       if (missing) {
         return { label: `${profileId} missing${more}`, source: "" };
       }
@@ -134,6 +166,10 @@ export const resolveAuthLabel = async (
         } else {
           flags.push("cooldown");
         }
+      }
+      if (!profile && isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId })) {
+        const suffix = formatFlagsSuffix(flags);
+        return `${profileId}=aws-sdk${suffix}`;
       }
       if (
         !profile ||
@@ -192,11 +228,11 @@ export const resolveAuthLabel = async (
     };
   }
 
-  const envKey = resolveEnvApiKey(provider);
+  const envKey = resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
   if (envKey) {
     const isOAuthEnv =
       envKey.source.includes("ANTHROPIC_OAUTH_TOKEN") ||
-      envKey.source.toLowerCase().includes("oauth");
+      normalizeLowercaseStringOrEmpty(envKey.source).includes("oauth");
     const label = isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey);
     return { label, source: mode === "verbose" ? envKey.source : "" };
   }
@@ -216,5 +252,3 @@ export const formatAuthLabel = (auth: { label: string; source: string }) => {
   }
   return `${auth.label} (${auth.source})`;
 };
-
-export { resolveProfileOverride } from "./directive-handling.auth-profile.js";

@@ -1,9 +1,13 @@
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   findNormalizedProviderValue,
   type ModelRef,
   normalizeProviderId,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export type ModelPickerCatalogEntry = {
   provider: string;
@@ -16,7 +20,7 @@ export type ModelPickerItem = ModelRef;
 const MODEL_PICK_PROVIDER_PREFERENCE = [
   "anthropic",
   "openai",
-  "openai-codex",
+  "openai",
   "minimax",
   "synthetic",
   "google",
@@ -57,7 +61,7 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
 
   for (const entry of catalog) {
     const provider = normalizeProviderId(entry.provider);
-    const model = entry.id?.trim();
+    const model = normalizeOptionalString(entry.id);
     if (!provider || !model) {
       continue;
     }
@@ -77,7 +81,9 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
     if (providerOrder !== 0) {
       return providerOrder;
     }
-    return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
+    return normalizeLowercaseStringOrEmpty(a.model).localeCompare(
+      normalizeLowercaseStringOrEmpty(b.model),
+    );
   });
 
   return out;
@@ -93,8 +99,8 @@ export function resolveProviderEndpointLabel(
     { baseUrl?: string; api?: string } | undefined
   >;
   const entry = findNormalizedProviderValue(providers, normalized);
-  const endpoint = entry?.baseUrl?.trim();
-  const api = entry?.api?.trim();
+  const endpoint = normalizeOptionalString(entry?.baseUrl);
+  const api = normalizeOptionalString(entry?.api);
   return {
     endpoint: endpoint || undefined,
     api: api || undefined,

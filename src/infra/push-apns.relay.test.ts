@@ -1,15 +1,20 @@
 import { generateKeyPairSync } from "node:crypto";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deriveDeviceIdFromPublicKey,
   publicKeyRawBase64UrlFromPem,
   verifyDeviceSignature,
 } from "./device-identity.js";
-import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
+import {
+  DEFAULT_APNS_RELAY_BASE_URL,
+  resolveApnsRelayConfigFromEnv,
+  sendApnsRelayPush,
+} from "./push-apns.relay.js";
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
   const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
   if (!deviceId) {
@@ -18,7 +23,7 @@ const relayGatewayIdentity = (() => {
   return {
     deviceId,
     publicKey: publicKeyRaw,
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
   };
 })();
 
@@ -42,14 +47,56 @@ function createRelayPushParams() {
   };
 }
 
+function expectRelayConfig(
+  resolved: ReturnType<typeof resolveApnsRelayConfigFromEnv>,
+  expected: { baseUrl: string; timeoutMs: number },
+) {
+  expect(resolved.ok).toBe(true);
+  if (!resolved.ok) {
+    throw new Error("expected APNs relay config to resolve");
+  }
+  expect(resolved.value.baseUrl).toBe(expected.baseUrl);
+  expect(resolved.value.timeoutMs).toBe(expected.timeoutMs);
+}
+
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
-    it("returns a missing-config error when no relay base URL is configured", () => {
-      expect(resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv)).toEqual({
-        ok: false,
-        error:
-          "APNs relay config missing: set gateway.push.apns.relay.baseUrl or OPENCLAW_APNS_RELAY_BASE_URL",
-      });
+    it("defaults to the hosted relay when the registration was minted by the hosted relay", () => {
+      expectRelayConfig(
+        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
+          registrationRelayOrigin: `${DEFAULT_APNS_RELAY_BASE_URL}/`,
+        }),
+        {
+          baseUrl: DEFAULT_APNS_RELAY_BASE_URL,
+          timeoutMs: 10_000,
+        },
+      );
+    });
+
+    it("fails closed when relay registration origin is unknown and no relay URL is configured", () => {
+      const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv);
+
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        expect(resolved.error).toContain("relay registrations without the hosted relay origin");
+      }
+    });
+
+    it("rejects config that does not match the registration relay origin", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {} as NodeJS.ProcessEnv,
+        { push: { apns: { relay: { baseUrl: DEFAULT_APNS_RELAY_BASE_URL } } } },
+        { registrationRelayOrigin: "https://relay.example.com" },
+      );
+
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        expect(resolved.error).toContain("origin mismatch");
+      }
     });
 
     it("lets env overrides win and clamps tiny timeout values", () => {
@@ -70,12 +117,21 @@ describe("push-apns.relay", () => {
         },
       );
 
-      expect(resolved).toMatchObject({
-        ok: true,
-        value: {
-          baseUrl: "https://relay-override.example.com/base",
-          timeoutMs: 1000,
-        },
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay-override.example.com/base",
+        timeoutMs: 1000,
+      });
+    });
+
+    it("caps oversized timeout values before they reach AbortSignal.timeout", () => {
+      const resolved = resolveApnsRelayConfigFromEnv({
+        OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+        OPENCLAW_APNS_RELAY_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
+      } as NodeJS.ProcessEnv);
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
       });
     });
 
@@ -86,12 +142,9 @@ describe("push-apns.relay", () => {
         OPENCLAW_APNS_RELAY_TIMEOUT_MS: "nope",
       } as NodeJS.ProcessEnv);
 
-      expect(resolved).toMatchObject({
-        ok: true,
-        value: {
-          baseUrl: "http://[::1]:8787",
-          timeoutMs: 10_000,
-        },
+      expectRelayConfig(resolved, {
+        baseUrl: "http://[::1]:8787",
+        timeoutMs: 10_000,
       });
     });
 
@@ -154,20 +207,29 @@ describe("push-apns.relay", () => {
       });
 
       expect(sender).toHaveBeenCalledTimes(1);
-      const sent = sender.mock.calls[0]?.[0];
-      expect(sent).toMatchObject({
-        relayConfig: {
-          baseUrl: "https://relay.example.com",
-          timeoutMs: 1000,
-        },
-        sendGrant: "send-grant-123",
-        relayHandle: "relay-handle-123",
-        gatewayDeviceId: relayGatewayIdentity.deviceId,
-        signedAtMs: 123_456_789,
-        pushType: "alert",
-        priority: "10",
-        payload: { aps: { alert: { title: "Wake", body: "Ping" } } },
-      });
+      const sent = firstMockCall(sender)?.[0] as
+        | {
+            relayConfig?: { baseUrl?: string; timeoutMs?: number };
+            sendGrant?: string;
+            relayHandle?: string;
+            gatewayDeviceId?: string;
+            signedAtMs?: number;
+            pushType?: string;
+            priority?: string;
+            payload?: unknown;
+            bodyJson?: string;
+            signature?: string;
+          }
+        | undefined;
+      expect(sent?.relayConfig?.baseUrl).toBe("https://relay.example.com");
+      expect(sent?.relayConfig?.timeoutMs).toBe(1000);
+      expect(sent?.sendGrant).toBe("send-grant-123");
+      expect(sent?.relayHandle).toBe("relay-handle-123");
+      expect(sent?.gatewayDeviceId).toBe(relayGatewayIdentity.deviceId);
+      expect(sent?.signedAtMs).toBe(123_456_789);
+      expect(sent?.pushType).toBe("alert");
+      expect(sent?.priority).toBe("10");
+      expect(sent?.payload).toEqual({ aps: { alert: { title: "Wake", body: "Ping" } } });
       expect(sent?.bodyJson).toBe(
         JSON.stringify({
           relayHandle: "relay-handle-123",
@@ -188,13 +250,11 @@ describe("push-apns.relay", () => {
           sent?.signature ?? "",
         ),
       ).toBe(true);
-      expect(result).toMatchObject({
-        ok: true,
-        status: 200,
-        apnsId: "relay-apns-id",
-        environment: "production",
-        tokenSuffix: "abcd1234",
-      });
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe(200);
+      expect(result.apnsId).toBe("relay-apns-id");
+      expect(result.environment).toBe("production");
+      expect(result.tokenSuffix).toBe("abcd1234");
     });
 
     it("does not follow relay redirects", async () => {
@@ -208,13 +268,12 @@ describe("push-apns.relay", () => {
       const result = await sendApnsRelayPush(createRelayPushParams());
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
-      expect(result).toMatchObject({
-        ok: false,
-        status: 302,
-        reason: "RelayRedirectNotAllowed",
-        environment: "production",
-      });
+      const fetchOptions = firstMockCall(fetchMock)?.[1] as { redirect?: unknown } | undefined;
+      expect(fetchOptions?.redirect).toBe("manual");
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(302);
+      expect(result.reason).toBe("RelayRedirectNotAllowed");
+      expect(result.environment).toBe("production");
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {

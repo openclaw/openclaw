@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 type PreambleResult = {
   command: string;
   chdirPath?: string;
@@ -28,9 +30,7 @@ export function splitShellWords(input: string | undefined, maxWords = 48): strin
   let quote: '"' | "'" | undefined;
   let escaped = false;
 
-  for (let i = 0; i < input.length; i += 1) {
-    const char = input[i];
-
+  for (const char of input) {
     if (escaped) {
       current += char;
       escaped = false;
@@ -82,7 +82,7 @@ export function binaryName(token: string | undefined): string | undefined {
   }
   const cleaned = stripOuterQuotes(token) ?? token;
   const segment = cleaned.split(/[/]/).at(-1) ?? cleaned;
-  return segment.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(segment);
 }
 
 export function optionValue(words: string[], names: string[]): string | undefined {
@@ -224,7 +224,7 @@ export function unwrapShellWrapper(command: string): string {
   return inner ? (stripOuterQuotes(inner) ?? command) : command;
 }
 
-export function scanTopLevelChars(
+function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
 ): void {
@@ -336,6 +336,7 @@ export function stripShellPreamble(command: string): PreambleResult {
         first = { index: idx, length: 1 };
         return false;
       }
+      return undefined;
     });
     const head = (first ? rest.slice(0, first.index) : rest).trim();
     const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);

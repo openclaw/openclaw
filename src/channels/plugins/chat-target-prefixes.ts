@@ -1,3 +1,10 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parseStrictInteger } from "../../infra/parse-finite-number.js";
+
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
 export type ChatTargetPrefixesParams = {
@@ -21,18 +28,20 @@ export type ChatSenderAllowParams = {
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
+  allowConversationTargets?: boolean | null;
 };
 
-function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
+export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
+  allowConversationTargets?: boolean | null;
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
-  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
+  const allowFrom = normalizeStringEntries(params.allowFrom);
   if (allowFrom.length === 0) {
     return false;
   }
@@ -41,9 +50,12 @@ function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params
   }
 
   const senderNormalized = params.normalizeSender(params.sender);
-  const chatId = params.chatId ?? undefined;
-  const chatGuid = params.chatGuid?.trim();
-  const chatIdentifier = params.chatIdentifier?.trim();
+  const allowConversationTargets = params.allowConversationTargets === true;
+  const chatId = allowConversationTargets ? (params.chatId ?? undefined) : undefined;
+  const chatGuid = allowConversationTargets ? normalizeOptionalString(params.chatGuid) : undefined;
+  const chatIdentifier = allowConversationTargets
+    ? normalizeOptionalString(params.chatIdentifier)
+    : undefined;
 
   for (const entry of allowFrom) {
     if (!entry) {
@@ -94,7 +106,7 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
     if (!remainder) {
       throw new Error(`${prefix} target is required`);
     }
-    const remainderLower = remainder.toLowerCase();
+    const remainderLower = normalizeLowercaseStringOrEmpty(remainder);
     if (params.isChatTarget(remainderLower)) {
       return params.parseTarget(remainder);
     }
@@ -134,8 +146,8 @@ export function parseChatTargetPrefixesOrThrow(
   for (const prefix of params.chatIdPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (!Number.isFinite(chatId)) {
+      const chatId = parseStrictInteger(value);
+      if (chatId === undefined) {
         throw new Error(`Invalid chat_id: ${value}`);
       }
       return { kind: "chat_id", chatId };
@@ -218,9 +230,10 @@ export function resolveServicePrefixedOrChatAllowTarget<
   return null;
 }
 
-export function createAllowedChatSenderMatcher<TParsed extends ParsedChatAllowTarget>(params: {
+export function createAllowedChatSenderMatcher(params: {
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
+  allowConversationTargets?: boolean;
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
@@ -229,6 +242,8 @@ export function createAllowedChatSenderMatcher<TParsed extends ParsedChatAllowTa
       chatId: input.chatId,
       chatGuid: input.chatGuid,
       chatIdentifier: input.chatIdentifier,
+      allowConversationTargets:
+        input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,
       parseAllowTarget: params.parseAllowTarget,
     });
@@ -240,8 +255,8 @@ export function parseChatAllowTargetPrefixes(
   for (const prefix of params.chatIdPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (Number.isFinite(chatId)) {
+      const chatId = parseStrictInteger(value);
+      if (chatId !== undefined) {
         return { kind: "chat_id", chatId };
       }
     }

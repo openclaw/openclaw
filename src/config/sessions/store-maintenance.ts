@@ -1,19 +1,29 @@
-import fs from "node:fs";
-import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadConfig } from "../config.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
-const DEFAULT_SESSION_ROTATE_BYTES = 10_485_760; // 10 MB
-const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "warn";
+const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
+const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
+const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
+const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
 
 export type SessionMaintenanceWarning = {
   activeSessionKey: string;
@@ -29,7 +39,6 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  rotateBytes: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -37,25 +46,14 @@ export type ResolvedSessionMaintenanceConfig = {
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
   const raw = maintenance?.pruneAfter ?? maintenance?.pruneDays;
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
   }
   try {
-    return parseDurationMs(String(raw).trim(), { defaultUnit: "d" });
+    return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
-  }
-}
-
-function resolveRotateBytes(maintenance?: SessionMaintenanceConfig): number {
-  const raw = maintenance?.rotateBytes;
-  if (raw === undefined || raw === null || raw === "") {
-    return DEFAULT_SESSION_ROTATE_BYTES;
-  }
-  try {
-    return parseByteSize(String(raw).trim(), { defaultUnit: "b" });
-  } catch {
-    return DEFAULT_SESSION_ROTATE_BYTES;
   }
 }
 
@@ -67,11 +65,12 @@ function resolveResetArchiveRetentionMs(
   if (raw === false) {
     return null;
   }
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return pruneAfterMs;
   }
   try {
-    return parseDurationMs(String(raw).trim(), { defaultUnit: "d" });
+    return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return pruneAfterMs;
   }
@@ -79,11 +78,12 @@ function resolveResetArchiveRetentionMs(
 
 function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
   const raw = maintenance?.maxDiskBytes;
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return null;
   }
   try {
-    return parseByteSize(String(raw).trim(), { defaultUnit: "b" });
+    return parseByteSize(normalized, { defaultUnit: "b" });
   } catch {
     return null;
   }
@@ -112,11 +112,12 @@ function resolveHighWaterBytes(
     return null;
   }
   const raw = maintenance?.highWaterBytes;
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return computeDefault();
   }
   try {
-    const parsed = parseByteSize(String(raw).trim(), { defaultUnit: "b" });
+    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
     return Math.min(parsed, maxDiskBytes);
   } catch {
     return computeDefault();
@@ -127,24 +128,44 @@ function resolveHighWaterBytes(
  * Resolve maintenance settings from openclaw.json (`session.maintenance`).
  * Falls back to built-in defaults when config is missing or unset.
  */
-export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
-  let maintenance: SessionMaintenanceConfig | undefined;
-  try {
-    maintenance = loadConfig().session?.maintenance;
-  } catch {
-    // Config may not be available (e.g. in tests). Use defaults.
-  }
+export function resolveMaintenanceConfigFromInput(
+  maintenance?: SessionMaintenanceConfig,
+): ResolvedSessionMaintenanceConfig {
   const pruneAfterMs = resolvePruneAfterMs(maintenance);
   const maxDiskBytes = resolveMaxDiskBytes(maintenance);
   return {
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
-    rotateBytes: resolveRotateBytes(maintenance),
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
+}
+
+export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) {
+    return 1;
+  }
+  if (maxEntries <= STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES) {
+    return maxEntries + 1;
+  }
+  const slack = Math.max(
+    MIN_BATCHED_ENTRY_MAINTENANCE_SLACK,
+    Math.ceil(maxEntries * BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO),
+  );
+  return maxEntries + slack;
+}
+
+export function shouldRunSessionEntryMaintenance(params: {
+  entryCount: number;
+  maxEntries: number;
+  force?: boolean;
+}): boolean {
+  if (params.force) {
+    return true;
+  }
+  return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
 /**
@@ -155,12 +176,19 @@ export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
 export function pruneStaleEntries(
   store: Record<string, SessionEntry>,
   overrideMaxAgeMs?: number,
-  opts: { log?: boolean; onPruned?: (params: { key: string; entry: SessionEntry }) => void } = {},
+  opts: {
+    log?: boolean;
+    onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
+  } = {},
 ): number {
-  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfig().pruneAfterMs;
+  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys })) {
+      continue;
+    }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
       opts.onPruned?.({ key, entry });
       delete store[key];
@@ -173,8 +201,123 @@ export function pruneStaleEntries(
   return pruned;
 }
 
+export const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
+
+export interface QuotaSuspensionMaintenanceResult {
+  /** Suspensions whose state was advanced from "suspended" to "resuming" so the next attempt injects a handoff. */
+  resumed: Array<{ sessionKey: string; laneId?: string }>;
+  /** Entries whose `quotaSuspension` field was removed entirely (already-resumed records past 2x TTL). */
+  cleared: number;
+}
+
+/**
+ * Two-stage TTL maintenance for `quotaSuspension` records:
+ *  1. After `ttlMs`, transition `state: "suspended" → "resuming"` so the next
+ *     attempt for that session sees the resume marker and injects a handoff.
+ *  2. After `2 * ttlMs`, drop the field entirely (the record has done its job).
+ *
+ * Mutates `store` in-place. The caller is responsible for translating the
+ * returned `resumed[]` into in-process lane-concurrency restoration calls,
+ * which keeps this module free of `process/*` dependencies.
+ */
+export function pruneQuotaSuspensions(params: {
+  store: Record<string, SessionEntry>;
+  now: number;
+  ttlMs?: number;
+  log?: boolean;
+}): QuotaSuspensionMaintenanceResult {
+  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
+  const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
+  const resumed: Array<{ sessionKey: string; laneId?: string }> = [];
+  let cleared = 0;
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    const suspension = entry.quotaSuspension;
+    if (!suspension) {
+      continue;
+    }
+    const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
+    const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
+    if (params.now >= cleanupAtMs) {
+      delete entry.quotaSuspension;
+      cleared++;
+      continue;
+    }
+    if (suspension.state === "suspended" && params.now >= resumeAtMs) {
+      entry.quotaSuspension = { ...suspension, state: "resuming" };
+      resumed.push({ sessionKey, laneId: suspension.laneId });
+    }
+  }
+  if ((resumed.length > 0 || cleared > 0) && params.log !== false) {
+    log.info("processed quota-suspension TTLs", {
+      resumed: resumed.length,
+      cleared,
+      ttlMs,
+    });
+  }
+  return { resumed, cleared };
+}
+
 function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
+}
+
+function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return (
+    isSubagentSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    rest.startsWith("hook:") ||
+    rest.startsWith("node:") ||
+    rest === "heartbeat" ||
+    rest.endsWith(":heartbeat") ||
+    rest.includes(":heartbeat:")
+  );
+}
+
+function isTelegramTopicSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^telegram:(?:group|channel|direct|dm):.+:topic:[^:]+$/.test(rest);
+}
+
+function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^[^:]+:(?:group|channel):.+$/.test(rest);
+}
+
+export function isProtectedSessionMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
+    return false;
+  }
+  if (parseSessionThreadInfoFast(sessionKey).threadId) {
+    return true;
+  }
+  if (isTelegramTopicSessionKey(sessionKey)) {
+    return true;
+  }
+  if (isExternalGroupOrChannelSessionKey(sessionKey)) {
+    return true;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  return chatType === "group" || chatType === "channel" || chatType === "thread";
+}
+
+export function shouldPreserveMaintenanceEntry(params: {
+  key: string;
+  entry: SessionEntry | undefined;
+  preserveKeys?: ReadonlySet<string>;
+}): boolean {
+  return (
+    params.preserveKeys?.has(params.key) === true ||
+    isProtectedSessionMaintenanceEntry(params.key, params.entry)
+  );
 }
 
 export function getActiveSessionMaintenanceWarning(params: {
@@ -192,16 +335,20 @@ export function getActiveSessionMaintenanceWarning(params: {
   if (!activeEntry) {
     return null;
   }
+  if (isProtectedSessionMaintenanceEntry(activeSessionKey, activeEntry)) {
+    return null;
+  }
   const now = params.nowMs ?? Date.now();
   const cutoffMs = now - params.pruneAfterMs;
   const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
   const keys = Object.keys(params.store);
-  const wouldCap =
-    keys.length > params.maxEntries &&
-    keys
-      .toSorted((a, b) => getEntryUpdatedAt(params.store[b]) - getEntryUpdatedAt(params.store[a]))
-      .slice(params.maxEntries)
-      .includes(activeSessionKey);
+  const wouldCap = wouldCapActiveSession({
+    store: params.store,
+    keys,
+    activeEntry,
+    activeSessionKey,
+    maxEntries: params.maxEntries,
+  });
 
   if (!wouldPrune && !wouldCap) {
     return null;
@@ -218,6 +365,52 @@ export function getActiveSessionMaintenanceWarning(params: {
   };
 }
 
+function wouldCapActiveSession(params: {
+  store: Record<string, SessionEntry>;
+  keys: string[];
+  activeEntry: SessionEntry;
+  activeSessionKey: string;
+  maxEntries: number;
+}): boolean {
+  if (params.keys.length <= params.maxEntries) {
+    return false;
+  }
+  if (params.maxEntries <= 0) {
+    return true;
+  }
+
+  const protectedCount = params.keys.filter(
+    (key) =>
+      key !== params.activeSessionKey && isProtectedSessionMaintenanceEntry(key, params.store[key]),
+  ).length;
+  const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
+  if (maxRemovableEntries <= 0) {
+    return true;
+  }
+
+  const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
+  let newerOrTieBeforeActive = 0;
+  let seenActive = false;
+  for (const key of params.keys) {
+    if (key === params.activeSessionKey) {
+      seenActive = true;
+      continue;
+    }
+    if (isProtectedSessionMaintenanceEntry(key, params.store[key])) {
+      continue;
+    }
+    const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
+    if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
+      newerOrTieBeforeActive++;
+      if (newerOrTieBeforeActive >= maxRemovableEntries) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /**
  * Cap the store to the N most recently updated entries.
  * Entries without `updatedAt` are sorted last (removed first when over limit).
@@ -229,11 +422,23 @@ export function capEntryCount(
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfig().maxEntries;
-  const keys = Object.keys(store);
-  if (keys.length <= maxEntries) {
+  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
+  const preservedCount = Object.entries(store).filter(([key, entry]) =>
+    shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
+  ).length;
+  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  const keys = Object.keys(store).filter(
+    (key) =>
+      !shouldPreserveMaintenanceEntry({
+        key,
+        entry: store[key],
+        preserveKeys: opts.preserveKeys,
+      }),
+  );
+  if (keys.length <= maxRemovableEntries) {
     return 0;
   }
 
@@ -244,7 +449,7 @@ export function capEntryCount(
     return bTime - aTime;
   });
 
-  const toRemove = sorted.slice(maxEntries);
+  const toRemove = sorted.slice(maxRemovableEntries);
   for (const key of toRemove) {
     const entry = store[key];
     if (entry) {
@@ -256,72 +461,4 @@ export function capEntryCount(
     log.info("capped session entry count", { removed: toRemove.length, maxEntries });
   }
   return toRemove.length;
-}
-
-async function getSessionFileSize(storePath: string): Promise<number | null> {
-  try {
-    const stat = await fs.promises.stat(storePath);
-    return stat.size;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Rotate the sessions file if it exceeds the configured size threshold.
- * Renames the current file to `sessions.json.bak.{timestamp}` and cleans up
- * old rotation backups, keeping only the 3 most recent `.bak.*` files.
- */
-export async function rotateSessionFile(
-  storePath: string,
-  overrideBytes?: number,
-): Promise<boolean> {
-  const maxBytes = overrideBytes ?? resolveMaintenanceConfig().rotateBytes;
-
-  // Check current file size (file may not exist yet).
-  const fileSize = await getSessionFileSize(storePath);
-  if (fileSize == null) {
-    return false;
-  }
-
-  if (fileSize <= maxBytes) {
-    return false;
-  }
-
-  // Rotate: rename current file to .bak.{timestamp}
-  const backupPath = `${storePath}.bak.${Date.now()}`;
-  try {
-    await fs.promises.rename(storePath, backupPath);
-    log.info("rotated session store file", {
-      backupPath: path.basename(backupPath),
-      sizeBytes: fileSize,
-    });
-  } catch {
-    // If rename fails (e.g. file disappeared), skip rotation.
-    return false;
-  }
-
-  // Clean up old backups — keep only the 3 most recent .bak.* files.
-  try {
-    const dir = path.dirname(storePath);
-    const baseName = path.basename(storePath);
-    const files = await fs.promises.readdir(dir);
-    const backups = files
-      .filter((f) => f.startsWith(`${baseName}.bak.`))
-      .toSorted()
-      .toReversed();
-
-    const maxBackups = 3;
-    if (backups.length > maxBackups) {
-      const toDelete = backups.slice(maxBackups);
-      for (const old of toDelete) {
-        await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
-      }
-      log.info("cleaned up old session store backups", { deleted: toDelete.length });
-    }
-  } catch {
-    // Best-effort cleanup; don't fail the write.
-  }
-
-  return true;
 }

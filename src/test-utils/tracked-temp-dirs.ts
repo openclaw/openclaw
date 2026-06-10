@@ -43,10 +43,31 @@ export function createTrackedTempDirs() {
     },
     async cleanup(): Promise<void> {
       const roots = [...cleanupRoots];
-      cleanupRoots.clear();
-      prefixRoots.clear();
       pendingPrefixRoots.clear();
-      await Promise.all(roots.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      const dirlists = await Promise.all(
+        roots.map((dir) =>
+          fs.readdir(dir).catch((err: unknown) => {
+            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+              return [];
+            }
+            throw err;
+          }),
+        ),
+      );
+      await Promise.all(
+        roots.flatMap((dir, i) =>
+          dirlists[i].map((entry) =>
+            fs.rm(path.join(dir, entry), { recursive: true, force: true }),
+          ),
+        ),
+      );
+      for (const dir of roots) {
+        for (const state of prefixRoots.values()) {
+          if (state.root === dir) {
+            state.nextIndex = 0;
+          }
+        }
+      }
     },
   };
 }

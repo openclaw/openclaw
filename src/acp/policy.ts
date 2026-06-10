@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+import { AcpRuntimeError } from "@openclaw/acp-core/runtime/errors";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { AcpRuntimeError } from "./runtime/errors.js";
 
 const ACP_DISABLED_MESSAGE = "ACP is disabled by policy (`acp.enabled=false`).";
 const ACP_DISPATCH_DISABLED_MESSAGE =
@@ -44,6 +44,13 @@ export function resolveAcpDispatchPolicyError(cfg: OpenClawConfig): AcpRuntimeEr
     return null;
   }
   return new AcpRuntimeError("ACP_DISPATCH_DISABLED", message);
+}
+
+export function resolveAcpExplicitTurnPolicyError(cfg: OpenClawConfig): AcpRuntimeError | null {
+  if (isAcpEnabledByPolicy(cfg)) {
+    return null;
+  }
+  return new AcpRuntimeError("ACP_DISPATCH_DISABLED", ACP_DISABLED_MESSAGE);
 }
 
 export function isAcpAgentAllowedByPolicy(cfg: OpenClawConfig, agentId: string): boolean {

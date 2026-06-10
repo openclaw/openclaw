@@ -3,18 +3,17 @@ import {
   readFileUtf8AndCleanup,
   stubFetchTextResponse,
 } from "../test-utils/camera-url-test-helpers.js";
+import { createNodesTool } from "./tools/nodes-tool.js";
 
 const { callGateway } = vi.hoisted(() => ({
   callGateway: vi.fn(),
 }));
 
 vi.mock("../gateway/call.js", () => ({ callGateway }));
-vi.mock("../media/image-ops.js", () => ({
+vi.mock("../media/media-services.js", () => ({
   getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 const NODE_ID = "mac-1";
 const JPG_PAYLOAD = {
@@ -48,21 +47,12 @@ function unexpectedGatewayMethod(method: unknown): never {
 }
 
 function getNodesTool(options?: { modelHasVision?: boolean; allowMediaInvokeCommands?: boolean }) {
-  const toolOptions: {
-    modelHasVision?: boolean;
-    allowMediaInvokeCommands?: boolean;
-  } = {};
-  if (options?.modelHasVision !== undefined) {
-    toolOptions.modelHasVision = options.modelHasVision;
-  }
-  if (options?.allowMediaInvokeCommands !== undefined) {
-    toolOptions.allowMediaInvokeCommands = options.allowMediaInvokeCommands;
-  }
-  const tool = createOpenClawTools(toolOptions).find((candidate) => candidate.name === "nodes");
-  if (!tool) {
-    throw new Error("missing nodes tool");
-  }
-  return tool;
+  return createNodesTool({
+    ...(options?.modelHasVision !== undefined ? { modelHasVision: options.modelHasVision } : {}),
+    ...(options?.allowMediaInvokeCommands !== undefined
+      ? { allowMediaInvokeCommands: options.allowMediaInvokeCommands }
+      : {}),
+  });
 }
 
 async function executeNodes(
@@ -74,6 +64,32 @@ async function executeNodes(
 
 type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
 type GatewayMockResult = Record<string, unknown> | null | undefined;
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectInvokeParams(
+  invokeParams: unknown,
+  expected: {
+    command: string;
+    nodeId?: string;
+    params?: Record<string, unknown>;
+  },
+) {
+  const record = requireRecord(invokeParams, "node.invoke params");
+  expect(record.command).toBe(expected.command);
+  if (expected.nodeId !== undefined) {
+    expect(record.nodeId).toBe(expected.nodeId);
+  }
+  const params = requireRecord(record.params, `${expected.command} params`);
+  for (const [key, value] of Object.entries(expected.params ?? {})) {
+    expect(params[key]).toEqual(value);
+  }
+}
 
 function mockNodeList(params?: { commands?: string[]; remoteIp?: string }) {
   return {
@@ -89,10 +105,13 @@ function mockNodeList(params?: { commands?: string[]; remoteIp?: string }) {
 
 function expectSingleImage(result: NodesToolResult, params?: { mimeType?: string }) {
   const images = (result.content ?? []).filter((block) => block.type === "image");
-  expect(images).toHaveLength(1);
-  if (params?.mimeType) {
-    expect(images[0]?.mimeType).toBe(params.mimeType);
-  }
+  expect(images).toEqual([
+    {
+      type: "image",
+      data: JPG_PAYLOAD.base64,
+      mimeType: params?.mimeType ?? "image/jpeg",
+    },
+  ]);
 }
 
 function expectNoImages(result: NodesToolResult) {
@@ -108,15 +127,15 @@ function expectFirstMediaUrl(result: NodesToolResult): string {
 }
 
 function expectFirstTextContains(result: NodesToolResult, expectedText: string) {
-  expect(result.content?.[0]).toMatchObject({
-    type: "text",
-    text: expect.stringContaining(expectedText),
-  });
+  const first = result.content?.[0];
+  expect(first?.type).toBe("text");
+  const text = first?.type === "text" ? first.text : "";
+  expect(text).toContain(expectedText);
 }
 
 function parseFirstTextJson(result: NodesToolResult): unknown {
   const first = result.content?.[0];
-  expect(first).toMatchObject({ type: "text" });
+  expect(first?.type).toBe("text");
   const text = first?.type === "text" ? first.text : "";
   return JSON.parse(text);
 }
@@ -148,7 +167,7 @@ function setupPhotosLatestMock(params?: { remoteIp?: string }) {
   setupNodeInvokeMock({
     ...(params?.remoteIp ? { remoteIp: params.remoteIp } : {}),
     onInvoke: (invokeParams) => {
-      expect(invokeParams).toMatchObject({
+      expectInvokeParams(invokeParams, {
         command: "photos.latest",
         params: PHOTOS_LATEST_DEFAULT_PARAMS,
       });
@@ -163,17 +182,16 @@ async function executePhotosLatest(params: { modelHasVision: boolean }) {
   });
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   callGateway.mockClear();
   vi.unstubAllGlobals();
-  await loadOpenClawToolsForTest();
 });
 
 describe("nodes camera_snap", () => {
   it("uses front/high-quality defaults when params are omitted", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           command: "camera.snap",
           params: {
             facing: "front",
@@ -228,14 +246,14 @@ describe("nodes camera_snap", () => {
     );
 
     expectNoImages(result);
-    expect(result.content ?? []).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
     expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
   });
 
   it("passes deviceId when provided", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           command: "camera.snap",
           params: { deviceId: "cam-123" },
         });
@@ -280,7 +298,7 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    expect(result.content ?? []).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
     await expect(readFileUtf8AndCleanup(expectFirstMediaUrl(result))).resolves.toBe("url-image");
   });
 
@@ -323,7 +341,7 @@ describe("nodes camera_clip", () => {
       node: NODE_ID,
       facing: "front",
     });
-    const filePath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
+    const filePath = ((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
       .replace(/^FILE:/, "")
       .trim();
     await expect(readFileUtf8AndCleanup(filePath)).resolves.toBe("url-clip");
@@ -354,7 +372,7 @@ describe("nodes photos_latest", () => {
   it("returns empty content/details when no photos are available", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           command: "photos.latest",
           params: {
             limit: 1,
@@ -378,8 +396,8 @@ describe("nodes photos_latest", () => {
       { modelHasVision: false },
     );
 
-    expect(result.content ?? []).toEqual([]);
-    expect(result.details).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
+    expect(result.details).toStrictEqual([]);
   });
 
   it("returns MEDIA paths and no inline images when model has no vision", async () => {
@@ -388,14 +406,12 @@ describe("nodes photos_latest", () => {
     const result = await executePhotosLatest({ modelHasVision: false });
 
     expectNoImages(result);
-    expect(result.content ?? []).toEqual([]);
+    expect(result.content ?? []).toStrictEqual([]);
     const details =
       (result.details as { photos?: Array<Record<string, unknown>> } | undefined)?.photos ?? [];
-    expect(details[0]).toMatchObject({
-      width: 1,
-      height: 1,
-      createdAt: "2026-03-04T00:00:00Z",
-    });
+    expect(details[0]?.width).toBe(1);
+    expect(details[0]?.height).toBe(1);
+    expect(details[0]?.createdAt).toBe("2026-03-04T00:00:00Z");
     expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
   });
 
@@ -414,7 +430,7 @@ describe("nodes notifications_list", () => {
     setupNodeInvokeMock({
       commands: ["notifications.list"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "notifications.list",
           params: {},
@@ -436,7 +452,7 @@ describe("nodes notifications_list", () => {
     });
 
     expectFirstTextContains(result, '"notifications"');
-    expect(parseFirstTextJson(result)).toMatchObject({
+    expect(parseFirstTextJson(result)).toStrictEqual({
       enabled: true,
       connected: true,
       count: 1,
@@ -450,7 +466,7 @@ describe("nodes notifications_action", () => {
     setupNodeInvokeMock({
       commands: ["notifications.actions"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "notifications.actions",
           params: {
@@ -470,7 +486,7 @@ describe("nodes notifications_action", () => {
     });
 
     expectFirstTextContains(result, '"dismiss"');
-    expect(parseFirstTextJson(result)).toMatchObject({
+    expect(parseFirstTextJson(result)).toStrictEqual({
       ok: true,
       key: "n1",
       action: "dismiss",
@@ -481,7 +497,7 @@ describe("nodes notifications_action", () => {
     setupNodeInvokeMock({
       commands: ["notifications.actions"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "notifications.actions",
           params: {
@@ -502,7 +518,7 @@ describe("nodes notifications_action", () => {
       notificationReplyText: " On it ",
     });
 
-    expect(parseFirstTextJson(result)).toMatchObject({
+    expect(parseFirstTextJson(result)).toStrictEqual({
       ok: true,
       key: "n2",
       action: "reply",
@@ -515,7 +531,7 @@ describe("nodes location_get", () => {
     setupNodeInvokeMock({
       commands: ["location.get"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "location.get",
           params: {
@@ -543,7 +559,7 @@ describe("nodes location_get", () => {
       locationTimeoutMs: 4_500,
     });
 
-    expect(parseFirstTextJson(result)).toMatchObject({
+    expect(parseFirstTextJson(result)).toStrictEqual({
       latitude: 37.3346,
       longitude: -122.009,
       accuracyMeters: 18,
@@ -557,7 +573,7 @@ describe("nodes device_status and device_info", () => {
     setupNodeInvokeMock({
       commands: ["device.status", "device.info"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "device.status",
           params: {},
@@ -582,7 +598,7 @@ describe("nodes device_status and device_info", () => {
     setupNodeInvokeMock({
       commands: ["device.status", "device.info"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "device.info",
           params: {},
@@ -608,7 +624,7 @@ describe("nodes device_status and device_info", () => {
     setupNodeInvokeMock({
       commands: ["device.permissions"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "device.permissions",
           params: {},
@@ -637,25 +653,21 @@ describe("nodes device_status and device_info", () => {
     });
 
     expectFirstTextContains(result, '"permissions"');
-    expect(parseFirstTextJson(result)).toMatchObject({
-      permissions: {
-        sms: {
-          status: "denied",
-          promptable: true,
-          capabilities: {
-            send: { status: "denied", promptable: true },
-            read: { status: "granted", promptable: false },
-          },
-        },
-      },
-    });
+    const parsed = requireRecord(parseFirstTextJson(result), "device permissions payload");
+    const permissions = requireRecord(parsed.permissions, "permissions");
+    const sms = requireRecord(permissions.sms, "sms permissions");
+    expect(sms.status).toBe("denied");
+    expect(sms.promptable).toBe(true);
+    const capabilities = requireRecord(sms.capabilities, "sms capabilities");
+    expect(capabilities.send).toStrictEqual({ status: "denied", promptable: true });
+    expect(capabilities.read).toStrictEqual({ status: "granted", promptable: false });
   });
 
   it("invokes device.health and returns payload", async () => {
     setupNodeInvokeMock({
       commands: ["device.health"],
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           nodeId: NODE_ID,
           command: "device.health",
           params: {},
@@ -682,7 +694,7 @@ describe("nodes invoke", () => {
   it("allows metadata-only camera.list via generic invoke", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           command: "camera.list",
           params: {},
         });
@@ -700,10 +712,9 @@ describe("nodes invoke", () => {
       invokeCommand: "camera.list",
     });
 
-    expect(result.details).toMatchObject({
-      payload: {
-        devices: [{ id: "cam-back", name: "Back Camera" }],
-      },
+    const details = requireRecord(result.details, "camera.list details");
+    expect(details.payload).toStrictEqual({
+      devices: [{ id: "cam-back", name: "Back Camera" }],
     });
   });
 
@@ -721,7 +732,7 @@ describe("nodes invoke", () => {
   it("allows media invoke commands when explicitly enabled", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
+        expectInvokeParams(invokeParams, {
           command: "photos.latest",
           params: { limit: 1 },
         });
@@ -743,15 +754,9 @@ describe("nodes invoke", () => {
       { allowMediaInvokeCommands: true },
     );
 
-    expect(result.details).toMatchObject({
-      payload: {
-        photos: [{ format: "jpg", base64: "aGVsbG8=", width: 1, height: 1 }],
-      },
+    const details = requireRecord(result.details, "photos.latest invoke details");
+    expect(details.payload).toStrictEqual({
+      photos: [{ format: "jpg", base64: "aGVsbG8=", width: 1, height: 1 }],
     });
   });
 });
-async function loadOpenClawToolsForTest(): Promise<void> {
-  vi.resetModules();
-  await import("./test-helpers/fast-core-tools.js");
-  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-}

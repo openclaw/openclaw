@@ -1,5 +1,8 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as toText,
+} from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ClaudeChannelMode = "off" | "on" | "auto";
 
@@ -16,7 +19,7 @@ export type ConversationDescriptor = {
   updatedAt?: number | null;
 };
 
-export type SessionRow = {
+type SessionRow = {
   key: string;
   channel?: string;
   lastChannel?: string;
@@ -43,6 +46,10 @@ export type SessionRow = {
 
 export type SessionListResult = {
   sessions?: SessionRow[];
+};
+
+export type SessionDescribeResult = {
+  session?: SessionRow | null;
 };
 
 export type ChatHistoryResult = {
@@ -124,15 +131,13 @@ export const ClaudePermissionRequestSchema = z.object({
   }),
 });
 
-export function toText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
+export { toText };
 
 export function resolveMessageId(entry: Record<string, unknown>): string | undefined {
   return (
     toText(entry.id) ??
-    (entry.__openclaw && typeof entry.__openclaw === "object"
-      ? toText((entry.__openclaw as { id?: unknown }).id)
+    (entry["__openclaw"] && typeof entry["__openclaw"] === "object"
+      ? toText((entry["__openclaw"] as { id?: unknown }).id)
       : undefined)
   );
 }
@@ -146,8 +151,18 @@ export function summarizeResult(
   };
 }
 
-export function resolveConversationChannel(row: SessionRow): string | undefined {
-  return normalizeMessageChannel(
+export function summarizeStructuredResult(
+  label: string,
+  count: number,
+  payload: unknown,
+): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{ type: "text", text: `${label}: ${count}\n\n${JSON.stringify(payload, null, 2)}` }],
+  };
+}
+
+function resolveConversationChannel(row: SessionRow): string | undefined {
+  return normalizeOptionalLowercaseString(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??
       toText(row.channel) ??

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -11,16 +12,17 @@ import {
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
+import {
+  PLUGIN_MODEL_CATALOG_FILE,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+} from "./plugin-model-catalog.js";
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: () => [],
   syncExternalCliCredentials: () => false,
 }));
 
 vi.mock("./models-config.providers.js", async () => {
-  const actual = await vi.importActual<typeof import("./models-config.providers.js")>(
-    "./models-config.providers.js",
-  );
-
   function createImplicitProvider(baseUrl: string): ModelsProviderConfig {
     return {
       baseUrl,
@@ -40,7 +42,16 @@ vi.mock("./models-config.providers.js", async () => {
   }
 
   return {
-    ...actual,
+    applyNativeStreamingUsageCompat: (providers: Record<string, ModelsProviderConfig>) => providers,
+    enforceSourceManagedProviderSecrets: ({
+      providers,
+    }: {
+      providers: Record<string, ModelsProviderConfig>;
+    }) => providers,
+    normalizeProviders: ({ providers }: { providers: Record<string, ModelsProviderConfig> }) =>
+      providers,
+    normalizeProviderCatalogModelsForConfig: (providers: Record<string, ModelsProviderConfig>) =>
+      providers,
     resolveImplicitProviders: async ({ env }: { env?: NodeJS.ProcessEnv }) => {
       const providers: Record<string, ModelsProviderConfig> = {
         chutes: {
@@ -92,6 +103,39 @@ type ParsedProviderConfig = {
   models?: Array<{ id: string }>;
 };
 
+async function readGeneratedProviders(
+  agentDir: string,
+): Promise<Record<string, ParsedProviderConfig>> {
+  const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+  const parsed = JSON.parse(raw) as { providers?: Record<string, ParsedProviderConfig> };
+  const providers = { ...parsed.providers };
+  const pluginsDir = path.join(agentDir, "plugins");
+  let pluginDirs: Array<import("node:fs").Dirent>;
+  try {
+    pluginDirs = await fs.readdir(pluginsDir, { withFileTypes: true });
+  } catch {
+    return providers;
+  }
+  for (const entry of pluginDirs) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const catalogPath = path.join(pluginsDir, entry.name, PLUGIN_MODEL_CATALOG_FILE);
+    const catalogRaw = await fs.readFile(catalogPath, "utf8").catch(() => undefined);
+    if (!catalogRaw) {
+      continue;
+    }
+    const catalog = JSON.parse(catalogRaw) as {
+      generatedBy?: string;
+      providers?: Record<string, ParsedProviderConfig>;
+    };
+    if (catalog.generatedBy === PLUGIN_MODEL_CATALOG_GENERATED_BY) {
+      Object.assign(providers, catalog.providers);
+    }
+  }
+  return providers;
+}
+
 async function runEnvProviderCase(params: {
   envVar: "MINIMAX_API_KEY" | "SYNTHETIC_API_KEY";
   envValue: string;
@@ -103,11 +147,7 @@ async function runEnvProviderCase(params: {
   try {
     await ensureOpenClawModelsJson({});
 
-    const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
-    const raw = await fs.readFile(modelPath, "utf8");
-    const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
-    const provider = parsed.providers[params.providerKey];
-    expect(provider).toBeDefined();
+    const provider = (await readGeneratedProviders(resolveDefaultAgentDir({})))[params.providerKey];
     expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
   } finally {
     if (previousValue === undefined) {
@@ -119,12 +159,15 @@ async function runEnvProviderCase(params: {
 }
 
 describe("models-config", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
     ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
       await import("./models-config.js"));
+  });
+
+  beforeEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -146,7 +189,6 @@ describe("models-config", () => {
         const agentDir = path.join(home, "agent-empty");
         // ensureAuthProfileStore merges the main auth store into non-main dirs; point main at our temp dir.
         process.env.OPENCLAW_AGENT_DIR = agentDir;
-        process.env.PI_CODING_AGENT_DIR = agentDir;
 
         const result = await ensureOpenClawModelsJson(
           {
@@ -155,14 +197,18 @@ describe("models-config", () => {
           agentDir,
         );
 
-        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
-        const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
+        const providers = await readGeneratedProviders(agentDir);
 
         expect(result.wrote).toBe(true);
-        expect(Object.keys(parsed.providers).length).toBeGreaterThan(0);
-        expect(parsed.providers["openai"]).toBeUndefined();
-        expect(parsed.providers["minimax"]).toBeUndefined();
-        expect(parsed.providers["synthetic"]).toBeUndefined();
+        expect(Object.keys(providers).toSorted()).toStrictEqual([
+          "chutes",
+          "deepseek",
+          "mistral",
+          "xai",
+        ]);
+        expect(providers["openai"]).toBeUndefined();
+        expect(providers["minimax"]).toBeUndefined();
+        expect(providers["synthetic"]).toBeUndefined();
       });
     });
   });
@@ -171,7 +217,7 @@ describe("models-config", () => {
     await withTempHome(async () => {
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<
@@ -187,10 +233,57 @@ describe("models-config", () => {
       };
 
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
-      expect(parsed.providers["custom-proxy"]?.models?.[0]).toMatchObject({
-        id: "llama-3.1-8b",
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      const model = parsed.providers["custom-proxy"]?.models?.[0];
+      expect(model?.id).toBe("llama-3.1-8b");
+      expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    });
+  });
+
+  it("preserves existing generated plugin catalog secrets in merge mode", async () => {
+    await withTempHome(async (home) => {
+      const agentDir = path.join(home, "agent-plugin-merge");
+      const catalogPath = path.join(agentDir, "plugins", "deepseek", PLUGIN_MODEL_CATALOG_FILE);
+      await fs.mkdir(path.dirname(catalogPath), { recursive: true });
+      await fs.writeFile(path.join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+      await fs.writeFile(
+        catalogPath,
+        JSON.stringify(
+          {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              deepseek: {
+                baseUrl: "https://persisted.example/v1",
+                api: "openai-completions",
+                apiKey: "persisted-key",
+                models: [{ id: "test-model" }],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const pluginMetadataSnapshot = {
+        index: { plugins: [{ pluginId: "deepseek", enabled: true }] },
+        normalizePluginId: (pluginId: string) => pluginId,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: {
+          providers: new Map([["deepseek", ["deepseek"]]]),
+          modelCatalogProviders: new Map([["deepseek", ["deepseek"]]]),
+          setupProviders: new Map(),
+        },
+      } as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+
+      await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir, {
+        pluginMetadataSnapshot,
       });
+
+      const raw = await fs.readFile(catalogPath, "utf8");
+      const parsed = JSON.parse(raw) as {
+        providers: Record<string, ParsedProviderConfig>;
+      };
+      expect(parsed.providers.deepseek?.baseUrl).toBe("https://persisted.example/v1");
+      expect(parsed.providers.deepseek).toBeDefined();
     });
   });
 

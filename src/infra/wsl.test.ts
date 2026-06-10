@@ -1,18 +1,29 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 const readFileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:fs", () => ({
-  readFileSync: readFileSyncMock,
-}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    readFileSync: readFileSyncMock,
+  };
+});
 
-vi.mock("node:fs/promises", () => ({
-  default: {
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFile: readFileMock,
+    },
     readFile: readFileMock,
-  },
-}));
+  };
+});
 
 let isWSLEnv: typeof import("./wsl.js").isWSLEnv;
 let isWSLSync: typeof import("./wsl.js").isWSLSync;
@@ -20,13 +31,8 @@ let isWSL2Sync: typeof import("./wsl.js").isWSL2Sync;
 let isWSL: typeof import("./wsl.js").isWSL;
 let resetWSLStateForTests: typeof import("./wsl.js").resetWSLStateForTests;
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
 function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  mockProcessPlatform(platform);
 }
 
 describe("wsl detection", () => {
@@ -38,6 +44,9 @@ describe("wsl detection", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV"]);
+    delete process.env.WSL_INTEROP;
+    delete process.env.WSL_DISTRO_NAME;
+    delete process.env.WSLENV;
     readFileSyncMock.mockReset();
     readFileMock.mockReset();
     setPlatform("linux");
@@ -47,9 +56,7 @@ describe("wsl detection", () => {
   afterEach(() => {
     envSnapshot.restore();
     resetWSLStateForTests();
-    if (originalPlatformDescriptor) {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
+    vi.restoreAllMocks();
   });
 
   it.each([

@@ -1,5 +1,9 @@
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -11,14 +15,30 @@ import {
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
-} from "./defaults.js";
+} from "./defaults.constants.js";
+import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
+export const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
+const MIN_MEDIA_TIMEOUT_MS = 1000;
+
 export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {
   const value = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : fallbackSeconds;
-  return Math.max(1000, Math.floor(value * 1000));
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return MIN_MEDIA_TIMEOUT_MS;
+  }
+  const timeoutMs = Math.floor(value * 1000);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(timeoutMs) ? timeoutMs : MAX_TIMER_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+  );
+}
+
+export function resolveMediaRuntimeTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS);
 }
 
 export function resolvePrompt(
@@ -64,13 +84,6 @@ export function resolveMaxBytes(params: {
   return DEFAULT_MAX_BYTES[params.capability];
 }
 
-export function resolveCapabilityConfig(
-  cfg: OpenClawConfig,
-  capability: MediaUnderstandingCapability,
-): MediaUnderstandingConfig | undefined {
-  return cfg.tools?.media?.[capability];
-}
-
 export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;
@@ -81,21 +94,6 @@ export function resolveScopeDecision(params: {
     channel: params.ctx.Surface ?? params.ctx.Provider,
     chatType: normalizeMediaUnderstandingChatType(params.ctx.ChatType),
   });
-}
-
-function resolveEntryCapabilities(params: {
-  entry: MediaUnderstandingModelConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-}): MediaUnderstandingCapability[] | undefined {
-  const entryType = params.entry.type ?? (params.entry.command ? "cli" : "provider");
-  if (entryType === "cli") {
-    return undefined;
-  }
-  const providerId = normalizeMediaProviderId(params.entry.provider ?? "");
-  if (!providerId) {
-    return undefined;
-  }
-  return params.providerRegistry.get(providerId)?.capabilities;
 }
 
 export function resolveModelEntries(params: {
@@ -116,12 +114,11 @@ export function resolveModelEntries(params: {
 
   return entries
     .filter(({ entry, source }) => {
-      const caps =
-        entry.capabilities && entry.capabilities.length > 0
-          ? entry.capabilities
-          : source === "shared"
-            ? resolveEntryCapabilities({ entry, providerRegistry: params.providerRegistry })
-            : undefined;
+      const caps = resolveEffectiveMediaEntryCapabilities({
+        entry,
+        source,
+        providerRegistry: params.providerRegistry,
+      });
       if (!caps || caps.length === 0) {
         if (source === "shared") {
           if (shouldLogVerbose()) {

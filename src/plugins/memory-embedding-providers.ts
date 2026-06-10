@@ -1,6 +1,6 @@
-import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/host/embedding-inputs.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import type { EmbeddingInput } from "../memory-host-sdk/host/embedding-inputs.js";
 
 export type MemoryEmbeddingBatchChunk = {
   text: string;
@@ -17,9 +17,15 @@ export type MemoryEmbeddingBatchOptions = {
   debug: (message: string, data?: Record<string, unknown>) => void;
 };
 
+export type MemoryEmbeddingProviderCallOptions = {
+  signal?: AbortSignal;
+};
+
 export type MemoryEmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
+  inlineQueryTimeoutMs?: number;
+  inlineBatchTimeoutMs?: number;
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
@@ -27,25 +33,46 @@ export type MemoryEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
+  embedBatch: (
+    texts: string[],
+    options?: MemoryEmbeddingProviderCallOptions,
+  ) => Promise<number[][]>;
+  embedBatchInputs?: (
+    inputs: EmbeddingInput[],
+    options?: MemoryEmbeddingProviderCallOptions,
+  ) => Promise<number[][]>;
+  close?: () => Promise<void> | void;
 };
 
 export type MemoryEmbeddingProviderCreateOptions = {
   config: OpenClawConfig;
   agentDir?: string;
+  provider?: string;
+  fallback?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
   };
   model: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    contextSize?: number | "auto";
   };
   outputDimensionality?: number;
+  taskType?:
+    | "RETRIEVAL_QUERY"
+    | "RETRIEVAL_DOCUMENT"
+    | "SEMANTIC_SIMILARITY"
+    | "CLASSIFICATION"
+    | "CLUSTERING"
+    | "QUESTION_ANSWERING"
+    | "FACT_VERIFICATION";
 };
 
 export type MemoryEmbeddingProviderCreateResult = {
@@ -57,6 +84,7 @@ export type MemoryEmbeddingProviderAdapter = {
   id: string;
   defaultModel?: string;
   transport?: "local" | "remote";
+  authProviderId?: string;
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
@@ -135,4 +163,4 @@ export function clearMemoryEmbeddingProviders(): void {
   getMemoryEmbeddingProviders().clear();
 }
 
-export const _resetMemoryEmbeddingProviders = clearMemoryEmbeddingProviders;
+export const resetMemoryEmbeddingProviders = clearMemoryEmbeddingProviders;

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { AcpRuntime, AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect } from "vitest";
 import { toAcpRuntimeError } from "./errors.js";
-import type { AcpRuntime, AcpRuntimeEvent } from "./types.js";
 
 export type AcpRuntimeAdapterContractParams = {
   createRuntime: () => Promise<AcpRuntime> | AcpRuntime;
@@ -50,6 +51,7 @@ export async function runAcpRuntimeAdapterContract(
         event.type === "tool_call",
     ),
   ).toBe(true);
+  expect(successEvents.some((event) => event.type === "done")).toBe(true);
   await params.assertSuccessEvents?.(successEvents);
 
   if (params.includeControlChecks ?? true) {
@@ -75,7 +77,7 @@ export async function runAcpRuntimeAdapterContract(
 
   let errorThrown: unknown = null;
   const errorEvents: AcpRuntimeEvent[] = [];
-  const errorPrompt = params.errorPrompt?.trim();
+  const errorPrompt = normalizeOptionalString(params.errorPrompt);
   if (errorPrompt) {
     try {
       for await (const event of runtime.runTurn({

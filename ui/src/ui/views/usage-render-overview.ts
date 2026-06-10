@@ -1,14 +1,10 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  formatCost,
-  formatDayLabel,
-  formatFullDate,
-  formatTokens,
-  UsageInsightStats,
-} from "./usage-metrics.ts";
-import {
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { formatCost, formatDayLabel, formatFullDate, formatTokens } from "./usage-metrics.ts";
+import type { UsageInsightStats } from "./usage-metrics.ts";
+import type {
   UsageAggregates,
   UsageColumnId,
   UsageSessionEntry,
@@ -21,6 +17,218 @@ function pct(part: number, total: number): number {
     return 0;
   }
   return (part / total) * 100;
+}
+
+const DAILY_BAR_TOOLTIP_MARGIN_PX = 8;
+const DAILY_BAR_TOOLTIP_GAP_PX = 8;
+
+type DailyBarTooltipTrigger = "hover" | "focus";
+
+type DailyBarTooltipContent = {
+  dateLabel: string;
+  tokensLabel: string;
+  costLabel: string;
+  breakdownLines: string[];
+};
+
+type ActiveDailyBarTooltip = {
+  source: HTMLElement;
+  reasons: Set<DailyBarTooltipTrigger>;
+  content: DailyBarTooltipContent;
+};
+
+let activeDailyBarTooltip: ActiveDailyBarTooltip | null = null;
+let floatingDailyBarTooltip: HTMLElement | null = null;
+let floatingDailyBarTooltipListenersAttached = false;
+let floatingDailyBarTooltipObserver: MutationObserver | null = null;
+let suppressNextDailyBarFocusTooltip = false;
+let suppressDailyBarFocusTooltipTimer: number | null = null;
+
+function clampValue(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+function getFloatingDailyBarTooltip(): HTMLElement {
+  if (!floatingDailyBarTooltip) {
+    floatingDailyBarTooltip = document.createElement("div");
+    floatingDailyBarTooltip.className = "daily-bar-tooltip daily-bar-tooltip--floating";
+  }
+  if (!floatingDailyBarTooltip.isConnected) {
+    document.body.append(floatingDailyBarTooltip);
+  }
+  return floatingDailyBarTooltip;
+}
+
+function renderFloatingDailyBarTooltipContent(
+  tooltip: HTMLElement,
+  content: DailyBarTooltipContent,
+) {
+  const date = document.createElement("strong");
+  date.textContent = content.dateLabel;
+
+  const children: Node[] = [
+    date,
+    document.createElement("br"),
+    document.createTextNode(content.tokensLabel),
+    document.createElement("br"),
+    document.createTextNode(content.costLabel),
+  ];
+
+  for (const line of content.breakdownLines) {
+    const item = document.createElement("div");
+    item.textContent = line;
+    children.push(item);
+  }
+
+  tooltip.replaceChildren(...children);
+}
+
+function positionFloatingDailyBarTooltip() {
+  if (!activeDailyBarTooltip) {
+    return;
+  }
+  if (!activeDailyBarTooltip.source.isConnected) {
+    hideDailyBarTooltip();
+    return;
+  }
+
+  const tooltip = getFloatingDailyBarTooltip();
+  const sourceRect = activeDailyBarTooltip.source.getBoundingClientRect();
+  tooltip.style.visibility = "hidden";
+  tooltip.style.left = "0px";
+  tooltip.style.top = "0px";
+
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const maxLeft = viewportWidth - tooltipRect.width - DAILY_BAR_TOOLTIP_MARGIN_PX;
+  const maxTop = viewportHeight - tooltipRect.height - DAILY_BAR_TOOLTIP_MARGIN_PX;
+  const left = clampValue(
+    sourceRect.left + sourceRect.width / 2 - tooltipRect.width / 2,
+    DAILY_BAR_TOOLTIP_MARGIN_PX,
+    maxLeft,
+  );
+  let top = sourceRect.top - tooltipRect.height - DAILY_BAR_TOOLTIP_GAP_PX;
+  let placement = "above";
+
+  if (top < DAILY_BAR_TOOLTIP_MARGIN_PX) {
+    placement = "below";
+    top = sourceRect.bottom + DAILY_BAR_TOOLTIP_GAP_PX;
+  }
+
+  tooltip.dataset.placement = placement;
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(clampValue(top, DAILY_BAR_TOOLTIP_MARGIN_PX, maxTop))}px`;
+  tooltip.style.visibility = "";
+}
+
+function attachFloatingDailyBarTooltipListeners() {
+  if (floatingDailyBarTooltipListenersAttached) {
+    return;
+  }
+  window.addEventListener("resize", positionFloatingDailyBarTooltip);
+  window.addEventListener("scroll", positionFloatingDailyBarTooltip, true);
+  floatingDailyBarTooltipListenersAttached = true;
+}
+
+function detachFloatingDailyBarTooltipListeners() {
+  if (!floatingDailyBarTooltipListenersAttached) {
+    return;
+  }
+  window.removeEventListener("resize", positionFloatingDailyBarTooltip);
+  window.removeEventListener("scroll", positionFloatingDailyBarTooltip, true);
+  floatingDailyBarTooltipListenersAttached = false;
+}
+
+function attachFloatingDailyBarTooltipObserver() {
+  if (floatingDailyBarTooltipObserver) {
+    return;
+  }
+  floatingDailyBarTooltipObserver = new MutationObserver(() => {
+    if (activeDailyBarTooltip && !activeDailyBarTooltip.source.isConnected) {
+      hideDailyBarTooltip();
+    }
+  });
+  floatingDailyBarTooltipObserver.observe(document.body, { childList: true, subtree: true });
+}
+
+function detachFloatingDailyBarTooltipObserver() {
+  floatingDailyBarTooltipObserver?.disconnect();
+  floatingDailyBarTooltipObserver = null;
+}
+
+function showDailyBarTooltip(
+  source: HTMLElement,
+  content: DailyBarTooltipContent,
+  reason: DailyBarTooltipTrigger,
+) {
+  if (!activeDailyBarTooltip || activeDailyBarTooltip.source !== source) {
+    activeDailyBarTooltip = {
+      source,
+      reasons: new Set(),
+      content,
+    };
+  }
+
+  activeDailyBarTooltip.content = content;
+  activeDailyBarTooltip.reasons.add(reason);
+
+  const tooltip = getFloatingDailyBarTooltip();
+  renderFloatingDailyBarTooltipContent(tooltip, content);
+  positionFloatingDailyBarTooltip();
+  attachFloatingDailyBarTooltipListeners();
+  attachFloatingDailyBarTooltipObserver();
+}
+
+function hideDailyBarTooltip(source?: HTMLElement, reason?: DailyBarTooltipTrigger) {
+  if (!activeDailyBarTooltip) {
+    return;
+  }
+  if (source && activeDailyBarTooltip.source !== source) {
+    return;
+  }
+  if (reason) {
+    activeDailyBarTooltip.reasons.delete(reason);
+    if (activeDailyBarTooltip.reasons.size > 0) {
+      return;
+    }
+  }
+
+  activeDailyBarTooltip = null;
+  floatingDailyBarTooltip?.remove();
+  detachFloatingDailyBarTooltipListeners();
+  detachFloatingDailyBarTooltipObserver();
+}
+
+function suppressDailyBarFocusTooltipForPointer() {
+  suppressNextDailyBarFocusTooltip = true;
+  if (suppressDailyBarFocusTooltipTimer !== null) {
+    window.clearTimeout(suppressDailyBarFocusTooltipTimer);
+  }
+  suppressDailyBarFocusTooltipTimer = window.setTimeout(() => {
+    suppressNextDailyBarFocusTooltip = false;
+    suppressDailyBarFocusTooltipTimer = null;
+  }, 0);
+}
+
+function showDailyBarFocusTooltip(source: HTMLElement, content: DailyBarTooltipContent) {
+  if (suppressNextDailyBarFocusTooltip) {
+    return;
+  }
+  showDailyBarTooltip(source, content, "focus");
+}
+
+function handleDailyBarKeydown(
+  event: KeyboardEvent,
+  day: string,
+  onSelectDay: (day: string, shiftKey: boolean) => void,
+) {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+
+  event.preventDefault();
+  onSelectDay(day, event.shiftKey);
 }
 
 function getCostBreakdown(totals: UsageTotals) {
@@ -218,7 +426,8 @@ function renderDailyChartCompact(
             const isSelected = selectedDays.includes(d.date);
             const label = formatDayLabel(d.date);
             // Shorter label for many days (just day number)
-            const shortLabel = daily.length > 20 ? String(parseInt(d.date.slice(8), 10)) : label;
+            const shortLabel =
+              daily.length > 20 ? String(Number.parseInt(d.date.slice(8), 10)) : label;
             const labelClass =
               daily.length > 20 ? "daily-bar-label daily-bar-label--compact" : "daily-bar-label";
             const segments =
@@ -254,9 +463,31 @@ function renderDailyChartCompact(
                     ]
                 : [];
             const totalLabel = isTokenMode ? formatTokens(d.totalTokens) : formatCost(d.totalCost);
+            const tooltipContent = {
+              dateLabel: formatFullDate(d.date),
+              tokensLabel: `${formatTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
+                t("usage.metrics.tokens"),
+              )}`.trim(),
+              costLabel: formatCost(d.totalCost),
+              breakdownLines,
+            };
             return html`
               <div
                 class="daily-bar-wrapper ${isSelected ? "selected" : ""}"
+                role="button"
+                tabindex="0"
+                aria-pressed=${isSelected ? "true" : "false"}
+                aria-label=${`${tooltipContent.dateLabel}: ${tooltipContent.tokensLabel}, ${tooltipContent.costLabel}`}
+                @pointerdown=${suppressDailyBarFocusTooltipForPointer}
+                @mouseenter=${(e: MouseEvent) =>
+                  showDailyBarTooltip(e.currentTarget as HTMLElement, tooltipContent, "hover")}
+                @mouseleave=${(e: MouseEvent) =>
+                  hideDailyBarTooltip(e.currentTarget as HTMLElement, "hover")}
+                @focus=${(e: FocusEvent) =>
+                  showDailyBarFocusTooltip(e.currentTarget as HTMLElement, tooltipContent)}
+                @blur=${(e: FocusEvent) =>
+                  hideDailyBarTooltip(e.currentTarget as HTMLElement, "focus")}
+                @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
                 @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
               >
                 ${dailyChartMode === "by-type"
@@ -281,14 +512,6 @@ function renderDailyChartCompact(
                   : html` <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div> `}
                 ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
                 <div class="${labelClass}">${shortLabel}</div>
-                <div class="daily-bar-tooltip">
-                  <strong>${formatFullDate(d.date)}</strong><br />
-                  ${formatTokens(d.totalTokens)} ${t("usage.metrics.tokens").toLowerCase()}<br />
-                  ${formatCost(d.totalCost)}
-                  ${breakdownLines.length
-                    ? html`${breakdownLines.map((line) => html`<div>${line}</div>`)}`
-                    : nothing}
-                </div>
               </div>
             `;
           })}
@@ -494,7 +717,7 @@ function renderUsageInsights(
     ? Math.round(totals.totalTokens / aggregates.messages.total)
     : 0;
   const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-  const cacheBase = totals.input + totals.cacheRead;
+  const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
   const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
   const cacheHitLabel =
     cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");
@@ -527,7 +750,7 @@ function renderUsageInsights(
       return {
         label: formatDayLabel(day.date),
         value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${t("usage.overview.errors").toLowerCase()} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(day.tokens)}`,
+        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(day.tokens)}`,
         rate,
       };
     })
@@ -570,7 +793,7 @@ function renderUsageInsights(
             title: t("usage.overview.messages"),
             hint: t("usage.overview.messagesHint"),
             value: aggregates.messages.total,
-            sub: `${aggregates.messages.user} ${t("usage.overview.user").toLowerCase()} · ${aggregates.messages.assistant} ${t("usage.overview.assistant").toLowerCase()}`,
+            sub: `${aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
             className: "usage-summary-card--hero",
           })}
           ${renderSummaryStat({
@@ -609,7 +832,7 @@ function renderUsageInsights(
             title: t("usage.overview.errorRate"),
             hint: errorHint,
             value: `${errorRatePct.toFixed(2)}%`,
-            sub: `${aggregates.messages.errors} ${t("usage.overview.errors").toLowerCase()} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
+            sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
             tone: errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good",
             className: "usage-summary-card--medium",
           })}
@@ -617,7 +840,7 @@ function renderUsageInsights(
             title: t("usage.overview.avgCost"),
             hint: costHint,
             value: formatCost(avgCost, 4),
-            sub: `${formatCost(totals.totalCost)} ${t("usage.breakdown.total").toLowerCase()}`,
+            sub: `${formatCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
             className: "usage-summary-card--compact",
           })}
           ${renderSummaryStat({
@@ -745,39 +968,57 @@ function renderSessionsCard(
     return parts;
   };
 
-  // Helper to get session value (filtered by days if selected)
-  const getSessionValue = (s: UsageSessionEntry): number => {
+  const selectedDaySet = new Set(selectedDays);
+
+  const getSessionMetricValue = (s: UsageSessionEntry, metric: "tokens" | "cost"): number => {
     const usage = s.usage;
     if (!usage) {
       return 0;
     }
 
-    // If days are selected and session has daily breakdown, compute filtered total
-    if (selectedDays.length > 0 && usage.dailyBreakdown && usage.dailyBreakdown.length > 0) {
-      const filteredDays = usage.dailyBreakdown.filter((d) => selectedDays.includes(d.date));
-      return isTokenMode
-        ? filteredDays.reduce((sum, d) => sum + d.tokens, 0)
-        : filteredDays.reduce((sum, d) => sum + d.cost, 0);
+    if (selectedDaySet.size > 0 && usage.dailyBreakdown && usage.dailyBreakdown.length > 0) {
+      return usage.dailyBreakdown.reduce((sum, day) => {
+        if (!selectedDaySet.has(day.date)) {
+          return sum;
+        }
+        return sum + (metric === "tokens" ? day.tokens : day.cost);
+      }, 0);
     }
 
-    // Otherwise use total
-    return isTokenMode ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
+    return metric === "tokens" ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
+  };
+
+  const getSessionValue = (s: UsageSessionEntry): number => {
+    return getSessionMetricValue(s, isTokenMode ? "tokens" : "cost");
+  };
+
+  const getSessionSortValue = (s: UsageSessionEntry): number => {
+    switch (sessionSort) {
+      case "recent":
+        return s.updatedAt ?? 0;
+      case "messages":
+        return s.usage?.messageCounts?.total ?? 0;
+      case "errors":
+        return s.usage?.messageCounts?.errors ?? 0;
+      case "cost":
+        return getSessionMetricValue(s, "cost");
+      case "tokens":
+        return getSessionMetricValue(s, "tokens");
+    }
+    const exhaustiveSort: never = sessionSort;
+    return exhaustiveSort;
   };
 
   const sortedSessions = [...sessions].toSorted((a, b) => {
-    switch (sessionSort) {
-      case "recent":
-        return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-      case "messages":
-        return (b.usage?.messageCounts?.total ?? 0) - (a.usage?.messageCounts?.total ?? 0);
-      case "errors":
-        return (b.usage?.messageCounts?.errors ?? 0) - (a.usage?.messageCounts?.errors ?? 0);
-      case "cost":
-        return getSessionValue(b) - getSessionValue(a);
-      case "tokens":
-      default:
-        return getSessionValue(b) - getSessionValue(a);
+    const valueDiff = getSessionSortValue(b) - getSessionSortValue(a);
+    if (valueDiff !== 0) {
+      return valueDiff;
     }
+    const recentDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+    if (recentDiff !== 0) {
+      return recentDiff;
+    }
+    return formatSessionListLabel(a).localeCompare(formatSessionListLabel(b));
   });
   const sortedWithDir = sessionSortDir === "asc" ? sortedSessions.toReversed() : sortedSessions;
 
@@ -848,7 +1089,7 @@ function renderSessionsCard(
             ${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)}
             ${t("usage.sessions.avg")}
           </span>
-          <span>${totalErrors} ${t("usage.overview.errors").toLowerCase()}</span>
+          <span>${totalErrors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}</span>
         </div>
         <div class="chart-toggle small">
           <button

@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { tryListenOnPort } from "../infra/ports-probe.js";
+import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
 export type PortProcess = { pid: number; command?: string };
@@ -64,7 +66,7 @@ function isRecoverableLsofError(err: unknown): boolean {
   if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
     return true;
   }
-  const message = err instanceof Error ? err.message : String(err);
+  const message = formatErrorMessage(err);
   return /lsof.*(permission denied|not permitted|operation not permitted|eacces|eperm)/i.test(
     message,
   );
@@ -258,12 +260,19 @@ export async function forceFreePortAndWait(
     sigtermTimeoutMs?: number;
   } = {},
 ): Promise<ForceFreePortResult> {
-  const timeoutMs = Math.max(opts.timeoutMs ?? 1500, 0);
-  const intervalMs = Math.max(opts.intervalMs ?? 100, 1);
-  const sigtermTimeoutMs = Math.min(Math.max(opts.sigtermTimeoutMs ?? 600, 0), timeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
+  const intervalMs = resolvePositiveTimerTimeoutMs(opts.intervalMs, 100);
+  const sigtermTimeoutMs = Math.min(
+    resolveTimerTimeoutMs(opts.sigtermTimeoutMs, 600, 0),
+    timeoutMs,
+  );
 
   let killed: PortProcess[] = [];
   let useFuserFallback = false;
+
+  if (!(await isPortBusy(port))) {
+    return { killed, waitedMs: 0, escalatedToSigkill: false };
+  }
 
   try {
     killed = forceFreePort(port);
@@ -275,6 +284,10 @@ export async function forceFreePortAndWait(
     killed = killPortWithFuser(port, "SIGTERM");
   }
 
+  if (killed.length === 0) {
+    return { killed, waitedMs: 0, escalatedToSigkill: false };
+  }
+
   const checkBusy = async (): Promise<boolean> =>
     useFuserFallback ? isPortBusy(port) : listPortListeners(port).length > 0;
 
@@ -283,13 +296,13 @@ export async function forceFreePortAndWait(
   }
 
   let waitedMs = 0;
-  const triesSigterm = intervalMs > 0 ? Math.ceil(sigtermTimeoutMs / intervalMs) : 0;
-  for (let i = 0; i < triesSigterm; i++) {
+  while (waitedMs < sigtermTimeoutMs) {
     if (!(await checkBusy())) {
       return { killed, waitedMs, escalatedToSigkill: false };
     }
-    await sleep(intervalMs);
-    waitedMs += intervalMs;
+    const sleepMs = Math.min(intervalMs, sigtermTimeoutMs - waitedMs);
+    await sleep(sleepMs);
+    waitedMs += sleepMs;
   }
 
   if (!(await checkBusy())) {
@@ -303,14 +316,13 @@ export async function forceFreePortAndWait(
     killPids(remaining, "SIGKILL");
   }
 
-  const remainingBudget = Math.max(timeoutMs - waitedMs, 0);
-  const triesSigkill = intervalMs > 0 ? Math.ceil(remainingBudget / intervalMs) : 0;
-  for (let i = 0; i < triesSigkill; i++) {
+  while (waitedMs < timeoutMs) {
     if (!(await checkBusy())) {
       return { killed, waitedMs, escalatedToSigkill: true };
     }
-    await sleep(intervalMs);
-    waitedMs += intervalMs;
+    const sleepMs = Math.min(intervalMs, timeoutMs - waitedMs);
+    await sleep(sleepMs);
+    waitedMs += sleepMs;
   }
 
   if (!(await checkBusy())) {
@@ -368,16 +380,17 @@ export async function waitForPortBindable(
   port: number,
   opts: { timeoutMs?: number; intervalMs?: number; host?: string } = {},
 ): Promise<number> {
-  const timeoutMs = Math.max(opts.timeoutMs ?? 3000, 0);
-  const intervalMs = Math.max(opts.intervalMs ?? 150, 1);
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 3000, 0);
+  const intervalMs = resolvePositiveTimerTimeoutMs(opts.intervalMs, 150);
   const host = opts.host;
   let waited = 0;
   while (waited < timeoutMs) {
     if (await probePortFree(port, host)) {
       return waited;
     }
-    await sleep(intervalMs);
-    waited += intervalMs;
+    const sleepMs = Math.min(intervalMs, timeoutMs - waited);
+    await sleep(sleepMs);
+    waited += sleepMs;
   }
   // Final attempt
   if (await probePortFree(port, host)) {

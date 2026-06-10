@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -54,9 +54,12 @@ function emitProcessExit(
 }
 
 describe("runCommandWithTimeout no-output timer", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ runCommandWithTimeout } = await import("./exec.js"));
+  });
+
+  beforeEach(() => {
     spawnMock.mockClear();
   });
 
@@ -90,6 +93,31 @@ describe("runCommandWithTimeout no-output timer", () => {
     expect(result.noOutputTimedOut).toBe(false);
     expect(result.stdout).toBe("...");
     expect(fake.kill).not.toHaveBeenCalled();
+  });
+
+  it("bounds captured stdout and stderr while keeping the newest output", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeSpawnedChild();
+    spawnMock.mockReturnValue(fake.child);
+
+    const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], {
+      timeoutMs: 1_000,
+      maxOutputBytes: 5,
+    });
+
+    fake.stdout.emit("data", Buffer.from("abcdef"));
+    fake.stdout.emit("data", Buffer.from("gh"));
+    fake.stderr.emit("data", Buffer.from("123"));
+    fake.stderr.emit("data", Buffer.from("4567"));
+
+    emitProcessExit(fake, { code: 0 });
+    const result = await runPromise;
+
+    expect(result.stdout).toBe("defgh");
+    expect(result.stderr).toBe("34567");
+    expect(result.stdoutTruncatedBytes).toBe(3);
+    expect(result.stderrTruncatedBytes).toBe(2);
+    expect(result.termination).toBe("exit");
   });
 
   it("marks no-output timeout when the spawned child goes silent", async () => {

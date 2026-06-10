@@ -1,10 +1,19 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import {
+  buildChannelConfigSchema,
+  createChatChannelPlugin,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
+import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
@@ -14,15 +23,21 @@ import {
   createEmptyChannelResult,
   createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
+  isNumericTargetId,
+  sendPayloadWithChunkedTextAndMedia,
+} from "openclaw/plugin-sdk/reply-payload";
+import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -33,22 +48,9 @@ import { zaloMessageActions } from "./actions.js";
 import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
-import {
-  buildChannelConfigSchema,
-  buildTokenChannelStatusSummary,
-  DEFAULT_ACCOUNT_ID,
-  chunkTextForOutbound,
-  formatAllowFromLowercase,
-  listDirectoryUserEntriesFromAllowFrom,
-  isNumericTargetId,
-  sendPayloadWithChunkedTextAndMedia,
-  type ChannelAccountSnapshot,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
-import { zaloSetupAdapter } from "./setup-core.js";
-import { zaloSetupWizard } from "./setup-surface.js";
+import { createZaloSetupWizardProxy, zaloSetupAdapter } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -72,6 +74,9 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
 }
 
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const zaloSetupWizard = createZaloSetupWizardProxy(
+  async () => (await import("./setup-surface.js")).zaloSetupWizard,
+);
 const zaloTextChunkLimit = 2000;
 
 const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
@@ -95,6 +100,38 @@ const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
       mediaUrl,
       cfg,
     }),
+});
+
+export const zaloMessageAdapter = defineChannelMessageAdapter({
+  id: "zalo",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+  send: {
+    text: async ({ to, text, accountId, cfg }) =>
+      await (
+        await loadZaloChannelRuntime()
+      ).sendZaloText({
+        to,
+        text,
+        accountId: accountId ?? undefined,
+        cfg,
+      }),
+    media: async ({ to, text, mediaUrl, accountId, cfg }) =>
+      await (
+        await loadZaloChannelRuntime()
+      ).sendZaloText({
+        to,
+        text,
+        accountId: accountId ?? undefined,
+        mediaUrl,
+        cfg,
+      }),
+  },
 });
 
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
@@ -182,12 +219,17 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             },
           }),
       },
-      auth: zaloApprovalAuth,
+      approvalCapability: zaloApprovalAuth,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       groups: {
         resolveRequireMention: () => true,
       },
       actions: zaloMessageActions,
       messaging: {
+        targetPrefixes: ["zalo", "zl"],
         normalizeTarget: normalizeZaloMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
@@ -230,6 +272,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         startAccount: async (ctx) =>
           await (await loadZaloChannelRuntime()).startZaloGatewayAccount(ctx),
       },
+      message: zaloMessageAdapter,
     },
     security: {
       resolveDmPolicy: resolveZaloDmPolicy,

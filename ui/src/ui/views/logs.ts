@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
@@ -35,15 +37,14 @@ function matchesFilter(entry: LogEntry, needle: string) {
   if (!needle) {
     return true;
   }
-  const haystack = [entry.message, entry.subsystem, entry.raw]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(
+    [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
+  );
   return haystack.includes(needle);
 }
 
 export function renderLogs(props: LogsProps) {
-  const needle = props.filterText.trim().toLowerCase();
+  const needle = normalizeLowercaseStringOrEmpty(props.filterText);
   const levelFiltered = LEVELS.some((level) => !props.levelFilters[level]);
   const filtered = props.entries.filter((entry) => {
     if (entry.level && !props.levelFilters[entry.level]) {
@@ -54,7 +55,7 @@ export function renderLogs(props: LogsProps) {
   const exportLabel = needle || levelFiltered ? "filtered" : "visible";
 
   return html`
-    <section class="card">
+    <section class="card card--fill-height">
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Logs</div>
@@ -62,7 +63,7 @@ export function renderLogs(props: LogsProps) {
         </div>
         <div class="row" style="gap: 8px;">
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
+            ${props.loading ? t("common.loading") : t("common.refresh")}
           </button>
           <button
             class="btn"

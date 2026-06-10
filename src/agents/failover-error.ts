@@ -1,12 +1,19 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { formatCliCommand } from "../cli/command-format.js";
 import { readErrorName } from "../infra/errors.js";
-import { isTimeoutErrorMessage, type FailoverReason } from "./pi-embedded-helpers.js";
 import {
   classifyFailoverSignal,
+  inferSignalStatus,
+  isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
-} from "./pi-embedded-helpers/errors.js";
+} from "./embedded-agent-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+const MAX_FAILOVER_CAUSE_DEPTH = 25;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -15,6 +22,15 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly rawError?: string;
+  readonly authProfileFailure?: { allInCooldown: boolean };
+  // Originating request attribution propagated through wrapper errors so
+  // structured log ingestion (e.g. api_health_log) can attribute exhausted
+  // failover failures back to a session/lane and the last attempted provider.
+  // See #42713.
+  readonly sessionId?: string;
+  readonly lane?: string;
+  readonly suspend?: boolean;
 
   constructor(
     message: string,
@@ -25,7 +41,12 @@ export class FailoverError extends Error {
       profileId?: string;
       status?: number;
       code?: string;
+      rawError?: string;
+      authProfileFailure?: { allInCooldown: boolean };
+      sessionId?: string;
+      lane?: string;
       cause?: unknown;
+      suspend?: boolean;
     },
   ) {
     super(message, { cause: params.cause });
@@ -36,17 +57,32 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.rawError = params.rawError;
+    this.authProfileFailure = params.authProfileFailure;
+    this.sessionId = params.sessionId;
+    this.lane = params.lane;
+    this.suspend = params.suspend;
   }
 }
 
 export function isFailoverError(err: unknown): err is FailoverError {
-  return err instanceof FailoverError;
+  if (err instanceof FailoverError) {
+    return true;
+  }
+  return Boolean(
+    err &&
+    typeof err === "object" &&
+    (err as { name?: unknown }).name === "FailoverError" &&
+    typeof (err as { reason?: unknown }).reason === "string",
+  );
 }
 
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {
     case "billing":
       return 402;
+    case "server_error":
+      return 500;
     case "rate_limit":
       return 429;
     case "overloaded":
@@ -101,8 +137,8 @@ function readDirectStatusCode(err: unknown): number | undefined {
   if (typeof candidate === "number") {
     return candidate;
   }
-  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
-    return Number(candidate);
+  if (typeof candidate === "string") {
+    return parseStrictNonNegativeInteger(candidate);
   }
   return undefined;
 }
@@ -120,6 +156,11 @@ function readDirectErrorCode(err: unknown): string | undefined {
     const trimmed = directCode.trim();
     return trimmed ? trimmed : undefined;
   }
+  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
+  if (typeof detailCode === "string") {
+    const trimmed = detailCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
   const status = (err as { status?: unknown }).status;
   if (typeof status !== "string" || /^\d+$/.test(status)) {
     return undefined;
@@ -130,6 +171,62 @@ function readDirectErrorCode(err: unknown): string | undefined {
 
 function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
+}
+
+function isStableProviderErrorType(value: string): boolean {
+  if (
+    /^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+      value,
+    )
+  ) {
+    return false;
+  }
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value);
+}
+
+function readDirectErrorType(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const directType = (err as { errorType?: unknown }).errorType;
+  if (typeof directType === "string") {
+    const trimmed = directType.trim();
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  const detailType = (err as { detail?: { type?: unknown } }).detail?.type;
+  if (typeof detailType === "string") {
+    const trimmed = detailType.trim();
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  const type = (err as { type?: unknown }).type;
+  if (typeof type === "string") {
+    const trimmed = type.trim();
+    if (!trimmed || /^(?:error|exception)$/i.test(trimmed)) {
+      return undefined;
+    }
+    return isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  return undefined;
+}
+
+function getErrorType(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorType);
+}
+
+function readDirectProvider(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const provider = (err as { provider?: unknown }).provider;
+  if (typeof provider !== "string") {
+    return undefined;
+  }
+  const trimmed = provider.trim();
+  return trimmed || undefined;
+}
+
+function getProvider(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectProvider);
 }
 
 function readDirectErrorMessage(err: unknown): string | undefined {
@@ -158,15 +255,87 @@ function getErrorMessage(err: unknown): string {
   return findErrorProperty(err, readDirectErrorMessage) ?? "";
 }
 
-function getErrorCause(err: unknown): unknown {
-  if (!err || typeof err !== "object" || !("cause" in err)) {
-    return undefined;
+function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
+  const message = readDirectErrorMessage(err);
+  return {
+    status: readDirectStatusCode(err),
+    code: readDirectErrorCode(err),
+    errorType: readDirectErrorType(err),
+    message: message || undefined,
+    provider: readDirectProvider(err),
+  };
+}
+
+function hasSessionWriteLockContention(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isSessionWriteLockAcquireError(err)) {
+    return true;
   }
-  return (err as { cause?: unknown }).cause;
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (seen.has(err)) {
+    return false;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  return (
+    hasSessionWriteLockContention(candidate.error, seen) ||
+    hasSessionWriteLockContention(candidate.cause, seen) ||
+    hasSessionWriteLockContention(candidate.reason, seen)
+  );
+}
+
+function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
+  // Match by name to avoid importing embedded-agent-runner here (would create a cycle).
+  return Boolean(
+    err && typeof err === "object" && readErrorName(err) === "EmbeddedAttemptSessionTakeoverError",
+  );
+}
+
+function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
+  }
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (seen.has(err)) {
+    return false;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  return (
+    hasEmbeddedAttemptSessionTakeover(candidate.error, seen) ||
+    hasEmbeddedAttemptSessionTakeover(candidate.cause, seen) ||
+    hasEmbeddedAttemptSessionTakeover(candidate.reason, seen)
+  );
+}
+
+/**
+ * True when the error is a local runtime coordination error (session write-lock
+ * timeout or embedded attempt session takeover) rather than a provider/model
+ * failure. The model fallback chain must abort on these instead of consuming
+ * candidate slots — retrying any model would hit the same local condition.
+ * See #83510.
+ */
+export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
+  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+    return false;
+  }
+  if (isFailoverError(err)) {
+    return false;
+  }
+  if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
+  }
+  return resolveFailoverClassificationFromError(err) === null;
 }
 
 function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
+    return false;
+  }
+  if (hasSessionWriteLockContention(err)) {
     return false;
   }
   if (readErrorName(err) === "TimeoutError") {
@@ -186,6 +355,9 @@ export function isTimeoutError(err: unknown): boolean {
   if (readErrorName(err) !== "AbortError") {
     return false;
   }
+  if (hasSessionWriteLockContention(err)) {
+    return false;
+  }
   const message = getErrorMessage(err);
   if (message && ABORT_TIMEOUT_RE.test(message)) {
     return true;
@@ -201,37 +373,145 @@ function failoverReasonFromClassification(
   return classification?.kind === "reason" ? classification.reason : null;
 }
 
-function normalizeErrorSignal(err: unknown): FailoverSignal {
+function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
   const message = getErrorMessage(err);
   return {
     status: getStatusCode(err),
     code: getErrorCode(err),
+    errorType: getErrorType(err),
     message: message || undefined,
+    provider: getProvider(err) ?? providerHint,
   };
 }
 
-function resolveFailoverClassificationFromError(err: unknown): FailoverClassification | null {
+function getNestedErrorCandidates(err: unknown): unknown[] {
+  if (!err || typeof err !== "object") {
+    return [];
+  }
+  const candidate = err as { error?: unknown; cause?: unknown };
+  return [candidate.error, candidate.cause].filter(
+    (value): value is unknown => value !== undefined && value !== err,
+  );
+}
+
+function isFormatClassification(classification: FailoverClassification | null): boolean {
+  return classification?.kind === "reason" && classification.reason === "format";
+}
+
+function decideNestedFormatOverride(
+  candidate: unknown,
+  inheritedStatus: number | undefined,
+  seen: Set<object>,
+  depth: number,
+): boolean | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  if (candidate && typeof candidate === "object") {
+    if (seen.has(candidate)) {
+      return null;
+    }
+    seen.add(candidate);
+  }
+
+  const directSignal = normalizeDirectErrorSignal(candidate);
+  const nestedCandidates = getNestedErrorCandidates(candidate);
+  const nestedStatus = directSignal.status ?? inheritedStatus;
+  const hasDirectMessage = Boolean(directSignal.message?.trim());
+  if (
+    hasDirectMessage &&
+    isUnclassifiedNoBodyHttpSignal({ ...directSignal, status: nestedStatus })
+  ) {
+    return true;
+  }
+  if (hasDirectMessage && (nestedCandidates.length === 0 || classifyFailoverSignal(directSignal))) {
+    return false;
+  }
+  for (const nestedCandidate of nestedCandidates) {
+    const decision = decideNestedFormatOverride(nestedCandidate, nestedStatus, seen, depth + 1);
+    if (decision !== null) {
+      return decision;
+    }
+  }
+  return null;
+}
+
+function resolveFailoverClassificationFromErrorInternal(
+  err: unknown,
+  seen: Set<object>,
+  depth: number,
+  providerHint?: string,
+): FailoverClassification | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  if (err && typeof err === "object") {
+    if (seen.has(err)) {
+      return null;
+    }
+    seen.add(err);
+  }
   if (isFailoverError(err)) {
     return {
       kind: "reason",
       reason: err.reason,
     };
   }
+  const signal = normalizeErrorSignal(err, providerHint);
+  const codeReason = signal.code
+    ? failoverReasonFromClassification(classifyFailoverSignal({ code: signal.code }))
+    : null;
+  const hasExplicitFailoverMetadata =
+    typeof inferSignalStatus(signal) === "number" ||
+    (codeReason !== null && codeReason !== "timeout");
+  const hasSessionLock = hasSessionWriteLockContention(err);
 
-  const classification = classifyFailoverSignal(normalizeErrorSignal(err));
+  const classification = classifyFailoverSignal(signal);
+  const nestedCandidates = getNestedErrorCandidates(err);
+
   if (!classification || classification.kind === "context_overflow") {
-    // Let wrapped causes override parent timeout/overflow guesses.
-    const cause = getErrorCause(err);
-    if (cause && cause !== err) {
-      const causeClassification = resolveFailoverClassificationFromError(cause);
-      if (causeClassification) {
-        return causeClassification;
+    for (const candidate of nestedCandidates) {
+      const nestedClassification = resolveFailoverClassificationFromErrorInternal(
+        candidate,
+        seen,
+        depth + 1,
+        providerHint,
+      );
+      if (nestedClassification) {
+        if (hasSessionLock && !hasExplicitFailoverMetadata) {
+          return null;
+        }
+        return nestedClassification;
+      }
+    }
+  }
+
+  if (isFormatClassification(classification)) {
+    for (const candidate of nestedCandidates) {
+      const shouldClearFormat = decideNestedFormatOverride(
+        candidate,
+        signal.status,
+        seen,
+        depth + 1,
+      );
+      if (shouldClearFormat === true) {
+        return null;
+      }
+      if (shouldClearFormat === false) {
+        break;
       }
     }
   }
 
   if (classification) {
+    if (hasSessionLock && !hasExplicitFailoverMetadata) {
+      return null;
+    }
     return classification;
+  }
+
+  if (hasSessionLock) {
+    return null;
   }
 
   if (isTimeoutError(err)) {
@@ -243,22 +523,99 @@ function resolveFailoverClassificationFromError(err: unknown): FailoverClassific
   return null;
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
-  return failoverReasonFromClassification(resolveFailoverClassificationFromError(err));
+function resolveFailoverClassificationFromError(
+  err: unknown,
+  providerHint?: string,
+): FailoverClassification | null {
+  return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
+}
+
+export function resolveFailoverReasonFromError(
+  err: unknown,
+  providerHint?: string,
+): FailoverReason | null {
+  return failoverReasonFromClassification(
+    resolveFailoverClassificationFromError(err, providerHint),
+  );
+}
+
+/**
+ * Build an actionable remediation hint for a failover error when the failure
+ * reason is `auth` / `auth_permanent` and we have enough provider attribution
+ * to suggest a re-authentication command. Returns `undefined` for any other
+ * failure shape so callers can opportunistically append the hint without
+ * branching on every reason themselves.
+ *
+ * Keep the string short and copy-pasteable — operators see it in fallback
+ * summary errors and TUI status lines.
+ */
+export function buildFailoverRemediationHint(err: unknown): string | undefined {
+  if (!isFailoverError(err)) {
+    return undefined;
+  }
+  if (err.reason !== "auth" && err.reason !== "auth_permanent") {
+    return undefined;
+  }
+  const provider = err.provider?.trim();
+  if (!provider) {
+    return undefined;
+  }
+  const command = buildProviderReauthCommand(provider);
+  return command ? `Re-authenticate with: ${command}` : undefined;
+}
+
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function buildProviderReauthCommand(
+  provider: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string | undefined {
+  const trimmed = provider.trim();
+  if (!trimmed || hasControlCharacter(trimmed)) {
+    return undefined;
+  }
+  return formatCliCommand(
+    `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`,
+    env,
+  );
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function describeFailoverError(err: unknown): {
   message: string;
+  rawError?: string;
   reason?: FailoverReason;
   status?: number;
   code?: string;
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  sessionId?: string;
+  lane?: string;
 } {
   if (isFailoverError(err)) {
     return {
       message: err.message,
+      rawError: err.rawError,
       reason: err.reason,
       status: err.status,
       code: err.code,
+      provider: err.provider,
+      model: err.model,
+      profileId: err.profileId,
+      sessionId: err.sessionId,
+      lane: err.lane,
     };
   }
   const signal = normalizeErrorSignal(err);
@@ -268,6 +625,7 @@ export function describeFailoverError(err: unknown): {
     reason: resolveFailoverReasonFromError(err) ?? undefined,
     status: signal.status,
     code: signal.code,
+    provider: signal.provider,
   };
 }
 
@@ -277,12 +635,14 @@ export function coerceToFailoverError(
     provider?: string;
     model?: string;
     profileId?: string;
+    sessionId?: string;
+    lane?: string;
   },
 ): FailoverError | null {
   if (isFailoverError(err)) {
     return err;
   }
-  const reason = resolveFailoverReasonFromError(err);
+  const reason = resolveFailoverReasonFromError(err, context?.provider);
   if (!reason) {
     return null;
   }
@@ -292,13 +652,21 @@ export function coerceToFailoverError(
   const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
 
+  // Suspend when hitting rate limits or billing issues in an attributed session
+  const shouldSuspend =
+    Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
+
   return new FailoverError(message, {
     reason,
-    provider: context?.provider,
+    provider: context?.provider ?? signal.provider,
     model: context?.model,
     profileId: context?.profileId,
+    sessionId: context?.sessionId,
+    lane: context?.lane,
     status,
     code,
+    rawError: message,
     cause: err instanceof Error ? err : undefined,
+    suspend: shouldSuspend,
   });
 }

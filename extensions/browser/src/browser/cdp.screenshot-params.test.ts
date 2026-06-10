@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withCdpSocket } from "./cdp.helpers.js";
+import { captureScreenshot } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { shouldUsePlaywrightForScreenshot } from "./profile-capabilities.js";
 
@@ -17,44 +19,50 @@ const mockState = vi.hoisted(() => ({
 }));
 
 vi.mock("./cdp.helpers.js", () => ({
-  withCdpSocket: vi.fn(async (_wsUrl: string, fn: (send: unknown) => Promise<unknown>) => {
-    const send = (method: string, params?: Record<string, unknown>) => {
-      sentMessages.push({ method, params });
-      if (method === "Page.captureScreenshot") {
-        return Promise.resolve({ data: "AAAA" });
-      }
-      if (method === "Page.getLayoutMetrics") {
-        return Promise.resolve({
-          cssContentSize: { width: 1200, height: 3000 },
-          contentSize: { width: 1200, height: 3000 },
-        });
-      }
-      if (method === "Emulation.clearDeviceMetricsOverride") {
-        mockState.emulationCleared = true;
-        return Promise.resolve({});
-      }
-      if (method === "Emulation.setDeviceMetricsOverride") {
-        mockState.emulationCleared = false;
-        return Promise.resolve({});
-      }
-      if (method === "Runtime.evaluate") {
-        if (mockState.emulationCleared && mockState.emulatedTab) {
+  withCdpSocket: vi.fn(
+    async (
+      _wsUrl: string,
+      fn: (send: unknown) => Promise<unknown>,
+      _opts?: { commandTimeoutMs?: number },
+    ) => {
+      const send = (method: string, params?: Record<string, unknown>) => {
+        sentMessages.push({ method, params });
+        if (method === "Page.captureScreenshot") {
+          return Promise.resolve({ data: "AAAA" });
+        }
+        if (method === "Page.getLayoutMetrics") {
+          return Promise.resolve({
+            cssContentSize: { width: 1200, height: 3000 },
+            contentSize: { width: 1200, height: 3000 },
+          });
+        }
+        if (method === "Emulation.clearDeviceMetricsOverride") {
+          mockState.emulationCleared = true;
+          return Promise.resolve({});
+        }
+        if (method === "Emulation.setDeviceMetricsOverride") {
+          mockState.emulationCleared = false;
+          return Promise.resolve({});
+        }
+        if (method === "Runtime.evaluate") {
+          if (mockState.emulationCleared && mockState.emulatedTab) {
+            return Promise.resolve({
+              result: {
+                value: mockState.naturalViewport,
+              },
+            });
+          }
           return Promise.resolve({
             result: {
-              value: mockState.naturalViewport,
+              value: mockState.viewport,
             },
           });
         }
-        return Promise.resolve({
-          result: {
-            value: mockState.viewport,
-          },
-        });
-      }
-      return Promise.resolve({});
-    };
-    return fn(send);
-  }),
+        return Promise.resolve({});
+      };
+      return fn(send);
+    },
+  ),
   appendCdpPath: vi.fn(),
   fetchJson: vi.fn(),
   isLoopbackHost: vi.fn(),
@@ -74,38 +82,55 @@ const localProfile: ResolvedBrowserProfile = {
   cdpIsLoopback: true,
   color: "#FF4500",
   driver: "openclaw",
+  headless: false,
   attachOnly: false,
 };
 
-let captureScreenshot: typeof import("./cdp.js").captureScreenshot;
-
-beforeEach(async () => {
+beforeEach(() => {
   sentMessages.length = 0;
   mockState.emulationCleared = false;
   mockState.emulatedTab = true;
   mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
   mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
-  vi.resetModules();
-  ({ captureScreenshot } = await import("./cdp.js"));
 });
 
+function requireSentMessage(method: string) {
+  const message = sentMessages.find((m) => m.method === method);
+  if (!message) {
+    throw new Error(`expected ${method} CDP message`);
+  }
+  return message;
+}
+
 describe("CDP screenshot params", () => {
-  it("viewport screenshot uses fromSurface: false without clip or emulation override", async () => {
+  it("viewport screenshot omits fromSurface and captureBeyondViewport", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
-    const call = sentMessages.find((m) => m.method === "Page.captureScreenshot");
-    expect(call).toBeDefined();
-    expect(call!.params).toMatchObject({
-      format: "png",
-      fromSurface: false,
-      captureBeyondViewport: true,
-    });
-    expect(call!.params).not.toHaveProperty("clip");
+    const call = requireSentMessage("Page.captureScreenshot");
+    expect(call.params?.format).toBe("png");
+    expect(call.params).not.toHaveProperty("fromSurface");
+    expect(call.params).not.toHaveProperty("captureBeyondViewport");
+    expect(call.params).not.toHaveProperty("clip");
 
     const emulationCalls = sentMessages.filter(
       (m) => m.method === "Emulation.setDeviceMetricsOverride",
     );
     expect(emulationCalls).toHaveLength(0);
+  });
+
+  it("uses the requested timeout as the raw CDP command timeout", async () => {
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      timeoutMs: 12_345,
+    });
+
+    const [wsUrl, sendCallback, options] =
+      (withCdpSocket as unknown as { mock: { calls: Array<Array<unknown>> } }).mock.calls.at(-1) ??
+      [];
+    expect(wsUrl).toBe("ws://localhost:9222/devtools/page/X");
+    expect(typeof sendCallback).toBe("function");
+    expect(options).toEqual({ commandTimeoutMs: 12_345 });
   });
 
   it("fullPage on emulated tab: clears, detects drift, re-applies saved emulation", async () => {
@@ -119,28 +144,29 @@ describe("CDP screenshot params", () => {
 
     const setCalls = sentMessages.filter((m) => m.method === "Emulation.setDeviceMetricsOverride");
     expect(setCalls.length).toBe(2);
+    const [firstSetCall, secondSetCall] = setCalls;
+    if (!firstSetCall || !secondSetCall) {
+      throw new Error("expected two viewport updates");
+    }
 
     // Expand: uses saved DPR, mobile defaults to false
-    expect(setCalls[0]!.params).toMatchObject({
-      width: 1200,
-      height: 3000,
-      deviceScaleFactor: 2,
-      mobile: false,
-    });
+    expect(firstSetCall.params?.width).toBe(1200);
+    expect(firstSetCall.params?.height).toBe(3000);
+    expect(firstSetCall.params?.deviceScaleFactor).toBe(2);
+    expect(firstSetCall.params?.mobile).toBe(false);
 
     // Clear is called first in the finally block
-    const clearCall = sentMessages.find((m) => m.method === "Emulation.clearDeviceMetricsOverride");
-    expect(clearCall).toBeDefined();
+    requireSentMessage("Emulation.clearDeviceMetricsOverride");
+    const captureCall = requireSentMessage("Page.captureScreenshot");
+    expect(captureCall.params?.captureBeyondViewport).toBe(true);
 
     // Viewport drifted after clear → re-apply saved dimensions
-    expect(setCalls[1]!.params).toMatchObject({
-      width: 800,
-      height: 600,
-      deviceScaleFactor: 2,
-      mobile: false,
-      screenWidth: 800,
-      screenHeight: 600,
-    });
+    expect(secondSetCall.params?.width).toBe(800);
+    expect(secondSetCall.params?.height).toBe(600);
+    expect(secondSetCall.params?.deviceScaleFactor).toBe(2);
+    expect(secondSetCall.params?.mobile).toBe(false);
+    expect(secondSetCall.params?.screenWidth).toBe(800);
+    expect(secondSetCall.params?.screenHeight).toBe(600);
   });
 
   it("fullPage on non-emulated tab: clears and does NOT re-apply emulation", async () => {
@@ -158,17 +184,15 @@ describe("CDP screenshot params", () => {
     // Only the expand call — no re-apply after clear
     expect(setCalls).toHaveLength(1);
 
-    const clearCall = sentMessages.find((m) => m.method === "Emulation.clearDeviceMetricsOverride");
-    expect(clearCall).toBeDefined();
+    requireSentMessage("Emulation.clearDeviceMetricsOverride");
   });
 
   it("fullPage viewport dimensions never shrink below current innerWidth/Height", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", fullPage: true });
 
-    const expandCall = sentMessages.find((m) => m.method === "Emulation.setDeviceMetricsOverride");
-    expect(expandCall).toBeDefined();
-    expect(Number(expandCall!.params!.width)).toBeGreaterThanOrEqual(800);
-    expect(Number(expandCall!.params!.height)).toBeGreaterThanOrEqual(600);
+    const expandCall = requireSentMessage("Emulation.setDeviceMetricsOverride");
+    expect(Number(expandCall.params?.width)).toBeGreaterThanOrEqual(800);
+    expect(Number(expandCall.params?.height)).toBeGreaterThanOrEqual(600);
   });
 });
 

@@ -6,10 +6,9 @@ import {
   MarkdownConfigSchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 
 const groupConfigSchema = z.object({
-  allow: z.boolean().optional(),
   enabled: z.boolean().optional(),
   requireMention: z.boolean().optional(),
   tools: ToolPolicySchema,

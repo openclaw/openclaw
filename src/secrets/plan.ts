@@ -1,12 +1,10 @@
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contract.js";
 import { parseDotPath, toDotPath } from "./shared.js";
-import {
-  isKnownSecretTargetType,
-  resolvePlanTargetAgainstRegistry,
-  type ResolvedPlanTarget,
-} from "./target-registry.js";
+import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
 export type SecretsPlanTargetType = string;
 
@@ -35,9 +33,7 @@ export type SecretsPlanTarget = {
    * For provider targets, used to scrub auth-profile/static residues.
    */
   providerId?: string;
-  /**
-   * For googlechat account-scoped targets.
-   */
+  /** For account-scoped channel targets. */
   accountId?: string;
   /**
    * Optional auth-profile provider value used when creating new auth profile mappings.
@@ -62,10 +58,6 @@ export type SecretsApplyPlan = {
 
 const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
   return SecretProviderSchema.safeParse(value).success;
 }
@@ -83,7 +75,7 @@ export function resolveValidatedPlanTarget(candidate: {
   accountId?: string;
   authProfileProvider?: string;
 }): ResolvedPlanTarget | null {
-  if (!isKnownSecretTargetType(candidate.type)) {
+  if (typeof candidate.type !== "string" || !candidate.type.trim()) {
     return null;
   }
   const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
@@ -92,7 +84,7 @@ export function resolveValidatedPlanTarget(candidate: {
   }
   const segments =
     Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
-      ? candidate.pathSegments.map((segment) => String(segment).trim()).filter(Boolean)
+      ? normalizeStringEntries(candidate.pathSegments)
       : parseDotPath(path);
   if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
     return null;
@@ -129,7 +121,6 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       authProfileProvider: candidate.authProfileProvider,
     });
     if (
-      !isKnownSecretTargetType(candidate.type) ||
       typeof candidate.path !== "string" ||
       !candidate.path.trim() ||
       (candidate.pathSegments !== undefined && !Array.isArray(candidate.pathSegments)) ||

@@ -17,7 +17,6 @@ import Testing
 
     private func makeProjectRootWithPnpm() throws -> (tmp: URL, pnpmPath: URL) {
         let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
         try makeExecutableForTests(at: pnpmPath)
         return (tmp, pnpmPath)
@@ -27,12 +26,17 @@ import Testing
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
 
         let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: openclawPath)
 
-        let cmd = CommandResolver.openclawCommand(subcommand: "gateway", defaults: defaults, configRoot: [:])
+        let searchPaths = [tmp.appendingPathComponent("node_modules/.bin").path]
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: searchPaths,
+            projectRoot: tmp)
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
@@ -40,12 +44,11 @@ import Testing
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
 
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/openclaw.js")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v22.19.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
@@ -53,7 +56,8 @@ import Testing
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
+            projectRoot: tmp)
 
         #expect(cmd.count >= 3)
         if cmd.count >= 3 {
@@ -67,7 +71,6 @@ import Testing
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
 
         let binDir = tmp.appendingPathComponent("bin")
         let openclawPath = binDir.appendingPathComponent("openclaw")
@@ -79,7 +82,8 @@ import Testing
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [binDir.path])
+            searchPaths: [binDir.path],
+            projectRoot: tmp)
 
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "rpc"]))
     }
@@ -88,7 +92,6 @@ import Testing
         let defaults = self.makeLocalDefaults()
 
         let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
 
         let binDir = tmp.appendingPathComponent("bin")
         let openclawPath = binDir.appendingPathComponent("openclaw")
@@ -98,7 +101,8 @@ import Testing
             subcommand: "gateway",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [binDir.path])
+            searchPaths: [binDir.path],
+            projectRoot: tmp)
 
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
@@ -133,9 +137,11 @@ import Testing
 
     @Test func `preferred paths start with project node bins`() throws {
         let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
 
-        let first = CommandResolver.preferredPaths().first
+        let first = CommandResolver.preferredPaths(
+            home: FileManager().homeDirectoryForCurrentUser,
+            current: [],
+            projectRoot: tmp).first
         #expect(first == tmp.appendingPathComponent("node_modules/.bin").path)
     }
 
@@ -158,6 +164,9 @@ import Testing
         } else {
             #expect(Bool(false))
         }
+        #expect(cmd.contains("StrictHostKeyChecking=yes"))
+        #expect(!cmd.contains("StrictHostKeyChecking=accept-new"))
+        #expect(cmd.contains("UpdateHostKeys=yes"))
         #expect(cmd.contains("-i"))
         #expect(cmd.contains("/tmp/id_ed25519"))
         if let script = cmd.last {
@@ -168,6 +177,28 @@ import Testing
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
         }
+    }
+
+    @Test func `empty remote defaults fall back to config remote values`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set(" ", forKey: remoteTargetKey)
+        defaults.set("", forKey: remoteIdentityKey)
+
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshTarget": "alice@gateway.local",
+                        "sshIdentity": "/tmp/config-id",
+                    ],
+                ],
+            ])
+
+        #expect(settings.target == "alice@gateway.local")
+        #expect(settings.identity == "/tmp/config-id")
     }
 
     @Test func `rejects unsafe SSH targets`() {
@@ -182,7 +213,6 @@ import Testing
         defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
 
         let tmp = try makeTempDirForTests()
-        CommandResolver.setProjectRoot(tmp.path)
 
         let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: openclawPath)
@@ -190,12 +220,33 @@ import Testing
         let cmd = CommandResolver.openclawCommand(
             subcommand: "daemon",
             defaults: defaults,
-            configRoot: ["gateway": ["mode": "local"]])
+            configRoot: ["gateway": ["mode": "local"]],
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
+            projectRoot: tmp)
 
         #expect(cmd.first == openclawPath.path)
         #expect(cmd.count >= 2)
         if cmd.count >= 2 {
             #expect(cmd[1] == "daemon")
         }
+    }
+
+    @Test func `remote settings fall back to config ssh target`() {
+        let defaults = self.makeDefaults()
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshTarget": "alice@gateway.example:2222",
+                        "sshIdentity": "/tmp/id_ed25519",
+                    ],
+                ],
+            ])
+
+        #expect(settings.mode == .remote)
+        #expect(settings.target == "alice@gateway.example:2222")
+        #expect(settings.identity == "/tmp/id_ed25519")
     }
 }

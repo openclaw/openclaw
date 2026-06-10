@@ -36,6 +36,7 @@ type RequirementsEvaluationRemoteContext = {
   remotePlatforms?: string[];
 };
 
+/** Returns required binaries absent from both the local host and optional remote target. */
 export function resolveMissingBins(params: {
   required: string[];
   hasLocalBin: (bin: string) => boolean;
@@ -53,6 +54,7 @@ export function resolveMissingBins(params: {
   });
 }
 
+/** Treats an any-bin requirement as satisfied when any listed binary exists locally or remotely. */
 export function resolveMissingAnyBins(params: {
   required: string[];
   hasLocalBin: (bin: string) => boolean;
@@ -70,6 +72,7 @@ export function resolveMissingAnyBins(params: {
   return params.required;
 }
 
+/** Resolves OS requirements against local and remote platforms, accepting macos as darwin. */
 export function resolveMissingOs(params: {
   required: string[];
   localPlatform: string;
@@ -78,15 +81,29 @@ export function resolveMissingOs(params: {
   if (params.required.length === 0) {
     return [];
   }
-  if (params.required.includes(params.localPlatform)) {
+  const localPlatform = normalizeOsRequirementPlatform(params.localPlatform);
+  const requiredPlatforms = new Set(
+    params.required.map((platform) => normalizeOsRequirementPlatform(platform)),
+  );
+  if (requiredPlatforms.has(localPlatform)) {
     return [];
   }
-  if (params.remotePlatforms?.some((platform) => params.required.includes(platform))) {
+  if (
+    params.remotePlatforms?.some((platform) =>
+      requiredPlatforms.has(normalizeOsRequirementPlatform(platform)),
+    )
+  ) {
     return [];
   }
   return params.required;
 }
 
+function normalizeOsRequirementPlatform(platform: string): string {
+  const normalized = platform.trim().toLowerCase();
+  return normalized === "macos" ? "darwin" : normalized;
+}
+
+/** Returns environment variable names whose caller-provided satisfaction check fails. */
 export function resolveMissingEnv(params: {
   required: string[];
   isSatisfied: (envName: string) => boolean;
@@ -101,6 +118,7 @@ export function resolveMissingEnv(params: {
   return missing;
 }
 
+/** Builds per-config-path status while preserving every declared path for UI diagnostics. */
 export function buildConfigChecks(params: {
   required: string[];
   isSatisfied: (pathStr: string) => boolean;
@@ -111,6 +129,7 @@ export function buildConfigChecks(params: {
   });
 }
 
+/** Evaluates normalized requirements and returns missing categories plus config diagnostics. */
 export function evaluateRequirements(
   params: RequirementsEvaluationContext &
     RequirementsEvaluationRemoteContext & {
@@ -142,6 +161,7 @@ export function evaluateRequirements(
   });
   const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
 
+  // `always` keeps diagnostics visible while making runtime eligibility unconditional.
   const missing = params.always
     ? { bins: [], anyBins: [], env: [], config: [], os: [] }
     : {
@@ -163,6 +183,7 @@ export function evaluateRequirements(
   return { missing, eligible, configChecks };
 }
 
+/** Converts entry metadata into the canonical requirement shape before evaluation. */
 export function evaluateRequirementsFromMetadata(
   params: RequirementsEvaluationContext &
     RequirementsEvaluationRemoteContext & {
@@ -196,6 +217,7 @@ export function evaluateRequirementsFromMetadata(
   return { required, ...result };
 }
 
+/** Convenience wrapper for callers that receive remote capability checks as one object. */
 export function evaluateRequirementsFromMetadataWithRemote(
   params: RequirementsEvaluationContext & {
     metadata?: RequirementsMetadata;

@@ -1,11 +1,20 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMattermostClient, createMattermostDirectChannelWithRetry } from "./client.js";
 
 describe("createMattermostDirectChannelWithRetry", () => {
   const mockFetch = vi.fn<typeof fetch>();
 
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   function createMockClient() {
@@ -23,6 +32,16 @@ describe("createMattermostDirectChannelWithRetry", () => {
     return Object.assign(new TypeError("fetch failed"), { cause });
   }
 
+  async function resolveRetryRun<T>(run: Promise<T>): Promise<T> {
+    await vi.runAllTimersAsync();
+    return await run;
+  }
+
+  function suppressUnhandled<T>(run: Promise<T>): Promise<T> {
+    run.catch(() => {});
+    return run;
+  }
+
   it("succeeds on first attempt without retries", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -34,9 +53,11 @@ describe("createMattermostDirectChannelWithRetry", () => {
     const client = createMockClient();
     const onRetry = vi.fn();
 
-    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      onRetry,
-    });
+    const result = await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        onRetry,
+      }),
+    );
 
     expect(result.id).toBe("dm-channel-123");
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -62,19 +83,24 @@ describe("createMattermostDirectChannelWithRetry", () => {
     const client = createMockClient();
     const onRetry = vi.fn();
 
-    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 3,
-      initialDelayMs: 10,
-      onRetry,
-    });
+    const result = await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+        onRetry,
+      }),
+    );
 
     expect(result.id).toBe("dm-channel-456");
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(onRetry).toHaveBeenCalledWith(
-      1,
-      expect.any(Number),
-      expect.objectContaining({ message: expect.stringContaining("429") }),
+    const retryCall = onRetry.mock.calls[0];
+    expect(retryCall?.[0]).toBe(1);
+    expect(retryCall?.[1]).toBeGreaterThanOrEqual(10);
+    expect(retryCall?.[1]).toBeLessThanOrEqual(20);
+    expect(retryCall?.[2]).toBeInstanceOf(Error);
+    expect((retryCall?.[2] as Error | undefined)?.message).toBe(
+      "Mattermost API 429 undefined: Too many requests",
     );
   });
 
@@ -91,10 +117,12 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 3,
-      initialDelayMs: 10,
-    });
+    const result = await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    );
 
     // Should retry and succeed on second attempt (port 443 should NOT be treated as 4xx)
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -114,12 +142,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await expect(
+    const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         maxRetries: 3,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow();
+    );
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 400");
 
     // Should not retry - only called once (400 is a client error, even though message contains "429")
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -150,10 +179,12 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 3,
-      initialDelayMs: 10,
-    });
+    const result = await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    );
 
     expect(result.id).toBe("dm-channel-789");
     expect(mockFetch).toHaveBeenCalledTimes(3);
@@ -172,10 +203,12 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 3,
-      initialDelayMs: 10,
-    });
+    const result = await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    );
 
     expect(result.id).toBe("dm-channel-abc");
     expect(mockFetch).toHaveBeenCalledTimes(3);
@@ -198,10 +231,12 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 3,
-      initialDelayMs: 10,
-    });
+    const result = await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    );
 
     expect(result.id).toBe("dm-channel-fetch-failed");
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -218,12 +253,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await expect(
+    const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         maxRetries: 3,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow("400");
+    );
+    await expect(resolveRetryRun(run)).rejects.toThrow("400");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
@@ -239,12 +275,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await expect(
+    const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         maxRetries: 3,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow("404");
+    );
+    await expect(resolveRetryRun(run)).rejects.toThrow("404");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
@@ -260,12 +297,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await expect(
+    const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         maxRetries: 2,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow();
+    );
+    await expect(resolveRetryRun(run)).rejects.toThrow("Mattermost API 503");
 
     expect(mockFetch).toHaveBeenCalledTimes(3); // initial + 2 retries
   });
@@ -298,17 +336,41 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await expect(
+    const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         timeoutMs: 50,
         maxRetries: 0,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow();
+    );
+    await expect(resolveRetryRun(run)).rejects.toThrow("AbortError");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(abortSignal).toBeDefined();
+    expect(abortSignal).toBeInstanceOf(AbortSignal);
+    expect(abortSignal?.aborted).toBe(true);
     expect(abortListenerCalled).toBe(true);
+  });
+
+  it("caps oversized request timeouts before scheduling aborts", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ id: "dm-channel-capped" }),
+    } as Response);
+
+    const client = createMockClient();
+
+    await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+      maxRetries: 0,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses exponential backoff with jitter between retries", async () => {
@@ -325,14 +387,16 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 3,
-      initialDelayMs: 100,
-      maxDelayMs: 1000,
-      onRetry: (attempt, delayMs) => {
-        delays.push(delayMs);
-      },
-    });
+    await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 100,
+        maxDelayMs: 1000,
+        onRetry: (attempt, delayMs) => {
+          delays.push(delayMs);
+        },
+      }),
+    );
 
     expect(delays).toHaveLength(2);
     // First retry: exponentialDelay = 100ms, jitter = 0-100ms, total = 100-200ms
@@ -359,14 +423,16 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 4,
-      initialDelayMs: 1000,
-      maxDelayMs: 2500,
-      onRetry: (attempt, delayMs) => {
-        delays.push(delayMs);
-      },
-    });
+    await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 4,
+        initialDelayMs: 1000,
+        maxDelayMs: 2500,
+        onRetry: (attempt, delayMs) => {
+          delays.push(delayMs);
+        },
+      }),
+    );
 
     expect(delays).toHaveLength(4);
     // All delays should be capped at maxDelayMs
@@ -388,12 +454,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await expect(
+    const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         maxRetries: 3,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow("400");
+    );
+    await expect(resolveRetryRun(run)).rejects.toThrow("400");
 
     // Should not retry - only called once
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -410,12 +477,13 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    await expect(
+    const run = suppressUnhandled(
       createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
         maxRetries: 3,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow("403");
+    );
+    await expect(resolveRetryRun(run)).rejects.toThrow("403");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
@@ -433,12 +501,14 @@ describe("createMattermostDirectChannelWithRetry", () => {
     });
 
     const client = createMockClient();
-    await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      timeoutMs: 5000,
-    });
+    await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        timeoutMs: 5000,
+      }),
+    );
 
-    expect(capturedSignal).toBeDefined();
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(false);
   });
 
   it("retries on 5xx even if error message contains 4xx substring", async () => {
@@ -454,10 +524,12 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     const client = createMockClient();
 
-    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
-      maxRetries: 3,
-      initialDelayMs: 10,
-    });
+    const result = await resolveRetryRun(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    );
 
     // Should retry and succeed on second attempt
     expect(mockFetch).toHaveBeenCalledTimes(2);

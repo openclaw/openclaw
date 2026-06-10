@@ -1,14 +1,24 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
+import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
+import {
+  collectQuotaWindows,
+  formatQuotaReset,
+  type QuotaWindowSummary,
+} from "../provider-quota-summary.ts";
+import { resolveSessionDisplayName } from "../session-display.ts";
 import type {
   SessionsUsageResult,
   SessionsListResult,
   SkillStatusReport,
   CronJob,
   CronStatus,
+  ModelAuthStatusResult,
 } from "../types.ts";
 
 export type OverviewCardsProps = {
@@ -17,6 +27,7 @@ export type OverviewCardsProps = {
   skillsReport: SkillStatusReport | null;
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
+  modelAuthStatus: ModelAuthStatusResult | null;
   presenceCount: number;
   onNavigate: (tab: string) => void;
 };
@@ -47,7 +58,45 @@ function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
   `;
 }
 
+function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null {
+  const primary = windows[0];
+  if (!primary) {
+    return null;
+  }
+  const reset = formatQuotaReset(primary.resetAt);
+  const primaryHint = [primary.displayName, primary.label, reset ? `reset ${reset}` : null].filter(
+    Boolean,
+  );
+  const secondary = windows.find(
+    (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
+  );
+  const secondaryHint = secondary
+    ? `${[secondary.displayName, secondary.label].filter(Boolean).join(" · ")} ${t(
+        "overview.cards.modelAuthUsageLeft",
+        {
+          pct: String(secondary.remaining),
+        },
+      )}`
+    : null;
+  const valueClass = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "";
+
+  return {
+    kind: "quota",
+    tab: "usage",
+    label: t("tabs.usage"),
+    value: html`<span class=${valueClass}
+      >${t("overview.cards.modelAuthUsageLeft", { pct: String(primary.remaining) })}</span
+    >`,
+    hint: [primaryHint.join(" · "), secondaryHint].filter(Boolean).join(" · "),
+  };
+}
+
 function renderSkeletonCards() {
+  // Render 4 skeletons — matching the always-present cards (cost, sessions,
+  // skills, cron). The Model Auth card is conditional on OAuth providers
+  // existing, so rendering it in the skeleton would cause a layout shift
+  // when real data arrives for a setup without OAuth. Accept a brief empty
+  // slot instead for setups that DO have OAuth.
   return html`
     <section class="ov-cards">
       ${[0, 1, 2, 3].map(
@@ -84,7 +133,13 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const cronEnabled = props.cronStatus?.enabled ?? null;
   const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
   const cronJobCount = props.cronJobs.length;
-  const failedCronCount = props.cronJobs.filter((j) => j.state?.lastStatus === "error").length;
+  const failedCronCount = props.cronJobs.filter(
+    (j) => resolveCronJobLastRunStatus(j) === "error",
+  ).length;
+  const authLoading = props.modelAuthStatus === null;
+  const authProviders = props.modelAuthStatus?.providers ?? [];
+  const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
+  const quotaCard = renderProviderQuotaCard(collectQuotaWindows(monitoredProviders));
 
   const cronValue =
     cronEnabled == null
@@ -130,6 +185,95 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       hint: cronHint,
     },
   ];
+  if (quotaCard) {
+    cards.splice(1, 0, quotaCard);
+  }
+
+  // Model auth card — show providers whose auth needs monitoring.
+  // See isMonitoredAuthProvider for the exact predicate.
+  //
+  // Rendered while loading (modelAuthStatus === null) so the card slot stays
+  // in the grid instead of snapping in on data arrival, matching the cron
+  // card's N/A-placeholder pattern. Still hidden entirely for api-key-only
+  // setups post-load (nothing to monitor), which accepts a one-time hide
+  // rather than the recurring load-time layout shift.
+  if (authLoading) {
+    cards.push({
+      kind: "auth",
+      tab: "overview",
+      label: t("overview.cards.modelAuth"),
+      value: t("common.na"),
+      hint: "",
+    });
+  } else if (monitoredProviders.length > 0) {
+    const expired = monitoredProviders.filter(
+      (p) => p.status === "expired" || p.status === "missing",
+    ).length;
+    const expiring = monitoredProviders.filter((p) => p.status === "expiring").length;
+    const authValue =
+      expired > 0
+        ? html`<span class="danger"
+            >${t("overview.cards.modelAuthExpired", { count: String(expired) })}</span
+          >`
+        : expiring > 0
+          ? html`<span class="warn"
+              >${t("overview.cards.modelAuthExpiring", { count: String(expiring) })}</span
+            >`
+          : t("overview.cards.modelAuthOk", { count: String(monitoredProviders.length) });
+
+    // Format a window reset time compactly (e.g. "2:43 PM", "Apr 16").
+    // Hidden for windows with plenty of headroom to keep the hint readable;
+    // shown when a window is below 25% to signal urgency.
+    const formatReset = (resetAt: number | undefined, pctLeft: number): string | null => {
+      const timestampMs = asDateTimestampMs(resetAt);
+      if (timestampMs === undefined || pctLeft >= 25) {
+        return null;
+      }
+      const d = new Date(timestampMs);
+      const withinADay = timestampMs - Date.now() < 24 * 60 * 60 * 1000;
+      return withinADay
+        ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+        : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    };
+
+    const hintParts = monitoredProviders
+      .map((p) => {
+        const bits: string[] = [];
+        for (const w of p.usage?.windows ?? []) {
+          // Clamp to [0, 100] — providers can report usedPercent > 100 when
+          // fully exhausted, which would render as "-5% left" without this.
+          const pctLeft = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
+          const label = (w.label || "").trim();
+          const prefix = label ? `${label} ` : "";
+          const pctStr = t("overview.cards.modelAuthUsageLeft", { pct: String(pctLeft) });
+          const resetStr = formatReset(w.resetAt, pctLeft);
+          bits.push(resetStr ? `${prefix}${pctStr} (${resetStr})` : `${prefix}${pctStr}`);
+        }
+        if (
+          p.expiry &&
+          Number.isFinite(p.expiry.at) &&
+          p.status !== "static" &&
+          p.expiry.label &&
+          p.expiry.label !== "unknown"
+        ) {
+          bits.push(t("overview.cards.modelAuthExpiresIn", { when: p.expiry.label }));
+        }
+        return bits.length > 0 ? `${p.displayName}: ${bits.join(", ")}` : null;
+      })
+      .filter((s): s is string => s !== null)
+      .slice(0, 2);
+    const authHint =
+      hintParts.join(" · ") ||
+      t("overview.cards.modelAuthProviders", { count: String(monitoredProviders.length) });
+
+    cards.push({
+      kind: "auth",
+      tab: "overview",
+      label: t("overview.cards.modelAuth"),
+      value: authValue,
+      hint: authHint,
+    });
+  }
 
   const sessions = props.sessionsResult?.sessions.slice(0, 5) ?? [];
 
@@ -145,7 +289,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
                 (s) => html`
                   <li class="ov-recent__row">
                     <span class="ov-recent__key"
-                      >${blurDigits(s.displayName || s.label || s.key)}</span
+                      >${blurDigits(resolveSessionDisplayName(s.key, s))}</span
                     >
                     <span class="ov-recent__model">${s.model ?? ""}</span>
                     <span class="ov-recent__time"

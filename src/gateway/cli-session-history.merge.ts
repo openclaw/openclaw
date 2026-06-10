@@ -1,3 +1,8 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
@@ -7,17 +12,22 @@ function extractComparableText(message: unknown): string | undefined {
     return undefined;
   }
   const record = message as { role?: unknown; text?: unknown; content?: unknown };
-  const role = typeof record.role === "string" ? record.role : undefined;
+  const role = readStringValue(record.role);
   const parts: string[] = [];
-  if (typeof record.text === "string") {
-    parts.push(record.text);
+  const text = readStringValue(record.text);
+  if (text !== undefined) {
+    parts.push(text);
   }
-  if (typeof record.content === "string") {
-    parts.push(record.content);
+  const content = readStringValue(record.content);
+  if (content !== undefined) {
+    parts.push(content);
   } else if (Array.isArray(record.content)) {
     for (const block of record.content) {
-      if (block && typeof block === "object" && "text" in block && typeof block.text === "string") {
-        parts.push(block.text);
+      if (block && typeof block === "object" && "text" in block) {
+        const blockText = readStringValue(block.text);
+        if (blockText !== undefined) {
+          parts.push(blockText);
+        }
       }
     }
   }
@@ -33,42 +43,61 @@ function extractComparableText(message: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function resolveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function resolveComparableTimestamp(message: unknown): number | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  return resolveFiniteNumber((message as { timestamp?: unknown }).timestamp);
+  return asFiniteNumber((message as { timestamp?: unknown }).timestamp);
 }
 
 function resolveComparableRole(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const role = (message as { role?: unknown }).role;
-  return typeof role === "string" ? role : undefined;
+  return readStringValue((message as { role?: unknown }).role);
 }
 
-function resolveImportedExternalId(message: unknown): string | undefined {
+type ImportedExternalIdentity = {
+  externalId: string;
+  importedFrom?: string;
+  cliSessionId?: string;
+};
+
+function resolveImportedExternalIdentity(message: unknown): ImportedExternalIdentity | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   const meta =
     "__openclaw" in message &&
-    (message as { __openclaw?: unknown }).__openclaw &&
-    typeof (message as { __openclaw?: unknown }).__openclaw === "object"
-      ? ((message as { __openclaw?: Record<string, unknown> }).__openclaw ?? {})
+    (message as { __openclaw?: unknown })["__openclaw"] &&
+    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object"
+      ? ((message as { __openclaw?: Record<string, unknown> })["__openclaw"] ?? {})
       : undefined;
-  const externalId = meta?.externalId;
-  return typeof externalId === "string" && externalId.trim() ? externalId : undefined;
+  const externalId = normalizeOptionalString(meta?.externalId);
+  return externalId
+    ? {
+        externalId,
+        importedFrom: normalizeOptionalString(meta?.importedFrom),
+        cliSessionId: normalizeOptionalString(meta?.cliSessionId),
+      }
+    : undefined;
+}
+
+function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean {
+  const importedIdentity = resolveImportedExternalIdentity(imported);
+  const existingIdentity = resolveImportedExternalIdentity(existing);
+  if (!importedIdentity || !existingIdentity) {
+    return false;
+  }
+  return (
+    importedIdentity.externalId === existingIdentity.externalId &&
+    importedIdentity.importedFrom === existingIdentity.importedFrom &&
+    importedIdentity.cliSessionId === existingIdentity.cliSessionId
+  );
 }
 
 function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
-  const importedExternalId = resolveImportedExternalId(imported);
-  if (importedExternalId && resolveImportedExternalId(existing) === importedExternalId) {
+  if (hasSameExternalIdentity(existing, imported)) {
     return true;
   }
 
@@ -101,12 +130,6 @@ function compareHistoryMessages(
   const bTimestamp = resolveComparableTimestamp(b.message);
   if (aTimestamp !== undefined && bTimestamp !== undefined && aTimestamp !== bTimestamp) {
     return aTimestamp - bTimestamp;
-  }
-  if (aTimestamp !== undefined && bTimestamp === undefined) {
-    return -1;
-  }
-  if (aTimestamp === undefined && bTimestamp !== undefined) {
-    return 1;
   }
   return a.order - b.order;
 }

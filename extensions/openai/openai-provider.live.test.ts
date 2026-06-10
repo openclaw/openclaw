@@ -1,9 +1,10 @@
 import OpenAI from "openai";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const DEFAULT_LIVE_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.4-nano"] as const;
+const DEFAULT_LIVE_MODEL_IDS = ["chat-latest", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
@@ -14,10 +15,45 @@ type LiveModelCase = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  reasoning: boolean;
+  textVerbosity: "low" | "medium";
 };
 
 function resolveLiveModelCase(modelId: string): LiveModelCase {
   switch (modelId) {
+    case "chat-latest":
+      return {
+        modelId,
+        templateId: "gpt-5.5",
+        templateName: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        reasoning: false,
+        textVerbosity: "medium",
+      };
+    case "gpt-5.5":
+      return {
+        modelId,
+        templateId: "gpt-5.5",
+        templateName: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
+    case "gpt-5.5-pro":
+      return {
+        modelId,
+        templateId: "gpt-5.4-pro",
+        templateName: "GPT-5.4 Pro",
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
     case "gpt-5.4":
       return {
         modelId,
@@ -26,6 +62,8 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.4-pro":
       return {
@@ -35,6 +73,8 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 21, output: 168, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.4-mini":
       return {
@@ -44,6 +84,8 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
       };
     case "gpt-5.4-nano":
       return {
@@ -53,6 +95,8 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         cost: { input: 0.05, output: 0.4, cacheRead: 0.005, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
       };
     default:
       throw new Error(`Unsupported live OpenAI model: ${modelId}`);
@@ -60,11 +104,14 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
 }
 
 function resolveLiveModelCases(raw?: string): LiveModelCase[] {
-  const requested = raw
-    ?.split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const modelIds = requested?.length ? requested : [...DEFAULT_LIVE_MODEL_IDS];
+  const requested: string[] = [];
+  for (const value of raw?.split(",") ?? []) {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      requested.push(trimmed);
+    }
+  }
+  const modelIds = requested.length ? requested : [...DEFAULT_LIVE_MODEL_IDS];
   return [...new Set(modelIds)].map((modelId) => resolveLiveModelCase(modelId));
 }
 
@@ -85,22 +132,24 @@ describeLive("buildOpenAIProvider live", () => {
               provider: "openai",
               api: "openai-completions",
               baseUrl: "https://api.openai.com/v1",
-              reasoning: true,
+              reasoning: liveCase.reasoning,
               input: ["text", "image"],
               cost: liveCase.cost,
               contextWindow: liveCase.contextWindow,
               maxTokens: liveCase.maxTokens,
-            };
+            } satisfies ProviderRuntimeModel;
           }
           return null;
         },
       };
 
-      const resolved = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId: liveCase.modelId,
-        modelRegistry: registry as never,
-      });
+      const resolved =
+        registry.find("openai", liveCase.modelId) ??
+        provider.resolveDynamicModel?.({
+          provider: "openai",
+          modelId: liveCase.modelId,
+          modelRegistry: registry as never,
+        });
       if (!resolved) {
         throw new Error(`openai provider did not resolve ${liveCase.modelId}`);
       }
@@ -111,12 +160,11 @@ describeLive("buildOpenAIProvider live", () => {
         model: resolved,
       });
 
-      expect(normalized).toMatchObject({
-        provider: "openai",
-        id: liveCase.modelId,
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      });
+      expect(normalized?.provider).toBe("openai");
+      expect(normalized?.id).toBe(liveCase.modelId);
+      expect(normalized?.api).toBe("openai-responses");
+      expect(normalized?.baseUrl).toBe("https://api.openai.com/v1");
+      expect(normalized?.reasoning).toEqual(liveCase.reasoning);
 
       const client = new OpenAI({
         apiKey: OPENAI_API_KEY,
@@ -125,12 +173,15 @@ describeLive("buildOpenAIProvider live", () => {
 
       const response = await client.responses.create({
         model: normalized?.id ?? liveCase.modelId,
-        input: "Reply with exactly OK.",
-        max_output_tokens: 16,
+        instructions: "Return exactly OK and no other text.",
+        input: "Return exactly OK.",
+        max_output_tokens: 64,
+        ...(liveCase.reasoning ? { reasoning: { effort: "none" as const } } : {}),
+        text: { verbosity: liveCase.textVerbosity },
       });
 
       expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
     },
-    30_000,
+    180_000,
   );
 });

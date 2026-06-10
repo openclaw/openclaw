@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { createSandboxTestContext } from "openclaw/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
-} from "../../../test/helpers/sandbox-fixtures.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 
@@ -52,7 +52,7 @@ async function runCommand(params: {
   args: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  stdin?: string | Buffer;
+  stdin?: string | Uint8Array;
   allowFailure?: boolean;
   timeoutMs?: number;
 }): Promise<ExecResult> {
@@ -88,18 +88,19 @@ async function runCommand(params: {
       }
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          new Error(
-            [
-              `command failed: ${params.command} ${params.args.join(" ")}`,
-              `exit: ${exitCode}`,
-              stdout.trim() ? `stdout:\n${stdout}` : "",
-              stderr.trim() ? `stderr:\n${stderr}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          ),
-        );
+        const message = [
+          `command failed: ${params.command} ${params.args.join(" ")}`,
+          `exit: ${exitCode}`,
+        ];
+        const trimmedStdout = stdout.trim();
+        if (trimmedStdout.length > 0) {
+          message.push(`stdout:\n${stdout}`);
+        }
+        const trimmedStderr = stderr.trim();
+        if (trimmedStderr.length > 0) {
+          message.push(`stderr:\n${stderr}`);
+        }
+        reject(new Error(message.join("\n")));
         return;
       }
       resolve({ code: exitCode, stdout, stderr });
@@ -117,7 +118,21 @@ async function commandAvailable(command: string): Promise<boolean> {
       allowFailure: true,
       timeoutMs: 20_000,
     });
-    return result.code === 0 || result.stdout.length > 0 || result.stderr.length > 0;
+    return result.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function openshellGatewayAvailable(command: string): Promise<boolean> {
+  try {
+    const result = await runCommand({
+      command,
+      args: ["gateway", "start", "--help"],
+      allowFailure: true,
+      timeoutMs: 20_000,
+    });
+    return result.code === 0 && `${result.stdout}\n${result.stderr}`.includes("--name");
   } catch {
     return false;
   }
@@ -255,7 +270,9 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
         },
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
 
   await runCommand({
@@ -307,7 +324,7 @@ async function runBackendExec(params: {
     env: {},
     usePty: false,
   });
-  let result: ExecResult | null = null;
+  let result: ExecResult | null | undefined;
   try {
     result = await runCommand({
       command: execSpec.argv[0] ?? "ssh",
@@ -338,6 +355,9 @@ describe("openshell sandbox backend e2e", () => {
       if (!(await commandAvailable(OPENCLAW_OPENSHELL_COMMAND))) {
         return;
       }
+      if (!(await openshellGatewayAvailable(OPENCLAW_OPENSHELL_COMMAND))) {
+        return;
+      }
 
       const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openshell-e2e-"));
       const env = openshellEnv(rootDir);
@@ -354,7 +374,7 @@ describe("openshell sandbox backend e2e", () => {
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
       const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
       const gatewayPort = await allocatePort();
-      let hostPolicyServer: HostPolicyServer | null = null;
+      let hostPolicyServer: HostPolicyServer | null | undefined;
       const sandboxCfg = {
         mode: "all" as const,
         backend: "openshell" as const,
@@ -475,9 +495,14 @@ describe("openshell sandbox backend e2e", () => {
         }
 
         await bridge.writeFile({ filePath: "nested/remote-only.txt", data: "hello-remote\n" });
-        await expect(
-          fs.readFile(path.join(workspaceDir, "nested", "remote-only.txt"), "utf8"),
-        ).rejects.toThrow();
+        const hostReadError = await fs
+          .readFile(path.join(workspaceDir, "nested", "remote-only.txt"), "utf8")
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(hostReadError).toBeInstanceOf(Error);
+        expect((hostReadError as NodeJS.ErrnoException).code).toBe("ENOENT");
         await expect(bridge.readFile({ filePath: "nested/remote-only.txt" })).resolves.toEqual(
           Buffer.from("hello-remote\n"),
         );

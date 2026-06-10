@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -6,40 +6,43 @@ const {
   showLoadingAnimationMock,
   getProfileMock,
   MessagingApiClientMock,
-  loadConfigMock,
+  requireRuntimeConfigMock,
   resolveLineAccountMock,
   resolveLineChannelAccessTokenMock,
   recordChannelActivityMock,
   logVerboseMock,
+  resolvePinnedHostnameWithPolicyMock,
 } = vi.hoisted(() => {
-  const pushMessageMock = vi.fn();
-  const replyMessageMock = vi.fn();
-  const showLoadingAnimationMock = vi.fn();
-  const getProfileMock = vi.fn();
-  const MessagingApiClientMock = vi.fn(function () {
+  const pushMessageMockLocal = vi.fn();
+  const replyMessageMockLocal = vi.fn();
+  const showLoadingAnimationMockLocal = vi.fn();
+  const getProfileMockLocal = vi.fn();
+  const MessagingApiClientMockLocal = vi.fn(function () {
     return {
-      pushMessage: pushMessageMock,
-      replyMessage: replyMessageMock,
-      showLoadingAnimation: showLoadingAnimationMock,
-      getProfile: getProfileMock,
+      pushMessage: pushMessageMockLocal,
+      replyMessage: replyMessageMockLocal,
+      showLoadingAnimation: showLoadingAnimationMockLocal,
+      getProfile: getProfileMockLocal,
     };
   });
-  const loadConfigMock = vi.fn(() => ({}));
-  const resolveLineAccountMock = vi.fn(() => ({ accountId: "default" }));
-  const resolveLineChannelAccessTokenMock = vi.fn(() => "line-token");
-  const recordChannelActivityMock = vi.fn();
-  const logVerboseMock = vi.fn();
+  const requireRuntimeConfigMockLocal = vi.fn((cfg: unknown) => cfg ?? {});
+  const resolveLineAccountMockLocal = vi.fn(() => ({ accountId: "default" }));
+  const resolveLineChannelAccessTokenMockLocal = vi.fn(() => "line-token");
+  const recordChannelActivityMockLocal = vi.fn();
+  const logVerboseMockLocal = vi.fn();
+  const resolvePinnedHostnameWithPolicyMockLocal = vi.fn();
   return {
-    pushMessageMock,
-    replyMessageMock,
-    showLoadingAnimationMock,
-    getProfileMock,
-    MessagingApiClientMock,
-    loadConfigMock,
-    resolveLineAccountMock,
-    resolveLineChannelAccessTokenMock,
-    recordChannelActivityMock,
-    logVerboseMock,
+    pushMessageMock: pushMessageMockLocal,
+    replyMessageMock: replyMessageMockLocal,
+    showLoadingAnimationMock: showLoadingAnimationMockLocal,
+    getProfileMock: getProfileMockLocal,
+    MessagingApiClientMock: MessagingApiClientMockLocal,
+    requireRuntimeConfigMock: requireRuntimeConfigMockLocal,
+    resolveLineAccountMock: resolveLineAccountMockLocal,
+    resolveLineChannelAccessTokenMock: resolveLineChannelAccessTokenMockLocal,
+    recordChannelActivityMock: recordChannelActivityMockLocal,
+    logVerboseMock: logVerboseMockLocal,
+    resolvePinnedHostnameWithPolicyMock: resolvePinnedHostnameWithPolicyMockLocal,
   };
 });
 
@@ -47,8 +50,8 @@ vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  loadConfig: loadConfigMock,
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
+  requireRuntimeConfig: requireRuntimeConfigMock,
 }));
 
 vi.mock("./accounts.js", () => ({
@@ -59,33 +62,67 @@ vi.mock("./channel-access-token.js", () => ({
   resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", () => ({
   recordChannelActivity: recordChannelActivityMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     logVerbose: logVerboseMock,
   };
 });
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+}));
+
 let sendModule: typeof import("./send.js");
 
+const LINE_TEST_CFG = {
+  channels: {
+    line: {
+      accounts: {
+        default: {},
+      },
+    },
+  },
+};
+
 describe("LINE send helpers", () => {
-  beforeEach(async () => {
+  const fixedSentAt = 1_800_000_000_000;
+
+  beforeAll(async () => {
+    sendModule = await import("./send.js");
+  });
+
+  afterAll(() => {
+    vi.doUnmock("@line/bot-sdk");
+    vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./channel-access-token.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-activity-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.resetModules();
+  });
+
+  beforeEach(() => {
+    vi.setSystemTime(fixedSentAt);
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
     getProfileMock.mockReset();
     MessagingApiClientMock.mockReset();
-    loadConfigMock.mockReset();
+    requireRuntimeConfigMock.mockClear();
     resolveLineAccountMock.mockReset();
     resolveLineChannelAccessTokenMock.mockReset();
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
+    resolvePinnedHostnameWithPolicyMock.mockReset();
 
     MessagingApiClientMock.mockImplementation(function () {
       return {
@@ -95,13 +132,16 @@ describe("LINE send helpers", () => {
         getProfile: getProfileMock,
       };
     });
-    loadConfigMock.mockReturnValue({});
+    requireRuntimeConfigMock.mockImplementation((cfg: unknown) => cfg ?? LINE_TEST_CFG);
     resolveLineAccountMock.mockReturnValue({ accountId: "default" });
     resolveLineChannelAccessTokenMock.mockReturnValue("line-token");
+    resolvePinnedHostnameWithPolicyMock.mockResolvedValue({
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
     pushMessageMock.mockResolvedValue({});
     replyMessageMock.mockResolvedValue({});
     showLoadingAnimationMock.mockResolvedValue({});
-    sendModule = await import("./send.js");
   });
 
   afterEach(() => {
@@ -120,7 +160,7 @@ describe("LINE send helpers", () => {
       "line:user:U123",
       "https://example.com/original.jpg",
       undefined,
-      { verbose: true },
+      { cfg: LINE_TEST_CFG, verbose: true },
     );
 
     expect(pushMessageMock).toHaveBeenCalledWith({
@@ -139,11 +179,45 @@ describe("LINE send helpers", () => {
       direction: "outbound",
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
-    expect(result).toEqual({ messageId: "push", chatId: "U123" });
+    expect(result).toEqual({
+      chatId: "U123",
+      messageId: "push",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "media",
+            platformMessageId: "push",
+            raw: {
+              channel: "line",
+              chatId: "U123",
+              conversationId: "U123",
+              messageId: "push",
+              meta: { messageCount: 1 },
+            },
+            threadId: "U123",
+          },
+        ],
+        platformMessageIds: ["push"],
+        primaryPlatformMessageId: "push",
+        raw: [
+          {
+            channel: "line",
+            chatId: "U123",
+            conversationId: "U123",
+            messageId: "push",
+            meta: { messageCount: 1 },
+          },
+        ],
+        sentAt: fixedSentAt,
+        threadId: "U123",
+      },
+    });
   });
 
   it("replies when reply token is provided", async () => {
     const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
+      cfg: LINE_TEST_CFG,
       replyToken: "reply-token",
       mediaUrl: "https://example.com/media.jpg",
       verbose: true,
@@ -166,11 +240,45 @@ describe("LINE send helpers", () => {
       ],
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual({ messageId: "reply", chatId: "C1" });
+    expect(result).toEqual({
+      chatId: "C1",
+      messageId: "reply",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "media",
+            platformMessageId: "reply",
+            raw: {
+              channel: "line",
+              chatId: "C1",
+              conversationId: "C1",
+              messageId: "reply",
+              meta: { messageCount: 2 },
+            },
+            threadId: "C1",
+          },
+        ],
+        platformMessageIds: ["reply"],
+        primaryPlatformMessageId: "reply",
+        raw: [
+          {
+            channel: "line",
+            chatId: "C1",
+            conversationId: "C1",
+            messageId: "reply",
+            meta: { messageCount: 2 },
+          },
+        ],
+        sentAt: fixedSentAt,
+        threadId: "C1",
+      },
+    });
   });
 
   it("sends video with explicit image preview URL", async () => {
     await sendModule.sendMessageLine("line:user:U100", "Video", {
+      cfg: LINE_TEST_CFG,
       mediaUrl: "https://example.com/video.mp4",
       mediaKind: "video",
       previewImageUrl: "https://example.com/preview.jpg",
@@ -197,14 +305,31 @@ describe("LINE send helpers", () => {
   it("throws when video preview URL is missing", async () => {
     await expect(
       sendModule.sendMessageLine("line:user:U200", "Video", {
+        cfg: LINE_TEST_CFG,
         mediaUrl: "https://example.com/video.mp4",
         mediaKind: "video",
       }),
     ).rejects.toThrow(/require previewimageurl/i);
   });
 
+  it("blocks private-network media URLs before calling LINE", async () => {
+    resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
+      new Error("SSRF blocked private network target"),
+    );
+
+    await expect(
+      sendModule.sendMessageLine("line:user:U200", "Image", {
+        cfg: LINE_TEST_CFG,
+        mediaUrl: "https://127.0.0.1/image.jpg",
+      }),
+    ).rejects.toThrow(/private network/i);
+
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
   it("omits trackingId for non-user destinations", async () => {
     await sendModule.sendMessageLine("line:group:C100", "Video", {
+      cfg: LINE_TEST_CFG,
       mediaUrl: "https://example.com/video.mp4",
       mediaKind: "video",
       previewImageUrl: "https://example.com/preview.jpg",
@@ -228,9 +353,36 @@ describe("LINE send helpers", () => {
   });
 
   it("throws when push messages are empty", async () => {
-    await expect(sendModule.pushMessagesLine("U123", [])).rejects.toThrow(
+    await expect(sendModule.pushMessagesLine("U123", [], { cfg: LINE_TEST_CFG })).rejects.toThrow(
       "Message must be non-empty for LINE sends",
     );
+  });
+
+  it("rejects lowercased LINE-shaped recipients (#81628 safety net)", async () => {
+    // 33-char value with lowercase leading char — what an upstream session-key
+    // fragment looked like before the cron-tool fix. LINE rejects with HTTP 400
+    // anyway; throwing locally keeps the failure permanent so delivery-recovery
+    // moves the entry to failed/ immediately instead of silently retrying 5×.
+    await expect(
+      sendModule.pushMessagesLine(
+        "cabcdef0123456789abcdef0123456789",
+        [{ type: "text", text: "hello" }],
+        { cfg: LINE_TEST_CFG },
+      ),
+    ).rejects.toThrow(/Recipient is not a valid LINE id/);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts case-exact LINE recipients with the leading capital preserved", async () => {
+    await sendModule.pushMessagesLine(
+      "Cabcdef0123456789abcdef0123456789",
+      [{ type: "text", text: "hello" }],
+      { cfg: LINE_TEST_CFG },
+    );
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "Cabcdef0123456789abcdef0123456789",
+      messages: [{ type: "text", text: "hello" }],
+    });
   });
 
   it("logs HTTP body when push fails", async () => {
@@ -245,7 +397,9 @@ describe("LINE send helpers", () => {
     pushMessageMock.mockRejectedValueOnce(err);
 
     await expect(
-      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }]),
+      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
     ).rejects.toThrow("LINE push failed");
 
     expect(logVerboseMock).toHaveBeenCalledWith(
@@ -259,8 +413,8 @@ describe("LINE send helpers", () => {
       pictureUrl: "https://example.com/peter.jpg",
     });
 
-    const first = await sendModule.getUserProfile("U-cache");
-    const second = await sendModule.getUserProfile("U-cache");
+    const first = await sendModule.getUserProfile("U-cache", { cfg: LINE_TEST_CFG });
+    const second = await sendModule.getUserProfile("U-cache", { cfg: LINE_TEST_CFG });
 
     expect(first).toEqual({
       displayName: "Peter",
@@ -273,10 +427,12 @@ describe("LINE send helpers", () => {
   it("continues when loading animation is unsupported", async () => {
     showLoadingAnimationMock.mockRejectedValueOnce(new Error("unsupported"));
 
-    await expect(sendModule.showLoadingAnimation("line:room:R1")).resolves.toBeUndefined();
+    await expect(
+      sendModule.showLoadingAnimation("line:room:R1", { cfg: LINE_TEST_CFG }),
+    ).resolves.toBeUndefined();
 
     expect(logVerboseMock).toHaveBeenCalledWith(
-      expect.stringContaining("line: loading animation failed (non-fatal)"),
+      "line: loading animation failed (non-fatal): Error: unsupported",
     );
   });
 
@@ -285,10 +441,11 @@ describe("LINE send helpers", () => {
       "U-quick",
       "Pick one",
       Array.from({ length: 20 }, (_, index) => `Choice ${index + 1}`),
+      { cfg: LINE_TEST_CFG },
     );
 
     expect(pushMessageMock).toHaveBeenCalledTimes(1);
-    const firstCall = pushMessageMock.mock.calls[0] as [
+    const firstCall = pushMessageMock.mock.calls.at(0) as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);

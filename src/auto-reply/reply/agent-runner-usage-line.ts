@@ -1,4 +1,10 @@
-import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import {
+  estimateUsageCost,
+  formatTokenCount,
+  formatUsd,
+  type ModelCostConfig,
+} from "../../utils/usage-format.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 export const formatResponseUsageLine = (params: {
@@ -9,12 +15,7 @@ export const formatResponseUsageLine = (params: {
     cacheWrite?: number;
   };
   showCost: boolean;
-  costConfig?: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
+  costConfig?: ModelCostConfig;
 }): string | null => {
   const usage = params.usage;
   if (!usage) {
@@ -27,6 +28,8 @@ export const formatResponseUsageLine = (params: {
   }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
+  const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
   const cost =
     params.showCost && typeof input === "number" && typeof output === "number"
       ? estimateUsageCost({
@@ -40,8 +43,13 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  const cacheSuffix =
+    (typeof cacheRead === "number" && cacheRead > 0) ||
+    (typeof cacheWrite === "number" && cacheWrite > 0)
+      ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
+      : "";
   const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+  return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
@@ -62,7 +70,21 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
     ...existing,
     text: `${existingText}${separator}${line}`,
   };
+  const metadata = getReplyPayloadMetadata(existing);
+  const nextWithMetadata = metadata
+    ? setReplyPayloadMetadata(next, {
+        ...metadata,
+        ...(metadata.sourceReplyTranscriptMirror
+          ? {
+              sourceReplyTranscriptMirror: {
+                ...metadata.sourceReplyTranscriptMirror,
+                text: next.text,
+              },
+            }
+          : {}),
+      })
+    : next;
   const updated = payloads.slice();
-  updated[index] = next;
+  updated[index] = nextWithMetadata;
   return updated;
 };

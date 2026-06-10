@@ -1,8 +1,11 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileConfig } from "../../config/types.js";
-import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAuthProfileMetadata } from "./identity.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 
 function getProfileSuffix(profileId: string): string {

@@ -1,105 +1,39 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SandboxFsBridge } from "./fs-bridge.js";
-import type { SandboxRegistryEntry } from "./registry.js";
-import type { SandboxConfig, SandboxContext } from "./types.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type {
+  RegisteredSandboxBackend,
+  SandboxBackendFactory,
+  SandboxBackendId,
+  SandboxBackendManager,
+  SandboxBackendRegistration,
+} from "./backend.types.js";
 
-export type SandboxBackendId = string;
+export type {
+  CreateSandboxBackendParams,
+  SandboxBackendFactory,
+  SandboxBackendId,
+  SandboxBackendManager,
+  SandboxBackendRegistration,
+  SandboxBackendRuntimeInfo,
+} from "./backend.types.js";
+export type {
+  SandboxBackendCommandParams,
+  SandboxBackendCommandResult,
+  SandboxBackendExecSpec,
+  SandboxBackendHandle,
+} from "./backend-handle.types.js";
 
-export type SandboxBackendExecSpec = {
-  argv: string[];
-  env: NodeJS.ProcessEnv;
-  stdinMode: "pipe-open" | "pipe-closed";
-  finalizeToken?: unknown;
-};
+const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
 
-export type SandboxBackendCommandParams = {
-  script: string;
-  args?: string[];
-  stdin?: Buffer | string;
-  allowFailure?: boolean;
-  signal?: AbortSignal;
-};
-
-export type SandboxBackendCommandResult = {
-  stdout: Buffer;
-  stderr: Buffer;
-  code: number;
-};
-
-export type SandboxBackendHandle = {
-  id: SandboxBackendId;
-  runtimeId: string;
-  runtimeLabel: string;
-  workdir: string;
-  env?: Record<string, string>;
-  configLabel?: string;
-  configLabelKind?: string;
-  capabilities?: {
-    browser?: boolean;
+function getSandboxBackendFactories(): Map<SandboxBackendId, RegisteredSandboxBackend> {
+  const globalStore = globalThis as typeof globalThis & {
+    [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<SandboxBackendId, RegisteredSandboxBackend>;
   };
-  buildExecSpec(params: {
-    command: string;
-    workdir?: string;
-    env: Record<string, string>;
-    usePty: boolean;
-  }): Promise<SandboxBackendExecSpec>;
-  finalizeExec?: (params: {
-    status: "completed" | "failed";
-    exitCode: number | null;
-    timedOut: boolean;
-    token?: unknown;
-  }) => Promise<void>;
-  runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
-  createFsBridge?: (params: { sandbox: SandboxContext }) => SandboxFsBridge;
-};
-
-export type SandboxBackendRuntimeInfo = {
-  running: boolean;
-  actualConfigLabel?: string;
-  configLabelMatch: boolean;
-};
-
-export type SandboxBackendManager = {
-  describeRuntime(params: {
-    entry: SandboxRegistryEntry;
-    config: OpenClawConfig;
-    agentId?: string;
-  }): Promise<SandboxBackendRuntimeInfo>;
-  removeRuntime(params: {
-    entry: SandboxRegistryEntry;
-    config: OpenClawConfig;
-    agentId?: string;
-  }): Promise<void>;
-};
-
-export type CreateSandboxBackendParams = {
-  sessionKey: string;
-  scopeKey: string;
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  cfg: SandboxConfig;
-};
-
-export type SandboxBackendFactory = (
-  params: CreateSandboxBackendParams,
-) => Promise<SandboxBackendHandle>;
-
-export type SandboxBackendRegistration =
-  | SandboxBackendFactory
-  | {
-      factory: SandboxBackendFactory;
-      manager?: SandboxBackendManager;
-    };
-
-type RegisteredSandboxBackend = {
-  factory: SandboxBackendFactory;
-  manager?: SandboxBackendManager;
-};
-
-const SANDBOX_BACKEND_FACTORIES = new Map<SandboxBackendId, RegisteredSandboxBackend>();
+  globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY] ??= new Map();
+  return globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY];
+}
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {
-  const normalized = id.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(id);
   if (!normalized) {
     throw new Error("Sandbox backend id must not be empty.");
   }
@@ -112,23 +46,25 @@ export function registerSandboxBackend(
 ): () => void {
   const normalizedId = normalizeSandboxBackendId(id);
   const resolved = typeof registration === "function" ? { factory: registration } : registration;
-  const previous = SANDBOX_BACKEND_FACTORIES.get(normalizedId);
-  SANDBOX_BACKEND_FACTORIES.set(normalizedId, resolved);
+  const factories = getSandboxBackendFactories();
+  const previous = factories.get(normalizedId);
+  factories.set(normalizedId, resolved);
   return () => {
+    const currentFactories = getSandboxBackendFactories();
     if (previous) {
-      SANDBOX_BACKEND_FACTORIES.set(normalizedId, previous);
+      currentFactories.set(normalizedId, previous);
       return;
     }
-    SANDBOX_BACKEND_FACTORIES.delete(normalizedId);
+    currentFactories.delete(normalizedId);
   };
 }
 
 export function getSandboxBackendFactory(id: string): SandboxBackendFactory | null {
-  return SANDBOX_BACKEND_FACTORIES.get(normalizeSandboxBackendId(id))?.factory ?? null;
+  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.factory ?? null;
 }
 
 export function getSandboxBackendManager(id: string): SandboxBackendManager | null {
-  return SANDBOX_BACKEND_FACTORIES.get(normalizeSandboxBackendId(id))?.manager ?? null;
+  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.manager ?? null;
 }
 
 export function requireSandboxBackendFactory(id: string): SandboxBackendFactory {

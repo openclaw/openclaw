@@ -4,7 +4,7 @@ import {
   resolveSandboxBrowserConfig,
   resolveSandboxDockerConfig,
 } from "../agents/sandbox/config.js";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("sandbox docker config", () => {
   it("joins setupCommand arrays with newlines", () => {
@@ -60,6 +60,75 @@ describe("sandbox docker config", () => {
         "/home/user/projects:/projects:ro",
       ]);
     }
+  });
+
+  it("accepts Windows drive-letter binds in sandbox.docker config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              binds: ["D:/data/openclaw/src:/src:ro", "D:\\data\\openclaw\\output:/output:rw"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.binds).toEqual([
+        "D:/data/openclaw/src:/src:ro",
+        "D:\\data\\openclaw\\output:/output:rw",
+      ]);
+    }
+  });
+
+  it("rejects drive-relative Windows binds in sandbox.docker config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              binds: ["D:relative\\path:/src:ro"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts non-empty Docker GPU passthrough config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              gpus: "all",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.gpus).toBe("all");
+    }
+  });
+
+  it("rejects empty Docker GPU passthrough config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              gpus: "",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
   });
 
   it("rejects network host mode via Zod schema validation", () => {
@@ -186,7 +255,10 @@ describe("sandbox browser binds config", () => {
         defaults: {
           sandbox: {
             browser: {
-              binds: ["/home/user/.chrome-profile:/data/chrome:rw"],
+              binds: [
+                "/home/user/.chrome-profile:/data/chrome:rw",
+                "D:/data/openclaw/chrome:/data/chrome-windows:rw",
+              ],
             },
           },
         },
@@ -196,7 +268,28 @@ describe("sandbox browser binds config", () => {
     if (res.ok) {
       expect(res.config.agents?.defaults?.sandbox?.browser?.binds).toEqual([
         "/home/user/.chrome-profile:/data/chrome:rw",
+        "D:/data/openclaw/chrome:/data/chrome-windows:rw",
       ]);
+    }
+  });
+
+  it("rejects relative source paths in browser binds", () => {
+    for (const bind of [
+      "relative/profile:/data/chrome:rw",
+      "D:relative\\profile:/data/chrome:rw",
+    ]) {
+      const res = validateConfigObject({
+        agents: {
+          defaults: {
+            sandbox: {
+              browser: {
+                binds: [bind],
+              },
+            },
+          },
+        },
+      });
+      expect(res.ok, bind).toBe(false);
     }
   });
 
@@ -230,7 +323,7 @@ describe("sandbox browser binds config", () => {
       globalBrowser: { binds: [] },
       agentBrowser: {},
     });
-    expect(resolved.binds).toEqual([]);
+    expect(resolved.binds).toStrictEqual([]);
   });
 
   it("ignores agent browser binds under shared scope", () => {

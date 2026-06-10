@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
 import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
 
@@ -8,6 +9,10 @@ type ScheduleOptionInput = {
   exact?: unknown;
   stagger?: unknown;
   tz?: unknown;
+};
+
+type PositionalScheduleInput = {
+  positionalSchedule?: unknown;
 };
 
 type NormalizedScheduleOptions = {
@@ -34,6 +39,30 @@ export function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSch
     throw new Error("Choose exactly one schedule: --at, --every, or --cron");
   }
   return schedule;
+}
+
+export function resolveCronCreateScheduleFromArgs(
+  options: ScheduleOptionInput & PositionalScheduleInput,
+): CronSchedule {
+  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
+  if (!positionalSchedule) {
+    return resolveCronCreateSchedule(options);
+  }
+  const normalized = normalizeScheduleOptions(options);
+  if (countChosenSchedules(normalized) > 0) {
+    throw new Error("Choose a positional schedule or one of --at, --every, or --cron.");
+  }
+  const every = parseEverySchedule(positionalSchedule);
+  return resolveCronCreateSchedule({
+    ...options,
+    at: every
+      ? undefined
+      : looksLikeCronExpression(positionalSchedule)
+        ? undefined
+        : positionalSchedule,
+    cron: looksLikeCronExpression(positionalSchedule) ? positionalSchedule : undefined,
+    every,
+  });
 }
 
 export function resolveCronEditScheduleRequest(
@@ -74,16 +103,16 @@ export function applyExistingCronSchedulePatch(
 }
 
 function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedScheduleOptions {
-  const staggerRaw = readTrimmedString(options.stagger);
+  const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
     throw new Error("Choose either --stagger or --exact, not both");
   }
   return {
-    at: readTrimmedString(options.at),
-    every: readTrimmedString(options.every),
-    cronExpr: readTrimmedString(options.cron),
-    tz: readOptionalString(options.tz),
+    at: normalizeOptionalString(options.at) ?? "",
+    every: normalizeOptionalString(options.every) ?? "",
+    cronExpr: normalizeOptionalString(options.cron) ?? "",
+    tz: normalizeOptionalString(options.tz),
     requestedStaggerMs: parseCronStaggerMs({ staggerRaw, useExact }),
   };
 }
@@ -91,6 +120,16 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
 function countChosenSchedules(options: NormalizedScheduleOptions): number {
   return [Boolean(options.at), Boolean(options.every), Boolean(options.cronExpr)].filter(Boolean)
     .length;
+}
+
+function parseEverySchedule(value: string): string | undefined {
+  const match = /^every\s+(.+)$/iu.exec(value.trim());
+  return match?.[1]?.trim() || undefined;
+}
+
+function looksLikeCronExpression(value: string): boolean {
+  const parts = value.trim().split(/\s+/u);
+  return parts.length === 5 || parts.length === 6;
 }
 
 function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule | undefined {
@@ -103,14 +142,14 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
   if (options.at) {
     const atIso = parseAt(options.at, options.tz);
     if (!atIso) {
-      throw new Error("Invalid --at; use ISO time or duration like 20m");
+      throw new Error("Invalid --at. Use an ISO timestamp or a duration like 20m.");
     }
     return { kind: "at", at: atIso };
   }
   if (options.every) {
     const everyMs = parseDurationMs(options.every);
     if (!everyMs) {
-      throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
+      throw new Error("Invalid --every. Use a duration like 10m, 1h, or 1d.");
     }
     return { kind: "every", everyMs };
   }
@@ -123,13 +162,4 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
     };
   }
   return undefined;
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  const trimmed = readTrimmedString(value);
-  return trimmed || undefined;
-}
-
-function readTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
 }

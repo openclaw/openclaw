@@ -1,20 +1,63 @@
-import { Type } from "@sinclair/typebox";
-import {
-  createUnionActionGate,
-  listTokenSourcedAccounts,
-} from "openclaw/plugin-sdk/channel-actions";
+import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createDiscordActionGate, listEnabledDiscordAccounts } from "./accounts.js";
-import { handleDiscordMessageAction } from "./actions/handle-action.js";
-import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { inspectDiscordAccount } from "./account-inspect.js";
+import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
+import { readDiscordComponentSpec } from "./components.js";
+import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
 
-function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
-  const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
+const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
+  "emoji-upload",
+  "sticker-upload",
+  "role-add",
+  "role-remove",
+  "channel-create",
+  "channel-edit",
+  "channel-delete",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
+  "event-create",
+]);
+
+const localExecutionActions = new Set<ChannelMessageActionName>([
+  "send",
+  "upload-file",
+  "thread-reply",
+  "sticker",
+  "emoji-upload",
+  "sticker-upload",
+  "event-create",
+]);
+
+function resolveDiscordActionExecutionMode({ action }: { action: ChannelMessageActionName }) {
+  return localExecutionActions.has(action) ? "local" : "gateway";
+}
+
+let discordChannelActionsRuntimePromise:
+  | Promise<typeof import("./channel-actions.runtime.js")>
+  | undefined;
+
+async function loadDiscordChannelActionsRuntime() {
+  discordChannelActionsRuntimePromise ??= import("./channel-actions.runtime.js");
+  return await discordChannelActionsRuntimePromise;
+}
+
+function listDiscoverableDiscordAccounts(cfg: OpenClawConfig) {
+  return listDiscordAccountIds(cfg)
+    .map((accountId) => inspectDiscordAccount({ cfg, accountId }))
+    .filter((account) => account.enabled && account.configured);
+}
+
+function resolveDiscordActionDiscovery(cfg: OpenClawConfig) {
+  const accounts = listDiscoverableDiscordAccounts(cfg);
   if (accounts.length === 0) {
     return null;
   }
@@ -30,12 +73,33 @@ function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscord
   };
 }
 
+function resolveScopedDiscordActionDiscovery(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  if (!params.accountId) {
+    return resolveDiscordActionDiscovery(params.cfg);
+  }
+  const account = inspectDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.enabled || !account.configured) {
+    return null;
+  }
+  const gate = createDiscordActionGate({
+    cfg: params.cfg,
+    accountId: account.accountId,
+  });
+  return {
+    isEnabled: (key: keyof DiscordActionConfig, defaultValue = true) => gate(key, defaultValue),
+  };
+}
+
 function describeDiscordMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveDiscordActionDiscovery(cfg);
+  const discovery = resolveScopedDiscordActionDiscovery({ cfg, accountId });
   if (!discovery) {
     return {
       actions: [],
@@ -53,6 +117,7 @@ function describeDiscordMessageTool({
     actions.add("emoji-list");
   }
   if (discovery.isEnabled("messages")) {
+    actions.add("upload-file");
     actions.add("read");
     actions.add("edit");
     actions.add("delete");
@@ -122,28 +187,74 @@ function describeDiscordMessageTool({
   }
   return {
     actions: Array.from(actions),
-    capabilities: ["interactive", "components"],
-    schema: {
-      properties: {
-        components: Type.Optional(createDiscordMessageToolComponentsSchema()),
-      },
-    },
+    capabilities: ["presentation"],
   };
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
+  // Credential-only Discord actions run in the gateway when one is available.
+  // Send/file-style actions stay local because core owns their thread, media,
+  // component, and client-local payload semantics.
+  resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === "discord" &&
+    trustedRequesterGuildAdminActions.has(action),
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
+    const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
-      const to = typeof args.to === "string" ? args.to : undefined;
-      return to ? { to } : null;
+      return extractToolSend(args, "sendMessage");
     }
     if (action === "threadReply") {
-      const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
+      const channelId = normalizeOptionalString(args.channelId) ?? "";
       return channelId ? { to: `channel:${channelId}` } : null;
     }
     return null;
+  },
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const payloadWithDeliveryMetadata = withDiscordInboundEventDeliveryMetadata(payload, {
+      sessionKey: ctx.sessionKey,
+      inboundEventKind: ctx.inboundEventKind,
+    });
+    const rawComponents = ctx.params.components;
+    if (typeof rawComponents === "function") {
+      return null;
+    }
+    const componentSpec =
+      rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
+        ? readDiscordComponentSpec(rawComponents)
+        : undefined;
+    const nativeComponents = Array.isArray(rawComponents) ? rawComponents : undefined;
+    const embeds = Array.isArray(ctx.params.embeds) ? ctx.params.embeds : undefined;
+    if ((componentSpec || nativeComponents) && embeds?.length) {
+      return null;
+    }
+    const filename = normalizeOptionalString(ctx.params.filename);
+    if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
+      return payloadWithDeliveryMetadata;
+    }
+    const discordData =
+      payloadWithDeliveryMetadata.channelData?.discord &&
+      typeof payloadWithDeliveryMetadata.channelData.discord === "object" &&
+      !Array.isArray(payloadWithDeliveryMetadata.channelData.discord)
+        ? (payloadWithDeliveryMetadata.channelData.discord as Record<string, unknown>)
+        : {};
+    return {
+      ...payloadWithDeliveryMetadata,
+      channelData: {
+        ...payloadWithDeliveryMetadata.channelData,
+        discord: {
+          ...discordData,
+          ...(componentSpec ? { components: componentSpec } : {}),
+          ...(nativeComponents ? { components: nativeComponents } : {}),
+          ...(embeds?.length ? { embeds } : {}),
+          ...(filename ? { filename } : {}),
+        },
+      },
+    };
   },
   handleAction: async ({
     action,
@@ -152,16 +263,26 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     accountId,
     requesterSenderId,
     toolContext,
+    mediaAccess,
     mediaLocalRoots,
+    mediaReadFile,
+    sessionKey,
+    inboundEventKind,
   }) => {
-    return await handleDiscordMessageAction({
+    return await (
+      await loadDiscordChannelActionsRuntime()
+    ).handleDiscordMessageAction({
       action,
       params,
       cfg,
       accountId,
       requesterSenderId,
       toolContext,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(inboundEventKind ? { inboundEventKind } : {}),
     });
   },
 };

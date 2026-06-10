@@ -129,7 +129,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
-      for (let i = 0; i < 20; i += 1) {
+      for (let i = 0; i < 19; i += 1) {
         inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
       }
       inspectPortUsage
@@ -140,7 +140,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       if (process.platform !== "win32") {
         expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+        expect(killProcessTree).toHaveBeenNthCalledWith(2, 5252, { graceMs: 300 });
       } else {
         expect(killProcessTree).not.toHaveBeenCalled();
       }
@@ -168,6 +168,27 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("does not reclaim gateway listeners when stopping a node Scheduled Task", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
+      env.OPENCLAW_SERVICE_KIND = "node";
+      env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockResolvedValue(busyPortUsage(4242));
+
+      await stopScheduledTask({ env, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Node"],
+        ["/End", "/TN", "OpenClaw Node"],
+      ]);
+    });
+  });
+
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(4);
@@ -183,6 +204,55 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+        ["/Run", "/TN", "OpenClaw Gateway"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
+      ]);
+    });
+  });
+
+  it("does not wait on or force-kill the gateway port when restarting a node Scheduled Task", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(4);
+      env.OPENCLAW_SERVICE_KIND = "node";
+      env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
+      inspectPortUsage.mockResolvedValue(busyPortUsage(5151));
+
+      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Node"],
+        ["/End", "/TN", "OpenClaw Node"],
+        ["/Run", "/TN", "OpenClaw Node"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
+      ]);
+    });
+  });
+
+  it("throws when /Run fails during restart", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
+      );
+
+      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
+        "schtasks run failed: ERROR: Access is denied.",
+      );
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });

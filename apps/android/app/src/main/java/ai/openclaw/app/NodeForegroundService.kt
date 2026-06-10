@@ -3,12 +3,14 @@ package ai.openclaw.app
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
 import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,10 +19,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
+/** Foreground service that keeps the Android node connection and voice capture visible to the OS. */
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
   private var didStartForeground = false
+  private var voiceCaptureMode = VoiceCaptureMode.Off
 
   override fun onCreate() {
     super.onCreate()
@@ -33,25 +37,56 @@ class NodeForegroundService : Service() {
       stopSelf()
       return
     }
+    // Split connection and capture flows before combining so notification text
+    // can update without restarting runtime-owned connection work.
     notificationJob =
       scope.launch {
         combine(
-          runtime.statusText,
-          runtime.serverName,
-          runtime.isConnected,
-          runtime.micEnabled,
-          runtime.micIsListening,
-        ) { status, server, connected, micEnabled, micListening ->
-          Quint(status, server, connected, micEnabled, micListening)
-        }.collect { (status, server, connected, micEnabled, micListening) ->
-          val title = if (connected) "OpenClaw Node · Connected" else "OpenClaw Node"
-          val micSuffix =
-            if (micEnabled) {
-              if (micListening) " · Mic: Listening" else " · Mic: Pending"
-            } else {
-              ""
+          combine(
+            runtime.statusText,
+            runtime.serverName,
+            runtime.isConnected,
+            runtime.voiceCaptureMode,
+          ) { status, server, connected, mode ->
+            VoiceNotificationBase(
+              status = status,
+              server = server,
+              connected = connected,
+              mode = mode,
+            )
+          },
+          combine(
+            runtime.micEnabled,
+            runtime.micIsListening,
+            runtime.talkModeListening,
+            runtime.talkModeSpeaking,
+          ) { micEnabled, micListening, talkListening, talkSpeaking ->
+            VoiceNotificationCapture(
+              micEnabled = micEnabled,
+              micListening = micListening,
+              talkListening = talkListening,
+              talkSpeaking = talkSpeaking,
+            )
+          },
+        ) { base, capture ->
+          VoiceNotificationState(base = base, capture = capture)
+        }.collect { state ->
+          voiceCaptureMode = state.mode
+          val title =
+            when {
+              state.connected && state.mode == VoiceCaptureMode.TalkMode -> "OpenClaw Node · Talk"
+              state.connected -> "OpenClaw Node · Connected"
+              else -> "OpenClaw Node"
             }
-          val text = (server?.let { "$status · $it" } ?: status) + micSuffix
+          val text =
+            (state.server?.let { "${state.status} · $it" } ?: state.status) +
+              voiceNotificationSuffix(
+                mode = state.mode,
+                manualMicEnabled = state.capture.micEnabled,
+                manualMicListening = state.capture.micListening,
+                talkListening = state.capture.talkListening,
+                talkSpeaking = state.capture.talkSpeaking,
+              )
 
           startForegroundWithTypes(
             notification = buildNotification(title = title, text = text),
@@ -60,12 +95,26 @@ class NodeForegroundService : Service() {
       }
   }
 
-  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+  override fun onStartCommand(
+    intent: Intent?,
+    flags: Int,
+    startId: Int,
+  ): Int {
     when (intent?.action) {
       ACTION_STOP -> {
         (application as NodeApp).peekRuntime()?.disconnect()
         stopSelf()
         return START_NOT_STICKY
+      }
+      ACTION_SET_VOICE_CAPTURE_MODE -> {
+        voiceCaptureMode = intent.getStringExtra(EXTRA_VOICE_CAPTURE_MODE).toVoiceCaptureMode()
+        startForegroundWithTypes(
+          notification =
+            buildNotification(
+              title = "OpenClaw Node",
+              text = if (voiceCaptureMode == VoiceCaptureMode.TalkMode) "Talk mode active" else "Connected",
+            ),
+        )
       }
     }
     // Keep running; connection is managed by NodeRuntime (auto-reconnect + manual).
@@ -94,10 +143,14 @@ class NodeForegroundService : Service() {
     mgr.createNotificationChannel(channel)
   }
 
-  private fun buildNotification(title: String, text: String): Notification {
-    val launchIntent = Intent(this, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
+  private fun buildNotification(
+    title: String,
+    text: String,
+  ): Notification {
+    val launchIntent =
+      Intent(this, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      }
     val launchPending =
       PendingIntent.getActivity(
         this,
@@ -115,7 +168,8 @@ class NodeForegroundService : Service() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
 
-    return NotificationCompat.Builder(this, CHANNEL_ID)
+    return NotificationCompat
+      .Builder(this, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle(title)
       .setContentText(text)
@@ -127,17 +181,14 @@ class NodeForegroundService : Service() {
       .build()
   }
 
-  private fun updateNotification(notification: Notification) {
-    val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    mgr.notify(NOTIFICATION_ID, notification)
-  }
-
   private fun startForegroundWithTypes(notification: Notification) {
+    val serviceTypes = foregroundServiceTypesForVoiceMode(voiceCaptureMode)
     if (didStartForeground) {
-      updateNotification(notification)
+      // Re-issue startForeground when Talk mode toggles so Android sees the microphone service type.
+      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
       return
     }
-    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+    ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
     didStartForeground = true
   }
 
@@ -146,17 +197,110 @@ class NodeForegroundService : Service() {
     private const val NOTIFICATION_ID = 1
 
     private const val ACTION_STOP = "ai.openclaw.app.action.STOP"
+    private const val ACTION_SET_VOICE_CAPTURE_MODE = "ai.openclaw.app.action.SET_VOICE_CAPTURE_MODE"
+    private const val EXTRA_VOICE_CAPTURE_MODE = "ai.openclaw.app.extra.VOICE_CAPTURE_MODE"
 
+    /** Starts the persistent node foreground service from UI lifecycle code. */
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
       context.startForegroundService(intent)
     }
 
+    /** Requests disconnect through the service action path so notification actions and UI share behavior. */
     fun stop(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
       context.startService(intent)
     }
+
+    /** Updates Android's foreground-service type before voice capture mode changes require microphone access. */
+    fun setVoiceCaptureMode(
+      context: Context,
+      mode: VoiceCaptureMode,
+    ) {
+      val intent =
+        Intent(context, NodeForegroundService::class.java)
+          .setAction(ACTION_SET_VOICE_CAPTURE_MODE)
+          .putExtra(EXTRA_VOICE_CAPTURE_MODE, mode.name)
+      if (mode == VoiceCaptureMode.TalkMode) {
+        // Microphone foreground service type must be declared before Talk capture starts.
+        ContextCompat.startForegroundService(context, intent)
+      } else {
+        context.startService(intent)
+      }
+    }
   }
 }
 
-private data class Quint<A, B, C, D, E>(val first: A, val second: B, val third: C, val fourth: D, val fifth: E)
+/**
+ * Foreground-service type mask required by Android for the current voice capture mode.
+ */
+internal fun foregroundServiceTypesForVoiceMode(mode: VoiceCaptureMode): Int {
+  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+  return if (mode == VoiceCaptureMode.TalkMode) {
+    base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+  } else {
+    base
+  }
+}
+
+/**
+ * Compact notification suffix for voice state; kept pure for service-notification tests.
+ */
+internal fun voiceNotificationSuffix(
+  mode: VoiceCaptureMode,
+  manualMicEnabled: Boolean,
+  manualMicListening: Boolean,
+  talkListening: Boolean,
+  talkSpeaking: Boolean,
+): String =
+  when (mode) {
+    VoiceCaptureMode.TalkMode ->
+      when {
+        talkSpeaking -> " · Talk: Speaking"
+        talkListening -> " · Talk: Listening"
+        else -> " · Talk: On"
+      }
+    VoiceCaptureMode.ManualMic ->
+      if (manualMicEnabled) {
+        if (manualMicListening) " · Mic: Listening" else " · Mic: Pending"
+      } else {
+        ""
+      }
+    VoiceCaptureMode.Off -> ""
+  }
+
+private fun String?.toVoiceCaptureMode(): VoiceCaptureMode =
+  VoiceCaptureMode.entries.firstOrNull {
+    it.name == this
+  } ?: VoiceCaptureMode.Off
+
+/** Connection fields that drive foreground notification title/body text. */
+private data class VoiceNotificationBase(
+  val status: String,
+  val server: String?,
+  val connected: Boolean,
+  val mode: VoiceCaptureMode,
+)
+
+/** Voice capture fields that affect foreground-service type and suffix. */
+private data class VoiceNotificationCapture(
+  val micEnabled: Boolean,
+  val micListening: Boolean,
+  val talkListening: Boolean,
+  val talkSpeaking: Boolean,
+)
+
+/** Aggregated notification state from runtime flows. */
+private data class VoiceNotificationState(
+  val base: VoiceNotificationBase,
+  val capture: VoiceNotificationCapture,
+) {
+  val status: String
+    get() = base.status
+  val server: String?
+    get() = base.server
+  val connected: Boolean
+    get() = base.connected
+  val mode: VoiceCaptureMode
+    get() = base.mode
+}

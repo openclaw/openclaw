@@ -1,3 +1,10 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
@@ -7,7 +14,12 @@ import {
   parseOptionalField,
 } from "./delivery-field-schemas.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
-import { inferLegacyName } from "./service/normalize.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { inferCronJobName } from "./service/normalize.js";
+import {
+  assertSafeCronSessionTargetId,
+  resolveCronCurrentSessionTarget,
+} from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -15,7 +27,7 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
-  /** Session context for resolving "current" sessionTarget or auto-binding when not specified */
+  /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
   sessionContext?: { sessionKey?: string };
 };
 
@@ -23,59 +35,56 @@ const DEFAULT_OPTIONS: NormalizeOptions = {
   applyDefaults: false,
 };
 
+function normalizeTrimmedStringArray(
+  value: unknown,
+  options?: { allowNull?: boolean },
+): string[] | null | undefined {
+  if (Array.isArray(value)) {
+    const normalized = normalizeTrimmedStringList(value);
+    if (normalized.length === 0 && value.length > 0) {
+      return undefined;
+    }
+    return normalized;
+  }
+  if (options?.allowNull && value === null) {
+    return null;
+  }
+  return undefined;
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
-  const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
+  const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
   const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
-  const exprRaw = typeof schedule.expr === "string" ? schedule.expr.trim() : "";
-  const legacyCronRaw = typeof schedule.cron === "string" ? schedule.cron.trim() : "";
-  const normalizedExpr = exprRaw || legacyCronRaw;
-  const atMsRaw = schedule.atMs;
-  const atRaw = schedule.at;
-  const atString = typeof atRaw === "string" ? atRaw.trim() : "";
-  const parsedAtMs =
-    typeof atMsRaw === "number"
-      ? atMsRaw
-      : typeof atMsRaw === "string"
-        ? parseAbsoluteTimeMs(atMsRaw)
-        : atString
-          ? parseAbsoluteTimeMs(atString)
-          : null;
+  const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
+  const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
+  const atString = normalizeOptionalString(schedule.at) ?? "";
+  const parsedAtMs = atString ? parseAbsoluteTimeMs(atString) : null;
 
   if (kind) {
     next.kind = kind;
-  } else {
-    if (
-      typeof schedule.atMs === "number" ||
-      typeof schedule.at === "string" ||
-      typeof schedule.atMs === "string"
-    ) {
-      next.kind = "at";
-    } else if (typeof schedule.everyMs === "number") {
-      next.kind = "every";
-    } else if (normalizedExpr) {
-      next.kind = "cron";
-    }
   }
 
+  const parsedAtIso = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
   if (atString) {
-    next.at = parsedAtMs !== null ? new Date(parsedAtMs).toISOString() : atString;
-  } else if (parsedAtMs !== null) {
-    next.at = new Date(parsedAtMs).toISOString();
-  }
-  if ("atMs" in next) {
-    delete next.atMs;
+    next.at = parsedAtIso ?? atString;
+  } else if (parsedAtIso !== undefined) {
+    next.at = parsedAtIso;
   }
 
-  if (normalizedExpr) {
-    next.expr = normalizedExpr;
+  if (exprRaw) {
+    next.expr = exprRaw;
   } else if ("expr" in next) {
     delete next.expr;
   }
-  if ("cron" in next) {
-    delete next.cron;
-  }
 
+  if (everyMs !== undefined && everyMs >= 1) {
+    next.everyMs = Math.floor(everyMs);
+  }
+  if (anchorMs !== undefined && anchorMs >= 0) {
+    next.anchorMs = Math.floor(anchorMs);
+  }
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
@@ -83,12 +92,31 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.staggerMs;
   }
 
+  if (next.kind === "at") {
+    // Keep each schedule variant canonical so persisted jobs do not carry stale
+    // fields from a previous kind after CLI/API normalization.
+    delete next.everyMs;
+    delete next.anchorMs;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
+  } else if (next.kind === "every") {
+    delete next.at;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
+  } else if (next.kind === "cron") {
+    delete next.at;
+    delete next.everyMs;
+    delete next.anchorMs;
+  }
+
   return next;
 }
 
 function coercePayload(payload: UnknownRecord) {
   const next: UnknownRecord = { ...payload };
-  const kindRaw = typeof next.kind === "string" ? next.kind.trim().toLowerCase() : "";
+  const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
@@ -96,33 +124,20 @@ function coercePayload(payload: UnknownRecord) {
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
-  if (!next.kind) {
-    const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
-    const hasText = typeof next.text === "string" && next.text.trim().length > 0;
-    const hasAgentTurnHint =
-      typeof next.model === "string" ||
-      typeof next.thinking === "string" ||
-      typeof next.timeoutSeconds === "number" ||
-      typeof next.allowUnsafeExternalContent === "boolean";
-    if (hasMessage) {
-      next.kind = "agentTurn";
-    } else if (hasText) {
-      next.kind = "systemEvent";
-    } else if (hasAgentTurnHint) {
-      // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
-      next.kind = "agentTurn";
-    }
-  }
   if (typeof next.message === "string") {
-    const trimmed = next.message.trim();
+    const trimmed = normalizeOptionalString(next.message) ?? "";
     if (trimmed) {
       next.message = trimmed;
+    } else {
+      next.message = "";
     }
   }
   if (typeof next.text === "string") {
-    const trimmed = next.text.trim();
+    const trimmed = normalizeOptionalString(next.text) ?? "";
     if (trimmed) {
       next.text = trimmed;
+    } else {
+      next.text = "";
     }
   }
   if ("model" in next) {
@@ -149,44 +164,39 @@ function coercePayload(payload: UnknownRecord) {
       delete next.timeoutSeconds;
     }
   }
+  if ("fallbacks" in next) {
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    if (fallbacks !== undefined) {
+      next.fallbacks = fallbacks;
+    } else {
+      delete next.fallbacks;
+    }
+  }
+  if ("toolsAllow" in next) {
+    const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
+    if (toolsAllow !== undefined) {
+      next.toolsAllow = toolsAllow;
+    } else {
+      delete next.toolsAllow;
+    }
+  }
   if (
     "allowUnsafeExternalContent" in next &&
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
   }
-  if ("toolsAllow" in next) {
-    if (Array.isArray(next.toolsAllow)) {
-      next.toolsAllow = (next.toolsAllow as unknown[])
-        .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
-        .map((t) => t.trim());
-      if ((next.toolsAllow as string[]).length === 0) {
-        delete next.toolsAllow;
-      }
-    } else if (next.toolsAllow === null) {
-      // Explicit null means "clear the allow-list" (edit --clear-tools)
-      next.toolsAllow = null;
-    } else {
-      delete next.toolsAllow;
-    }
-  }
-  if ("deliver" in next) {
-    delete next.deliver;
-  }
-  if ("channel" in next) {
-    delete next.channel;
-  }
-  if ("to" in next) {
-    delete next.to;
-  }
-  if ("threadId" in next) {
-    delete next.threadId;
-  }
-  if ("bestEffortDeliver" in next) {
-    delete next.bestEffortDeliver;
-  }
-  if ("provider" in next) {
-    delete next.provider;
+  if (next.kind === "systemEvent") {
+    delete next.message;
+    delete next.model;
+    delete next.fallbacks;
+    delete next.thinking;
+    delete next.timeoutSeconds;
+    delete next.lightContext;
+    delete next.allowUnsafeExternalContent;
+    delete next.toolsAllow;
+  } else if (next.kind === "agentTurn") {
+    delete next.text;
   }
   return next;
 }
@@ -199,37 +209,131 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("mode" in next) {
     delete next.mode;
   }
-  if (parsed.channel !== undefined) {
+  if ("channel" in delivery && delivery.channel === null) {
+    next.channel = null;
+  } else if (parsed.channel !== undefined) {
     next.channel = parsed.channel;
   } else if ("channel" in next) {
     delete next.channel;
   }
-  if (parsed.to !== undefined) {
+  if ("to" in delivery && delivery.to === null) {
+    next.to = null;
+  } else if (parsed.to !== undefined) {
     next.to = parsed.to;
   } else if ("to" in next) {
     delete next.to;
   }
-  if (parsed.threadId !== undefined) {
+  if ("threadId" in delivery && delivery.threadId === null) {
+    next.threadId = null;
+  } else if (parsed.threadId !== undefined) {
     next.threadId = parsed.threadId;
   } else if ("threadId" in next) {
     delete next.threadId;
   }
-  if (parsed.accountId !== undefined) {
+  if ("accountId" in delivery && delivery.accountId === null) {
+    next.accountId = null;
+  } else if (parsed.accountId !== undefined) {
     next.accountId = parsed.accountId;
   } else if ("accountId" in next) {
     delete next.accountId;
   }
+  if ("failureDestination" in next) {
+    if (next.failureDestination === null) {
+      next.failureDestination = null;
+    } else if (isRecord(next.failureDestination)) {
+      next.failureDestination = coerceFailureDestination(next.failureDestination);
+    } else {
+      delete next.failureDestination;
+    }
+  }
+  if ("completionDestination" in next) {
+    if (next.completionDestination === null) {
+      next.completionDestination = null;
+    } else {
+      const completionDestination = isRecord(next.completionDestination)
+        ? coerceCompletionDestination(next.completionDestination)
+        : null;
+      if (completionDestination) {
+        next.completionDestination = completionDestination;
+      } else {
+        delete next.completionDestination;
+      }
+    }
+  }
   return next;
 }
 
-function unwrapJob(raw: UnknownRecord) {
-  if (isRecord(raw.data)) {
-    return raw.data;
+function coerceCompletionDestination(value: UnknownRecord) {
+  const mode = normalizeOptionalLowercaseString(value.mode);
+  const to = normalizeOptionalString(value.to);
+  if (mode !== "webhook") {
+    return null;
   }
-  if (isRecord(raw.job)) {
-    return raw.job;
+  return {
+    mode,
+    ...(to ? { to } : {}),
+  } satisfies UnknownRecord;
+}
+
+function coerceFailureDestination(value: UnknownRecord) {
+  const next: UnknownRecord = { ...value };
+  if ("channel" in next) {
+    if (next.channel === null) {
+      next.channel = null;
+    } else if (next.channel === undefined) {
+      next.channel = undefined;
+    } else {
+      const channel = normalizeOptionalLowercaseString(next.channel);
+      if (channel) {
+        next.channel = channel;
+      } else {
+        delete next.channel;
+      }
+    }
   }
-  return raw;
+  if ("to" in next) {
+    if (next.to === null) {
+      next.to = null;
+    } else if (next.to === undefined) {
+      next.to = undefined;
+    } else {
+      const to = normalizeOptionalString(next.to);
+      if (to) {
+        next.to = to;
+      } else {
+        delete next.to;
+      }
+    }
+  }
+  if ("accountId" in next) {
+    if (next.accountId === null) {
+      next.accountId = null;
+    } else if (next.accountId === undefined) {
+      next.accountId = undefined;
+    } else {
+      const accountId = normalizeOptionalString(next.accountId);
+      if (accountId) {
+        next.accountId = accountId;
+      } else {
+        delete next.accountId;
+      }
+    }
+  }
+  if ("mode" in next) {
+    if (next.mode === null) {
+      next.mode = null;
+    } else if (next.mode === undefined) {
+      next.mode = undefined;
+    } else {
+      const mode = normalizeOptionalLowercaseString(next.mode);
+      if (mode === "announce" || mode === "webhook") {
+        next.mode = mode;
+      } else {
+        delete next.mode;
+      }
+    }
+  }
+  return next;
 }
 
 function normalizeSessionTarget(raw: unknown) {
@@ -237,16 +341,14 @@ function normalizeSessionTarget(raw: unknown) {
     return undefined;
   }
   const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower === "main" || lower === "isolated" || lower === "current") {
     return lower;
   }
-  // Support custom session IDs with "session:" prefix
+  // Custom session targets must still pass the same session-id safety gate used
+  // by runtime session resolution.
   if (lower.startsWith("session:")) {
-    const sessionId = trimmed.slice(8).trim();
-    if (sessionId) {
-      return `session:${sessionId}`;
-    }
+    return `session:${assertSafeCronSessionTargetId(trimmed.slice(8))}`;
   }
   return undefined;
 }
@@ -255,52 +357,14 @@ function normalizeWakeMode(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (trimmed === "now" || trimmed === "next-heartbeat") {
     return trimmed;
   }
   return undefined;
 }
 
-function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord) {
-  const copyString = (field: "model" | "thinking") => {
-    if (typeof payload[field] === "string" && payload[field].trim()) {
-      return;
-    }
-    const value = next[field];
-    if (typeof value === "string" && value.trim()) {
-      payload[field] = value.trim();
-    }
-  };
-  copyString("model");
-  copyString("thinking");
-
-  if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
-    payload.timeoutSeconds = next.timeoutSeconds;
-  }
-  if (
-    typeof payload.allowUnsafeExternalContent !== "boolean" &&
-    typeof next.allowUnsafeExternalContent === "boolean"
-  ) {
-    payload.allowUnsafeExternalContent = next.allowUnsafeExternalContent;
-  }
-}
-
-function stripLegacyTopLevelFields(next: UnknownRecord) {
-  delete next.model;
-  delete next.thinking;
-  delete next.timeoutSeconds;
-  delete next.allowUnsafeExternalContent;
-  delete next.message;
-  delete next.text;
-  delete next.deliver;
-  delete next.channel;
-  delete next.to;
-  delete next.threadId;
-  delete next.bestEffortDeliver;
-  delete next.provider;
-}
-
+/** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
   options: NormalizeOptions = DEFAULT_OPTIONS,
@@ -308,7 +372,7 @@ export function normalizeCronJobInput(
   if (!isRecord(raw)) {
     return null;
   }
-  const base = unwrapJob(raw);
+  const base = raw;
   const next: UnknownRecord = { ...base };
 
   if ("agentId" in base) {
@@ -344,7 +408,7 @@ export function normalizeCronJobInput(
     if (typeof enabled === "boolean") {
       next.enabled = enabled;
     } else if (typeof enabled === "string") {
-      const trimmed = enabled.trim().toLowerCase();
+      const trimmed = normalizeOptionalLowercaseString(enabled);
       if (trimmed === "true") {
         next.enabled = true;
       }
@@ -376,16 +440,6 @@ export function normalizeCronJobInput(
     next.schedule = coerceSchedule(base.schedule);
   }
 
-  if (!("payload" in next) || !isRecord(next.payload)) {
-    const message = typeof next.message === "string" ? next.message.trim() : "";
-    const text = typeof next.text === "string" ? next.text.trim() : "";
-    if (message) {
-      next.payload = { kind: "agentTurn", message };
-    } else if (text) {
-      next.payload = { kind: "systemEvent", text };
-    }
-  }
-
   if (isRecord(base.payload)) {
     next.payload = coercePayload(base.payload);
   }
@@ -393,16 +447,6 @@ export function normalizeCronJobInput(
   if (isRecord(base.delivery)) {
     next.delivery = coerceDelivery(base.delivery);
   }
-
-  if ("isolation" in next) {
-    delete next.isolation;
-  }
-
-  const payload = isRecord(next.payload) ? next.payload : null;
-  if (payload && payload.kind === "agentTurn") {
-    copyTopLevelAgentTurnFields(next, payload);
-  }
-  stripLegacyTopLevelFields(next);
 
   if (options.applyDefaults) {
     if (!next.wakeMode) {
@@ -416,7 +460,7 @@ export function normalizeCronJobInput(
       isRecord(next.schedule) &&
       isRecord(next.payload)
     ) {
-      next.name = inferLegacyName({
+      next.name = inferCronJobName({
         schedule: next.schedule as { kind?: unknown; everyMs?: unknown; expr?: unknown },
         payload: next.payload as { kind?: unknown; text?: unknown; message?: unknown },
       });
@@ -428,10 +472,8 @@ export function normalizeCronJobInput(
     }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
-      // Keep default behavior unchanged for backward compatibility:
-      // - systemEvent defaults to "main"
-      // - agentTurn defaults to "isolated" (NOT "current", to avoid token accumulation)
-      // Users must explicitly specify "current" or "session:xxx" for custom session binding
+      // Keep create-time defaults explicit: system events join main, while agent
+      // turns isolate by default to avoid unbounded token accumulation.
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
@@ -439,28 +481,14 @@ export function normalizeCronJobInput(
       }
     }
 
-    // Resolve "current" sessionTarget to the actual sessionKey from context
-    if (next.sessionTarget === "current") {
-      if (options.sessionContext?.sessionKey) {
-        const sessionKey = options.sessionContext.sessionKey.trim();
-        if (sessionKey) {
-          // Store as session:customId format for persistence
-          next.sessionTarget = `session:${sessionKey}`;
-        }
-      }
-      // If "current" wasn't resolved, fall back to "isolated" behavior
-      // This handles CLI/headless usage where no session context exists
-      if (next.sessionTarget === "current") {
-        next.sessionTarget = "isolated";
-      }
-    }
-    if (next.sessionTarget === "current") {
-      const sessionKey = options.sessionContext?.sessionKey?.trim();
-      if (sessionKey) {
-        next.sessionTarget = `session:${sessionKey}`;
-      } else {
-        next.sessionTarget = "isolated";
-      }
+    const resolvedSessionTarget = resolveCronCurrentSessionTarget({
+      sessionTarget: typeof next.sessionTarget === "string" ? next.sessionTarget : undefined,
+      sessionKey: options.sessionContext?.sessionKey,
+    });
+    if (resolvedSessionTarget !== undefined) {
+      next.sessionTarget = resolvedSessionTarget;
+    } else {
+      delete next.sessionTarget;
     }
     if (
       "schedule" in next &&
@@ -486,7 +514,8 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Support "isolated", custom session IDs (session:xxx), and resolved "current" as isolated-like targets
+    // Resolved "current" and custom session ids still use isolated-agent
+    // delivery semantics, so they get the same default announce behavior.
     const isIsolatedAgentTurn =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
@@ -501,6 +530,7 @@ export function normalizeCronJobInput(
   return next;
 }
 
+/** Normalizes a raw cron create request and applies create-time defaults. */
 export function normalizeCronJobCreate(
   raw: unknown,
   options?: Omit<NormalizeOptions, "applyDefaults">,
@@ -511,6 +541,7 @@ export function normalizeCronJobCreate(
   }) as CronJobCreate | null;
 }
 
+/** Normalizes a raw cron patch request without filling omitted fields. */
 export function normalizeCronJobPatch(
   raw: unknown,
   options?: NormalizeOptions,

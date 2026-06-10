@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
@@ -7,8 +8,7 @@ import { hashTextSha256 } from "./hash.js";
 export function slugifySessionKey(value: string) {
   const trimmed = value.trim() || "session";
   const hash = hashTextSha256(trimmed).slice(0, 8);
-  const safe = trimmed
-    .toLowerCase()
+  const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const base = safe.slice(0, 32) || "session";

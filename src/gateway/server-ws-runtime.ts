@@ -1,23 +1,13 @@
-import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   attachGatewayWsConnectionHandler,
-  type GatewayWsSharedHandlerParams,
+  type AttachGatewayWsConnectionHandlerParams,
 } from "./server/ws-connection.js";
 
-type GatewayWsRuntimeParams = GatewayWsSharedHandlerParams & {
-  logGateway: ReturnType<typeof createSubsystemLogger>;
-  logHealth: ReturnType<typeof createSubsystemLogger>;
-  logWsControl: ReturnType<typeof createSubsystemLogger>;
-  extraHandlers: GatewayRequestHandlers;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: {
-      dropIfSlow?: boolean;
-      stateVersion?: { presence?: number; health?: number };
-    },
-  ) => void;
+type GatewayWsRuntimeParams = Omit<
+  AttachGatewayWsConnectionHandlerParams,
+  "buildRequestContext" | "refreshHealthSnapshot"
+> & {
   context: GatewayRequestContext;
 };
 
@@ -28,17 +18,23 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     preauthConnectionBudget: params.preauthConnectionBudget,
     port: params.port,
     gatewayHost: params.gatewayHost,
-    canvasHostEnabled: params.canvasHostEnabled,
-    canvasHostServerPort: params.canvasHostServerPort,
+    pluginSurfaceScheme: params.pluginSurfaceScheme,
+    getPluginNodeCapabilities: params.getPluginNodeCapabilities,
     resolvedAuth: params.resolvedAuth,
+    getResolvedAuth: params.getResolvedAuth,
+    getRequiredSharedGatewaySessionGeneration: params.getRequiredSharedGatewaySessionGeneration,
     rateLimiter: params.rateLimiter,
     browserRateLimiter: params.browserRateLimiter,
+    preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs,
+    isStartupPending: params.isStartupPending,
     gatewayMethods: params.gatewayMethods,
     events: params.events,
+    refreshHealthSnapshot: params.context.refreshHealthSnapshot,
     logGateway: params.logGateway,
     logHealth: params.logHealth,
     logWsControl: params.logWsControl,
     extraHandlers: params.extraHandlers,
+    getMethodRegistry: params.getMethodRegistry,
     broadcast: params.broadcast,
     buildRequestContext: () => params.context,
   });

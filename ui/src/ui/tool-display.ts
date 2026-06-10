@@ -6,7 +6,9 @@ import {
   resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
+import type { ToolDetailMode } from "../../../src/agents/tool-display-exec.js";
 import type { IconName } from "./icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;
@@ -48,24 +50,6 @@ const EMOJI_ICON_MAP: Record<string, IconName> = {
   "💬": "messageSquare",
 };
 
-const SLACK_SPEC: ToolDisplaySpec = {
-  icon: "messageSquare",
-  title: "Slack",
-  actions: {
-    react: { label: "react", detailKeys: ["channelId", "messageId", "emoji"] },
-    reactions: { label: "reactions", detailKeys: ["channelId", "messageId"] },
-    sendMessage: { label: "send", detailKeys: ["to", "content"] },
-    editMessage: { label: "edit", detailKeys: ["channelId", "messageId"] },
-    deleteMessage: { label: "delete", detailKeys: ["channelId", "messageId"] },
-    readMessages: { label: "read messages", detailKeys: ["channelId", "limit"] },
-    pinMessage: { label: "pin", detailKeys: ["channelId", "messageId"] },
-    unpinMessage: { label: "unpin", detailKeys: ["channelId", "messageId"] },
-    listPins: { label: "list pins", detailKeys: ["channelId"] },
-    memberInfo: { label: "member", detailKeys: ["userId"] },
-    emojiList: { label: "emoji list" },
-  },
-};
-
 function iconForEmoji(emoji?: string): IconName {
   if (!emoji) {
     return "puzzle";
@@ -91,7 +75,6 @@ const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
     convertSpec(spec),
   ]),
 );
-TOOL_MAP.slack = SLACK_SPEC;
 
 function shortenHomeInString(input: string): string {
   if (!input) {
@@ -118,22 +101,26 @@ export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
   meta?: string;
+  detailMode?: ToolDetailMode;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
-  const key = name.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  let { verb, detail } = resolveToolVerbAndDetailForArgs({
+  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
     meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
+    toolDetailMode: params.detailMode,
     detailCoerce: { includeFalse: true, includeZero: true },
   });
+  const { verb } = toolDisplayParts;
+  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -151,9 +138,4 @@ export function resolveToolDisplay(params: {
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   return formatToolDetailText(display.detail, { prefixWithWith: true });
-}
-
-export function formatToolSummary(display: ToolDisplay): string {
-  const detail = formatToolDetail(display);
-  return detail ? `${display.label}: ${detail}` : display.label;
 }

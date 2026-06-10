@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
-import type { SecretRefResolveCache } from "./resolve.js";
+import type { SecretRefResolveCache } from "./resolve-types.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
@@ -9,12 +10,13 @@ export type SecretResolverWarningCode =
   | "SECRETS_REF_OVERRIDES_PLAINTEXT"
   | "SECRETS_REF_IGNORED_INACTIVE_SURFACE"
   | "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT"
+  | "WEB_SEARCH_AUTODETECT_SELECTED"
   | "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
   | "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK"
-  | "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
-  | "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK"
-  | "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED"
-  | "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK";
+  | "WEB_FETCH_PROVIDER_INVALID_AUTODETECT"
+  | "WEB_FETCH_AUTODETECT_SELECTED"
+  | "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED"
+  | "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK";
 
 export type SecretResolverWarning = {
   code: SecretResolverWarningCode;
@@ -33,21 +35,25 @@ export type ResolverContext = {
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   cache: SecretRefResolveCache;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   warnings: SecretResolverWarning[];
   warningKeys: Set<string>;
   assignments: SecretAssignment[];
 };
 
 export type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
+export type { SecretRefResolveCache } from "./resolve-types.js";
 
 export function createResolverContext(params: {
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ResolverContext {
   return {
     sourceConfig: params.sourceConfig,
     env: params.env,
     cache: {},
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
     warnings: [],
     warningKeys: new Set(),
     assignments: [],
@@ -135,7 +141,7 @@ export function applyResolvedAssignments(params: {
 }
 
 export function hasOwnProperty(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 export function isEnabledFlag(value: unknown): boolean {

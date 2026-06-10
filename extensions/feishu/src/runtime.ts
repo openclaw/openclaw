@@ -1,6 +1,9 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "../runtime-api.js";
 
 const { setRuntime: setFeishuRuntime, getRuntime: getFeishuRuntime } =
-  createPluginRuntimeStore<PluginRuntime>("Feishu runtime not initialized");
+  createPluginRuntimeStore<PluginRuntime>({
+    pluginId: "feishu",
+    errorMessage: "Feishu runtime not initialized",
+  });
 export { getFeishuRuntime, setFeishuRuntime };

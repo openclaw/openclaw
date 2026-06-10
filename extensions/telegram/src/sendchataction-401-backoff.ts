@@ -4,6 +4,7 @@ import {
   sleepWithAbort,
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type TelegramSendChatActionLogger = (message: string) => void;
 
@@ -46,6 +47,8 @@ export type CreateTelegramSendChatActionHandlerParams = {
   sendChatActionFn: SendChatActionFn;
   logger: TelegramSendChatActionLogger;
   maxConsecutive401?: number;
+  minIntervalMs?: number;
+  now?: () => number;
 };
 
 const BACKOFF_POLICY: BackoffPolicy = {
@@ -60,7 +63,9 @@ function is401Error(error: unknown): boolean {
     return false;
   }
   const message = error instanceof Error ? error.message : JSON.stringify(error);
-  return message.includes("401") || message.toLowerCase().includes("unauthorized");
+  return (
+    message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
+  );
 }
 
 /**
@@ -76,13 +81,17 @@ export function createTelegramSendChatActionHandler({
   sendChatActionFn,
   logger,
   maxConsecutive401 = 10,
+  minIntervalMs = 0,
+  now = () => Date.now(),
 }: CreateTelegramSendChatActionHandlerParams): TelegramSendChatActionHandler {
   let consecutive401Failures = 0;
   let suspended = false;
+  const blockedUntilByKey = new Map<string, number>();
 
   const reset = () => {
     consecutive401Failures = 0;
     suspended = false;
+    blockedUntilByKey.clear();
   };
 
   const sendChatAction = async (
@@ -92,6 +101,16 @@ export function createTelegramSendChatActionHandler({
   ): Promise<void> => {
     if (suspended) {
       return;
+    }
+
+    const key = minIntervalMs > 0 ? `${String(chatId)}:${action}` : undefined;
+    const attemptedAt = key ? now() : 0;
+    if (key) {
+      const blockedUntil = blockedUntilByKey.get(key);
+      if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
+        return;
+      }
+      blockedUntilByKey.set(key, Number.POSITIVE_INFINITY);
     }
 
     if (consecutive401Failures > 0) {
@@ -129,6 +148,10 @@ export function createTelegramSendChatActionHandler({
         }
       }
       throw error;
+    } finally {
+      if (key) {
+        blockedUntilByKey.set(key, attemptedAt + minIntervalMs);
+      }
     }
   };
 

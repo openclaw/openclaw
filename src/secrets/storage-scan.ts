@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { listAuthProfileStorePaths as listAuthProfileStorePathsFromAuthStorePaths } from "./auth-store-paths.js";
 import { parseEnvValue } from "./shared.js";
@@ -35,7 +37,7 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
 function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (override) {
-    return resolveUserPath(override);
+    return resolveUserPath(override, env);
   }
   return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
 }
@@ -118,15 +120,15 @@ export function readJsonObjectIfExists(
       };
     }
     const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isJsonObject(parsed)) {
       return { value: null };
     }
-    return { value: parsed as Record<string, unknown> };
+    return { value: parsed };
   } catch (err) {
     return {
       value: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

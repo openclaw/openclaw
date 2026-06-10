@@ -24,6 +24,7 @@ vi.mock("../cli/progress.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: loadConfig,
   loadConfig,
 }));
 
@@ -36,7 +37,7 @@ vi.mock("./daemon-install-helpers.js", () => ({
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -50,8 +51,9 @@ vi.mock("./daemon-runtime.js", () => ({
   GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],
 }));
 
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+vi.mock("../daemon/service.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
     resolveGatewayService: vi.fn(() => ({
@@ -116,7 +118,7 @@ describe("maybeInstallDaemon", () => {
     });
 
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway install blocked"),
+      "Gateway service install failed: Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (boom). Fix gateway auth config/token input and rerun configure.",
       "Gateway",
     );
     expect(buildGatewayInstallPlan).not.toHaveBeenCalled();

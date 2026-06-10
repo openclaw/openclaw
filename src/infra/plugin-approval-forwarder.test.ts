@@ -12,6 +12,8 @@ afterEach(() => {
 });
 
 const emptyRegistry = createTestRegistry([]);
+type SlackAdapterPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> &
+  Partial<Pick<ChannelPlugin, "approvalCapability" | "outbound">>;
 
 const PLUGIN_TARGETS_CFG = {
   approvals: {
@@ -66,6 +68,50 @@ async function flushPendingDelivery(): Promise<void> {
   await Promise.resolve();
 }
 
+type DeliveryArgs = {
+  payloads?: Array<{ text?: string; presentation?: unknown; interactive?: unknown }>;
+};
+
+function deliveryArgs(deliver: ReturnType<typeof vi.fn>): DeliveryArgs | undefined {
+  return deliver.mock.calls[0]?.at(0) as DeliveryArgs | undefined;
+}
+
+function firstDeliveredPayload(deliver: ReturnType<typeof vi.fn>) {
+  return deliveryArgs(deliver)?.payloads?.at(0);
+}
+
+function registerSlackAdapterPlugin(plugin: SlackAdapterPlugin): void {
+  const registry = createTestRegistry([{ pluginId: "slack", plugin, source: "test" }]);
+  setActivePluginRegistry(registry);
+}
+
+function createSlackAdapterPlugin(overrides: Partial<SlackAdapterPlugin>): SlackAdapterPlugin {
+  return {
+    ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
+    ...overrides,
+  };
+}
+
+async function registerPendingApproval(
+  forwarder: ReturnType<typeof createForwarder>["forwarder"],
+  deliver: ReturnType<typeof vi.fn>,
+): Promise<void> {
+  await forwarder.handlePluginApprovalRequested!(makePluginRequest());
+  await flushPendingDelivery();
+  expect(deliver).toHaveBeenCalled();
+  deliver.mockClear();
+}
+
+function makePluginResolved(overrides?: Partial<PluginApprovalResolved>): PluginApprovalResolved {
+  return {
+    id: "plugin-req-1",
+    decision: "allow-once",
+    resolvedBy: "telegram:user123",
+    ts: 2000,
+    ...overrides,
+  };
+}
+
 describe("plugin approval forwarding", () => {
   beforeEach(() => {
     setActivePluginRegistry(emptyRegistry);
@@ -85,32 +131,41 @@ describe("plugin approval forwarding", () => {
       expect(result).toBe(true);
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string; interactive?: unknown }> }
-        | undefined;
-      const payload = deliveryArgs?.payloads?.[0];
+      const payload = firstDeliveredPayload(deliver);
       const text = payload?.text ?? "";
       expect(text).toContain("Plugin approval required");
       expect(text).toContain("Sensitive tool call");
       expect(text).toContain("plugin-req-1");
       expect(text).toContain("/approve");
-      expect(payload?.interactive).toEqual({
+      expect(payload?.presentation).toEqual({
         blocks: [
           {
             type: "buttons",
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-once",
+                },
                 value: "/approve plugin-req-1 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
-                value: "/approve plugin-req-1 always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-always",
+                },
+                value: "/approve plugin-req-1 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 deny",
+                },
                 value: "/approve plugin-req-1 deny",
                 style: "danger",
               },
@@ -118,6 +173,53 @@ describe("plugin approval forwarding", () => {
           },
         ],
       });
+      expect(payload?.interactive).toBeUndefined();
+    });
+
+    it("renders only request-scoped plugin approval decisions", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const result = await forwarder.handlePluginApprovalRequested!(
+        makePluginRequest({
+          request: {
+            ...makePluginRequest().request,
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        }),
+      );
+      expect(result).toBe(true);
+      await flushPendingDelivery();
+      const payload = firstDeliveredPayload(deliver);
+      expect(payload?.text).toContain("Reply with: /approve plugin-req-1 allow-once|deny");
+      expect(payload?.text).not.toContain("allow-always");
+      expect(payload?.presentation).toEqual({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-once",
+                },
+                value: "/approve plugin-req-1 allow-once",
+                style: "success",
+              },
+              {
+                label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 deny",
+                },
+                value: "/approve plugin-req-1 deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      });
+      expect(payload?.interactive).toBeUndefined();
     });
 
     it("includes severity icon for critical", async () => {
@@ -128,9 +230,7 @@ describe("plugin approval forwarding", () => {
       await forwarder.handlePluginApprovalRequested!(request);
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const text =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
-          ?.text ?? "";
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toMatch(/🚨/);
     });
 
@@ -176,51 +276,36 @@ describe("plugin approval forwarding", () => {
   describe("channel adapter hooks", () => {
     it("uses buildPluginPendingPayload from channel adapter when available", async () => {
       const mockPayload = { text: "custom adapter payload" };
-      const adapterPlugin: Pick<
-        ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
-      > = {
-        ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
-          render: {
-            plugin: {
-              buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          approvalCapability: {
+            render: {
+              plugin: {
+                buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
+              },
             },
           },
-        },
-      };
-      const registry = createTestRegistry([
-        { pluginId: "slack", plugin: adapterPlugin, source: "test" },
-      ]);
-      setActivePluginRegistry(registry);
+        }),
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string }> }
-        | undefined;
-      expect(deliveryArgs?.payloads?.[0]?.text).toBe("custom adapter payload");
+      expect(firstDeliveredPayload(deliver)?.text).toBe("custom adapter payload");
     });
 
     it("calls outbound beforeDeliverPayload before plugin approval delivery", async () => {
       const beforeDeliverPayload = vi.fn();
-      const adapterPlugin: Pick<
-        ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "outbound"
-      > = {
-        ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        outbound: {
-          deliveryMode: "direct",
-          beforeDeliverPayload,
-        },
-      };
-      const registry = createTestRegistry([
-        { pluginId: "slack", plugin: adapterPlugin, source: "test" },
-      ]);
-      setActivePluginRegistry(registry);
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          outbound: {
+            deliveryMode: "direct",
+            beforeDeliverPayload,
+          },
+        }),
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
@@ -232,46 +317,27 @@ describe("plugin approval forwarding", () => {
 
     it("uses buildPluginResolvedPayload from channel adapter for resolved messages", async () => {
       const mockPayload = { text: "custom resolved payload" };
-      const adapterPlugin: Pick<
-        ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
-      > = {
-        ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
-          render: {
-            plugin: {
-              buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          approvalCapability: {
+            render: {
+              plugin: {
+                buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+              },
             },
           },
-        },
-      };
-      const registry = createTestRegistry([
-        { pluginId: "slack", plugin: adapterPlugin, source: "test" },
-      ]);
-      setActivePluginRegistry(registry);
+        }),
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
 
-      // First register request so targets are tracked
-      await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
-      deliver.mockClear();
+      await registerPendingApproval(forwarder, deliver);
 
-      const resolved: PluginApprovalResolved = {
-        id: "plugin-req-1",
-        decision: "allow-once",
-        resolvedBy: "telegram:user123",
-        ts: 2000,
-      };
-      await forwarder.handlePluginApprovalResolved!(resolved);
+      await forwarder.handlePluginApprovalResolved!(makePluginResolved());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string }> }
-        | undefined;
-      expect(deliveryArgs?.payloads?.[0]?.text).toBe("custom resolved payload");
+      expect(firstDeliveredPayload(deliver)?.text).toBe("custom resolved payload");
     });
   });
 
@@ -280,23 +346,11 @@ describe("plugin approval forwarding", () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
 
-      // First register request so targets are tracked
-      await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
-      deliver.mockClear();
+      await registerPendingApproval(forwarder, deliver);
 
-      const resolved: PluginApprovalResolved = {
-        id: "plugin-req-1",
-        decision: "allow-once",
-        resolvedBy: "telegram:user123",
-        ts: 2000,
-      };
-      await forwarder.handlePluginApprovalResolved!(resolved);
+      await forwarder.handlePluginApprovalResolved!(makePluginResolved());
       expect(deliver).toHaveBeenCalled();
-      const text =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
-          ?.text ?? "";
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toContain("Plugin approval");
       expect(text).toContain("allowed once");
     });
@@ -322,9 +376,7 @@ describe("plugin approval forwarding", () => {
       });
 
       expect(deliver).toHaveBeenCalled();
-      const text =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
-          ?.text ?? "";
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toContain("Plugin approval");
       expect(text).toContain("denied");
     });

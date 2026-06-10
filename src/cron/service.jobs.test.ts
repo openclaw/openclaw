@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { applyJobPatch, createJob, recomputeNextRuns } from "./service/jobs.js";
+import {
+  applyJobPatch,
+  createJob,
+  nextWakeAtMs,
+  recomputeNextRuns,
+  recomputeNextRunsForMaintenance,
+} from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
@@ -53,7 +59,7 @@ describe("applyJobPatch", () => {
       to: "123",
     });
 
-    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
+    applyJobPatch(job, switchToMainPatch());
     expect(job.sessionTarget).toBe("main");
     expect(job.payload.kind).toBe("systemEvent");
     expect(job.delivery).toBeUndefined();
@@ -65,9 +71,127 @@ describe("applyJobPatch", () => {
       to: "https://example.invalid/cron",
     });
 
-    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
+    applyJobPatch(job, switchToMainPatch());
     expect(job.sessionTarget).toBe("main");
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
+  });
+
+  it("clears chat delivery fields when switching delivery to webhook", () => {
+    const job = createIsolatedAgentTurnJob("job-webhook-switch", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+      threadId: 42,
+      accountId: "coordinator",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+      bestEffort: undefined,
+      completionDestination: undefined,
+      failureDestination: undefined,
+    });
+  });
+
+  it("clears migrated completion webhook when disabling delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-disable-completion-webhook", {
+      mode: "announce",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "none" },
+    });
+
+    expect(job.delivery?.mode).toBe("none");
+    expect(job.delivery?.completionDestination).toBeUndefined();
+  });
+
+  it("rejects completion webhook on disabled delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-disable-with-completion-webhook", {
+      mode: "announce",
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "none",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/legacy-completion",
+          },
+        },
+      }),
+    ).toThrow(
+      'cron completion destination webhook is only supported with delivery.mode="announce"',
+    );
+  });
+
+  it("clears migrated completion webhook while keeping announce delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-clear-completion-webhook", {
+      mode: "announce",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    });
+
+    applyJobPatch(job, {
+      delivery: { completionDestination: null },
+    });
+
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.completionDestination).toBeUndefined();
+  });
+
+  it("clears webhook delivery targets when switching delivery to announce", () => {
+    const job = createIsolatedAgentTurnJob("job-announce-switch", {
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "announce" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "announce",
+      channel: undefined,
+      to: undefined,
+      threadId: undefined,
+      accountId: undefined,
+      bestEffort: undefined,
+      failureDestination: undefined,
+    });
+  });
+
+  it("keeps explicit chat targets when switching webhook delivery to announce", () => {
+    const job = createIsolatedAgentTurnJob("job-announce-switch-target", {
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "announce", channel: "telegram", to: "-100123" },
+    });
+
+    expect(job.delivery).toMatchObject({
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
   });
 
   it("applies explicit delivery patches", () => {
@@ -86,7 +210,7 @@ describe("applyJobPatch", () => {
       },
     };
 
-    expect(() => applyJobPatch(job, patch)).not.toThrow();
+    applyJobPatch(job, patch);
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
       expect(job.payload.message).toBe("do it");
@@ -169,6 +293,81 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("persists agentTurn payload.fallbacks updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      fallbacks: ["openrouter/gpt-4.1-mini"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
+    }
+  });
+
+  it("persists agentTurn payload.toolsAllow updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-tools", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["read", "write"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toEqual(["read", "write"]);
+    }
+  });
+
+  it("clears agentTurn payload.toolsAllow when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toBeUndefined();
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",
@@ -188,6 +387,50 @@ describe("applyJobPatch", () => {
     expect(payload.kind).toBe("agentTurn");
     if (payload.kind === "agentTurn") {
       expect(payload.lightContext).toBe(true);
+    }
+  });
+
+  it("carries payload.fallbacks when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
+    }
+  });
+
+  it("carries payload.toolsAllow when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["exec", "read"],
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.toolsAllow).toEqual(["exec", "read"]);
     }
   });
 
@@ -219,13 +462,11 @@ describe("applyJobPatch", () => {
       to: "https://example.invalid/original",
     });
 
-    expect(() =>
-      applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),
-    ).not.toThrow();
+    applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } });
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
   });
 
-  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+  it("rejects failureDestination on existing main jobs without webhook delivery mode", () => {
     const job = createMainSystemEventJob("job-main-failure-dest", {
       mode: "announce",
       channel: "telegram",
@@ -266,20 +507,19 @@ describe("applyJobPatch", () => {
         to: "  https://example.invalid/failure  ",
       },
     };
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    applyJobPatch(job, { enabled: true });
     expect(job.delivery?.failureDestination?.to).toBe("https://example.invalid/failure");
   });
 
-  it("rejects Telegram delivery with invalid target (chatId/topicId format)", () => {
+  it("preserves raw channel delivery targets for plugin-owned validation", () => {
     const job = createIsolatedAgentTurnJob("job-telegram-invalid", {
       mode: "announce",
       channel: "telegram",
       to: "-10012345/6789",
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      'Invalid Telegram delivery target "-10012345/6789". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username',
-    );
+    applyJobPatch(job, { enabled: true });
+    expect(job.delivery?.to).toBe("-10012345/6789");
   });
 
   it.each([
@@ -297,7 +537,8 @@ describe("applyJobPatch", () => {
       ...(to ? { to } : {}),
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    applyJobPatch(job, { enabled: true });
+    expect(job.enabled).toBe(true);
   });
 });
 
@@ -329,7 +570,8 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     { name: "case-insensitive defaultAgentId match", defaultAgentId: "Main", agentId: "MAIN" },
   ] as const)("allows creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
     const state = createMockState(now, { defaultAgentId });
-    expect(() => createJob(state, mainJobInput(agentId))).not.toThrow();
+    const job = createJob(state, mainJobInput(agentId));
+    expect(job.sessionTarget).toBe("main");
   });
 
   it.each([
@@ -344,20 +586,48 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
 
   it("allows isolated session job for non-default agents", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    expect(() =>
-      createJob(state, {
-        name: "isolated-job",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "do it" },
-        agentId: "custom-agent",
-      }),
-    ).not.toThrow();
+    const job = createJob(state, {
+      name: "isolated-job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it" },
+      agentId: "custom-agent",
+    });
+    expect(job.agentId).toBe("custom-agent");
+    expect(job.sessionTarget).toBe("isolated");
   });
 
-  it("rejects failureDestination on main jobs without webhook delivery mode", () => {
+  it("accepts custom session targets with channel-native separators", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+    const job = createJob(state, {
+      name: "dingtalk-group-session",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget,
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(job.sessionTarget).toBe(sessionTarget);
+  });
+
+  it("rejects null bytes in custom session targets", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "bad-custom-session",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:bad\0id",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+  });
+
+  it("rejects failureDestination on created main jobs without webhook delivery mode", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     expect(() =>
       createJob(state, {
@@ -374,6 +644,32 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
         },
       }),
     ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+});
+
+describe("nextWakeAtMs", () => {
+  it("treats missing enabled like enabled so older persisted jobs still wake", () => {
+    const nextRunAtMs = Date.parse("2026-02-28T12:01:00.000Z");
+    const state = createMockState(Date.parse("2026-02-28T12:00:00.000Z"));
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          id: "legacy-missing-enabled",
+          name: "legacy missing enabled",
+          enabled: undefined as unknown as boolean,
+          createdAtMs: nextRunAtMs - 60_000,
+          updatedAtMs: nextRunAtMs - 60_000,
+          schedule: { kind: "at", at: new Date(nextRunAtMs).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "wake" },
+          state: { nextRunAtMs },
+        },
+      ],
+    };
+
+    expect(nextWakeAtMs(state)).toBe(nextRunAtMs);
   });
 });
 
@@ -406,7 +702,36 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
       );
       return;
     }
-    expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).not.toThrow();
+    applyJobPatch(job, patch, { defaultAgentId: "main" });
+    expect(job.agentId).toBe("main");
+  });
+
+  it("accepts patching to a custom session target with channel-native separators", () => {
+    const job = createMainJob();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+    applyJobPatch(
+      job,
+      {
+        sessionTarget,
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+      { defaultAgentId: "main" },
+    );
+    expect(job.sessionTarget).toBe(sessionTarget);
+  });
+
+  it("rejects patching to a custom session target with null bytes", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(
+        job,
+        {
+          sessionTarget: "session:bad\0id",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { defaultAgentId: "main" },
+      ),
+    ).toThrow("invalid cron sessionTarget session id");
   });
 });
 
@@ -540,12 +865,12 @@ describe("createJob delivery defaults", () => {
 });
 
 describe("recomputeNextRuns", () => {
-  it("backfills missing every anchorMs for legacy loaded jobs", () => {
+  it("backfills missing every anchorMs for loaded jobs", () => {
     const now = Date.parse("2026-03-01T12:00:00.000Z");
     const createdAtMs = now - 120_000;
     const job: CronJob = {
-      id: "legacy-every",
-      name: "legacy-every",
+      id: "loaded-every",
+      name: "loaded-every",
       enabled: true,
       createdAtMs,
       updatedAtMs: createdAtMs,
@@ -565,6 +890,248 @@ describe("recomputeNextRuns", () => {
     if (job.schedule.kind === "every") {
       expect(job.schedule.anchorMs).toBe(createdAtMs);
     }
-    expect(job.state.nextRunAtMs).toBe(now);
+    expect(job.state.nextRunAtMs).toBe(now + 60_000);
+  });
+
+  it("keeps recovered recurring error retries behind run-end backoff", () => {
+    const startedAt = Date.parse("2026-03-01T12:00:00.000Z");
+    const durationMs = 90_000;
+    const now = startedAt + 31_000;
+    const job: CronJob = {
+      id: "failed-every-long-run",
+      name: "failed every long run",
+      enabled: true,
+      createdAtMs: startedAt - 60_000,
+      updatedAtMs: startedAt,
+      schedule: { kind: "every", everyMs: 1_000, anchorMs: startedAt - 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        lastRunAtMs: startedAt,
+        lastDurationMs: durationMs,
+        lastStatus: "error",
+        consecutiveErrors: 1,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRuns(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(startedAt + durationMs + 30_000);
+  });
+
+  it("repairs future cron nextRunAtMs values that are not schedule slots", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const badFuture = Date.parse("2026-05-12T16:00:00.000Z");
+    const expected = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "daily-21-shanghai",
+      name: "daily 21 shanghai",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: badFuture },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(expected);
+  });
+
+  it("preserves valid future cron nextRunAtMs values during maintenance", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const validFuture = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "daily-valid-future",
+      name: "daily valid future",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: validFuture },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(validFuture);
+  });
+
+  it("repairs future cron nextRunAtMs values that would fire before the next schedule slot", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const tooEarly = Date.parse("2026-05-05T12:30:00.000Z");
+    const expected = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "daily-too-early",
+      name: "daily too early",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: tooEarly },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(expected);
+  });
+
+  it("preserves deferred agent-turn cron nextRunAtMs values before the next natural slot", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const deferred = Date.parse("2026-05-05T12:02:00.000Z");
+    const job: CronJob = {
+      id: "daily-deferred-agent-turn",
+      name: "daily deferred agent turn",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "tick" },
+      state: { nextRunAtMs: deferred },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(deferred);
+  });
+
+  it("preserves cron retry backoff nextRunAtMs values during maintenance", () => {
+    const now = Date.parse("2025-12-13T04:02:00.000Z");
+    const retryAt = Date.parse("2025-12-13T04:10:00.000Z");
+    const job: CronJob = {
+      id: "backoff-pending",
+      name: "backoff pending",
+      enabled: true,
+      createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+      updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "do not run during backoff" },
+      state: {
+        nextRunAtMs: retryAt,
+        lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+        lastStatus: "error",
+        consecutiveErrors: 4,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(retryAt);
+  });
+
+  it("preserves cron retry backoff nextRunAtMs values from the run end time", () => {
+    const now = Date.parse("2025-12-13T04:10:00.000Z");
+    const retryAt = Date.parse("2025-12-13T04:20:30.000Z");
+    const job: CronJob = {
+      id: "backoff-from-ended-at",
+      name: "backoff from ended at",
+      enabled: true,
+      createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+      updatedAtMs: Date.parse("2025-12-13T04:05:30.000Z"),
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "preserve run-end retry backoff" },
+      state: {
+        nextRunAtMs: retryAt,
+        lastRunAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+        lastDurationMs: 4 * 60_000,
+        lastStatus: "error",
+        consecutiveErrors: 4,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(retryAt);
+  });
+
+  it("repairs stale future cron nextRunAtMs values after error backoff has elapsed", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const badFuture = Date.parse("2026-05-12T16:00:00.000Z");
+    const expected = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "daily-expired-error",
+      name: "daily expired error",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        nextRunAtMs: badFuture,
+        lastRunAtMs: Date.parse("2026-05-04T00:00:00.000Z"),
+        lastStatus: "error",
+        consecutiveErrors: 1,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(expected);
+  });
+
+  it("keeps future nextRunAtMs while probing malformed cron schedules", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const future = Date.parse("2026-05-12T16:00:00.000Z");
+    const job: CronJob = {
+      id: "malformed-future",
+      name: "malformed future",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: future },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    recomputeNextRunsForMaintenance(state);
+    expect(job.state.nextRunAtMs).toBe(future);
+    expect(job.state.scheduleErrorCount).toBeUndefined();
   });
 });

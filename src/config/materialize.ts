@@ -1,22 +1,22 @@
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
   applyAgentDefaults,
+  applyCronDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
   applySessionDefaults,
-  applyTalkApiKey,
   applyTalkConfigNormalization,
 } from "./defaults.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
 
-export type ConfigMaterializationMode = "load" | "missing" | "snapshot";
+type ConfigMaterializationMode = "load" | "missing" | "snapshot";
 
 type MaterializationProfile = {
-  includeTalkApiKey: boolean;
   includeCompactionDefaults: boolean;
   includeContextPruningDefaults: boolean;
   includeLoggingDefaults: boolean;
@@ -25,21 +25,18 @@ type MaterializationProfile = {
 
 const MATERIALIZATION_PROFILES: Record<ConfigMaterializationMode, MaterializationProfile> = {
   load: {
-    includeTalkApiKey: false,
     includeCompactionDefaults: true,
     includeContextPruningDefaults: true,
     includeLoggingDefaults: true,
     normalizePaths: true,
   },
   missing: {
-    includeTalkApiKey: true,
     includeCompactionDefaults: true,
     includeContextPruningDefaults: true,
     includeLoggingDefaults: false,
     normalizePaths: false,
   },
   snapshot: {
-    includeTalkApiKey: true,
     includeCompactionDefaults: false,
     includeContextPruningDefaults: false,
     includeLoggingDefaults: true,
@@ -58,6 +55,10 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
   mode: ConfigMaterializationMode,
+  options: {
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
+  } = {},
 ): RuntimeConfig {
   const profile = MATERIALIZATION_PROFILES[mode];
   let next = applyMessageDefaults(config);
@@ -66,17 +67,18 @@ export function materializeRuntimeConfig(
   }
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
+  next = applyCronDefaults(next);
   if (profile.includeContextPruningDefaults) {
-    next = applyContextPruningDefaults(next);
+    next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
   }
   if (profile.includeCompactionDefaults) {
     next = applyCompactionDefaults(next);
   }
-  next = applyModelDefaults(next);
+  next = applyModelDefaults(next, {
+    manifestRegistry: options.manifestRegistry,
+    loadManifestRegistry: options.loadManifestRegistry,
+  });
   next = applyTalkConfigNormalization(next);
-  if (profile.includeTalkApiKey) {
-    next = applyTalkApiKey(next);
-  }
   if (profile.normalizePaths) {
     normalizeConfigPaths(next);
   }

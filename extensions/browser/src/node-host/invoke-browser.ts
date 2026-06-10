@@ -1,17 +1,21 @@
 import fsPromises from "node:fs/promises";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { redactCdpUrl } from "../browser/cdp.helpers.js";
+import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
+import { resolveBrowserConfig } from "../browser/config.js";
+import {
+  isPersistentBrowserProfileMutation,
+  normalizeBrowserRequestPath,
+  resolveRequestedBrowserProfile,
+} from "../browser/request-policy.js";
+import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import {
   createBrowserControlContext,
-  createBrowserRouteDispatcher,
-  detectMime,
-  isPersistentBrowserProfileMutation,
-  loadConfig,
-  normalizeBrowserRequestPath,
-  redactCdpUrl,
-  resolveBrowserConfig,
-  resolveRequestedBrowserProfile,
   startBrowserControlServiceFromConfig,
-  withTimeout,
-} from "../core-api.js";
+} from "../control-service.js";
+import { withTimeout } from "../sdk-node-runtime.js";
+import { detectMime } from "../sdk-setup-tools.js";
 
 type BrowserProxyParams = {
   method?: string;
@@ -38,11 +42,11 @@ const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
+  return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
 }
 
 function resolveBrowserProxyConfig() {
-  const cfg = loadConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const proxy = cfg.nodeHost?.browserProxy;
   const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
   const enabled = proxy?.enabled !== false;
@@ -51,12 +55,18 @@ function resolveBrowserProxyConfig() {
 
 let browserControlReady: Promise<void> | null = null;
 
+// Keep the production singleton but give tests a cheap reset seam so they do
+// not need to reload the entire module graph between cases.
+export function resetBrowserProxyCommandStateForTests(): void {
+  browserControlReady = null;
+}
+
 async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
     return browserControlReady;
   }
   browserControlReady = (async () => {
-    const cfg = loadConfig();
+    const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
       throw new Error("browser control disabled");
@@ -118,6 +128,7 @@ async function readBrowserProxyFile(filePath: string): Promise<BrowserProxyFile 
   return { path: filePath, base64: buffer.toString("base64"), mimeType };
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");
@@ -126,9 +137,7 @@ function decodeParams<T>(raw?: string | null): T {
 }
 
 function resolveBrowserProxyTimeout(timeoutMs?: number): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? Math.max(1, Math.floor(timeoutMs))
-    : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS);
 }
 
 function isBrowserProxyTimeoutError(err: unknown): boolean {
@@ -222,7 +231,7 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   await ensureBrowserControlService();
-  const cfg = loadConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
   const path = normalizeBrowserRequestPath(pathValue);
@@ -234,12 +243,10 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
       profile: params.profile,
     }) ?? "";
   const allowedProfiles = proxyConfig.allowProfiles;
+  if (isPersistentBrowserProfileMutation(method, path)) {
+    throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+  }
   if (allowedProfiles.length > 0) {
-    if (isPersistentBrowserProfileMutation(method, path)) {
-      throw new Error(
-        "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-      );
-    }
     if (path !== "/profiles") {
       const profileToCheck = requestedProfile || resolved.defaultProfile;
       if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {

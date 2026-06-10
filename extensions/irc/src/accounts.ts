@@ -1,9 +1,16 @@
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import {
+  parseOptionalDelimitedEntries,
+  tryReadSecretFileSync,
+} from "openclaw/plugin-sdk/channel-core";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -28,22 +35,29 @@ function parseTruthy(value?: string): boolean {
   if (!value) {
     return false;
   }
-  return TRUTHY_ENV.has(value.trim().toLowerCase());
+  return TRUTHY_ENV.has(normalizeLowercaseStringOrEmpty(value));
 }
 
 function parseIntEnv(value?: string): number | undefined {
   if (!value?.trim()) {
     return undefined;
   }
-  const parsed = Number.parseInt(value.trim(), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed > 65535) {
     return undefined;
   }
   return parsed;
 }
 
 const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefaultIrcAccountId } =
-  createAccountListHelpers("irc", { normalizeAccountId });
+  createAccountListHelpers("irc", {
+    normalizeAccountId,
+    hasImplicitDefaultAccount: (cfg) =>
+      Boolean(
+        (cfg.channels?.irc?.host?.trim() || process.env.IRC_HOST?.trim()) &&
+        (cfg.channels?.irc?.nick?.trim() || process.env.IRC_NICK?.trim()),
+      ),
+  });
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
 
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
@@ -109,7 +123,7 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig):
 
   const merged: IrcNickServConfig = {
     ...base,
-    service: base.service?.trim() || undefined,
+    service: normalizeOptionalString(base.service),
     passwordFile: passwordFile || undefined,
     password: resolvedPassword || undefined,
     registerEmail: base.registerEmail?.trim() || envRegisterEmail || undefined,
@@ -184,7 +198,7 @@ export function resolveIrcAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       configured: Boolean(host && nick),
       host,
       port,

@@ -1,7 +1,35 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/plugins/fetch-mock.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
+
+type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
+
+function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCall {
+  const call = fetchFn.mock.calls[index] as unknown as FetchCall | undefined;
+  if (!call) {
+    throw new Error(`fetch call ${index} missing`);
+  }
+  return call;
+}
+
+function expectGraphUploadFetch(fetchFn: ReturnType<typeof vi.fn>, expectedUrl: string): void {
+  const [url, init] = requireFetchCall(fetchFn);
+  expect(url).toBe(expectedUrl);
+  expect(init?.method).toBe("PUT");
+  expect(init?.headers?.Authorization).toBe("Bearer graph-token");
+  expect(init?.headers?.["Content-Type"]).toBe("application/octet-stream");
+  expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
+}
+
+function bodyOnlyErrorResponse(body: string, status = 500): Response {
+  return {
+    ok: false,
+    status,
+    headers: new Headers(),
+    body: new Response(body).body,
+  } as unknown as Response;
+}
 
 describe("graph upload helpers", () => {
   const tokenProvider = {
@@ -27,15 +55,9 @@ describe("graph upload helpers", () => {
       fetchFn: withFetchPreconnect(fetchFn),
     });
 
-    expect(fetchFn).toHaveBeenCalledWith(
+    expectGraphUploadFetch(
+      fetchFn,
       "https://graph.microsoft.com/v1.0/me/drive/root:/OpenClawShared/a.txt:/content",
-      expect.objectContaining({
-        method: "PUT",
-        headers: expect.objectContaining({
-          Authorization: "Bearer graph-token",
-          "Content-Type": "application/octet-stream",
-        }),
-      }),
     );
     expect(result).toEqual({
       id: "item-1",
@@ -64,15 +86,9 @@ describe("graph upload helpers", () => {
       fetchFn: withFetchPreconnect(fetchFn),
     });
 
-    expect(fetchFn).toHaveBeenCalledWith(
+    expectGraphUploadFetch(
+      fetchFn,
       "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content",
-      expect.objectContaining({
-        method: "PUT",
-        headers: expect.objectContaining({
-          Authorization: "Bearer graph-token",
-          "Content-Type": "application/octet-stream",
-        }),
-      }),
     );
     expect(result).toEqual({
       id: "item-2",
@@ -99,6 +115,31 @@ describe("graph upload helpers", () => {
         fetchFn: withFetchPreconnect(fetchFn),
       }),
     ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
+  it("bounds upload error bodies without requiring response.text()", async () => {
+    const fetchFn = vi.fn(async () =>
+      bodyOnlyErrorResponse(`${"upload-denied ".repeat(4096)}tail-marker`, 413),
+    );
+
+    let error: unknown;
+    try {
+      await uploadToSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "large.txt",
+        siteId: "site-123",
+        tokenProvider,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("SharePoint upload failed (413): upload-denied");
+    expect(message).not.toContain("tail-marker");
+    expect(message.length).toBeLessThan(700);
   });
 });
 
@@ -135,17 +176,10 @@ describe("resolveGraphChatId", () => {
       fetchFn: withFetchPreconnect(fetchFn),
     });
 
-    expect(fetchFn).toHaveBeenCalledWith(
-      expect.stringContaining("/me/chats"),
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer graph-token" }),
-      }),
-    );
-    const firstCall = fetchFn.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("expected Graph chat lookup request");
-    }
-    const [callUrlRaw] = firstCall as unknown as [string, RequestInit?];
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [callUrlRaw, init] = requireFetchCall(fetchFn);
+    expect(init?.headers?.Authorization).toBe("Bearer graph-token");
+    expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
     const callUrl = new URL(callUrlRaw);
     expect(callUrl.origin).toBe("https://graph.microsoft.com");
     expect(callUrl.pathname).toBe("/v1.0/me/chats");

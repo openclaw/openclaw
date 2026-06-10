@@ -1,12 +1,10 @@
 ---
-title: "Builtin Memory Engine"
 summary: "The default SQLite-based memory backend with keyword, vector, and hybrid search"
+title: "Builtin memory engine"
 read_when:
   - You want to understand the default memory backend
   - You want to configure embedding providers or hybrid search
 ---
-
-# Builtin Memory Engine
 
 The builtin engine is the default memory backend. It stores your memory index in
 a per-agent SQLite database and needs no extra dependencies to get started.
@@ -21,8 +19,9 @@ a per-agent SQLite database and needs no extra dependencies to get started.
 
 ## Getting started
 
-If you have an API key for OpenAI, Gemini, Voyage, or Mistral, the builtin
-engine auto-detects it and enables vector search. No config needed.
+By default, the builtin engine uses OpenAI embeddings. If you already have
+`OPENAI_API_KEY` or `models.providers.openai.apiKey` configured, vector search
+works with no extra memory config.
 
 To set a provider explicitly:
 
@@ -40,19 +39,42 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
+To force the built-in local embedding provider, install the optional
+`node-llama-cpp` runtime package next to OpenClaw, then point `local.modelPath`
+at a GGUF file:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "local",
+        fallback: "none",
+        local: {
+          modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
+        },
+      },
+    },
+  },
+}
+```
+
 ## Supported embedding providers
 
-| Provider | ID        | Auto-detected | Notes                               |
-| -------- | --------- | ------------- | ----------------------------------- |
-| OpenAI   | `openai`  | Yes           | Default: `text-embedding-3-small`   |
-| Gemini   | `gemini`  | Yes           | Supports multimodal (image + audio) |
-| Voyage   | `voyage`  | Yes           |                                     |
-| Mistral  | `mistral` | Yes           |                                     |
-| Ollama   | `ollama`  | No            | Local, set explicitly               |
-| Local    | `local`   | Yes (first)   | GGUF model, ~0.6 GB download        |
+| Provider          | ID                  | Notes                               |
+| ----------------- | ------------------- | ----------------------------------- |
+| Bedrock           | `bedrock`           | Uses AWS credential chain           |
+| DeepInfra         | `deepinfra`         | Default: `BAAI/bge-m3`              |
+| Gemini            | `gemini`            | Supports multimodal (image + audio) |
+| GitHub Copilot    | `github-copilot`    | Uses Copilot subscription           |
+| Local             | `local`             | Optional `node-llama-cpp` runtime   |
+| Mistral           | `mistral`           |                                     |
+| Ollama            | `ollama`            | Local/self-hosted                   |
+| OpenAI            | `openai`            | Default: `text-embedding-3-small`   |
+| OpenAI-compatible | `openai-compatible` | Generic `/v1/embeddings` endpoint   |
+| Voyage            | `voyage`            |                                     |
 
-Auto-detection picks the first provider whose API key can be resolved, in the
-order shown. Set `memorySearch.provider` to override.
+Set `memorySearch.provider` to switch away from OpenAI.
 
 ## How indexing works
 
@@ -60,6 +82,8 @@ OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
 80-token overlap) and stores them in a per-agent SQLite database.
 
 - **Index location:** `~/.openclaw/memory/<agentId>.sqlite`
+- **Storage maintenance:** SQLite WAL sidecars are bounded with periodic and
+  shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex (1.5s).
 - **Auto-reindex:** when the embedding provider, model, or chunking config
   changes, the entire index is rebuilt automatically.
@@ -91,11 +115,24 @@ automatic user modeling.
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
+**Local provider not detected?** Confirm the local path exists and run:
+
+```bash
+openclaw memory status --deep --agent main
+openclaw memory index --force --agent main
+```
+
+Both standalone CLI commands and the Gateway use the same `local` provider id.
+Set `memorySearch.provider: "local"` when you want local embeddings.
+
 **Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.
 
 **sqlite-vec not loading?** OpenClaw falls back to in-process cosine similarity
-automatically. Check logs for the specific load error.
+automatically. `openclaw memory status --deep` reports the local vector store
+separately from the embedding provider, so `Vector store: unavailable` points
+at sqlite-vec loading while `Embeddings: unavailable` points at provider/auth
+or model readiness. Check logs for the specific load error.
 
 ## Configuration
 
@@ -103,3 +140,9 @@ For embedding provider setup, hybrid search tuning (weights, MMR, temporal
 decay), batch indexing, multimodal memory, sqlite-vec, extra paths, and all
 other config knobs, see the
 [Memory configuration reference](/reference/memory-config).
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Active memory](/concepts/active-memory)

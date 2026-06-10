@@ -150,6 +150,31 @@ describe("textSimilarity", () => {
       }
     }
   });
+
+  // Regression: dreaming dedupe (and any caller comparing arbitrary content
+  // strings via Jaccard tokens) must NOT merge distinct snippets when both
+  // sides tokenize to the empty set. The shared `tokenize` only emits ASCII
+  // word-tokens and CJK uni-/bigrams, so inputs in other scripts (Cyrillic,
+  // Arabic, emoji-only, punctuation-only) all tokenize to `{}` and would
+  // otherwise return Jaccard=1 → false dedupe.
+  it("falls back to literal equality when both inputs tokenize to empty sets (non-CJK/non-ASCII)", () => {
+    // Distinct Cyrillic snippets — must NOT merge.
+    expect(textSimilarity("Привет мир", "Доброе утро")).toBe(0);
+    // Distinct Arabic snippets — must NOT merge.
+    expect(textSimilarity("مرحبا بالعالم", "صباح الخير")).toBe(0);
+    // Emoji-only — distinct must NOT merge, identical must merge.
+    expect(textSimilarity("🦞🦞🦞", "🚀🚀🚀")).toBe(0);
+    expect(textSimilarity("🦞🦞🦞", "🦞🦞🦞")).toBe(1);
+    // Punctuation-only — distinct must NOT merge, identical must merge.
+    expect(textSimilarity("!!!", "???")).toBe(0);
+    expect(textSimilarity("!!!", "!!!")).toBe(1);
+    // Two identical Cyrillic snippets — same normalized string → merge.
+    expect(textSimilarity("Привет мир", "Привет мир")).toBe(1);
+    // Empty vs empty — preserve identity (both literally equal).
+    expect(textSimilarity("", "")).toBe(1);
+    // Normalized equality is case-insensitive for non-tokenized text.
+    expect(textSimilarity("Привет МИР", "привет мир")).toBe(1);
+  });
 });
 
 describe("computeMMRScore", () => {
@@ -170,7 +195,7 @@ describe("computeMMRScore", () => {
         expected: -0.5,
       },
       { name: "lambda=0.5 mixed", relevance: 0.8, similarity: 0.6, lambda: 0.5, expected: 0.1 },
-      { name: "default lambda math", relevance: 1.0, similarity: 0.5, lambda: 0.7, expected: 0.55 },
+      { name: "default lambda math", relevance: 1, similarity: 0.5, lambda: 0.7, expected: 0.55 },
     ] as const;
 
     for (const testCase of cases) {
@@ -184,8 +209,8 @@ describe("computeMMRScore", () => {
 
 describe("empty input behavior", () => {
   it("returns empty array for empty input", () => {
-    expect(mmrRerank([])).toEqual([]);
-    expect(applyMMRToHybridResults([])).toEqual([]);
+    expect(mmrRerank([])).toStrictEqual([]);
+    expect(applyMMRToHybridResults([])).toStrictEqual([]);
   });
 });
 
@@ -214,7 +239,7 @@ describe("mmrRerank", () => {
 
   describe("lambda edge cases", () => {
     const diverseItems: MMRItem[] = [
-      { id: "1", score: 1.0, content: "apple banana cherry" },
+      { id: "1", score: 1, content: "apple banana cherry" },
       { id: "2", score: 0.9, content: "apple banana date" },
       { id: "3", score: 0.8, content: "elderberry fig grape" },
     ];
@@ -247,7 +272,7 @@ describe("mmrRerank", () => {
   describe("diversity behavior", () => {
     it("promotes diverse results over similar high-scoring ones", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "machine learning neural networks" },
+        { id: "1", score: 1, content: "machine learning neural networks" },
         { id: "2", score: 0.95, content: "machine learning deep learning" },
         { id: "3", score: 0.9, content: "database systems sql queries" },
         { id: "4", score: 0.85, content: "machine learning algorithms" },
@@ -263,7 +288,7 @@ describe("mmrRerank", () => {
 
     it("handles items with identical content", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "identical content" },
+        { id: "1", score: 1, content: "identical content" },
         { id: "2", score: 0.9, content: "identical content" },
         { id: "3", score: 0.8, content: "different stuff" },
       ];
@@ -276,7 +301,7 @@ describe("mmrRerank", () => {
 
     it("handles all identical content gracefully", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "same" },
+        { id: "1", score: 1, content: "same" },
         { id: "2", score: 0.9, content: "same" },
         { id: "3", score: 0.8, content: "same" },
       ];
@@ -290,7 +315,7 @@ describe("mmrRerank", () => {
   describe("tie-breaking", () => {
     it("uses original score as tiebreaker", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "unique content one" },
+        { id: "1", score: 1, content: "unique content one" },
         { id: "2", score: 0.9, content: "unique content two" },
         { id: "3", score: 0.8, content: "unique content three" },
       ];
@@ -327,7 +352,7 @@ describe("mmrRerank", () => {
     it("handles negative scores", () => {
       const items: MMRItem[] = [
         { id: "1", score: -0.5, content: "hello world" },
-        { id: "2", score: -1.0, content: "foo bar" },
+        { id: "2", score: -1, content: "foo bar" },
       ];
 
       const result = mmrRerank(items, { lambda: 0.7 });
@@ -395,7 +420,7 @@ describe("applyMMRToHybridResults", () => {
         path: "/a.ts",
         startLine: 1,
         endLine: 10,
-        score: 1.0,
+        score: 1,
         snippet: "function add numbers together",
         source: "memory",
       },

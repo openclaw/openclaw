@@ -2,179 +2,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
-  createSendCfgThreadingRuntime,
-  expectProvidedCfgSkipsRuntimeLoad,
-  expectRuntimeCfgFallback,
-} from "../../../test/helpers/plugins/send-config.js";
-import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
-import {
-  expectStopPendingUntilAbort,
-  startAccountAndTrackLifecycle,
-  waitForStartedMocks,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+  clearNextcloudTalkAccountFields,
+  nextcloudTalkDmPolicy,
+  nextcloudTalkSetupAdapter,
+  normalizeNextcloudTalkBaseUrl,
+  setNextcloudTalkAccountConfig,
+  validateNextcloudTalkBaseUrl,
+} from "./setup-core.js";
+import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
-  getBundledChannelRuntimeMap: () => new Map(),
-  getBundledChannelConfigSchemaMap: () => new Map(),
-}));
-
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
-const hoisted = vi.hoisted(() => ({
-  monitorNextcloudTalkProvider: vi.fn(),
-  loadConfig: vi.fn(),
-  resolveMarkdownTableMode: vi.fn(() => "preserve"),
-  convertMarkdownTables: vi.fn((text: string) => text),
-  record: vi.fn(),
-  resolveNextcloudTalkAccount: vi.fn(),
-  generateNextcloudTalkSignature: vi.fn(() => ({
-    random: "r",
-    signature: "s",
-  })),
-  mockFetchGuard: vi.fn(),
-}));
-
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
-  return {
-    ...actual,
-    monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
-  };
-});
-
-vi.mock("./runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.js")>();
-  return {
-    ...actual,
-    getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
-  };
-});
-
-vi.mock("./accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./accounts.js")>();
-  return {
-    ...actual,
-    resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
-  };
-});
-
-vi.mock("./signature.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./signature.js")>();
-  return {
-    ...actual,
-    generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
-    fetchWithSsrFGuard: hoisted.mockFetchGuard,
-  };
-});
-
-vi.mock("../../../src/infra/net/fetch-guard.js", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
-    fetchWithSsrFGuard: hoisted.mockFetchGuard,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
-    resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
-    convertMarkdownTables: hoisted.convertMarkdownTables,
-  };
-});
-
-const accountsActual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
-hoisted.resolveNextcloudTalkAccount.mockImplementation(accountsActual.resolveNextcloudTalkAccount);
-
-let resolveNextcloudTalkAccount: typeof import("./accounts.js").resolveNextcloudTalkAccount;
-let nextcloudTalkPlugin: typeof import("./channel.js").nextcloudTalkPlugin;
-let clearNextcloudTalkAccountFields: typeof import("./setup-core.js").clearNextcloudTalkAccountFields;
-let nextcloudTalkDmPolicy: typeof import("./setup-core.js").nextcloudTalkDmPolicy;
-let nextcloudTalkSetupAdapter: typeof import("./setup-core.js").nextcloudTalkSetupAdapter;
-let normalizeNextcloudTalkBaseUrl: typeof import("./setup-core.js").normalizeNextcloudTalkBaseUrl;
-let setNextcloudTalkAccountConfig: typeof import("./setup-core.js").setNextcloudTalkAccountConfig;
-let validateNextcloudTalkBaseUrl: typeof import("./setup-core.js").validateNextcloudTalkBaseUrl;
-let nextcloudTalkSetupWizard: typeof import("./setup-surface.js").nextcloudTalkSetupWizard;
-let sendMessageNextcloudTalk: typeof import("./send.js").sendMessageNextcloudTalk;
-let sendReactionNextcloudTalk: typeof import("./send.js").sendReactionNextcloudTalk;
-
-function buildAccount(): ResolvedNextcloudTalkAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    baseUrl: "https://nextcloud.example.com",
-    secret: "secret", // pragma: allowlist secret
-    secretSource: "config", // pragma: allowlist secret
-    config: {
-      baseUrl: "https://nextcloud.example.com",
-      botSecret: "secret", // pragma: allowlist secret
-      webhookPath: "/nextcloud-talk-webhook",
-      webhookPort: 8788,
-    },
-  };
-}
-
-function mockStartedMonitor() {
-  const stop = vi.fn();
-  hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
-  return stop;
-}
-
-function startNextcloudAccount(abortSignal?: AbortSignal) {
-  return nextcloudTalkPlugin.gateway!.startAccount!(
-    createStartAccountContext({
-      account: buildAccount(),
-      abortSignal,
-    }),
-  );
-}
-
 describe("nextcloud talk setup", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveNextcloudTalkAccount } = await import("./accounts.js"));
-    ({ nextcloudTalkPlugin } = await import("./channel.js"));
-    ({
-      clearNextcloudTalkAccountFields,
-      nextcloudTalkDmPolicy,
-      nextcloudTalkSetupAdapter,
-      normalizeNextcloudTalkBaseUrl,
-      setNextcloudTalkAccountConfig,
-      validateNextcloudTalkBaseUrl,
-    } = await import("./setup-core.js"));
-    ({ nextcloudTalkSetupWizard } = await import("./setup-surface.js"));
-    ({ sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js"));
-    hoisted.resolveNextcloudTalkAccount.mockImplementation(
-      accountsActual.resolveNextcloudTalkAccount,
-    );
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-    hoisted.resolveNextcloudTalkAccount.mockImplementation(
-      accountsActual.resolveNextcloudTalkAccount,
+  it("shows a bot install command with webhook, response, and reaction features", () => {
+    expect(nextcloudTalkSetupWizard.introNote?.lines.join("\n")).toContain(
+      "--feature webhook --feature response --feature reaction",
     );
   });
 
@@ -212,36 +56,47 @@ describe("nextcloud talk setup", () => {
       setNextcloudTalkAccountConfig(cfg, DEFAULT_ACCOUNT_ID, {
         apiUser: "bot",
       }),
-    ).toMatchObject({
+    ).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
+          baseUrl: "https://cloud.example.com",
+          botSecret: "top-secret",
           apiUser: "bot",
+          accounts: {
+            work: {
+              botSecret: "work-secret",
+              botSecretFile: "/tmp/work-secret",
+              apiPassword: "api-secret",
+            },
+          },
         },
       },
     });
 
-    expect(clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"])).toMatchObject({
+    expect(clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"])).toEqual({
       channels: {
         "nextcloud-talk": {
           baseUrl: "https://cloud.example.com",
+          accounts: {
+            work: {
+              botSecret: "work-secret",
+              botSecretFile: "/tmp/work-secret",
+              apiPassword: "api-secret",
+            },
+          },
         },
       },
     });
     expect(
       clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"]),
-    ).not.toMatchObject({
-      channels: {
-        "nextcloud-talk": {
-          botSecret: expect.anything(),
-        },
-      },
-    });
+    ).not.toHaveProperty(["channels", "nextcloud-talk", "botSecret"]);
 
-    expect(
-      clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"]),
-    ).toMatchObject({
+    expect(clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"])).toEqual({
       channels: {
         "nextcloud-talk": {
+          baseUrl: "https://cloud.example.com",
+          botSecret: "top-secret",
           accounts: {
             work: {
               apiPassword: "api-secret",
@@ -252,7 +107,7 @@ describe("nextcloud talk setup", () => {
     });
   });
 
-  it("sets top-level DM policy state", async () => {
+  it("sets top-level DM policy state", () => {
     const base: CoreConfig = {
       channels: {
         "nextcloud-talk": {},
@@ -260,13 +115,96 @@ describe("nextcloud talk setup", () => {
     };
 
     expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("pairing");
-    expect(nextcloudTalkDmPolicy.setPolicy(base, "open")).toMatchObject({
+    expect(nextcloudTalkDmPolicy.setPolicy(base, "open")).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });
+  });
+
+  it("honors named-account DM policy state and config keys", () => {
+    const base: CoreConfig = {
+      channels: {
+        "nextcloud-talk": {
+          dmPolicy: "disabled",
+          accounts: {
+            work: {
+              baseUrl: "https://cloud.example.com",
+              botSecret: "work-secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(nextcloudTalkDmPolicy.getCurrent(base, "work")).toBe("allowlist");
+    expect(nextcloudTalkDmPolicy.resolveConfigKeys?.(base, "work")).toEqual({
+      policyKey: "channels.nextcloud-talk.accounts.work.dmPolicy",
+      allowFromKey: "channels.nextcloud-talk.accounts.work.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const base: CoreConfig = {
+      channels: {
+        "nextcloud-talk": {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          accounts: {
+            work: {
+              baseUrl: "https://cloud.example.com",
+              botSecret: "work-secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("allowlist");
+    expect(nextcloudTalkDmPolicy.resolveConfigKeys?.(base)).toEqual({
+      policyKey: "channels.nextcloud-talk.accounts.work.dmPolicy",
+      allowFromKey: "channels.nextcloud-talk.accounts.work.allowFrom",
+    });
+
+    const next = nextcloudTalkDmPolicy.setPolicy(base, "open");
+    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBe("disabled");
+    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+  });
+
+  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = nextcloudTalkDmPolicy.setPolicy(
+      {
+        channels: {
+          "nextcloud-talk": {
+            allowFrom: ["alice"],
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBeUndefined();
+    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["alice", "*"]);
   });
 
   it("validates env/default-account constraints and applies config patches", () => {
@@ -274,30 +212,33 @@ describe("nextcloud talk setup", () => {
     const applyAccountConfig = nextcloudTalkSetupAdapter.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
+    if (!validateInput) {
+      throw new Error("Expected Nextcloud Talk setup validateInput");
+    }
 
     expect(
-      validateInput!({
+      validateInput({
         accountId: "work",
         input: { useEnv: true },
       } as never),
     ).toBe("NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.");
 
     expect(
-      validateInput!({
+      validateInput({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, baseUrl: "", secret: "" },
       } as never),
     ).toBe("Nextcloud Talk requires bot secret or --secret-file (or --use-env).");
 
     expect(
-      validateInput!({
+      validateInput({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, secret: "secret", baseUrl: "" },
       } as never),
     ).toBe("Nextcloud Talk requires --base-url.");
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {},
@@ -322,7 +263,7 @@ describe("nextcloud talk setup", () => {
     });
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {
@@ -341,9 +282,10 @@ describe("nextcloud talk setup", () => {
           baseUrl: "https://cloud.example.com",
         },
       } as never),
-    ).toMatchObject({
+    ).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
           accounts: {
             work: {
               enabled: true,
@@ -403,32 +345,6 @@ describe("nextcloud talk setup", () => {
     expect(next?.channels?.["nextcloud-talk"]).not.toHaveProperty("botSecret");
     expect(next?.channels?.["nextcloud-talk"]).not.toHaveProperty("botSecretFile");
   });
-
-  it("keeps startAccount pending until abort, then stops the monitor", async () => {
-    const stop = mockStartedMonitor();
-    const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: nextcloudTalkPlugin.gateway!.startAccount!,
-      account: buildAccount(),
-    });
-    await expectStopPendingUntilAbort({
-      waitForStarted: waitForStartedMocks(hoisted.monitorNextcloudTalkProvider),
-      isSettled,
-      abort,
-      task,
-      stop,
-    });
-  });
-
-  it("stops immediately when startAccount receives an already-aborted signal", async () => {
-    const stop = mockStartedMonitor();
-    const abort = new AbortController();
-    abort.abort();
-
-    await startNextcloudAccount(abort.signal);
-
-    expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
-    expect(stop).toHaveBeenCalledOnce();
-  });
 });
 
 describe("resolveNextcloudTalkAccount", () => {
@@ -471,145 +387,59 @@ describe("resolveNextcloudTalkAccount", () => {
       },
     } as CoreConfig;
 
-    const account = resolveNextcloudTalkAccount({ cfg });
-    expect(account.secret).toBe("");
-    expect(account.secretSource).toBe("none");
+    expect(() => resolveNextcloudTalkAccount({ cfg })).toThrow(
+      /Nextcloud Talk bot secret file.*must not be a symlink/,
+    );
     fs.rmSync(dir, { recursive: true, force: true });
   });
-});
 
-describe("nextcloud-talk send cfg threading", () => {
-  const fetchMock = vi.fn<typeof fetch>();
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js"));
-    vi.stubGlobal("fetch", fetchMock);
-    // Wire the SSRF guard mock to delegate to the global fetch mock
-    hoisted.mockFetchGuard.mockImplementation(async (p: { url: string; init?: RequestInit }) => {
-      const response = await globalThis.fetch(p.url, p.init);
-      return { response, release: async () => {}, finalUrl: p.url };
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            defaultAccount: "work",
+            botSecret: "top-secret",
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
     });
-    hoisted.resolveNextcloudTalkAccount.mockImplementation(
-      accountsActual.resolveNextcloudTalkAccount,
-    );
+
+    expect(account.accountId).toBe("work");
+    expect(account.baseUrl).toBe("https://cloud.example.com");
+    expect(account.secret).toBe("work-secret");
+    expect(account.secretSource).toBe("config");
   });
 
-  afterEach(() => {
-    fetchMock.mockReset();
-    hoisted.mockFetchGuard.mockReset();
-    vi.unstubAllGlobals();
-  });
-
-  it("uses provided cfg for sendMessage and skips runtime loadConfig", async () => {
-    const cfg = { source: "provided" } as const;
-    hoisted.resolveNextcloudTalkAccount.mockReturnValue({
-      accountId: "default",
-      baseUrl: "https://nextcloud.example.com",
-      secret: "secret-value", // pragma: allowlist secret
-    });
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          ocs: { data: { id: 12345, timestamp: 1_706_000_000 } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-
-    const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
-      cfg,
-      accountId: "work",
+  it("uses configured defaultAccount for omitted setup configured state", () => {
+    const configured = nextcloudTalkSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            defaultAccount: "work",
+            baseUrl: "https://root.example.com",
+            botSecret: "root-secret",
+            accounts: {
+              alerts: {
+                baseUrl: "https://alerts.example.com",
+                botSecret: "alerts-secret",
+              },
+              work: {
+                baseUrl: "",
+                botSecret: "",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
     });
 
-    expectProvidedCfgSkipsRuntimeLoad({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
-      cfg,
-      accountId: "work",
-    });
-    expect(hoisted.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg,
-      channel: "nextcloud-talk",
-      accountId: "default",
-    });
-    expect(hoisted.convertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
-    expect(hoisted.record).toHaveBeenCalledWith({
-      channel: "nextcloud-talk",
-      accountId: "default",
-      direction: "outbound",
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      messageId: "12345",
-      roomToken: "abc123",
-      timestamp: 1_706_000_000,
-    });
-  });
-
-  it("sends with provided cfg even when the runtime store is not initialized", async () => {
-    const cfg = { source: "provided" } as const;
-    hoisted.resolveNextcloudTalkAccount.mockReturnValue({
-      accountId: "default",
-      baseUrl: "https://nextcloud.example.com",
-      secret: "secret-value",
-    });
-    hoisted.record.mockImplementation(() => {
-      throw new Error("Nextcloud Talk runtime not initialized");
-    });
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          ocs: { data: { id: 12346, timestamp: 1_706_000_001 } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-
-    const result = await sendMessageNextcloudTalk("room:abc123", "hello", {
-      cfg,
-      accountId: "work",
-    });
-
-    expectProvidedCfgSkipsRuntimeLoad({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
-      cfg,
-      accountId: "work",
-    });
-    expect(hoisted.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg,
-      channel: "nextcloud-talk",
-      accountId: "default",
-    });
-    expect(hoisted.convertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
-    expect(result).toEqual({
-      messageId: "12346",
-      roomToken: "abc123",
-      timestamp: 1_706_000_001,
-    });
-  });
-
-  it("falls back to runtime cfg for sendReaction when cfg is omitted", async () => {
-    const runtimeCfg = { source: "runtime" } as const;
-    hoisted.loadConfig.mockReturnValueOnce(runtimeCfg);
-    hoisted.resolveNextcloudTalkAccount.mockReturnValue({
-      accountId: "default",
-      baseUrl: "https://nextcloud.example.com",
-      secret: "secret-value", // pragma: allowlist secret
-    });
-    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
-
-    const result = await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
-      accountId: "default",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expectRuntimeCfgFallback({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
-      cfg: runtimeCfg,
-      accountId: "default",
-    });
+    expect(configured).toBe(false);
   });
 });

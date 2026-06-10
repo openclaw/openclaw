@@ -1,29 +1,79 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
+import { copyProviderCatalogResultProjection } from "./provider-catalog-result.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
-let providerRuntimePromise: Promise<typeof import("./provider-discovery.runtime.js")> | undefined;
+const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const providerRuntimeLoader = createLazyImportLoader(
+  () => import("./provider-discovery.runtime.js"),
+);
 
 function loadProviderRuntime() {
-  providerRuntimePromise ??= import("./provider-discovery.runtime.js");
-  return providerRuntimePromise;
+  return providerRuntimeLoader.load();
 }
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
   return provider.catalog ?? provider.discovery;
 }
 
-export async function resolvePluginDiscoveryProviders(params: {
+function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
+  return resolveProviderCatalogHook(provider) ?? provider.staticCatalog;
+}
+
+function createProviderConfigRecord(): Record<string, ModelProviderConfig> {
+  return Object.create(null) as Record<string, ModelProviderConfig>;
+}
+
+function isSafeProviderConfigKey(value: string): boolean {
+  return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
+}
+
+export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
-}): Promise<ProviderPlugin[]> {
+  includeUntrustedWorkspacePlugins?: boolean;
+  requireCompleteDiscoveryEntryCoverage?: boolean;
+  discoveryEntriesOnly?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+};
+
+export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
+  index?: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+};
+
+export function resolveInstalledPluginProviderContributionIds(
+  params: ResolveInstalledPluginProviderContributionIdsParams = {},
+): string[] {
+  const registryParams =
+    params.candidates && params.preferPersisted === undefined
+      ? { ...params, preferPersisted: false }
+      : params;
+  return sortUniqueStrings(
+    listManifestProviderContributionIds({
+      ...registryParams,
+      index: params.index,
+      includeDisabled: params.includeDisabled,
+    }),
+  );
+}
+
+export async function resolveRuntimePluginDiscoveryProviders(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
-    .filter((provider) => resolveProviderCatalogHook(provider));
+    .filter((provider) => resolveProviderCatalogOrderHook(provider));
 }
 
 export function groupPluginDiscoveryProvidersByOrder(
@@ -37,7 +87,7 @@ export function groupPluginDiscoveryProvidersByOrder(
   } as Record<ProviderDiscoveryOrder, ProviderPlugin[]>;
 
   for (const provider of providers) {
-    const order = resolveProviderCatalogHook(provider)?.order ?? "late";
+    const order = resolveProviderCatalogOrderHook(provider)?.order ?? "late";
     grouped[order].push(provider);
   }
 
@@ -61,14 +111,30 @@ export function normalizePluginDiscoveryResult(params: {
     return {};
   }
 
-  if ("provider" in result) {
-    return { [normalizeProviderId(params.provider.id)]: result.provider };
+  const projection = copyProviderCatalogResultProjection(result);
+  if (projection.kind === "provider") {
+    const normalized = createProviderConfigRecord();
+    for (const providerId of [
+      params.provider.id,
+      ...(params.provider.aliases ?? []),
+      ...(params.provider.hookAliases ?? []),
+    ]) {
+      const normalizedKey = normalizeProviderId(providerId);
+      if (!isSafeProviderConfigKey(normalizedKey)) {
+        continue;
+      }
+      normalized[normalizedKey] = projection.provider;
+    }
+    return normalized;
   }
 
-  const normalized: Record<string, ModelProviderConfig> = {};
-  for (const [key, value] of Object.entries(result.providers)) {
+  const normalized = createProviderConfigRecord();
+  if (projection.kind !== "providers") {
+    return normalized;
+  }
+  for (const [key, value] of projection.providers) {
     const normalizedKey = normalizeProviderId(key);
-    if (!normalizedKey || !value) {
+    if (!isSafeProviderConfigKey(normalizedKey) || !value) {
       continue;
     }
     normalized[normalizedKey] = value;
@@ -92,7 +158,7 @@ export function runProviderCatalog(params: {
   ) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
-    mode: "api_key" | "oauth" | "token" | "none";
+    mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
     source: "env" | "profile" | "none";
     profileId?: string;
   };
@@ -104,5 +170,26 @@ export function runProviderCatalog(params: {
     env: params.env,
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
+  });
+}
+
+export function runProviderStaticCatalog(params: {
+  provider: ProviderPlugin;
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}) {
+  return params.provider.staticCatalog?.run({
+    config: {},
+    env: {},
+    resolveProviderApiKey: () => ({
+      apiKey: undefined,
+    }),
+    resolveProviderAuth: () => ({
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    }),
   });
 }

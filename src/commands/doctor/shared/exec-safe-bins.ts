@@ -1,4 +1,6 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCommandResolutionFromArgv } from "../../../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
@@ -10,7 +12,6 @@ import {
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
 } from "../../../infra/exec-safe-bin-trust.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 export type ExecSafeBinCoverageHit = {
@@ -42,7 +43,7 @@ function normalizeConfiguredSafeBins(entries: unknown): string[] {
   return Array.from(
     new Set(
       entries
-        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
         .filter((entry) => entry.length > 0),
     ),
   ).toSorted();

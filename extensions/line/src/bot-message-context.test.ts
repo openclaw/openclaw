@@ -1,17 +1,30 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { webhook } from "@line/bot-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
-import { setDefaultChannelPluginRegistryForTests } from "openclaw/plugin-sdk/testing";
+import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
-import { linePlugin } from "./channel.js";
 import type { ResolvedLineAccount } from "./types.js";
 
-type AgentBinding = NonNullable<OpenClawConfig["bindings"]>[number];
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
+
+const lineBindingsPlugin = {
+  id: "line",
+  bindings: lineBindingsAdapter,
+  conversationBindings: {
+    defaultTopLevelPlacement: "current",
+    supportsCurrentConversationBinding: true,
+  },
+};
 
 describe("buildLineMessageContext", () => {
   let tmpDir: string;
@@ -59,7 +72,15 @@ describe("buildLineMessageContext", () => {
     }) as PostbackEvent;
 
   beforeEach(async () => {
-    setDefaultChannelPluginRegistryForTests();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: lineBindingsPlugin.id,
+          plugin: lineBindingsPlugin,
+          source: "test",
+        },
+      ]),
+    );
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-context-"));
     storePath = path.join(tmpDir, "sessions.json");
@@ -86,13 +107,9 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    if (!context) {
-      throw new Error("context missing");
-    }
 
-    expect(context.ctxPayload.OriginatingTo).toBe("line:group:group-1");
-    expect(context.ctxPayload.To).toBe("line:group:group-1");
+    expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-1");
+    expect(context?.ctxPayload.To).toBe("line:group:group-1");
   });
 
   it("routes group postback replies to the group id", async () => {
@@ -185,7 +202,6 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: false,
     });
 
-    expect(context).not.toBeNull();
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
   });
 
@@ -215,6 +231,32 @@ describe("buildLineMessageContext", () => {
     });
 
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
+  });
+
+  it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" });
+    const directCfg: OpenClawConfig = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    };
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg: directCfg,
+      account: {
+        ...account,
+        config: { allowFrom: ["user-1"] },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.route.sessionKey).toBe("agent:main:line:direct:user-1");
+    const updateLastRoute = context?.turn.record.updateLastRoute;
+    expect(updateLastRoute?.sessionKey).toBe(context?.route.sessionKey);
+    expect(updateLastRoute?.sessionKey).not.toBe("agent:main:main");
+    expect(updateLastRoute?.channel).toBe("line");
+    expect(updateLastRoute?.to).toBe("user-1");
+    expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
   it("sets CommandAuthorized on postback context", async () => {
@@ -263,9 +305,8 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("line-group-agent");
-    expect(context!.route.matchedBy).toBe("binding.peer");
+    expect(context?.route.agentId).toBe("line-group-agent");
+    expect(context?.route.matchedBy).toBe("binding.peer");
   });
 
   it("room peer binding matches raw roomId without prefix (#21907)", async () => {
@@ -301,18 +342,12 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("line-room-agent");
-    expect(context!.route.matchedBy).toBe("binding.peer");
+    expect(context?.route.agentId).toBe("line-room-agent");
+    expect(context?.route.matchedBy).toBe("binding.peer");
   });
 
-  it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", async () => {
-    const compiled = linePlugin.bindings?.compileConfiguredBinding({
-      binding: {
-        type: "acp",
-        agentId: "codex",
-        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-      } as AgentBinding,
+  it("normalizes LINE ACP binding conversation ids through the plugin bindings surface", () => {
+    const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:user:U1234567890abcdef1234567890abcdef",
     });
 
@@ -320,12 +355,7 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.matchInboundConversation({
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-        } as AgentBinding,
+      lineBindingsAdapter.matchInboundConversation({
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),
@@ -335,13 +365,8 @@ describe("buildLineMessageContext", () => {
     });
   });
 
-  it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
-    const compiled = linePlugin.bindings?.compileConfiguredBinding({
-      binding: {
-        type: "acp",
-        agentId: "codex",
-        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-      } as AgentBinding,
+  it("normalizes canonical LINE targets through the plugin bindings surface", () => {
+    const compiled = lineBindingsAdapter.compileConfiguredBinding({
       conversationId: "line:U1234567890abcdef1234567890abcdef",
     });
 
@@ -349,20 +374,14 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.resolveCommandConversation?.({
-        accountId: "default",
+      lineBindingsAdapter.resolveCommandConversation({
         originatingTo: "line:U1234567890abcdef1234567890abcdef",
       }),
     ).toEqual({
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      linePlugin.bindings?.matchInboundConversation({
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
-        } as AgentBinding,
+      lineBindingsAdapter.matchInboundConversation({
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),
@@ -397,9 +416,8 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: true,
     });
 
-    expect(context).not.toBeNull();
-    expect(context!.route.agentId).toBe("codex");
-    expect(context!.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
-    expect(context!.route.matchedBy).toBe("binding.channel");
+    expect(context?.route.agentId).toBe("codex");
+    expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+    expect(context?.route.matchedBy).toBe("binding.channel");
   });
 });

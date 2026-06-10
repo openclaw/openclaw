@@ -2,6 +2,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveAnthropicVertexRegion } from "./region.js";
 export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW = 1_000_000;
@@ -14,6 +15,7 @@ function buildAnthropicVertexModel(params: {
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
   maxTokens: number;
+  thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
 }): ModelDefinitionConfig {
   return {
     id: params.id,
@@ -23,11 +25,21 @@ function buildAnthropicVertexModel(params: {
     cost: params.cost,
     contextWindow: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
     maxTokens: params.maxTokens,
+    ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
   };
 }
 
 function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
   return [
+    buildAnthropicVertexModel({
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      maxTokens: 128000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    }),
     buildAnthropicVertexModel({
       id: "claude-opus-4-6",
       name: "Claude Opus 4.6",
@@ -52,7 +64,7 @@ export function buildAnthropicVertexProvider(params?: {
 }): ModelProviderConfig {
   const region = resolveAnthropicVertexRegion(params?.env);
   const baseUrl =
-    region.toLowerCase() === "global"
+    normalizeLowercaseStringOrEmpty(region) === "global"
       ? "https://aiplatform.googleapis.com"
       : `https://${region}-aiplatform.googleapis.com`;
 

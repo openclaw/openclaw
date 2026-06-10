@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TlonSettingsStore } from "../settings.js";
 
 type ChannelAuthorization = {

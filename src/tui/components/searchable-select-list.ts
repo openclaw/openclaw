@@ -6,8 +6,10 @@ import {
   type SelectItem,
   type SelectListTheme,
   truncateToWidth,
-} from "@mariozechner/pi-tui";
-import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
+} from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { findWordBoundaryIndex, fuzzyFilterLower } from "./fuzzy-filter.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);
@@ -80,7 +82,7 @@ export class SearchableSelectList implements Component {
    * 4. Fuzzy match (lowest priority)
    */
   private smartFilter(query: string): SelectItem[] {
-    const q = query.toLowerCase();
+    const q = normalizeLowercaseStringOrEmpty(query);
     type ScoredItem = { item: SelectItem; tier: number; score: number };
     type FuzzyCandidate = { item: SelectItem; searchTextLower: string };
     const scoredItems: ScoredItem[] = [];
@@ -89,8 +91,8 @@ export class SearchableSelectList implements Component {
     for (const item of this.items) {
       const rawLabel = this.getItemLabel(item);
       const rawDesc = item.description ?? "";
-      const label = stripAnsi(rawLabel).toLowerCase();
-      const desc = stripAnsi(rawDesc).toLowerCase();
+      const label = normalizeLowercaseStringOrEmpty(stripAnsi(rawLabel));
+      const desc = normalizeLowercaseStringOrEmpty(stripAnsi(rawDesc));
 
       // Tier 1: Exact substring in label
       const labelIndex = label.indexOf(q);
@@ -114,11 +116,12 @@ export class SearchableSelectList implements Component {
       const searchText = (item as { searchText?: string }).searchText ?? "";
       fuzzyCandidates.push({
         item,
-        searchTextLower: [rawLabel, rawDesc, searchText]
-          .map((value) => stripAnsi(value))
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase(),
+        searchTextLower: normalizeLowercaseStringOrEmpty(
+          [rawLabel, rawDesc, searchText]
+            .map((value) => stripAnsi(value))
+            .filter(Boolean)
+            .join(" "),
+        ),
       });
     }
 
@@ -171,13 +174,13 @@ export class SearchableSelectList implements Component {
     const tokens = query
       .trim()
       .split(/\s+/)
-      .map((token) => token.toLowerCase())
+      .map((token) => normalizeLowercaseStringOrEmpty(token))
       .filter((token) => token.length > 0);
     if (tokens.length === 0) {
       return text;
     }
 
-    const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
+    const uniqueTokens = uniqueStrings(tokens).toSorted((a, b) => b.length - a.length);
     let parts = this.splitAnsiParts(text);
     for (const token of uniqueTokens) {
       const regex = this.getCachedRegex(token);

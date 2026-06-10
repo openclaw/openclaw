@@ -1,5 +1,9 @@
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 export const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
@@ -30,10 +34,6 @@ type VercelGatewayModelShape = {
   max_tokens?: number;
   tags?: string[];
   pricing?: VercelPricingShape;
-};
-
-type VercelGatewayModelsResponse = {
-  data?: VercelGatewayModelShape[];
 };
 
 type StaticVercelGatewayModel = Omit<ModelDefinitionConfig, "cost"> & {
@@ -81,6 +81,19 @@ const STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG: readonly StaticVercelGatewayModel[
       cacheRead: 0,
     },
   },
+  {
+    id: "moonshotai/kimi-k2.6",
+    name: "Kimi K2.6",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 262_144,
+    maxTokens: 262_144,
+    cost: {
+      input: 0.95,
+      output: 4,
+      cacheRead: 0.16,
+    },
+  },
 ] as const;
 
 function toPerMillionCost(value: number | string | undefined): number {
@@ -88,9 +101,9 @@ function toPerMillionCost(value: number | string | undefined): number {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value)
-        : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric < 0) {
+        ? parseStrictFiniteNumber(value)
+        : undefined;
+  if (numeric === undefined || numeric < 0) {
     return 0;
   }
   return numeric * 1_000_000;
@@ -139,13 +152,13 @@ function buildDiscoveredModelDefinition(
 
   const fallback = getStaticFallbackModel(id);
   const contextWindow =
-    typeof model.context_window === "number" && Number.isFinite(model.context_window)
-      ? model.context_window
-      : (fallback?.contextWindow ?? VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW);
+    asPositiveSafeInteger(model.context_window) ??
+    fallback?.contextWindow ??
+    VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW;
   const maxTokens =
-    typeof model.max_tokens === "number" && Number.isFinite(model.max_tokens)
-      ? model.max_tokens
-      : (fallback?.maxTokens ?? VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS);
+    asPositiveSafeInteger(model.max_tokens) ??
+    fallback?.maxTokens ??
+    VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS;
   const normalizedCost = normalizeCost(model.pricing);
 
   return {
@@ -172,24 +185,42 @@ function buildDiscoveredModelDefinition(
   };
 }
 
+function asVercelGatewayModelShape(value: unknown): VercelGatewayModelShape {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Vercel AI Gateway model list: malformed JSON response");
+  }
+  return value as VercelGatewayModelShape;
+}
+
 export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionConfig[]> {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return getStaticVercelAiGatewayModelCatalog();
   }
 
   try {
-    const response = await fetch(`${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`, {
-      signal: AbortSignal.timeout(5000),
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+      timeoutMs: 5000,
+      auditContext: "vercel-ai-gateway.models",
     });
-    if (!response.ok) {
-      log.warn(`Failed to discover Vercel AI Gateway models: HTTP ${response.status}`);
-      return getStaticVercelAiGatewayModelCatalog();
+    try {
+      if (!response.ok) {
+        log.warn(`Failed to discover Vercel AI Gateway models: HTTP ${response.status}`);
+        return getStaticVercelAiGatewayModelCatalog();
+      }
+      const data = await readProviderJsonArrayFieldResponse(
+        response,
+        "Vercel AI Gateway model list",
+        "data",
+      );
+      const discovered = data
+        .map(asVercelGatewayModelShape)
+        .map(buildDiscoveredModelDefinition)
+        .filter((entry): entry is ModelDefinitionConfig => entry !== null);
+      return discovered.length > 0 ? discovered : getStaticVercelAiGatewayModelCatalog();
+    } finally {
+      await release();
     }
-    const data = (await response.json()) as VercelGatewayModelsResponse;
-    const discovered = (data.data ?? [])
-      .map(buildDiscoveredModelDefinition)
-      .filter((entry): entry is ModelDefinitionConfig => entry !== null);
-    return discovered.length > 0 ? discovered : getStaticVercelAiGatewayModelCatalog();
   } catch (error) {
     log.warn(`Failed to discover Vercel AI Gateway models: ${String(error)}`);
     return getStaticVercelAiGatewayModelCatalog();

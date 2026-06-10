@@ -1,3 +1,9 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+
 export type NodeMatchCandidate = {
   nodeId: string;
   displayName?: string;
@@ -12,9 +18,9 @@ type ScoredNodeMatch = {
   selectionScore: number;
 };
 
+/** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
 export function normalizeNodeKey(value: string) {
-  return value
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(value)
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
@@ -30,19 +36,20 @@ function listKnownNodes(nodes: NodeMatchCandidate[]): string {
 function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   const label = node.displayName || node.remoteIp || node.nodeId;
   const details = [`node=${node.nodeId}`];
-  if (typeof node.clientId === "string" && node.clientId.trim()) {
-    details.push(`client=${node.clientId.trim()}`);
+  const clientId = normalizeOptionalString(node.clientId);
+  if (clientId) {
+    details.push(`client=${clientId}`);
   }
   return `${label} [${details.join(", ")}]`;
 }
 
 function isCurrentOpenClawClient(clientId: string | undefined): boolean {
-  const normalized = clientId?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
   return normalized.startsWith("openclaw-");
 }
 
 function isLegacyClawdbotClient(clientId: string | undefined): boolean {
-  const normalized = clientId?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
   return normalized.startsWith("clawdbot-") || normalized.startsWith("moldbot-");
 }
 
@@ -57,6 +64,8 @@ function pickPreferredLegacyMigrationMatch(
   if (legacyCount === 0 || current.length + legacyCount !== matches.length) {
     return undefined;
   }
+  // During Clawdbot -> OpenClaw migration, a unique current client should win only
+  // when every other tie is a known legacy client for the same human-facing node.
   return current[0];
 }
 
@@ -95,7 +104,7 @@ function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): numbe
 }
 
 function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
-  const trimmed = query.trim();
+  const trimmed = normalizeOptionalString(query);
   if (!trimmed) {
     return [];
   }
@@ -115,6 +124,7 @@ function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): Score
     .filter((entry): entry is ScoredNodeMatch => entry !== null);
 }
 
+/** Returns candidates matching a node id, remote ip, normalized display name, or long id prefix. */
 export function resolveNodeMatches(
   nodes: NodeMatchCandidate[],
   query: string,
@@ -122,6 +132,7 @@ export function resolveNodeMatches(
   return resolveScoredMatches(nodes, query).map((entry) => entry.node);
 }
 
+/** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
 export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
   const q = query.trim();
   if (!q) {

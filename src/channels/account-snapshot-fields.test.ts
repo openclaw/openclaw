@@ -34,4 +34,29 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       baseUrl: "https://chat.example.test/",
     });
   });
+
+  it("preserves non-secret transport liveness timestamps", () => {
+    const snapshot = projectSafeChannelAccountSnapshotFields({
+      connected: true,
+      lastConnectedAt: 123,
+      lastInboundAt: 123,
+      lastOutboundAt: 234,
+      lastMessageAt: null,
+      lastEventAt: 345,
+      lastTransportActivityAt: 456,
+      channelAccessToken: "line-token",
+      channelSecret: "line-secret", // pragma: allowlist secret
+      probe: { ok: true, token: "probe-secret" },
+    });
+
+    expect(snapshot).toEqual({
+      connected: true,
+      lastConnectedAt: 123,
+      lastInboundAt: 123,
+      lastOutboundAt: 234,
+      lastMessageAt: null,
+      lastEventAt: 345,
+      lastTransportActivityAt: 456,
+    });
+  });
 });

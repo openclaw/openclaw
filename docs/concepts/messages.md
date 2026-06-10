@@ -7,10 +7,7 @@ read_when:
 title: "Messages"
 ---
 
-# Messages
-
-This page ties together how OpenClaw handles inbound messages, sessions, queueing,
-streaming, and reasoning visibility.
+OpenClaw handles inbound messages through a pipeline of session resolution, queueing, streaming, tool execution, and reasoning visibility. This page maps the path from inbound message to reply.
 
 ## Message flow (high level)
 
@@ -62,7 +59,7 @@ Config (global default + per-channel overrides):
 Notes:
 
 - Debounce applies to **text-only** messages; media/attachments flush immediately.
-- Control commands bypass debouncing so they remain standalone.
+- Control commands bypass debouncing so they remain standalone. Channels that explicitly opt in to same-sender DM coalescing can keep DM commands inside the debounce window so a split-send payload can join the same agent turn.
 
 ## Sessions and devices
 
@@ -79,12 +76,28 @@ gateway-backed session transcript, so they are the source of truth.
 
 Details: [Session management](/concepts/session).
 
+## Tool result metadata
+
+Tool result `content` is the model-visible result. Tool result `details` is
+runtime metadata for UI rendering, diagnostics, media delivery, and plugins.
+
+OpenClaw keeps that boundary explicit:
+
+- `toolResult.details` is stripped before provider replay and compaction input.
+- Persisted session transcripts keep only bounded `details`; oversized metadata
+  is replaced with a compact summary marked `persistedDetailsTruncated: true`.
+- Plugins and tools should put text the model must read in `content`, not only
+  in `details`.
+
 ## Inbound bodies and history context
 
 OpenClaw separates the **prompt body** from the **command body**:
 
-- `Body`: prompt text sent to the agent. This may include channel envelopes and
-  optional history wrappers.
+- `BodyForAgent`: primary model-facing text for the current message. Channel
+  plugins should keep this focused on the sender's current prompt-bearing text.
+- `Body`: legacy prompt fallback. This may include channel envelopes and
+  optional history wrappers, but current channels should not rely on it as the
+  primary model input when `BodyForAgent` is available.
 - `CommandBody`: raw user text for directive/command parsing.
 - `RawBody`: legacy alias for `CommandBody` (kept for compatibility).
 
@@ -104,19 +117,32 @@ already in the session transcript.
 Directive stripping only applies to the **current message** section so history
 remains intact. Channels that wrap history should set `CommandBody` (or
 `RawBody`) to the original message text and keep `Body` as the combined prompt.
+Structured history, reply, forwarded, and channel metadata are rendered as
+user-role untrusted context blocks during prompt assembly.
 History buffers are configurable via `messages.groupChat.historyLimit` (global
 default) and per-channel overrides like `channels.slack.historyLimit` or
 `channels.telegram.accounts.<id>.historyLimit` (set `0` to disable).
 
 ## Queueing and followups
 
-If a run is already active, inbound messages can be queued, steered into the
-current run, or collected for a followup turn.
+If a run is already active, inbound messages are steered into the current run by
+default. `messages.queue` selects whether active-run messages steer, queue for
+later, collect into one later turn, or interrupt the active run.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
-- Modes: `interrupt`, `steer`, `followup`, `collect`, plus backlog variants.
+- Default mode is `steer`, with a 500ms debounce for Codex steering batches and
+  followup/collect queues.
+- Modes: `steer`, `followup`, `collect`, and `interrupt`.
 
-Details: [Queueing](/concepts/queue).
+Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+
+## Channel run ownership
+
+Channel plugins may preserve ordering, debounce input, and apply transport
+backpressure before a message enters the session queue. They should not impose a
+separate timeout around the agent turn itself. Once a message is routed to a
+session, long-running work is governed by the session, tool, and runtime
+lifecycle so all channels report and recover from slow turns consistently.
 
 ## Streaming, chunking, and batching
 
@@ -140,7 +166,7 @@ OpenClaw can expose or hide model reasoning:
 
 - `/reasoning on|off|stream` controls visibility.
 - Reasoning content still counts toward token usage when produced by the model.
-- Telegram supports reasoning stream into the draft bubble.
+- Telegram supports reasoning stream into a transient draft bubble that is deleted after final delivery; use `/reasoning on` for persistent reasoning output.
 
 Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/reference/token-use).
 
@@ -151,10 +177,37 @@ Outbound message formatting is centralized in `messages`:
 - `messages.responsePrefix`, `channels.<channel>.responsePrefix`, and `channels.<channel>.accounts.<id>.responsePrefix` (outbound prefix cascade), plus `channels.whatsapp.messagePrefix` (WhatsApp inbound prefix)
 - Reply threading via `replyToMode` and per-channel defaults
 
-Details: [Configuration](/gateway/configuration-reference#messages) and channel docs.
+Details: [Configuration](/gateway/config-agents#messages) and channel docs.
+
+## Silent replies
+
+The exact silent token `NO_REPLY` / `no_reply` means "do not deliver a user-visible reply".
+When a turn also has pending tool media, such as generated TTS audio, OpenClaw
+strips the silent text but still delivers the media attachment.
+OpenClaw resolves that behavior by conversation type:
+
+- Direct conversations never receive `NO_REPLY` prompt guidance. If a direct
+  run accidentally returns a bare silent token, OpenClaw suppresses it instead
+  of rewriting or delivering it.
+- Groups/channels allow silence by default only for automatic group replies.
+  In `message_tool` visible-reply mode, silence means the model does not call
+  `message(action=send)`.
+- Internal orchestration allows silence by default.
+
+OpenClaw also uses silent replies for internal runner failures that happen
+before any assistant reply in non-direct chats, so groups/channels do not see
+gateway error boilerplate. Direct chats show compact failure copy by default;
+raw runner details are shown only when `/verbose full` is enabled.
+
+Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply`
+can override group/internal policy per surface.
+
+Bare silent replies are dropped on all surfaces, so parent sessions stay quiet
+instead of rewriting sentinel text into fallback chatter.
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
 - [Streaming](/concepts/streaming) — real-time message delivery
 - [Retry](/concepts/retry) — message delivery retry behavior
 - [Queue](/concepts/queue) — message processing queue

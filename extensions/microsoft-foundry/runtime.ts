@@ -1,5 +1,12 @@
 import type { ProviderPrepareRuntimeAuthContext } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getAccessTokenResultAsync } from "./cli.js";
 import {
   type CachedTokenEntry,
@@ -13,6 +20,7 @@ import {
 
 const cachedTokens = new Map<string, CachedTokenEntry>();
 const refreshPromises = new Map<string, Promise<{ apiKey: string; expiresAt: number }>>();
+const FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS = 55 * 60 * 1000;
 
 export function resetFoundryRuntimeAuthCaches(): void {
   cachedTokens.clear();
@@ -25,7 +33,11 @@ async function refreshEntraToken(params?: {
 }): Promise<{ apiKey: string; expiresAt: number }> {
   const result = await getAccessTokenResultAsync(params);
   const rawExpiry = result.expiresOn ? new Date(result.expiresOn).getTime() : Number.NaN;
-  const expiresAt = Number.isFinite(rawExpiry) ? rawExpiry : Date.now() + 55 * 60 * 1000;
+  const now = resolveDateTimestampMs(Date.now());
+  const expiresAt =
+    asDateTimestampMs(rawExpiry) ??
+    resolveExpiresAtMsFromDurationMs(FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS, { nowMs: now }) ??
+    now;
   cachedTokens.set(getFoundryTokenCacheKey(params), {
     token: result.accessToken,
     expiresAt,
@@ -44,11 +56,9 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
     const credential = ctx.profileId ? authStore.profiles[ctx.profileId] : undefined;
     const metadata = credential?.type === "api_key" ? credential.metadata : undefined;
     const modelId =
-      typeof ctx.modelId === "string" && ctx.modelId.trim().length > 0
-        ? ctx.modelId.trim()
-        : typeof metadata?.modelId === "string" && metadata.modelId.trim().length > 0
-          ? metadata.modelId.trim()
-          : ctx.modelId;
+      normalizeOptionalString(ctx.modelId) ??
+      normalizeOptionalString(metadata?.modelId) ??
+      ctx.modelId;
     const activeModelNameHint = ctx.modelId === metadata?.modelId ? metadata?.modelName : undefined;
     const modelNameHint = resolveConfiguredModelNameHint(
       modelId,
@@ -61,9 +71,8 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
           ? ctx.model.api
           : undefined;
     const endpoint =
-      typeof metadata?.endpoint === "string" && metadata.endpoint.trim().length > 0
-        ? metadata.endpoint.trim()
-        : extractFoundryEndpoint(ctx.model.baseUrl ?? "");
+      normalizeOptionalString(metadata?.endpoint) ??
+      extractFoundryEndpoint(ctx.model.baseUrl ?? "");
     const baseUrl = endpoint
       ? buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, configuredApi)
       : undefined;
@@ -72,7 +81,12 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
       tenantId: metadata?.tenantId,
     });
     const cachedToken = cachedTokens.get(cacheKey);
-    if (cachedToken && cachedToken.expiresAt > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
+    const rawNow = Date.now();
+    const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
+    const now = resolveDateTimestampMs(rawNow);
+    const refreshAfterMs =
+      resolveExpiresAtMsFromDurationMs(TOKEN_REFRESH_MARGIN_MS, { nowMs: now }) ?? now;
+    if (cachedToken && hasValidClock && cachedToken.expiresAt > refreshAfterMs) {
       return {
         apiKey: cachedToken.token,
         expiresAt: cachedToken.expiresAt,
@@ -95,7 +109,9 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
       ...(baseUrl ? { baseUrl } : {}),
     };
   } catch (err) {
-    const details = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to refresh Azure Entra ID token via az CLI: ${details}`);
+    const details = formatErrorMessage(err);
+    throw new Error(`Failed to refresh Azure Entra ID token via az CLI: ${details}`, {
+      cause: err,
+    });
   }
 }
