@@ -1025,7 +1025,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           )
         : undefined;
       const eventSink = refusalBuffer ?? stream;
-      let receivedRefusal = false;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1052,6 +1051,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
+        let sawMessageStart = false;
+        let sawMessageStop = false;
         const eventIndexKey = (eventIndex: unknown) =>
           typeof eventIndex === "number" ? eventIndex : -1;
         const appendReasoningContentThinkingDelta = (
@@ -1165,6 +1166,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             throw new Error(error?.message || "Anthropic Messages stream failed");
           }
           if (event.type === "message_start") {
+            sawMessageStart = true;
             const message = event.message as
               | { id?: string; model?: string; usage?: Record<string, unknown> }
               | undefined;
@@ -1190,6 +1192,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
             // and allowing the thinking-block recovery retry to fire.
             eventSink.push({ type: "start", partial: output as never });
+            continue;
+          }
+          if (event.type === "message_stop") {
+            sawMessageStop = true;
             continue;
           }
           if (event.type === "content_block_start") {
@@ -1446,7 +1452,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const usage = event.usage as Record<string, unknown> | undefined;
             if (delta?.stop_reason) {
               if (delta.stop_reason === "refusal") {
-                receivedRefusal = true;
                 applyAnthropicRefusal(output, delta.stop_details, model.provider);
               } else {
                 output.stopReason = mapStopReason(delta.stop_reason);
@@ -1472,16 +1477,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
-        if (output.stopReason !== "error" && output.stopReason !== "aborted") {
-          refusalBuffer?.flush();
+        if (refusalBuffer && sawMessageStart && !sawMessageStop) {
+          throw new Error("Anthropic stream ended before message_stop");
         }
-        finalizeTransportStream({ stream, output, signal: transportOptions.signal });
+        if (transportOptions.signal?.aborted) {
+          throw new Error("Request was aborted");
+        }
+        if (output.stopReason === "aborted" || output.stopReason === "error") {
+          throw new Error(output.errorMessage ?? "An unknown error occurred");
+        }
+        refusalBuffer?.flush();
+        finalizeTransportStream({ stream, output });
       } catch (error) {
-        if (receivedRefusal && refusalBuffer) {
-          refusalBuffer?.discard();
+        if (refusalBuffer) {
+          refusalBuffer.discard();
           output.content = [];
-        } else {
-          refusalBuffer?.flush();
         }
         failTransportStream({
           stream,

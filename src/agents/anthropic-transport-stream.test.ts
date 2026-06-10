@@ -638,6 +638,52 @@ describe("anthropic transport stream", () => {
     },
   );
 
+  it("discards buffered Fable output when the transport ends before terminal status", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_partial",
+            model: "claude-fable-5",
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "unsafe partial output" },
+        },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel({
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+        }),
+        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    expect(result.content).toEqual([]);
+    expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+  });
+
   it("preserves unsafe integer Anthropic tool-use input deltas", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

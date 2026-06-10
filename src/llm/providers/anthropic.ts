@@ -477,7 +477,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         )
       : undefined;
     const eventSink = refusalBuffer ?? stream;
-    let receivedRefusal = false;
 
     try {
       let client: Anthropic;
@@ -694,7 +693,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         } else if (event.type === "message_delta") {
           if (event.delta.stop_reason) {
             if (event.delta.stop_reason === "refusal") {
-              receivedRefusal = true;
               applyAnthropicRefusal(output, event.delta.stop_details, model.provider);
             } else {
               output.stopReason = mapStopReason(event.delta.stop_reason);
@@ -741,11 +739,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         // partialJson is only a streaming scratch buffer; never persist it.
         delete (block as { partialJson?: string }).partialJson;
       }
-      if (receivedRefusal && refusalBuffer) {
-        refusalBuffer?.discard();
+      if (refusalBuffer) {
+        refusalBuffer.discard();
         output.content = [];
-      } else {
-        refusalBuffer?.flush();
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
