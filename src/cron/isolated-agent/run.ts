@@ -1011,7 +1011,7 @@ async function finalizeCronRun(params: {
       input_tokens: input,
       output_tokens: output,
     };
-    const aggregateTotalTokens = usage.total ?? input + output;
+    const aggregateTotalTokens = input + output;
     if (aggregateTotalTokens > 0) {
       telemetryUsage.total_tokens = aggregateTotalTokens;
     }

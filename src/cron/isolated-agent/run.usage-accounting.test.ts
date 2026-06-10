@@ -29,6 +29,7 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
           usage: {
             input: 75000,
             output: 2000,
+            total: 56000,
             cacheRead: 5000,
             cacheWrite: 0,
           },
