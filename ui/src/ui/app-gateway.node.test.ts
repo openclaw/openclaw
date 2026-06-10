@@ -1653,6 +1653,21 @@ describe("connectGateway", () => {
     };
     host.chatRunId = "main-run-reasoning";
     host.chatMessages = [persistedUser];
+    host.sessionsResult = {
+      count: 1,
+      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+      path: "",
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          status: "done",
+          hasActiveRun: false,
+          updatedAt: Date.now(),
+        },
+      ],
+      ts: Date.now(),
+    };
     loadChatHistoryMock.mockClear();
 
     client.emitEvent({
@@ -1662,6 +1677,9 @@ describe("connectGateway", () => {
         message: persistedAssistant,
       },
     });
+    expect(host.chatRunId).toBe("main-run-reasoning");
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
     client.emitEvent({
       event: "chat",
       payload: {

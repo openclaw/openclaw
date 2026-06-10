@@ -5,7 +5,7 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../chat/heartbeat-display.ts";
-import { extractText } from "../chat/message-extract.ts";
+import { extractText, extractThinking } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import {
   appendTerminalAssistantMessage,
@@ -255,6 +255,10 @@ function historyHasSameOrNewerDisplayMessage(
   return historyMessages.some((historyMessage) => {
     if (messageDisplaySignature(historyMessage) !== signature) {
       return false;
+    }
+    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+    if (role === "assistant" && extractThinking(historyMessage) && !extractThinking(message)) {
+      return true;
     }
     const timestamp = messageTimestampMs(message);
     if (timestamp == null) {

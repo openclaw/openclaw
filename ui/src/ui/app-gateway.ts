@@ -1139,6 +1139,16 @@ function handleSessionMessageGatewayEvent(
     return;
   }
   const sessionMatchesHost = sessionMessageMatchesHost(host, sessionKey, payload?.agentId);
+  if (
+    host.chatRunId &&
+    sessionKey &&
+    sessionMatchesHost &&
+    sessionMessagePayloadHasThinking(payload)
+  ) {
+    deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    deferredReloadHost.pendingSessionMessageReloadHasThinking = true;
+    return;
+  }
   const runIdBeforeApply = host.chatRunId;
   const result = applySessionsChangedEvent(host as unknown as SessionsState, payload);
   if (result.applied && result.clearedChatRun) {

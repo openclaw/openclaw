@@ -1646,6 +1646,7 @@ describe("loadChatHistory filtering", () => {
     const liveAssistant = {
       role: "assistant",
       content: [{ type: "text", text: "Final answer" }],
+      timestamp: 200,
     };
     const request = vi.fn().mockResolvedValue({
       messages: [persistedUser, persistedAssistant],
@@ -2386,6 +2387,7 @@ describe("loadChatHistory retry handling", () => {
     const liveAssistant = {
       role: "assistant",
       content: [{ type: "text", text: "Final answer" }],
+      timestamp: 200,
     };
     const history = createDeferred<{ messages: unknown[]; thinkingLevel: string }>();
     const request = vi.fn(() => history.promise);
