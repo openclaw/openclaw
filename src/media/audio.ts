@@ -1,3 +1,4 @@
+// Audio media helpers normalize audio mime types, extensions, and load options.
 import { getFileExtension, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
@@ -35,7 +36,11 @@ export function isVoiceMessageCompatibleAudio(opts: {
   return VOICE_MESSAGE_AUDIO_EXTENSIONS.has(ext);
 }
 
-/** Backward-compatible alias for voice-message audio compatibility checks. */
+/**
+ * Backward-compatible alias for voice-message audio compatibility checks.
+ *
+ * @deprecated Use isVoiceMessageCompatibleAudio.
+ */
 export function isVoiceCompatibleAudio(opts: {
   contentType?: string | null;
   fileName?: string | null;

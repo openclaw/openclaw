@@ -1,3 +1,4 @@
+/** Collects and renders gateway health for channels, agents, plugins, and sessions. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
@@ -56,6 +57,7 @@ import type {
   PluginHealthErrorSummary,
   PluginHealthSummary,
 } from "./health.types.js";
+import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type {
@@ -101,6 +103,8 @@ const buildNonSensitiveProbeFailure = (
     return undefined;
   }
 
+  // Preserve the actionable Full Disk Access failure while stripping the local
+  // username path before health leaves the gateway.
   const error = redactIMessageProbeErrorMessage(record.error);
   if (
     !/\bimsg\b/i.test(error) ||
@@ -155,6 +159,7 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
+/** Formats optional model-pricing cache degradation for text health output. */
 export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
   const modelPricing = summary.modelPricing;
   if (!modelPricing || modelPricing.state === "disabled") {
@@ -184,6 +189,7 @@ function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefin
   return quarantined.length > 0 ? { quarantined } : undefined;
 }
 
+/** Formats context engine quarantine state for text health output. */
 export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
   const quarantined = summary.contextEngines?.quarantined ?? [];
   if (quarantined.length === 0) {
@@ -228,7 +234,8 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = async (storePath: string) => {
+const buildSessionSummary = async (storePath: string, cfg: OpenClawConfig) => {
+  await ensureSessionStateMigratedForCommand(cfg);
   const { loadSessionStore } = await import("../config/sessions/store.js");
   const store = loadSessionStore(storePath, { clone: false });
   const sessions = Object.entries(store)
@@ -403,6 +410,7 @@ async function resolveHealthAccountContext(params: {
   };
 }
 
+/** Builds the gateway-side health snapshot for channels, agents, plugins, and sessions. */
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
@@ -418,7 +426,7 @@ export async function getHealthSnapshot(params?: {
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
+    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath, cfg));
     sessionCache.set(storePath, sessions);
     agents.push({
       agentId: entry.id,
@@ -434,7 +442,10 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
+    (await buildSessionSummary(
+      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+      cfg,
+    ));
 
   const start = Date.now();
   const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
@@ -471,6 +482,8 @@ export async function getHealthSnapshot(params?: {
         ),
       ),
     );
+    // Probe preferred/default/bound accounts first, but include all configured
+    // accounts so verbose health can explain account-specific failures.
     debugHealth("channel", {
       id: plugin.id,
       accountIds,
@@ -623,6 +636,7 @@ export async function getHealthSnapshot(params?: {
   return summary;
 }
 
+/** Runs the `openclaw health` command against the gateway and renders JSON or text. */
 export async function healthCommand(
   opts: {
     json?: boolean;
@@ -714,18 +728,21 @@ export async function healthCommand(
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const fallbackAgents: AgentHealthSummary[] = [];
-    for (const entry of localAgents.ordered) {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-      fallbackAgents.push({
-        agentId: entry.id,
-        name: entry.name,
-        isDefault: entry.id === localAgents.defaultAgentId,
-        heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-        sessions: await buildSessionSummary(storePath),
-      });
-    }
-    const resolvedAgents = agents.length > 0 ? agents : fallbackAgents;
+    const resolvedAgents =
+      agents.length > 0
+        ? agents
+        : await Promise.all(
+            localAgents.ordered.map(async (entry) => {
+              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              return {
+                agentId: entry.id,
+                name: entry.name,
+                isDefault: entry.id === localAgents.defaultAgentId,
+                heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+                sessions: await buildSessionSummary(storePath, cfg),
+              } satisfies AgentHealthSummary;
+            }),
+          );
     const displayAgents = opts.verbose
       ? resolvedAgents
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);

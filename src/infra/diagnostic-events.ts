@@ -1,3 +1,4 @@
+// Defines and sanitizes runtime diagnostic event payloads.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
@@ -713,8 +714,14 @@ export type DiagnosticModelCallContent = Readonly<{
   toolDefinitions?: unknown;
 }>;
 
+export type DiagnosticToolCallContent = Readonly<{
+  toolInput?: unknown;
+  toolOutput?: unknown;
+}>;
+
 export type DiagnosticEventPrivateData = Readonly<{
   modelContent?: DiagnosticModelCallContent;
+  toolContent?: DiagnosticToolCallContent;
 }>;
 
 type DiagnosticEventListener = (

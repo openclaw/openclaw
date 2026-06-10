@@ -1,3 +1,4 @@
+// Covers ClawHub metadata and artifact fetch helpers.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +8,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  downloadClawHubSkillArchiveUrl,
   fetchClawHubSkillCard,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
@@ -139,8 +141,9 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
   });
 
-  it("treats OpenClaw CalVer correction versions as stable plugin API hosts", () => {
+  it("treats OpenClaw release correction versions as stable plugin API hosts", () => {
     expect(satisfiesPluginApiRange("2026.5.3-1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.32-1", ">=2026.5.32")).toBe(true);
     expect(satisfiesPluginApiRange("2026.5.3-2", ">=2026.5.3")).toBe(true);
     expect(satisfiesPluginApiRange("2026.5.3-beta.1", ">=2026.5.3")).toBe(true);
     expect(satisfiesPluginApiRange("2026.5.3-alpha.1", ">=2026.5.3")).toBe(true);
@@ -848,6 +851,35 @@ describe("clawhub helpers", () => {
     try {
       expect(path.basename(archive.archivePath)).toBe("agentreceipt.zip");
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([4, 5, 6]));
+    } finally {
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expectPathMissing(archiveDir);
+    }
+  });
+
+  it("does not send ambient ClawHub auth tokens to off-registry resolver archive URLs", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+
+    const archive = await downloadClawHubSkillArchiveUrl({
+      baseUrl: "https://clawhub.ai",
+      url: "https://codeload.github.com/NVIDIA/skills/zip/abcdef",
+      fetchImpl: async (input, init) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        requestedInit = init;
+        return new Response(new Uint8Array([7, 8, 9]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        });
+      },
+    });
+
+    try {
+      expect(requestedUrl).toBe("https://codeload.github.com/NVIDIA/skills/zip/abcdef");
+      expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([7, 8, 9]));
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();

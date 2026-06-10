@@ -1,3 +1,4 @@
+// Creates isolated temporary home directories for config-heavy tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

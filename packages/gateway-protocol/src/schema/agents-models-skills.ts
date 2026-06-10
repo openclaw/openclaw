@@ -1,3 +1,4 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -17,6 +18,7 @@ export const ModelChoiceSchema = Type.Object(
     name: NonEmptyString,
     provider: NonEmptyString,
     alias: Type.Optional(NonEmptyString),
+    available: Type.Optional(Type.Boolean()),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
   },
@@ -761,6 +763,29 @@ export const SkillsProposalReviseParamsSchema = Type.Object(
     evidence: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
+);
+
+/** Starts an agent turn that revises a pending proposal from natural-language instructions. */
+export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    targetAgentId: Type.Optional(NonEmptyString),
+    proposalId: NonEmptyString,
+    instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
+    sessionKey: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Chat-run acknowledgement returned after queueing a Skill Workshop revision request. */
+export const SkillsProposalRequestRevisionResultSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    status: Type.Union([Type.Literal("started"), Type.Literal("in_flight"), Type.Literal("ok")]),
+  },
+  { additionalProperties: true },
 );
 
 /** Shared approve/reject/quarantine action payload for one proposal. */

@@ -1,3 +1,4 @@
+/** Startup scan that resolves pending ACP session identities when backends can report status. */
 import {
   identityHasStableSessionId,
   isSessionIdentityPending,

@@ -1,3 +1,4 @@
+// Defines default port ranges for gateway and service config.
 type PortRange = { start: number; end: number };
 
 function isValidPort(port: number): boolean {

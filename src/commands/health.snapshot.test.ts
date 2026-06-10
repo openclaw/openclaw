@@ -1,3 +1,4 @@
+// Health snapshot tests cover channel, session, runtime, and gateway health snapshot construction.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +69,9 @@ async function loadFreshHealthModulesForTest() {
   }));
   vi.doMock("../config/sessions/store.js", () => ({
     loadSessionStore: () => testStore,
+  }));
+  vi.doMock("./session-state-migration.js", () => ({
+    ensureSessionStateMigratedForCommand: vi.fn(async () => undefined),
   }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),

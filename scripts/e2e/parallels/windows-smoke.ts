@@ -1,10 +1,12 @@
 #!/usr/bin/env -S pnpm tsx
+// Windows Smoke script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  currentRunningSnapshotInfo,
   makeTempDir,
   parseMode,
   parseProvider,
@@ -15,7 +17,10 @@ import {
   resolveSnapshot,
   run,
   say,
+  shouldSkipSnapshotRestore,
+  validateSnapshotRestoreMode,
   warn,
+  withProgressOnStderr,
   writeSummaryMarkdown,
   writeJson,
   type Mode,
@@ -273,7 +278,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     this.guest = new WindowsGuest(this.options.vmName, this.phases);
     this.tgzDir = await makeTempDir("openclaw-parallels-windows-tgz.");
     try {
-      this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
+      validateSnapshotRestoreMode(this.options.mode, "Windows smoke");
+      this.snapshot = shouldSkipSnapshotRestore()
+        ? currentRunningSnapshotInfo(this.options.vmName)
+        : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
       await this.prepareHost(
@@ -440,6 +448,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   }
 
   private restoreSnapshot(): void {
+    if (shouldSkipSnapshotRestore()) {
+      say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
+      return;
+    }
     this.waitForVmNotRestoring(240);
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     let restored = false;
@@ -821,7 +833,10 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  await new WindowsSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+  const options = parseArgs(process.argv.slice(2));
+  const runSmoke = () => new WindowsSmoke(options).run();
+  const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
+  await runPromise.catch((error: unknown) => {
     die(error instanceof Error ? error.message : String(error));
   });
 }

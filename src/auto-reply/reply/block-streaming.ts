@@ -1,3 +1,4 @@
+// Owns block-streaming policy and buffered delivery state for reply runs.
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveChannelStreamingBlockCoalesce } from "../../channels/streaming.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
@@ -38,6 +39,14 @@ type ProviderBlockStreamingConfig = {
   >;
 };
 
+function resolveScopedBlockStreamingCoalesce(
+  config: ProviderBlockStreamingConfig | undefined,
+): BlockStreamingCoalesceConfig | undefined {
+  return config
+    ? (resolveChannelStreamingBlockCoalesce(config) ?? config.blockStreamingCoalesce)
+    : undefined;
+}
+
 function resolveProviderBlockStreamingCoalesce(params: {
   cfg: OpenClawConfig | undefined;
   providerKey?: TextChunkProvider;
@@ -47,19 +56,21 @@ function resolveProviderBlockStreamingCoalesce(params: {
   if (!cfg || !providerKey) {
     return undefined;
   }
-  const providerCfg = (cfg as Record<string, unknown>)[providerKey];
+  const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
+  const providerCfg =
+    channelsConfig?.[providerKey] ?? (cfg as Record<string, unknown>)[providerKey];
   if (!providerCfg || typeof providerCfg !== "object") {
     return undefined;
   }
   const normalizedAccountId = normalizeAccountId(accountId);
   const typed = providerCfg as ProviderBlockStreamingConfig;
   const accountCfg = resolveAccountEntry(typed.accounts, normalizedAccountId);
-  return (
-    resolveChannelStreamingBlockCoalesce(accountCfg) ??
-    resolveChannelStreamingBlockCoalesce(typed) ??
-    accountCfg?.blockStreamingCoalesce ??
-    typed.blockStreamingCoalesce
-  );
+  const channelCoalesce = resolveScopedBlockStreamingCoalesce(typed);
+  const accountCoalesce = resolveScopedBlockStreamingCoalesce(accountCfg);
+  if (channelCoalesce || accountCoalesce) {
+    return { ...channelCoalesce, ...accountCoalesce };
+  }
+  return undefined;
 }
 
 export type BlockStreamingCoalescing = {

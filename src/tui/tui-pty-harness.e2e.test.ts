@@ -1,3 +1,4 @@
+// Exercises the fake-backend TUI PTY harness and visible terminal output.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -363,6 +364,7 @@ describe.sequential("TUI PTY harness", () => {
 
   it("renders local ready on startup", () => {
     expect(fixture.run.output()).toContain("local ready");
+    expect(fixture.run.output()).not.toContain("host local");
   });
 
   it(

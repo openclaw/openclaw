@@ -1,3 +1,4 @@
+// Runs commitment extraction, scheduling, and follow-up lifecycle work.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";

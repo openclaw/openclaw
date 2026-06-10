@@ -1,3 +1,6 @@
+/**
+ * Detects message-tool-only sends that should terminate an agent turn.
+ */
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { isMessageToolSendActionName } from "../../embedded-agent-messaging.js";
 import { isToolResultError } from "../../embedded-agent-subscribe.tools.js";
@@ -192,6 +195,7 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  onDeliveredSourceReply?: () => void;
 }): void {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return;
@@ -206,6 +210,7 @@ export function installMessageToolOnlyTerminalHook(params: {
         hookResult,
       })
     ) {
+      params.onDeliveredSourceReply?.();
       return { ...hookResult, terminate: true };
     }
     return hookResult;

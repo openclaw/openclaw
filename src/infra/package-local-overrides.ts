@@ -154,7 +154,12 @@ async function collectReferencedAddedOverridePaths(params: {
 }> {
   const addedPaths = new Set<string>();
   const dependenciesByChangePath = new Map<string, Set<string>>();
-  const scannedPaths = new Set<string>();
+  const scannedPathsByRoot = new Set<string>();
+  const modifiedChangesByPath = new Map(
+    params.changes
+      .filter((change) => change.kind === "modified" && change.savedPath)
+      .map((change) => [change.path, change]),
+  );
   const queue = params.changes
     .filter((change) => change.kind === "modified" && change.savedPath)
     .map((change) => ({
@@ -165,10 +170,16 @@ async function collectReferencedAddedOverridePaths(params: {
 
   while (queue.length > 0) {
     const current = queue.shift();
-    if (!current || scannedPaths.has(current.path)) {
+    if (!current) {
       continue;
     }
-    scannedPaths.add(current.path);
+    // Shared added files must be rescanned per modified root so partial-conflict
+    // reapply keeps each clean importer with its full dependency closure.
+    const scanKey = `${current.rootPath}\0${current.path}`;
+    if (scannedPathsByRoot.has(scanKey)) {
+      continue;
+    }
+    scannedPathsByRoot.add(scanKey);
     const source = await fs.readFile(current.sourcePath, "utf8").catch(() => "");
     for (const match of source.matchAll(LOCAL_IMPORT_SPECIFIER_PATTERN)) {
       const specifier = match[1] ?? match[2] ?? match[3] ?? "";
@@ -177,18 +188,27 @@ async function collectReferencedAddedOverridePaths(params: {
         specifier,
         actualSet: params.actualSet,
       });
-      if (!referencedPath || params.baselineSet.has(referencedPath)) {
+      if (!referencedPath) {
+        continue;
+      }
+      const referencedModifiedChange = modifiedChangesByPath.get(referencedPath);
+      if (params.baselineSet.has(referencedPath) && !referencedModifiedChange) {
         continue;
       }
       const dependencies = dependenciesByChangePath.get(current.rootPath) ?? new Set<string>();
       dependencies.add(referencedPath);
       dependenciesByChangePath.set(current.rootPath, dependencies);
-      if (!addedPaths.has(referencedPath)) {
+      if (!params.baselineSet.has(referencedPath)) {
         addedPaths.add(referencedPath);
+      }
+      const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
+      if (!scannedPathsByRoot.has(referencedScanKey)) {
         queue.push({
           path: referencedPath,
           rootPath: current.rootPath,
-          sourcePath: resolveSafePackagePath(params.packageRoot, referencedPath),
+          sourcePath:
+            referencedModifiedChange?.savedPath ??
+            resolveSafePackagePath(params.packageRoot, referencedPath),
         });
       }
     }
@@ -219,7 +239,7 @@ export async function captureLocalPackageOverrides(params: {
   let recoveryDir: string | null = null;
   const ensureRecoveryDir = async () => {
     recoveryDir ??= await fs.mkdtemp(
-      path.join(path.dirname(params.packageRoot), ".openclaw-local-overrides-"),
+      path.join(path.dirname(params.packageRoot), "openclaw-local-overrides-"),
     );
     return recoveryDir;
   };
@@ -390,7 +410,7 @@ export async function applyLocalPackageOverrides(params: {
       status: "preserved",
       applied: 0,
       warnings: [
-        "Local OpenClaw changes were preserved in the recovery bundle and were not reapplied. Re-run with --reapply-local-overrides only if you trust those package mutations.",
+        "Local OpenClaw changes were preserved in the recovery bundle and were not reapplied. Inspect the bundle and copy back trusted files manually, or run the update with --reapply-local-overrides when you want trusted edits replayed during that update.",
       ],
     };
   }

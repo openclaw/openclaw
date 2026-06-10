@@ -1,3 +1,4 @@
+// Audits installed plugins for trust, provenance, and filesystem risks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";

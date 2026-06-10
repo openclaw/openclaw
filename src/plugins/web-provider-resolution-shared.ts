@@ -1,3 +1,4 @@
+// Shares web-provider plugin resolution helpers without eager runtime imports.
 import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";

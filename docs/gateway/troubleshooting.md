@@ -625,7 +625,7 @@ Look for:
 Common signatures:
 
 - `SSH tunnel failed to start; falling back to direct probes.` → SSH setup failed, but the command still tried direct configured/loopback targets.
-- `multiple reachable gateways detected` → more than one target answered. Usually this means an intentional multi-gateway setup or stale/duplicate listeners.
+- `multiple reachable gateway identities detected` → distinct gateways answered, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is treated as one gateway with multiple transports, even when transport ports differ.
 - `Read-probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
 - `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed` → connect worked, but the full diagnostic RPC set timed out or failed. Treat this as a reachable Gateway with degraded diagnostics; compare `connect.ok` and `connect.rpcOk` in `--json` output.
 - `Capability: pairing-pending` or `gateway closed (1008): pairing required` → the gateway answered, but this client still needs pairing/approval before normal operator access.
@@ -691,7 +691,7 @@ Look for:
     - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
     - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
     - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
     - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
     - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
     - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.

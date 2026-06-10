@@ -1,3 +1,4 @@
+/** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
   buildSafeBinsShellCommand,
@@ -41,6 +42,7 @@ type SystemRunAllowlistAnalysis = {
 };
 
 /** Evaluate system.run argv or shell command against the exec allowlist policy. */
+/** Evaluates analyzed command segments against allowlist and trusted safe-bin policy. */
 export function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
@@ -284,6 +286,7 @@ function replacePosixShellInlineCommand(params: {
 }
 
 /** Mark truncated output in stderr when possible, otherwise stdout. */
+/** Truncates captured stdout/stderr in place to the node-host output cap. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;

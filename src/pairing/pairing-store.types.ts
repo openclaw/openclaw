@@ -1,3 +1,4 @@
+// Shared type contracts for pairing challenge and channel binding records.
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 

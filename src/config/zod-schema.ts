@@ -1,3 +1,4 @@
+// Assembles the canonical Zod schema for OpenClaw config parsing.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -219,6 +220,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    rerank: z.boolean().optional(),
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -701,6 +703,17 @@ export const OpenClawSchema = z
           .object({
             name: z.string().max(50).optional(),
             avatar: z.string().max(2_000_000).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    tui: z
+      .object({
+        footer: z
+          .object({
+            showRemoteHost: z.boolean().optional(),
           })
           .strict()
           .optional(),

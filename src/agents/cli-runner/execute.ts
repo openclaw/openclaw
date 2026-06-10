@@ -1,3 +1,7 @@
+/**
+ * Executes prepared CLI backend runs, including env isolation, streaming parse,
+ * live-session routing, and diagnostics.
+ */
 import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -96,6 +100,7 @@ function appendCliOutputParseBuffer(
   };
 }
 
+/** Overrides process/event dependencies for CLI runner execution tests. */
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
 }
@@ -223,6 +228,7 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+/** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
   model: string;
@@ -253,6 +259,7 @@ export function buildCliExecLogLine(params: {
   ].join(" ");
 }
 
+/** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
 export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
@@ -265,6 +272,7 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   ].join(" ");
 }
 
+/** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
@@ -486,6 +494,26 @@ export async function executePreparedCliRun(
             },
           });
         };
+        let commentaryCounter = 0;
+        const emitCliCommentaryText = (text: string) => {
+          commentaryCounter += 1;
+          const transformedText = applyPluginTextReplacements(
+            text,
+            context.backendResolved.textTransforms?.output,
+          );
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "item",
+            data: {
+              kind: "preamble",
+              itemId: `commentary-${params.runId}-${commentaryCounter}`,
+              phase: "update",
+              title: "commentary",
+              status: "running",
+              progressText: transformedText,
+            },
+          });
+        };
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -528,6 +556,8 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
+            classifyCommentaryText: context.params.classifyCommentaryText,
+            onCommentaryText: context.params.emitCommentaryText ? emitCliCommentaryText : undefined,
             cleanup: async () => {
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
@@ -572,6 +602,10 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
+              classifyCommentaryText: context.params.classifyCommentaryText,
+              onCommentaryText: context.params.emitCommentaryText
+                ? emitCliCommentaryText
+                : undefined,
             })
           : null;
         const supervisor = executeDeps.getProcessSupervisor();

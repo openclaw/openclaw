@@ -1,3 +1,4 @@
+/** ACP runtime error exports wired to OpenClaw secret redaction. */
 import { configureAcpErrorRedactor } from "@openclaw/acp-core";
 import { redactSensitiveText } from "../../logging/redact.js";
 

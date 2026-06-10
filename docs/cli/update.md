@@ -122,10 +122,10 @@ Package-manager updates also detect local edits to packaged `dist` files when
 the installed package includes OpenClaw's content inventory. The updater captures
 those edits before the package swap, verifies the new package first, and keeps
 the verified package in place by default while printing the local override
-recovery directory. Use `--reapply-local-overrides` only for trusted local edits;
-that opt-in reapplies changes whose target file did not change upstream and
-leaves conflicting files in the recovery directory instead of overwriting the
-update.
+recovery directory for manual inspection and restore. Use
+`--reapply-local-overrides` only for trusted local edits on that update run; the
+opt-in reapplies changes whose target file did not change upstream and leaves
+conflicting files in the recovery directory instead of overwriting the update.
 
 When a local managed Gateway service is installed and restart is enabled,
 package-manager updates stop the running service before replacing the package

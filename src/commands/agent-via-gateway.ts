@@ -1,3 +1,4 @@
+// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -130,6 +131,15 @@ function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCo
   return embeddedAgentCommandPromise;
 }
 
+async function loadMigratedEmbeddedAgentCommand(): Promise<
+  EmbeddedAgentCommandModule["agentCommand"]
+> {
+  const cfg = await loadRuntimeConfig();
+  const { ensureSessionStateMigratedForCommand } = await import("./session-state-migration.js");
+  await ensureSessionStateMigratedForCommand(cfg);
+  return await loadEmbeddedAgentCommand();
+}
+
 function loadAgentSessionModule(): Promise<AgentSessionModule> {
   agentSessionModulePromise ??= agentSessionModuleLoader();
   return agentSessionModulePromise;
@@ -146,6 +156,7 @@ function loadReplyPayloadModule() {
   return replyPayloadModulePromise;
 }
 
+/** Test-only hooks for resetting lazy imports and shortening retry timing. */
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
     embeddedAgentCommandPromise = undefined;
@@ -844,7 +855,7 @@ export async function agentCliCommand(
   };
   try {
     if (dispatchOpts.local === true) {
-      const agentCommand = await loadEmbeddedAgentCommand();
+      const agentCommand = await loadMigratedEmbeddedAgentCommand();
       const result = await agentCommand(localOpts, runtime, deps);
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }
@@ -872,7 +883,7 @@ export async function agentCliCommand(
         runtime.error?.(
           `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
         );
-        const agentCommand = await loadEmbeddedAgentCommand();
+        const agentCommand = await loadMigratedEmbeddedAgentCommand();
         const result = await agentCommand(
           {
             ...localOpts,
@@ -899,7 +910,7 @@ export async function agentCliCommand(
       runtime.error?.(
         `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
       );
-      const agentCommand = await loadEmbeddedAgentCommand();
+      const agentCommand = await loadMigratedEmbeddedAgentCommand();
       const result = await agentCommand(
         {
           ...localOpts,

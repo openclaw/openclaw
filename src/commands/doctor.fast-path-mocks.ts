@@ -1,3 +1,4 @@
+/** Fast-path module mocks for doctor command tests that do not need full integrations. */
 import { vi } from "vitest";
 
 vi.mock("./doctor-completion.js", () => ({
@@ -10,6 +11,10 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
   maybeRepairCanonicalApiKeyFieldAlias: vi.fn(async (params: { cfg: unknown }) => params.cfg),
+  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   maybeRepairLegacyFlatAuthProfileStores: vi.fn().mockResolvedValue(undefined),
   maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => cfg),
   maybeRepairOpenAICodexAuthProfileStores: vi.fn().mockResolvedValue(undefined),

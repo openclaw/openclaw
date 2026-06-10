@@ -1,3 +1,4 @@
+// Constructs channel plugin registries and plugin fixtures for tests.
 import type {
   ChannelCapabilities,
   ChannelId,

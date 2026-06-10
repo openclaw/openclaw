@@ -1,3 +1,4 @@
+// Collects and verifies package dist inventory metadata.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

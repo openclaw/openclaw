@@ -1,3 +1,4 @@
+// Covers package update step orchestration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -272,6 +273,9 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.localOverrides?.status).toBe("preserved");
       expect(result.localOverrides?.modified).toBe(1);
       expect(result.localOverrides?.applied).toBe(0);
+      expect(path.basename(result.localOverrides?.recoveryDir ?? "")).toMatch(
+        /^openclaw-local-overrides-/u,
+      );
       await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
         "export {};\n",
       );
@@ -282,6 +286,80 @@ describe("runGlobalPackageUpdateSteps", () => {
         ),
       ).resolves.toBe("export const local = true;\n");
     });
+  });
+
+  it("does not abort staged updates when local override capture is unsupported", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-staged-unsupported-overrides-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "postinstall-content-inventory.json"),
+          "[",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "index.js"),
+          "export const local = true;\n",
+          "utf8",
+        );
+
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+            expect(timeoutMs).toBe(1000);
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const prefixIndex = argv.indexOf("--prefix");
+            expect(prefixIndex).toBeGreaterThan(0);
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
+            await fs.writeFile(
+              path.join(stagedPackageRoot, "dist", "index.js"),
+              "export const updated = true;\n",
+              "utf8",
+            );
+            await writePackageDistInventory(stagedPackageRoot);
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+        );
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.afterVersion).toBe("2.0.0");
+        expect(result.localOverrides?.status).toBe("unsupported");
+        expect(result.steps.map((step) => step.name)).toEqual([
+          "global update",
+          "global install swap",
+          "local overrides",
+        ]);
+        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+          "export const updated = true;\n",
+        );
+      },
+    );
   });
 
   it("preserves local overrides without overwriting updated dist files", async () => {
@@ -438,6 +516,195 @@ describe("runGlobalPackageUpdateSteps", () => {
         await expect(fs.readFile(path.join(packageRoot, "dist", "extra.js"), "utf8")).resolves.toBe(
           "export const localClean = true;\n",
         );
+      },
+    );
+  });
+
+  it("keeps shared added dependency trees with clean partial reapply importers", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-shared-dependency-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+        await fs.writeFile(path.join(packageRoot, "dist", "feature.js"), "export {};\n", "utf8");
+        await writePackageDistInventory(packageRoot);
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "index.js"),
+          "import './shared.js';\nexport const localConflict = true;\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "feature.js"),
+          "import './shared.js';\nexport const localClean = true;\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "shared.js"),
+          "import './nested.js';\nexport const shared = true;\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "nested.js"),
+          "export const nested = true;\n",
+          "utf8",
+        );
+
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+            expect(timeoutMs).toBe(1000);
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const prefixIndex = argv.indexOf("--prefix");
+            expect(prefixIndex).toBeGreaterThan(0);
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
+            await fs.writeFile(
+              path.join(stagedPackageRoot, "dist", "index.js"),
+              "export const upstreamConflict = true;\n",
+              "utf8",
+            );
+            await fs.writeFile(
+              path.join(stagedPackageRoot, "dist", "feature.js"),
+              "export {};\n",
+              "utf8",
+            );
+            await writePackageDistInventory(stagedPackageRoot);
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+        );
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          reapplyLocalOverrides: true,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.localOverrides?.status).toBe("conflict");
+        expect(result.localOverrides?.applied).toBe(3);
+        expect(result.localOverrides?.conflicts).toEqual([
+          { path: "dist/index.js", reason: "target-changed" },
+        ]);
+        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+          "export const upstreamConflict = true;\n",
+        );
+        await expect(
+          fs.readFile(path.join(packageRoot, "dist", "feature.js"), "utf8"),
+        ).resolves.toBe("import './shared.js';\nexport const localClean = true;\n");
+        await expect(
+          fs.readFile(path.join(packageRoot, "dist", "shared.js"), "utf8"),
+        ).resolves.toBe("import './nested.js';\nexport const shared = true;\n");
+        await expect(
+          fs.readFile(path.join(packageRoot, "dist", "nested.js"), "utf8"),
+        ).resolves.toBe("export const nested = true;\n");
+      },
+    );
+  });
+
+  it("does not reapply modified importers when a modified dependency conflicts", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-modified-dependency-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "helper.js"),
+          "export const helper = 1;\n",
+          "utf8",
+        );
+        await writePackageDistInventory(packageRoot);
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "index.js"),
+          "import './helper.js';\nexport const localIndex = true;\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "helper.js"),
+          "export const localHelper = true;\n",
+          "utf8",
+        );
+
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+            expect(timeoutMs).toBe(1000);
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const prefixIndex = argv.indexOf("--prefix");
+            expect(prefixIndex).toBeGreaterThan(0);
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
+            await fs.writeFile(
+              path.join(stagedPackageRoot, "dist", "index.js"),
+              "export {};\n",
+              "utf8",
+            );
+            await fs.writeFile(
+              path.join(stagedPackageRoot, "dist", "helper.js"),
+              "export const upstreamHelper = true;\n",
+              "utf8",
+            );
+            await writePackageDistInventory(stagedPackageRoot);
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+        );
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          reapplyLocalOverrides: true,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.localOverrides?.status).toBe("conflict");
+        expect(result.localOverrides?.applied).toBe(0);
+        expect(result.localOverrides?.conflicts).toEqual([
+          { path: "dist/helper.js", reason: "target-changed" },
+          { path: "dist/index.js", reason: "target-changed" },
+        ]);
+        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+          "export {};\n",
+        );
+        await expect(
+          fs.readFile(path.join(packageRoot, "dist", "helper.js"), "utf8"),
+        ).resolves.toBe("export const upstreamHelper = true;\n");
       },
     );
   });
@@ -1175,6 +1442,17 @@ describe("runGlobalPackageUpdateSteps", () => {
         const globalRoot = path.join(globalDir, "5", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "index.js"),
+          "export const installed = true;\n",
+          "utf8",
+        );
+        await writePackageDistInventory(packageRoot);
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "index.js"),
+          "export const local = true;\n",
+          "utf8",
+        );
 
         const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
           if (name !== "global update") {
@@ -1182,6 +1460,12 @@ describe("runGlobalPackageUpdateSteps", () => {
           }
           expect(argv).toEqual(["pnpm", "add", "-g", "--global-dir", globalDir, "openclaw@2.0.0"]);
           await writePackageRoot(packageRoot, "2.0.0");
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "index.js"),
+            "export const updated = true;\n",
+            "utf8",
+          );
+          await writePackageDistInventory(packageRoot);
           return {
             name,
             command: argv.join(" "),
@@ -1203,8 +1487,185 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         expect(result.failedStep).toBeNull();
         expect(result.afterVersion).toBe("2.0.0");
-        expect(result.steps.map((step) => step.name)).toEqual(["global update"]);
+        expect(result.localOverrides?.status).toBe("preserved");
+        expect(result.localOverrides?.modified).toBe(1);
+        expect(result.steps.map((step) => step.name)).toEqual(["global update", "local overrides"]);
+        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+          "export const updated = true;\n",
+        );
+        await expect(
+          fs.readFile(
+            path.join(result.localOverrides?.recoveryDir ?? "", "files", "dist", "index.js"),
+            "utf8",
+          ),
+        ).resolves.toBe("export const local = true;\n");
       });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("does not abort in-place updates when local override capture is unsupported", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await withTempDir(
+        { prefix: "openclaw-package-update-in-place-unsupported-overrides-" },
+        async (base) => {
+          const globalDir = path.join(base, "pnpm", "global");
+          const globalRoot = path.join(globalDir, "5", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "postinstall-content-inventory.json"),
+            "[",
+            "utf8",
+          );
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "index.js"),
+            "export const local = true;\n",
+            "utf8",
+          );
+
+          const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            expect(argv).toEqual([
+              "pnpm",
+              "add",
+              "-g",
+              "--global-dir",
+              globalDir,
+              "openclaw@2.0.0",
+            ]);
+            await writePackageRoot(packageRoot, "2.0.0");
+            await fs.writeFile(
+              path.join(packageRoot, "dist", "index.js"),
+              "export const updated = true;\n",
+              "utf8",
+            );
+            await writePackageDistInventory(packageRoot);
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          });
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createPnpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.afterVersion).toBe("2.0.0");
+          expect(result.localOverrides?.status).toBe("unsupported");
+          expect(result.localOverrides?.warnings.join("\n")).toContain(
+            "could not be inspected before update",
+          );
+          expect(result.steps.map((step) => step.name)).toEqual([
+            "global update",
+            "local overrides",
+          ]);
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("export const updated = true;\n");
+        },
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("prints preserved local override recovery when an in-place update fails verification", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await withTempDir(
+        { prefix: "openclaw-package-update-in-place-verify-fail-" },
+        async (base) => {
+          const globalDir = path.join(base, "pnpm", "global");
+          const globalRoot = path.join(globalDir, "5", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "index.js"),
+            "export const installed = true;\n",
+            "utf8",
+          );
+          await writePackageDistInventory(packageRoot);
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "index.js"),
+            "export const local = true;\n",
+            "utf8",
+          );
+
+          const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            expect(argv).toEqual([
+              "pnpm",
+              "add",
+              "-g",
+              "--global-dir",
+              globalDir,
+              "openclaw@2.0.0",
+            ]);
+            await writePackageRoot(packageRoot, "2.0.0");
+            await fs.writeFile(
+              path.join(packageRoot, "dist", "index.js"),
+              "export const updated = true;\n",
+              "utf8",
+            );
+            await fs.writeFile(
+              path.join(packageRoot, "dist", "postinstall-content-inventory.json"),
+              "[",
+              "utf8",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          });
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createPnpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep,
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep?.name).toBe("global install verify");
+          expect(result.localOverrides?.status).toBe("preserved");
+          expect(result.localOverrides?.modified).toBe(1);
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.steps.map((step) => step.name)).toEqual([
+            "global update",
+            "global install verify",
+            "local overrides",
+          ]);
+          await expect(
+            fs.readFile(
+              path.join(result.localOverrides?.recoveryDir ?? "", "files", "dist", "index.js"),
+              "utf8",
+            ),
+          ).resolves.toBe("export const local = true;\n");
+        },
+      );
     } finally {
       platformSpy.mockRestore();
     }
