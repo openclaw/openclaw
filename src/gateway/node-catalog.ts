@@ -1,3 +1,5 @@
+// Gateway node catalog builder.
+// Merges paired devices, approved node records, and live websocket sessions.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
@@ -92,6 +94,8 @@ function resolveEffectiveLastSeen(params: {
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
 }): { lastSeenAtMs?: number; lastSeenReason?: string } {
+  // Live connected time is the freshest signal; stored last-seen values fill in
+  // disconnected rows without letting stale device-pairing data override nodes.
   const candidates: Array<{ atMs: number; reason?: string }> = [
     params.live?.connectedAtMs ? { atMs: params.live.connectedAtMs, reason: "connect" } : undefined,
     params.nodePairing?.lastSeenAtMs
@@ -169,6 +173,7 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
+/** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly NodePairingPairedNode[];
@@ -209,12 +214,14 @@ export function createKnownNodeCatalog(params: {
   return { entriesById };
 }
 
+/** Lists known nodes with connected nodes first and deterministic display ordering. */
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.entriesById.values()]
     .map((entry) => entry.effective)
     .toSorted(compareKnownNodes);
 }
 
+/** Returns the merged catalog entry for diagnostics that need source details. */
 export function getKnownNodeEntry(
   catalog: KnownNodeCatalog,
   nodeId: string,
@@ -222,6 +229,7 @@ export function getKnownNodeEntry(
   return catalog.entriesById.get(nodeId) ?? null;
 }
 
+/** Returns the effective node row shown to gateway clients. */
 export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
   return getKnownNodeEntry(catalog, nodeId)?.effective ?? null;
 }

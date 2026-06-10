@@ -1,3 +1,4 @@
+// Matrix plugin module implements auto join behavior.
 import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
@@ -58,10 +59,19 @@ export function registerMatrixAutoJoin(params: {
     );
     return resolved.filter((roomId): roomId is string => Boolean(roomId));
   };
+  const runInviteTask = (roomId: string, task: () => Promise<void>) => {
+    void Promise.resolve()
+      .then(task)
+      .catch((err: unknown) => {
+        runtime.error?.(
+          `matrix: auto-join invite handler failed for room ${roomId}: ${String(err)}`,
+        );
+      });
+  };
 
   // Handle invites directly so both "always" and "allowlist" modes share the same path.
   client.on("room.invite", (roomId: string, _inviteEvent: unknown) => {
-    void (async () => {
+    runInviteTask(roomId, async () => {
       if (autoJoin === "allowlist") {
         const allowedAliasRoomIds = await resolveAllowedAliasRoomIds();
         const allowed =
@@ -81,6 +91,6 @@ export function registerMatrixAutoJoin(params: {
       } catch (err) {
         runtime.error?.(`matrix: failed to join room ${roomId}: ${String(err)}`);
       }
-    })();
+    });
   });
 }

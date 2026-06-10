@@ -1,8 +1,11 @@
+// Phone Control tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,

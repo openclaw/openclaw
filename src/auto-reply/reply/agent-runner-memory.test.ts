@@ -1,3 +1,4 @@
+// Tests agent runner memory flush and persisted memory context handling.
 import fsCore from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -981,6 +982,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokens: 120,
       totalTokensFresh: true,
     };
+    const onCompactionNotice = vi.fn();
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -997,6 +999,7 @@ describe("runMemoryFlushIfNeeded", () => {
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
+      onCompactionNotice,
     });
 
     expect(entry).toBe(sessionEntry);
@@ -1011,6 +1014,8 @@ describe("runMemoryFlushIfNeeded", () => {
       contextTokenBudget: 100,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
   });
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {
@@ -2011,6 +2016,107 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.currentTokenCount).toBe(10);
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
+  });
+
+  it("emits preflight compaction notices around a successful budget compaction", async () => {
+    const sessionFile = path.join(rootDir, "notify-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const onCompactionNotice = vi.fn();
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              notifyUser: true,
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onCompactionNotice,
+    });
+
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "end");
+  });
+
+  it("emits an incomplete preflight compaction notice when post-compaction state update throws", async () => {
+    const sessionFile = path.join(rootDir, "notify-failed-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    incrementCompactionCountMock.mockRejectedValueOnce(new Error("count update failed"));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const onCompactionNotice = vi.fn();
+
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                notifyUser: true,
+                truncateAfterCompaction: true,
+                maxActiveTranscriptBytes: "10b",
+              },
+            },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100_000,
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      }),
+    ).rejects.toThrow("count update failed");
+
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
   });
 
   it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {

@@ -1,3 +1,5 @@
+// Runs Vitest through repo project selection, local scheduling policy, output
+// watchdogs, and process-group cleanup.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -17,24 +19,33 @@ const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
 const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
+/** Default watchdog timeout for Vitest runs that stop producing output. */
 export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
-export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 60_000;
+/** Default heartbeat interval while waiting on silent Vitest output. */
+export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 30_000;
+/** Longer watchdog timeout for known long-running Vitest configs. */
 export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 const LONG_RUNNING_VITEST_CONFIGS = new Set([
   "test/vitest/vitest.e2e.config.ts",
+  GATEWAY_VITEST_CONFIG,
   "test/vitest/vitest.ui-e2e.config.ts",
+  "test/vitest/vitest.full-agentic.config.ts",
+  "test/vitest/vitest.full-core-contracts.config.ts",
 ]);
 const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/openclaw-e2e-instance.test.ts",
 ]);
+const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
 const GLOB_PATTERN_CHARS_RE = /[*?[\]{}]/u;
+const NON_RUN_VITEST_SUBCOMMANDS = new Set(["bench", "list", "related"]);
 const VITEST_OPTIONS_WITH_VALUE = new Set([
   "--attachmentsDir",
   "--bail",
@@ -44,6 +55,7 @@ const VITEST_OPTIONS_WITH_VALUE = new Set([
   "-c",
   "--changed",
   "--dir",
+  "--diff",
   "--environment",
   "--exclude",
   "--execArgv",
@@ -100,6 +112,9 @@ function parsePositiveInt(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+/**
+ * Resolves default Node flags for Vitest, including the local Maglev opt-in.
+ */
 export function resolveVitestNodeArgs(env = process.env) {
   if (isTruthyEnvValue(env.OPENCLAW_VITEST_ENABLE_MAGLEV)) {
     return [];
@@ -116,6 +131,9 @@ function isMissingVitestResolveError(error) {
   );
 }
 
+/**
+ * Builds the actionable dependency-install message when Vitest is unavailable.
+ */
 export function resolveMissingVitestDependencyMessage(baseDir = repoRoot, fsImpl = fs) {
   const hasNodeModules = fsImpl.existsSync(path.join(baseDir, "node_modules"));
   const reason = hasNodeModules
@@ -129,11 +147,89 @@ export function resolveMissingVitestDependencyMessage(baseDir = repoRoot, fsImpl
   ].join("\n");
 }
 
+function resolvePathFromBase(value, baseDir) {
+  return path.isAbsolute(value) ? value : path.resolve(baseDir, value);
+}
+
+function resolvePnpmModulesDir(env) {
+  return env.PNPM_CONFIG_MODULES_DIR?.trim() || env.npm_config_modules_dir?.trim() || "";
+}
+
+function resolveHydratedVitestPackageJson({ baseDir, env, fsImpl }) {
+  const modulesDir = resolvePnpmModulesDir(env);
+  if (!modulesDir) {
+    return null;
+  }
+  const packageJsonPath = path.join(
+    resolvePathFromBase(modulesDir, baseDir),
+    "vitest",
+    "package.json",
+  );
+  return fsImpl.existsSync(packageJsonPath) ? packageJsonPath : null;
+}
+
+function ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform }) {
+  if (platform !== "win32") {
+    return true;
+  }
+  const selfLinkPath = path.join(hydratedNodeModulesPath, "node_modules");
+  if (fsImpl.existsSync(selfLinkPath)) {
+    return true;
+  }
+  try {
+    fsImpl.symlinkSync(hydratedNodeModulesPath, selfLinkPath, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveHydratedVitestCliEntry({ baseDir, env, fsImpl, platform }) {
+  const hydratedVitestPackageJson = resolveHydratedVitestPackageJson({ baseDir, env, fsImpl });
+  if (!hydratedVitestPackageJson) {
+    return null;
+  }
+  const hydratedNodeModulesPath = path.dirname(path.dirname(hydratedVitestPackageJson));
+  if (!ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform })) {
+    return null;
+  }
+  const nodeModulesPath = path.join(baseDir, "node_modules");
+  if (fsImpl.existsSync(nodeModulesPath)) {
+    const workspaceVitestCliEntry = path.join(nodeModulesPath, "vitest", "vitest.mjs");
+    return fsImpl.existsSync(workspaceVitestCliEntry) ? workspaceVitestCliEntry : null;
+  }
+  try {
+    fsImpl.symlinkSync(
+      hydratedNodeModulesPath,
+      nodeModulesPath,
+      platform === "win32" ? "junction" : "dir",
+    );
+  } catch {
+    return null;
+  }
+  return path.join(nodeModulesPath, "vitest", "vitest.mjs");
+}
+
+/**
+ * Resolves the Vitest CLI entry from normal or hydrated node_modules layouts.
+ */
 export function resolveVitestCliEntry({
   baseDir = repoRoot,
+  env = process.env,
   fsImpl = fs,
+  platform = process.platform,
   requireResolve = require.resolve.bind(require),
 } = {}) {
+  const hydratedVitestCliEntry = resolveHydratedVitestCliEntry({
+    baseDir,
+    env,
+    fsImpl,
+    platform,
+  });
+  if (hydratedVitestCliEntry) {
+    return hydratedVitestCliEntry;
+  }
+
   let vitestPackageJson;
   try {
     vitestPackageJson = requireResolve("vitest/package.json");
@@ -148,10 +244,16 @@ export function resolveVitestCliEntry({
   return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
 }
 
+/**
+ * Reads the explicit no-output watchdog timeout, if configured.
+ */
 export function resolveVitestNoOutputTimeoutMs(env = process.env) {
   return parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
 }
 
+/**
+ * Reads the explicit no-output heartbeat interval, if configured.
+ */
 export function resolveVitestNoOutputHeartbeatMs(env = process.env) {
   return parsePositiveInt(env[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]);
 }
@@ -227,6 +329,9 @@ function resolveExplicitVitestMode(argv) {
   return mode;
 }
 
+/**
+ * Adds default watchdog env for non-watch Vitest runs.
+ */
 export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
@@ -243,15 +348,16 @@ export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
     ...env,
-    ...(!hasTimeout
-      ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) }
-      : {}),
+    ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
       : {}),
   };
 }
 
+/**
+ * Chooses the default watchdog timeout from the selected Vitest config.
+ */
 export function resolveDefaultVitestNoOutputTimeoutMs(argv = []) {
   const config = resolveVitestConfigArg(argv);
   if (config !== null && isLongRunningVitestConfig(config)) {
@@ -286,6 +392,9 @@ function isLongRunningVitestConfig(config) {
   return false;
 }
 
+/**
+ * Builds spawn options for the primary Vitest child process.
+ */
 export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
   return {
     env: resolveVitestSpawnEnv(env),
@@ -294,6 +403,9 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
   };
 }
 
+/**
+ * Applies local Vitest scheduling and native worker budget env.
+ */
 export function resolveVitestSpawnEnv(env = process.env) {
   const nextEnv = resolveLocalVitestEnv(env);
   if (!shouldApplyNativeWorkerBudget(nextEnv)) {
@@ -325,6 +437,9 @@ function resolveExplicitVitestWorkerBudget(env) {
   return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
 }
 
+/**
+ * Filters known noisy Vitest stderr lines after stripping ANSI escapes.
+ */
 export function shouldSuppressVitestStderrLine(line) {
   const normalizedLine = line
     .split(ANSI_CSI_PREFIX)
@@ -333,6 +448,9 @@ export function shouldSuppressVitestStderrLine(line) {
   return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => normalizedLine.includes(pattern));
 }
 
+/**
+ * Detects pnpm exec node invocations so the wrapper can spawn Node directly.
+ */
 export function resolveDirectNodeVitestArgs(pnpmArgs) {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
 }
@@ -351,16 +469,24 @@ function optionConsumesNextArg(arg) {
   );
 }
 
-function isExplicitTestFileArg(arg) {
-  if (!EXPLICIT_TEST_FILE_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
-    return false;
-  }
+function isPathLikeExplicitFileArg(arg) {
   return (
     path.isAbsolute(arg) || arg.startsWith("./") || arg.startsWith("../") || /[/\\]/u.test(arg)
   );
 }
 
-function collectExplicitTestFileArgs(argv) {
+function isExplicitFileTargetArg(arg) {
+  if (!EXPLICIT_FILE_TARGET_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  return isPathLikeExplicitFileArg(arg);
+}
+
+function isExplicitTestFileArg(arg) {
+  return EXPLICIT_TEST_FILE_RE.test(arg) && isExplicitFileTargetArg(arg);
+}
+
+function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {
   const files = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -374,13 +500,20 @@ function collectExplicitTestFileArgs(argv) {
     if (arg.startsWith("-")) {
       continue;
     }
-    if (isExplicitTestFileArg(arg)) {
+    if (predicate(arg)) {
       files.push(arg);
     }
   }
   return files;
 }
 
+function collectExplicitTestFileArgs(argv) {
+  return collectExplicitFileTargetArgs(argv, isExplicitTestFileArg);
+}
+
+/**
+ * Forces explicit test-file targets to fail when Vitest finds no matching tests.
+ */
 export function resolveExplicitTestFileNoPassArgs(argv) {
   if (collectExplicitTestFileArgs(argv).length === 0) {
     return argv;
@@ -474,26 +607,51 @@ function stripRunSubcommand(argv) {
   return stripped;
 }
 
+function hasNonRunVitestSubcommand(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      return false;
+    }
+    if (optionConsumesNextArg(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    return NON_RUN_VITEST_SUBCOMMANDS.has(arg);
+  }
+  return false;
+}
+
+/**
+ * Delegates default or explicit-file runs to the repo test-projects runner.
+ */
 export function resolveTestProjectsDelegationArgs(argv) {
   if (
     hasExplicitVitestConfigArg(argv) ||
     hasAlternateVitestRootArg(argv) ||
     hasExplicitVitestProjectArg(argv) ||
     resolveExplicitVitestMode(argv) === "watch" ||
+    hasNonRunVitestSubcommand(argv) ||
     hasExplicitDisabledRunFlag(argv) ||
     hasSeparateVitestOptionValueArg(argv) ||
-    collectExplicitTestFileArgs(argv).length === 0
+    collectExplicitFileTargetArgs(argv).length === 0
   ) {
     return null;
   }
   return stripRunSubcommand(argv);
 }
 
+/**
+ * Lists explicit test file targets missing from the current checkout.
+ */
 export function resolveMissingExplicitTestFiles(argv, cwd = process.cwd(), fsImpl = fs) {
   if (hasExplicitVitestConfigArg(argv) || hasAlternateVitestRootArg(argv)) {
     return [];
   }
-  return collectExplicitTestFileArgs(argv)
+  return collectExplicitFileTargetArgs(argv)
     .filter((arg) => {
       const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
       return !fsImpl.existsSync(filePath);
@@ -519,6 +677,9 @@ function isToolingTestTarget(target) {
   );
 }
 
+/**
+ * Resolves config defaults and explicit-file handling for wrapper-inferred runs.
+ */
 export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (hasExplicitVitestConfigArg(argv)) {
     return argv;
@@ -552,6 +713,9 @@ function spawnVitestProcess({ pnpmArgs, spawnParams }) {
   });
 }
 
+/**
+ * Installs the no-output watchdog for long-running Vitest children.
+ */
 export function installVitestNoOutputWatchdog(params) {
   const timeoutMs = params.timeoutMs;
   if (!timeoutMs || timeoutMs <= 0) {
@@ -673,6 +837,9 @@ export function installVitestNoOutputWatchdog(params) {
   };
 }
 
+/**
+ * Forwards child output while optionally suppressing complete stderr lines.
+ */
 export function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
   if (!stream) {
     return;
@@ -701,6 +868,9 @@ export function forwardVitestOutput(stream, target, shouldSuppressLine = () => f
   });
 }
 
+/**
+ * Spawns Vitest with output forwarding, watchdogs, and process-group cleanup.
+ */
 export function spawnWatchedVitestProcess({
   pnpmArgs,
   spawnParams,
@@ -749,15 +919,32 @@ export function spawnWatchedVitestProcess({
   };
 }
 
+/**
+ * Builds env for the delegated test-projects runner.
+ */
 export function resolveTestProjectsRunnerEnv(env) {
   return resolveVitestSpawnEnv(env);
 }
 
-function spawnTestProjectsRunner(argv, env) {
-  return spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+/**
+ * Builds spawn options for the delegated test-projects runner.
+ */
+export function resolveTestProjectsRunnerSpawnParams(env, platform = process.platform) {
+  return {
     env: resolveTestProjectsRunnerEnv(env),
+    detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: "inherit",
+  };
+}
+
+function spawnTestProjectsRunner(argv, env) {
+  const child = spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+    ...resolveTestProjectsRunnerSpawnParams(env),
   });
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+  });
+  return { child, teardown };
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -770,7 +957,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   if (missingTestFiles.length > 0) {
     console.error(
       [
-        "[vitest] explicit test file(s) not found:",
+        "[vitest] explicit test/source file(s) not found:",
         ...missingTestFiles.map((file) => `  - ${file}`),
       ].join("\n"),
     );
@@ -779,8 +966,9 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const child = spawnTestProjectsRunner(delegatedArgs, env);
+    const { child, teardown } = spawnTestProjectsRunner(delegatedArgs, env);
     child.on("exit", (code, signal) => {
+      teardown();
       if (signal) {
         process.kill(process.pid, signal);
         return;
@@ -788,6 +976,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
       process.exit(code ?? 1);
     });
     child.on("error", (error) => {
+      teardown();
       console.error(error);
       process.exit(1);
     });

@@ -1,3 +1,10 @@
+/**
+ * Converts raw provider/transport errors into concise user-facing copy.
+ */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../../packages/normalization-core/src/string-coerce.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
@@ -11,10 +18,7 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../../packages/normalization-core/src/string-coerce.js";
-import {
+  stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
@@ -30,6 +34,7 @@ import {
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
+/** Format the billing failure copy with optional provider/model context. */
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();
@@ -414,8 +419,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutInternalTraceLines = errorContext
+    ? stripAssistantInternalTraceLines(withoutPlaceholder)
+    : withoutPlaceholder;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
-    stripLegacyBracketToolCallBlocks(withoutPlaceholder),
+    stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
   );
   const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {

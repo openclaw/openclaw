@@ -1,3 +1,4 @@
+// Run Oxlint tests cover run oxlint script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -197,22 +198,38 @@ describe("run-oxlint", () => {
         splitCore: true,
       }),
     ).toBe(2);
+
+    expect(() =>
+      resolveOxlintShardConcurrency({
+        env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2x" },
+        platform: "linux",
+        hostResources: roomyHost,
+        splitCore: true,
+      }),
+    ).toThrow("OPENCLAW_OXLINT_SHARD_CONCURRENCY must be a positive integer; got: 2x");
   });
 
   it("uses a bounded oxlint shard heartbeat by default", () => {
     expect(resolveShardHeartbeatMs({})).toBe(30_000);
     expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0" })).toBe(0);
     expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "5000" })).toBe(5000);
-    expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "bad" })).toBe(30_000);
+    expect(() => resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "5000ms" })).toThrow(
+      "OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS must be a non-negative integer; got: 5000ms",
+    );
   });
 
   it("uses a bounded oxlint shard timeout by default", () => {
     expect(resolveShardTimeoutMs({})).toBe(900_000);
     expect(resolveShardTimeoutMs({ OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "0" })).toBe(0);
     expect(resolveShardTimeoutMs({ OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "5000" })).toBe(5000);
-    expect(resolveShardTimeoutMs({ OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "bad" })).toBe(900_000);
+    expect(() => resolveShardTimeoutMs({ OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "1e3" })).toThrow(
+      "OPENCLAW_OXLINT_SHARD_TIMEOUT_MS must be a non-negative integer; got: 1e3",
+    );
     expect(resolveShardKillGraceMs({})).toBe(5_000);
     expect(resolveShardKillGraceMs({ OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "0" })).toBe(0);
+    expect(() => resolveShardKillGraceMs({ OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "-1" })).toThrow(
+      "OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS must be a non-negative integer; got: -1",
+    );
   });
 
   it("fails a stuck oxlint shard instead of waiting forever", async () => {
@@ -252,11 +269,11 @@ describe("run-oxlint", () => {
           runner,
           [
             "import { writeFileSync } from 'node:fs';",
-            "writeFileSync(process.env.READY_FILE, String(process.pid));",
             "process.on('SIGTERM', () => {",
             "  writeFileSync(process.env.SIGNALED_FILE, 'SIGTERM');",
             "  process.exit(0);",
             "});",
+            "writeFileSync(process.env.READY_FILE, String(process.pid));",
             "setInterval(() => {}, 1000);",
             "",
           ].join("\n"),
@@ -327,10 +344,10 @@ describe("run-oxlint", () => {
           runner,
           [
             "import { writeFileSync } from 'node:fs';",
-            "writeFileSync(process.env.READY_FILE, String(process.pid));",
             "process.on('SIGTERM', () => {",
             "  writeFileSync(process.env.IGNORED_FILE, 'SIGTERM');",
             "});",
+            "writeFileSync(process.env.READY_FILE, String(process.pid));",
             "setInterval(() => {}, 1000);",
             "",
           ].join("\n"),
@@ -347,7 +364,7 @@ describe("run-oxlint", () => {
             "    ...process.env,",
             "    OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: '0',",
             "    OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: '0',",
-            "    OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: '25',",
+            "    OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: '250',",
             "  },",
             "  extraArgs: [],",
             "  runner: process.env.RUNNER_FILE,",
@@ -518,14 +535,18 @@ describe("run-oxlint", () => {
     ]);
   });
 
-  it("keeps the default Windows oxlint extension chunk size for invalid overrides", () => {
+  it("rejects invalid Windows oxlint extension chunk size overrides", () => {
     expect(resolveWindowsExtensionChunkSize({})).toBe(8);
-    expect(
+    expect(() =>
       resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }),
-    ).toBe(8);
-    expect(
-      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }),
-    ).toBe(8);
+    ).toThrow("OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE must be a positive integer; got: 0");
+    expect(() =>
+      resolveWindowsExtensionChunkSize({
+        OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "8 chunks",
+      }),
+    ).toThrow(
+      "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE must be a positive integer; got: 8 chunks",
+    );
   });
 
   it("filters tracked targets missing from sparse checkouts", () => {

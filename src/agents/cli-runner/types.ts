@@ -1,3 +1,6 @@
+/**
+ * Shared types for preparing and executing CLI-backed agent runs.
+ */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -26,6 +29,7 @@ import type {
 } from "../embedded-agent-runner/run/params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
+/** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -55,6 +59,7 @@ export type RunCliAgentParams = {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
@@ -79,6 +84,7 @@ export type RunCliAgentParams = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
   agentAccountId?: string;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
@@ -96,6 +102,8 @@ export type RunCliAgentParams = {
     firstModelCallStarted?: boolean;
   }) => void;
   replyOperation?: ReplyOperation;
+  classifyCommentaryText?: boolean;
+  emitCommentaryText?: boolean;
   /**
    * Close any long-lived CLI live session created for this run after the run
    * finishes. Intended for temporary helper calls that should not keep process
@@ -110,6 +118,7 @@ export type RunCliAgentParams = {
   cleanupBundleMcpOnRunEnd?: boolean;
 };
 
+/** Backend config after MCP, skill, env, and cleanup preparation. */
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
@@ -118,6 +127,7 @@ export type CliPreparedBackend = {
   env?: Record<string, string>;
 };
 
+/** Reusable CLI session id and the reason it was rejected, when any. */
 export type CliReusableSession = {
   sessionId?: string;
   invalidatedReason?:
@@ -130,6 +140,7 @@ export type CliReusableSession = {
     | "orphaned-tool-use";
 };
 
+/** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
   effectiveAuthProfileId?: string;

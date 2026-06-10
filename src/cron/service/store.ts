@@ -1,3 +1,4 @@
+/** Loads, normalizes, quarantines, and persists cron service store state. */
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -21,6 +22,8 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
     return;
   }
+  // Runtime nextRunAtMs belongs to the old schedule identity; clear it so the
+  // current normalized schedule recomputes from the active clock.
   params.hydrated.state ??= {};
   params.hydrated.state.nextRunAtMs = undefined;
 }
@@ -101,13 +104,13 @@ export async function ensureLoaded(
     previousJobsById.set(job.id, job);
   }
   const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
+  // Persisted cron rows are validated lazily, so treat them as raw records at the
+  // store boundary and only trust the CronJob shape after validation below.
+  const loadedJobs = (loaded.store.jobs ?? []) as unknown as Record<string, unknown>[];
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
-  for (const [index, job] of loadedJobs.entries()) {
-    const decodedRaw = job as unknown as Record<string, unknown>;
-    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(decodedRaw);
-    const raw = decodedRaw;
+  for (const [index, raw] of loadedJobs.entries()) {
+    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
     // Accept old `jobId` rows at the raw boundary only; the in-memory store
@@ -126,11 +129,8 @@ export async function ensureLoaded(
         "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
       );
     }
-    const hydrated =
-      normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    const invalidReason = getInvalidPersistedCronJobReason(
-      hydrated as unknown as Record<string, unknown>,
-    );
+    const hydratedRaw = normalized ?? raw;
+    const invalidReason = getInvalidPersistedCronJobReason(hydratedRaw);
     if (invalidReason) {
       const quarantineEntry: QuarantinedCronConfigJob = {
         sourceIndex,
@@ -154,6 +154,8 @@ export async function ensureLoaded(
       warnInvalidPersistedCronJob({ state, raw, index: sourceIndex, reason: invalidReason });
       continue;
     }
+    // Validated above, so the raw record is now a trusted CronJob.
+    const hydrated = hydratedRaw as unknown as CronJob;
     jobs.push(hydrated);
     invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
   }

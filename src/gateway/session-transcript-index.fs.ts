@@ -1,3 +1,5 @@
+// Filesystem transcript indexer.
+// Streams JSONL transcript files into byte-offset indexes for history paging.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 
@@ -9,6 +11,7 @@ const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message
 
 type ParsedTranscriptRecord = Record<string, unknown>;
 
+/** Visible transcript entry plus its byte range in the JSONL file. */
 export type IndexedTranscriptEntry = {
   seq: number;
   id?: string;
@@ -119,6 +122,7 @@ function setCachedIndex(filePath: string, entry: CacheEntry): void {
   }
 }
 
+/** Clears transcript index caches and in-flight builds between tests. */
 export function clearSessionTranscriptIndexCache(): void {
   transcriptIndexCache.clear();
   transcriptIndexBuilds.clear();
@@ -141,6 +145,8 @@ function buildOversizedIndexedRawEntry(params: {
   offset: number;
   byteLength: number;
 }): IndexedRawEntry | null {
+  // Oversized lines may contain huge message arrays, so recover only metadata
+  // from a bounded prefix and synthesize a visible placeholder record.
   const prefix = params.line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
@@ -201,6 +207,8 @@ async function visitTranscriptJsonLines(
       }
       nextOffset += bytesRead;
       carryOffset = nextOffset - Buffer.byteLength(carry, "utf8");
+      // Yield between chunks so a large transcript scan does not monopolize the
+      // gateway event loop while chat/session traffic is still flowing.
       await yieldTranscriptIndexScan();
     }
 
@@ -323,6 +331,7 @@ async function buildSessionTranscriptIndex(
   };
 }
 
+/** Reads or builds the visible transcript index for a JSONL session file. */
 export async function readSessionTranscriptIndex(
   filePath: string,
   opts: ReadSessionTranscriptIndexOptions = {},

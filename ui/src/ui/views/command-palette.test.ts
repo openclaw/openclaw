@@ -1,3 +1,4 @@
+// Control UI tests cover command palette behavior.
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -127,6 +128,17 @@ describe("command palette", () => {
     const prose = items.find((item) => item.id === "slash:prose");
     expect(pair?.label).toBe("/pair");
     expect(prose?.label).toBe("/prose");
+  });
+
+  it("requests slash command hydration when the palette opens", async () => {
+    const onOpen = vi.fn();
+
+    await renderPalette({ onOpen });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    render(renderCommandPalette(createProps({ onOpen, query: "overview" })), container);
+    await nextFrame();
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it("matches localized base item labels and descriptions", async () => {

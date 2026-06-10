@@ -1,3 +1,4 @@
+// Tests reply session persistence, route updates, and label behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -178,6 +179,38 @@ async function writeSessionStoreFast(
 ): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+}
+
+async function writeTerminalTranscriptSessionStore(params: {
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+  status?: SessionEntry["status"];
+  omitStatus?: boolean;
+  updatedAt: number;
+  endedAt: number;
+  transcriptMtimeMs: number;
+}): Promise<void> {
+  const sessionFile = `${params.sessionId}.jsonl`;
+  const transcriptPath = path.join(path.dirname(params.storePath), sessionFile);
+  await fs.writeFile(
+    transcriptPath,
+    `${JSON.stringify({ type: "session", id: params.sessionId })}\n`,
+    "utf-8",
+  );
+  await fs.utimes(transcriptPath, params.transcriptMtimeMs / 1000, params.transcriptMtimeMs / 1000);
+  const status = params.status ?? (params.omitStatus ? undefined : "done");
+  await writeSessionStoreFast(params.storePath, {
+    [params.sessionKey]: {
+      sessionId: params.sessionId,
+      sessionFile,
+      updatedAt: params.updatedAt,
+      startedAt: params.endedAt - 10_000,
+      endedAt: params.endedAt,
+      runtimeMs: 9_000,
+      ...(status ? { status } : {}),
+    },
+  });
 }
 
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
@@ -1593,6 +1626,111 @@ describe("initSessionState reset policy", () => {
     expect(persisted[sessionKey]?.runtimeMs).toBe(9_000);
   });
 
+  it.each([
+    {
+      name: "non-main terminal rows ignore transcript mtime",
+      sessionKey: "agent:main:whatsapp:dm:terminal-entry",
+      updatedAtOffsetMs: -5_000,
+      endedAtOffsetMs: -6_000,
+      transcriptMtimeOffsetMs: -3_000,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      expectNewSession: true,
+    },
+    {
+      name: "main endedAt-only rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      omitStatus: true,
+      expectNewSession: true,
+    },
+    {
+      name: "failed main terminal rows reuse when the transcript exists",
+      sessionKey: "agent:main:main",
+      status: "failed" as const,
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows reuse when updatedAt already reflects the transcript",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -1_000,
+      endedAtOffsetMs: -6_000,
+      transcriptMtimeOffsetMs: -4_000,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows reuse when transcript mtime differs only by sub-millisecond precision",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -4_000,
+      endedAtOffsetMs: -6_000,
+      transcriptMtimeOffsetMs: -3_999.5,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows reuse when transcript is not newer than updatedAt",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: -15_000,
+      expectNewSession: false,
+    },
+  ])("$name", async (scenario) => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-terminal-entry-");
+    const storePath = path.join(root, "sessions.json");
+    const existingSessionId = "terminal-entry-old";
+    const now = Date.now();
+    const terminalUpdatedAt = now + scenario.updatedAtOffsetMs;
+    const terminalEndedAt = now + scenario.endedAtOffsetMs;
+    await writeTerminalTranscriptSessionStore({
+      storePath,
+      sessionKey: scenario.sessionKey,
+      sessionId: existingSessionId,
+      status: scenario.status,
+      omitStatus: scenario.omitStatus,
+      updatedAt: terminalUpdatedAt,
+      endedAt: terminalEndedAt,
+      transcriptMtimeMs: now + scenario.transcriptMtimeOffsetMs,
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: scenario.sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(scenario.expectNewSession);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    const entry = persisted[scenario.sessionKey];
+    if (scenario.expectNewSession) {
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(entry?.sessionId).not.toBe(existingSessionId);
+      expect(entry?.status).toBeUndefined();
+      expect(entry?.startedAt).toBeUndefined();
+      expect(entry?.endedAt).toBeUndefined();
+      expect(entry?.runtimeMs).toBeUndefined();
+    } else {
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(entry?.status).toBe(scenario.status ?? "done");
+      expect(entry?.endedAt).toBe(terminalEndedAt);
+    }
+  });
+
   it("keeps the existing stale session for /reset soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-stale-");
@@ -2595,6 +2733,64 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.modelOverrideFallbackOriginModel, testCase.name).toBeUndefined();
       expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
     }
+  });
+
+  it("clears recovered Codex fallback metadata for Discord channel sessions on /new", async () => {
+    const storePath = await createStorePath("openclaw-reset-discord-codex-fallback-");
+    const sessionKey = "agent:main:discord:channel:1488013357016420522";
+    const existingSessionId = "existing-discord-codex-fallback";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        providerOverride: "codex",
+        modelOverride: "gpt-5.4",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-5.5",
+        totalTokens: 231_980,
+        contextTokens: 272_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "discord-user",
+        To: "discord-bot",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "discord",
+        Surface: "discord",
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 999 },
+        agents: {
+          defaults: {
+            model: {
+              primary: "codex/gpt-5.5",
+              fallbacks: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(result.sessionEntry.totalTokens).toBeUndefined();
+    expect(result.sessionEntry.contextTokens).toBeUndefined();
+    expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
   });
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {

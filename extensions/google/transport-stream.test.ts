@@ -1,6 +1,8 @@
+// Google tests cover transport stream plugin behavior.
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -443,6 +445,31 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("name", "lookup");
     expect(result.content[2]).toHaveProperty("arguments", { q: "hello" });
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
+  });
+
+  it("strips redundant google provider prefixes from Gemini API model paths", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+
+    const model = buildGeminiModel({
+      id: "google/gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse",
+    );
   });
 
   it("merges tool-call thought signatures from sibling SSE parts", async () => {
@@ -954,6 +981,64 @@ describe("google transport stream", () => {
     expect(result.provider).toBe("google-vertex");
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+  });
+
+  it("refreshes authorized_user ADC from a compressed token response", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-gzip-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "gzip-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        gzipSync(JSON.stringify({ access_token: "ya29.gzip-token", expires_in: 3600 })),
+        {
+          status: 200,
+          headers: {
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(tokenFetchMock).toHaveBeenCalledTimes(1);
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      Authorization: "Bearer ya29.gzip-token",
+    });
   });
 
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
@@ -1626,6 +1711,76 @@ describe("google transport stream", () => {
     const generationConfig = requireGenerationConfig(params);
     expect(generationConfig.maxOutputTokens).toBe(128);
     expect(generationConfig).not.toHaveProperty("thinkingConfig");
+  });
+
+  it("forwards configured stop sequences to the Gemini generationConfig", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        stop: ["</tool>", "\n\nObservation:"],
+      } as never,
+    );
+
+    const generationConfig = requireGenerationConfig(params);
+    expect(generationConfig.stopSequences).toEqual(["</tool>", "\n\nObservation:"]);
+  });
+
+  it("omits stopSequences when the stop list is empty", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        stop: [],
+      } as never,
+    );
+
+    expect(params.generationConfig ?? {}).not.toHaveProperty("stopSequences");
+  });
+
+  it("sends stopSequences in the serialized Gemini request body via the guarded fetch transport", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"google-generative-ai">,
+      {},
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+          stop: ["</tool>", "\n\nObservation:"],
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    const init = requireRequestInit(guardedCall, "guarded fetch");
+    const payload = parseRequestJsonBody(init);
+    const generationConfig = requireGenerationConfig(payload);
+    expect(generationConfig.stopSequences).toEqual(["</tool>", "\n\nObservation:"]);
   });
 
   it("strips explicit thinkingBudget=0 but preserves includeThoughts for Gemini 2.5 Pro", () => {

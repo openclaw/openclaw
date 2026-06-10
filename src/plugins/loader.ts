@@ -1,3 +1,4 @@
+// Discovers, validates, and loads plugin metadata and runtime entrypoints.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -209,6 +210,11 @@ export type PluginLoadOptions = {
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
   /**
+   * Load channel runtime entries even when setup entries are available. Plugin CLI
+   * registration needs the runtime entry because setup entries only own setup state.
+   */
+  forceFullRuntimeForChannelPlugins?: boolean;
+  /**
    * For hot startup paths, prefer bundled plugin JS artifacts over source TS
    * entrypoints when both are present in a source checkout.
    */
@@ -388,6 +394,7 @@ type PluginRegistrySnapshot = {
     migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
+    trustedToolPolicies: NonNullable<PluginRegistry["trustedToolPolicies"]>;
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
@@ -433,6 +440,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
+      trustedToolPolicies: [...(registry.trustedToolPolicies ?? [])],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
@@ -477,6 +485,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.migrationProviders = snapshot.arrays.migrationProviders;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
+  registry.trustedToolPolicies = snapshot.arrays.trustedToolPolicies;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
   registry.httpRoutes = snapshot.arrays.httpRoutes;
@@ -919,6 +928,7 @@ function buildCacheKey(params: {
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
+  forceFullRuntimeForChannelPlugins?: boolean;
   preferBuiltPluginArtifacts?: boolean;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
@@ -961,7 +971,11 @@ function buildCacheKey(params: {
       ? "require-setup-entry"
       : "allow-full-fallback";
   const startupChannelMode =
-    params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
+    params.forceFullRuntimeForChannelPlugins === true
+      ? "force-full"
+      : params.preferSetupRuntimeForChannelPlugins === true
+        ? "prefer-setup"
+        : "full";
   const bundledArtifactMode =
     params.preferBuiltPluginArtifacts === true ? "prefer-built-artifacts" : "source-default";
   const rawConfigEnvMode =
@@ -1174,6 +1188,7 @@ function resolvePluginRegistrationPlan(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   preferSetupRuntimeForChannelPlugins: boolean;
+  forceFullRuntimeForChannelPlugins: boolean;
   toolDiscovery: boolean;
 }): PluginRegistrationPlan | null {
   if (params.canLoadScopedSetupOnlyChannelPlugin) {
@@ -1204,6 +1219,7 @@ function resolvePluginRegistrationPlan(params: {
     };
   }
   const loadSetupRuntimeEntry =
+    !params.forceFullRuntimeForChannelPlugins &&
     params.shouldLoadModules &&
     !params.validateOnly &&
     shouldLoadChannelPluginInSetupRuntime({
@@ -1283,6 +1299,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
+  const forceFullRuntimeForChannelPlugins = options.forceFullRuntimeForChannelPlugins === true;
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
@@ -1308,6 +1325,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    forceFullRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
@@ -1329,6 +1347,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    forceFullRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
@@ -1724,6 +1743,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    forceFullRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts,
     shouldActivate,
     shouldLoadModules,
@@ -2088,6 +2108,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         (!enableState.enabled || forceSetupOnlyChannelPlugins);
       const canLoadScopedSetupOnlyChannelPlugin =
         scopedSetupOnlyChannelPluginRequested &&
+        (candidate.origin !== "workspace" || enableState.enabled) &&
         (!requireSetupEntryForSetupOnlyChannelPlugins || Boolean(manifestRecord.setupSource));
       const registrationPlan = resolvePluginRegistrationPlan({
         canLoadScopedSetupOnlyChannelPlugin,
@@ -2100,7 +2121,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         manifestRecord,
         cfg,
         env,
-        preferSetupRuntimeForChannelPlugins,
+        preferSetupRuntimeForChannelPlugins: forceFullRuntimeForChannelPlugins
+          ? false
+          : preferSetupRuntimeForChannelPlugins,
+        forceFullRuntimeForChannelPlugins,
         toolDiscovery: options.toolDiscovery === true,
       });
 
@@ -2542,7 +2566,23 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               }
             }
           }
-          api.registerChannel(mergedSetupPlugin);
+          try {
+            api.registerChannel(mergedSetupPlugin);
+          } catch (err) {
+            recordPluginError({
+              logger,
+              registry,
+              record,
+              seenIds,
+              pluginId,
+              origin: candidate.origin,
+              phase: "load",
+              error: err,
+              logPrefix: `[plugins] ${record.id} failed to register setup channel from ${record.source}: `,
+              diagnosticMessagePrefix: "failed to register setup channel: ",
+            });
+            continue;
+          }
           registry.plugins.push(record);
           seenIds.set(pluginId, candidate.origin);
           continue;

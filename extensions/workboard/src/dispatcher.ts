@@ -1,7 +1,8 @@
+// Workboard plugin module implements dispatcher behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
-import type { WorkboardCard, WorkboardExecution, WorkboardStatus } from "./types.js";
+import type { WorkboardCard, WorkboardExecution } from "./types.js";
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
@@ -14,6 +15,7 @@ export type WorkboardDispatchStartOptions = {
   model?: string;
   provider?: string;
   ownerId?: string;
+  boardId?: string;
   now?: number;
 };
 
@@ -122,21 +124,28 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   );
 }
 
-function selectStartableCards(cards: WorkboardCard[], limit: number): WorkboardCard[] {
+function selectStartableCards(
+  cards: WorkboardCard[],
+  limit: number,
+  candidates: WorkboardCard[] = cards,
+): WorkboardCard[] {
   if (limit <= 0) {
     return [];
   }
-  const activeStatuses = new Set<WorkboardStatus>(["running", "review"]);
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
-    if (!activeStatuses.has(card.status) || cardIsArchived(card)) {
+    const consumesOwnerSlot =
+      card.status === "running" ||
+      Boolean(card.metadata?.claim) ||
+      card.execution?.status === "running";
+    if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }
     const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;
     runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
   }
   const selected: WorkboardCard[] = [];
-  for (const card of cards
+  for (const card of candidates
     .filter((entry) => entry.status === "ready" && !entry.metadata?.claim && !cardIsArchived(entry))
     .toSorted(sortReadyCards)) {
     const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;
@@ -158,7 +167,8 @@ export async function dispatchAndStartWorkboardCards(params: {
   options?: WorkboardDispatchStartOptions;
 }): Promise<WorkboardDispatchAndStartResult> {
   const now = params.options?.now ?? Date.now();
-  const dispatch = await params.store.dispatch(now);
+  const boardId = params.options?.boardId;
+  const dispatch = await params.store.dispatch({ now, boardId });
   const maxStarts = normalizePositiveInteger(
     params.options?.maxStarts,
     DEFAULT_DISPATCH_MAX_STARTS,
@@ -167,8 +177,9 @@ export async function dispatchAndStartWorkboardCards(params: {
   const startFailures: WorkboardStartFailure[] = [];
   const model = params.options?.model?.trim() || DEFAULT_DISPATCH_MODEL;
   const cards = await params.store.list();
+  const candidates = await params.store.list({ boardId });
 
-  for (const card of selectStartableCards(cards, maxStarts)) {
+  for (const card of selectStartableCards(cards, maxStarts, candidates)) {
     const ownerId = params.options?.ownerId?.trim() || card.agentId || DEFAULT_DISPATCH_OWNER;
     const sessionKey = buildSessionKey(card);
     let token = "";

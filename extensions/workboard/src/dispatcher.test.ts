@@ -1,3 +1,4 @@
+// Workboard tests cover dispatcher plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
@@ -78,6 +79,98 @@ describe("dispatchAndStartWorkboardCards", () => {
       status: "ready",
       metadata: { automation: { dispatchCount: 1 } },
     });
+  });
+
+  it("does not let review cards consume an agent running slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({
+      title: "Waiting for operator review",
+      status: "review",
+      priority: "normal",
+      agentId: "codex-main",
+    });
+    const ready = await store.create({
+      title: "Next ready card",
+      status: "ready",
+      priority: "high",
+      agentId: "codex-main",
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3 },
+    });
+
+    expect(result.started).toEqual([
+      expect.objectContaining({
+        cardId: ready.id,
+        runId: "run-next",
+      }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("starts workers only for the selected board", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const ops = await store.create({
+      title: "Ops worker",
+      status: "ready",
+      priority: "urgent",
+      boardId: "ops",
+    });
+    const product = await store.create({
+      title: "Product worker",
+      status: "ready",
+      priority: "urgent",
+      boardId: "product",
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-ops" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3, boardId: "ops" },
+    });
+
+    expect(result.started).toEqual([expect.objectContaining({ cardId: ops.id })]);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: `subagent:workboard-ops-${ops.id}`,
+      lane: `workboard:ops:${ops.id}`,
+    });
+    await expect(store.get(product.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: { automation: { boardId: "product" } },
+    });
+  });
+
+  it("keeps claimed review cards in the owner running slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const review = await store.create({
+      title: "Claimed operator review",
+      status: "review",
+      priority: "normal",
+      agentId: "codex-main",
+    });
+    await store.claim(review.id, { ownerId: "codex-main", token: "review-token" });
+    await store.create({
+      title: "Next ready card",
+      status: "ready",
+      priority: "high",
+      agentId: "codex-main",
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3 },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("blocks a card when worker start fails after claim", async () => {

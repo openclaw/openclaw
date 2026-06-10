@@ -1,3 +1,8 @@
+/**
+ * Channel catalog contract suites.
+ *
+ * Exercises manifest/catalog loading paths used by setup and install-on-demand surfaces.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -49,6 +54,7 @@ export function describeChannelCatalogEntryContract(params: {
   });
 }
 
+/** Verifies catalog entries that come only from bundled manifest metadata. */
 export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   pluginId: string;
   packageName: string;
@@ -101,6 +107,7 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   });
 }
 
+/** Verifies fallback ordering between bundled, official, and external catalogs. */
 export function describeOfficialFallbackChannelCatalogContract(params: {
   channelId: string;
   npmSpec: string;

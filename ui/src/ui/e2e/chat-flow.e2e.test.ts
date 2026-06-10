@@ -1,4 +1,5 @@
-import { chromium, type Browser } from "playwright";
+// Control UI tests cover chat flow behavior.
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -49,6 +50,94 @@ async function waitForRequests(
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
 }
 
+async function chatThreadDistanceFromBottom(page: Page): Promise<number> {
+  return page.locator(".chat-thread").evaluate((element) => {
+    const thread = element as HTMLElement;
+    return Math.round(thread.scrollHeight - thread.scrollTop - thread.clientHeight);
+  });
+}
+
+async function waitForChatScrollIdle(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const app = document.querySelector("openclaw-app") as
+            | (Element & {
+                chatIsProgrammaticScroll?: boolean;
+                chatScrollFrame?: number | null;
+                chatScrollTimeout?: number | null;
+              })
+            | null;
+          return Boolean(
+            app &&
+            app.chatScrollFrame == null &&
+            app.chatScrollTimeout == null &&
+            !app.chatIsProgrammaticScroll,
+          );
+        }),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+}
+
+async function scrollChatThreadToTop(page: Page): Promise<void> {
+  await page.locator(".chat-thread").evaluate((element) => {
+    const thread = element as HTMLElement;
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+}
+
+async function controlUiEventPayloads(
+  page: Page,
+  event: string,
+): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate((eventName) => {
+    const app = document.querySelector("openclaw-app") as
+      | (Element & { eventLogBuffer?: unknown[] })
+      | null;
+    return (app?.eventLogBuffer ?? [])
+      .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
+        const candidate = entry as { event?: unknown; payload?: unknown };
+        return (
+          candidate.event === eventName &&
+          Boolean(candidate.payload && typeof candidate.payload === "object")
+        );
+      })
+      .map((entry) => entry.payload);
+  }, event);
+}
+
+async function waitForControlUiChatSendPhases(
+  page: Page,
+  runId: string,
+  phases: string[],
+): Promise<void> {
+  await page.waitForFunction(
+    ({ expectedPhases, expectedRunId }) => {
+      const app = document.querySelector("openclaw-app") as
+        | (Element & { eventLogBuffer?: unknown[] })
+        | null;
+      const observedPhases = new Set(
+        (app?.eventLogBuffer ?? []).flatMap((entry) => {
+          const candidate = entry as {
+            event?: unknown;
+            payload?: { phase?: unknown; runId?: unknown };
+          };
+          return candidate.event === "control-ui.chat.send" &&
+            candidate.payload?.runId === expectedRunId &&
+            typeof candidate.payload.phase === "string"
+            ? [candidate.payload.phase]
+            : [];
+        }),
+      );
+      return expectedPhases.every((phase) => observedPhases.has(phase));
+    },
+    { expectedPhases: phases, expectedRunId: runId },
+  );
+}
+
 function chatSessionListResponse() {
   return {
     count: 2,
@@ -80,7 +169,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(
-        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
     server = await startControlUiE2eServer();
@@ -145,6 +234,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
 
       const prompt = "stream markdown through the GUI";
+      await gateway.deferNext("chat.send");
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 
@@ -171,6 +261,17 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
       expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
+
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await page.waitForFunction(() => {
+        const app = document.querySelector("openclaw-app") as
+          | (Element & { chatSending?: unknown })
+          | null;
+        return app?.chatSending === false;
+      });
+      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
+        timeout: 10_000,
+      });
 
       await gateway.emitChatFinal({
         runId,
@@ -239,13 +340,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["agents.list", "chat.history"],
+      defaultAgentId: "ops",
+      deferredMethods: ["chat.startup"],
       historyMessages: [],
+      sessionKey: "global",
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("agents.list");
+      await gateway.waitForRequest("chat.startup");
+      expect(await gateway.getRequests("agents.list")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("commands.list")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
       const prompt = "send before agents list completes";
       await page
@@ -255,21 +362,185 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
+          timeout: 10_000,
+        })
+        .toBe("");
       const params = requireRecord(sendRequest.params);
       expect(params.message).toBe(prompt);
-      expect(params.sessionKey).toBe("main");
+      expect(params.sessionKey).toBe("global");
+      expect(params.agentId).toBe("ops");
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-      await gateway.resolveDeferred("chat.history", {
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await waitForControlUiChatSendPhases(page, runId, ["ack"]);
+      await gateway.emitGatewayEvent("chat.send_timing", {
+        phase: "agent-run-started",
+        runId,
+        agentId: "ops",
+        sessionKey: "global",
+        ackToPhaseMs: 11,
+        receivedToPhaseMs: 20,
+        dispatchStartedToPhaseMs: 7,
+        agentRunId: "agent-run-e2e",
+      });
+      await waitForControlUiChatSendPhases(page, runId, ["server-agent-run-started"]);
+      await gateway.emitGatewayEvent("chat.send_timing", {
+        phase: "first-assistant-event",
+        runId,
+        agentId: "ops",
+        sessionKey: "global",
+        ackToPhaseMs: 31,
+        receivedToPhaseMs: 40,
+        dispatchStartedToPhaseMs: 27,
+      });
+      await waitForControlUiChatSendPhases(page, runId, ["server-first-assistant-event"]);
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "First token visible.",
+        message: {
+          content: [{ text: "First token visible.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        agentId: "ops",
+        sessionKey: "global",
+        state: "delta",
+      });
+      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      await waitForControlUiChatSendPhases(page, runId, [
+        "pending-visible",
+        "request-start",
+        "ack",
+        "server-agent-run-started",
+        "server-first-assistant-event",
+        "first-assistant-visible",
+      ]);
+      const sendTimingEvents = (await controlUiEventPayloads(page, "control-ui.chat.send")).filter(
+        (payload) => payload.runId === runId,
+      );
+      const sendTimingByPhase = new Map(
+        sendTimingEvents.map((payload) => [payload.phase, payload]),
+      );
+      expect(sendTimingEvents.map((payload) => payload.phase)).toEqual(
+        expect.arrayContaining([
+          "pending-visible",
+          "request-start",
+          "ack",
+          "server-first-assistant-event",
+          "first-assistant-visible",
+        ]),
+      );
+      const ackTiming = sendTimingByPhase.get("ack");
+      expect(ackTiming).toMatchObject({
+        ackStatus: "started",
+        runId,
+        sendState: "sending",
+        sessionKey: "global",
+      });
+      expect(ackTiming?.requestDurationMs).toEqual(expect.any(Number));
+      expect(sendTimingByPhase.get("server-agent-run-started")).toMatchObject({
+        agentRunId: "agent-run-e2e",
+        agentId: "ops",
+        runId,
+        serverAckToPhaseMs: 11,
+        serverDispatchStartedToPhaseMs: 7,
+        serverPhase: "agent-run-started",
+        serverReceivedToPhaseMs: 20,
+        sessionKey: "global",
+      });
+      expect(sendTimingByPhase.get("server-first-assistant-event")).toMatchObject({
+        agentId: "ops",
+        runId,
+        serverAckToPhaseMs: 31,
+        serverDispatchStartedToPhaseMs: 27,
+        serverPhase: "first-assistant-event",
+        serverReceivedToPhaseMs: 40,
+        sessionKey: "global",
+      });
+      const firstVisibleTiming = sendTimingByPhase.get("first-assistant-visible");
+      expect(firstVisibleTiming).toMatchObject({
+        ackStatus: "started",
+        eventState: "delta",
+        runId,
+        sendState: "sending",
+        sessionKey: "global",
+      });
+      expect(firstVisibleTiming?.ackToFirstAssistantEventMs).toEqual(expect.any(Number));
+      expect(firstVisibleTiming?.firstAssistantPaintMs).toEqual(expect.any(Number));
+      expect(firstVisibleTiming?.requestToFirstAssistantEventMs).toEqual(expect.any(Number));
+      await gateway.resolveDeferred("chat.startup", {
+        agentsList: {
+          agents: [{ id: "ops", name: "OpenClaw" }],
+          defaultId: "ops",
+          mainKey: "main",
+          scope: "agent",
+        },
         messages: [],
+        metadata: {
+          models: [],
+        },
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
+      await page.locator(".agent-chat__composer-combobox textarea").fill("/");
+      await gateway.waitForRequest("commands.list");
+      expect(await gateway.getRequests("agents.list")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
 
-      await gateway.resolveDeferred("agents.list");
+  it("keeps streamed text visible when a chat error terminates the turn", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const prompt = "stream before terminal error";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      const partialText = "Partial answer before gateway error.";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: partialText,
+        message: {
+          content: [{ text: partialText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.getByText(partialText).waitFor({ timeout: 10_000 });
+
+      await gateway.emitGatewayEvent("chat", {
+        errorMessage: "gateway disconnected",
+        runId,
+        sessionKey: "main",
+        state: "error",
+      });
+
+      await page.getByText(partialText).waitFor({ timeout: 10_000 });
+      await page.getByText("Error: gateway disconnected").waitFor({ timeout: 10_000 });
     } finally {
       await context.close();
     }
@@ -293,17 +564,78 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
+          timeout: 10_000,
+        })
+        .toBe("");
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await page.locator(".chat-queue").getByText("Sending").waitFor({ timeout: 10_000 });
       await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-thread").getByText(prompt).count()).toBe(0);
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
 
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("scrolls a delayed pending send into view before the ACK resolves", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `History message ${index}\n${"extra transcript line\n".repeat(4)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "assistant" : "user",
+      timestamp: baseTs + index,
+    }));
+    const gateway = await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("History message 49").waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(4);
+
+      await waitForChatScrollIdle(page);
+      await scrollChatThreadToTop(page);
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeGreaterThan(200);
+
+      await gateway.deferNext("chat.send");
+
+      const prompt = `pending send should scroll before ack\n${"visible now\n".repeat(6)}`;
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+
+      await page.locator(".chat-thread").getByText("pending send should scroll").waitFor({
+        timeout: 10_000,
+      });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(4);
+
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     } finally {
       await context.close();
     }
@@ -441,6 +773,53 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
       );
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows a pending send while a model override save is still pending", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(),
+      },
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
+      ],
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-model-select="true"]').click();
+      await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
+      await gateway.waitForRequest("sessions.patch");
+
+      const prompt = "send while the model save is pending";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await page.locator(".chat-queue").getByText("Waiting for model").waitFor({
+        timeout: 10_000,
+      });
+      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await gateway.resolveDeferred("sessions.patch", {});
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      expect(params.message).toBe(prompt);
+      expect(params.sessionKey).toBe("agent:main:session-a");
     } finally {
       await context.close();
     }

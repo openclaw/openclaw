@@ -1,3 +1,4 @@
+// Channel setup plugin install tests cover install decisions, registry reloads, scoped snapshots, and trust boundaries.
 import path from "node:path";
 import { bundledPluginRoot, bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,6 +48,8 @@ vi.mock("../../channels/plugins/catalog.js", () => {
   return {
     getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntry(...args),
     listChannelPluginCatalogEntries: (...args: unknown[]) =>
+      listChannelPluginCatalogEntries(...args),
+    listRawChannelPluginCatalogEntries: (...args: unknown[]) =>
       listChannelPluginCatalogEntries(...args),
   };
 });

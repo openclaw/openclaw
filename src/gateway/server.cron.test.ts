@@ -1,3 +1,5 @@
+// Gateway cron integration tests cover stored cron jobs, wakeups, isolated runs,
+// system events, SSRF-guarded delivery, and browser cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -719,6 +721,67 @@ describe("gateway server cron", () => {
       expect(modelOnlyPatched?.payload?.message).toBe("hello");
       expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-6");
 
+      const modelClearPatchRes = await directCronReq(cronState, "cron.update", {
+        id: mergeJobId,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+          },
+        },
+      });
+      expect(modelClearPatchRes.ok).toBe(true);
+      const modelCleared = modelClearPatchRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              message?: unknown;
+              model?: unknown;
+            };
+          }
+        | undefined;
+      expect(modelCleared?.payload?.kind).toBe("agentTurn");
+      expect(modelCleared?.payload?.message).toBe("hello");
+      expect(modelCleared?.payload?.model).toBeUndefined();
+
+      const replaceRes = await directCronReq(cronState, "cron.add", {
+        name: "replace payload",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+      });
+      expect(replaceRes.ok).toBe(true);
+      const replaceJobIdValue = (replaceRes.payload as { id?: unknown } | null)?.id;
+      const replaceJobId = typeof replaceJobIdValue === "string" ? replaceJobIdValue : "";
+      expect(replaceJobId.length > 0).toBe(true);
+
+      const replacePatchRes = await directCronReq(cronState, "cron.update", {
+        id: replaceJobId,
+        patch: {
+          sessionTarget: "isolated",
+          payload: {
+            kind: "agentTurn",
+            message: "hello",
+            model: null,
+          },
+        },
+      });
+      expect(replacePatchRes.ok).toBe(true);
+      const replaced = replacePatchRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              message?: unknown;
+              model?: unknown;
+            };
+          }
+        | undefined;
+      expect(replaced?.payload?.kind).toBe("agentTurn");
+      expect(replaced?.payload?.message).toBe("hello");
+      expect(replaced?.payload?.model).toBeUndefined();
+
       const deliveryPatchRes = await directCronReq(cronState, "cron.update", {
         id: mergeJobId,
         patch: {
@@ -1091,6 +1154,7 @@ describe("gateway server cron", () => {
       const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
       expect(Array.isArray(entries)).toBe(true);
       expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
+      expect((entries as Array<{ jobName?: unknown }>).at(-1)?.jobName).toBe("log test");
       expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
       expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
         "not-requested",

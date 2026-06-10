@@ -1,8 +1,11 @@
+/** Prepares and runs auto-reply agent turns, including prompt context and session policy. */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAutoFallbackPrimaryProbeSelection,
+  hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
   type AutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
@@ -12,7 +15,7 @@ import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runn
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
@@ -72,7 +75,7 @@ import {
   buildGroupIntro,
   resolveGroupSilentReplyBehavior,
 } from "./groups.js";
-import { hasInboundMedia } from "./inbound-media.js";
+import { hasInboundAudio, hasInboundMedia } from "./inbound-media.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -120,6 +123,7 @@ type InternalGetReplyOptions = GetReplyOptions & {
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 function hasResolvedThinkingCatalogEntry(params: {
   catalog?: readonly ThinkingCatalogEntry[];
@@ -148,6 +152,16 @@ function routeThreadIdsMatch(
   return String(activeThreadId) === String(currentThreadId);
 }
 
+function normalizeMessageTimestampMs(value: unknown): number | undefined {
+  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (timestamp === undefined || timestamp <= 0) {
+    return undefined;
+  }
+  const timestampMs =
+    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
+  return asDateTimestampMs(timestampMs);
+}
+
 function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
   if (normalizeChatType(ctx.ChatType) !== "direct") {
     return false;
@@ -160,6 +174,7 @@ function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
   );
 }
 
+/** Resolves silent-reply conversation type for prompt instructions. */
 export function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<
     MsgContext,
@@ -206,6 +221,7 @@ function resolvePersistedPromptSurface(entry?: SessionEntry): string | undefined
   );
 }
 
+/** Rewrites system-event prompt context to the persisted session channel when available. */
 export function resolvePromptSessionContextForSystemEvent(params: {
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
@@ -291,6 +307,7 @@ export function resolvePromptSessionContextForSystemEvent(params: {
   return changed ? next : sessionCtx;
 }
 
+/** Builds the prompt hint that explains one-shot exec override settings. */
 export function buildExecOverridePromptHint(params: {
   execOverrides?: ExecOverrides;
   elevatedLevel: ElevatedLevel;
@@ -334,9 +351,6 @@ const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-ru
 const sessionUpdatesRuntimeLoader = createLazyImportLoader(
   () => import("./session-updates.runtime.js"),
 );
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
-);
 
 function loadEmbeddedAgentRuntime() {
   return embeddedAgentRuntimeLoader.load();
@@ -348,10 +362,6 @@ function loadAgentRunnerRuntime() {
 
 function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
-}
-
-function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
 }
 
 function stripPromptThinkingDirectives(body: string): string {
@@ -436,6 +446,7 @@ type RunPreparedReplyParams = {
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
 };
 
+/** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -902,24 +913,9 @@ export async function runPreparedReply(
       catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
-      const previousThinkLevel = resolvedThinkLevel;
+      // Execution fallbacks are turn-local; directive/model persistence owns
+      // durable thinking remaps so explicit session overrides survive replies.
       resolvedThinkLevel = fallbackThinkLevel;
-      if (
-        sessionEntry &&
-        sessionStore &&
-        sessionKey &&
-        sessionEntry.thinkingLevel === previousThinkLevel
-      ) {
-        sessionEntry.thinkingLevel = fallbackThinkLevel;
-        sessionEntry.updatedAt = Date.now();
-        sessionStore[sessionKey] = sessionEntry;
-        if (storePath) {
-          const { updateSessionStore } = await loadSessionStoreRuntime();
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = sessionEntry;
-          });
-        }
-      }
     }
   }
   const internalOpts = opts as InternalGetReplyOptions | undefined;
@@ -1171,10 +1167,15 @@ export async function runPreparedReply(
     }
     resolveActiveRunAcceptsCurrentThread({ isActive });
   }
-  const runHasSessionModelOverride = Boolean(
+  const runHasStoredSessionModelOverride = Boolean(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
     normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
   );
+  const runHasLegacyAutoFallbackWithoutOrigin =
+    runHasStoredSessionModelOverride &&
+    hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
+  const runHasSessionModelOverride =
+    runHasStoredSessionModelOverride && !runHasLegacyAutoFallbackWithoutOrigin;
   const runModelOverrideSource = runHasSessionModelOverride
     ? preparedSessionState.sessionEntry?.modelOverrideSource
     : undefined;
@@ -1199,6 +1200,7 @@ export async function runPreparedReply(
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
+  const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
   });
@@ -1213,6 +1215,12 @@ export async function runPreparedReply(
                 mediaOnlyText: "[User sent media without caption]",
               }
             : {}),
+          // Persist the message's own arrival timestamp so the single
+          // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
+          // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that
+          // is identical whether this turn is sent as the current turn or
+          // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
+          ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
         }
       : undefined;
   const userTurnTranscriptRecorder =
@@ -1239,6 +1247,7 @@ export async function runPreparedReply(
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
+    currentInboundAudio: hasInboundAudio(sessionCtx),
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,

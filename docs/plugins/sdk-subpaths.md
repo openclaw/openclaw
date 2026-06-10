@@ -76,6 +76,7 @@ by package contract guardrails.
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter`, `resolveChannelDmAccess`, `resolveChannelDmAllowFrom`, `resolveChannelDmPolicy`, `normalizeChannelDmPolicy`, `normalizeLegacyDmAliases` |
     | `plugin-sdk/channel-config-schema` | Shared channel config schema primitives plus Zod and direct JSON/TypeBox builders |
     | `plugin-sdk/bundled-channel-config-schema` | Bundled OpenClaw channel config schemas for maintained bundled plugins only |
+    | `plugin-sdk/chat-channel-ids` | `BUNDLED_CHAT_CHANNEL_IDS`, `BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES`, `ChatChannelId`. Canonical bundled/official chat channel ids plus formatter labels/aliases for plugins that need to recognize envelope-prefixed text without hardcoding their own table. |
     | `plugin-sdk/channel-config-schema-legacy` | Deprecated compatibility alias for bundled-channel config schemas |
     | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
     | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
@@ -89,7 +90,7 @@ by package contract guardrails.
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility facade. Use `plugin-sdk/channel-inbound` for inbound runners and dispatch predicates, and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
-    | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
+    | `plugin-sdk/outbound-media` | Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
@@ -150,6 +151,7 @@ and pairing-path families.
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
+    | `plugin-sdk/provider-catalog-live-runtime` | Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, model-id filtering, TTL cache, and static fallback |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |

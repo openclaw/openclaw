@@ -1,3 +1,4 @@
+// Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -10,6 +11,7 @@ import {
   createReplyOperation,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
+  isReplyRunAbortableForCompaction,
   queueReplyRunMessage,
   replyRunRegistry,
   resolveActiveReplyRunSessionId,
@@ -55,6 +57,21 @@ describe("reply run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("treats queued reply operations as non-abortable for compaction", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-compact",
+      resetTriggered: false,
+    });
+
+    expect(isReplyRunActiveForSessionId("session-compact")).toBe(true);
+    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
   it("mirrors active reply operations into diagnostic work state", () => {

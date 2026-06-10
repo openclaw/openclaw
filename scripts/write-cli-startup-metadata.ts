@@ -1,3 +1,4 @@
+// Write Cli Startup Metadata script supports OpenClaw repository automation.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -28,6 +29,8 @@ const extensionsDir = path.join(rootDir, "extensions");
 const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
 const BROWSER_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
+const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = ["doctor", "gateway", "models", "plugins"] as const;
 const CORE_CHANNEL_ORDER = [
@@ -291,37 +294,157 @@ async function spawnText(
     cwd: string;
     env: NodeJS.ProcessEnv;
     failureMessage: string;
+    killGraceMs?: number;
+    maxOutputBytes?: number;
     timeoutMs: number;
   },
 ): Promise<string> {
+  const maxOutputBytes = options.maxOutputBytes ?? COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES;
+  const killGraceMs = options.killGraceMs ?? COMMAND_HELP_RENDER_KILL_GRACE_MS;
+  const useProcessGroup = process.platform !== "win32";
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd: options.cwd,
+      detached: useProcessGroup,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    let outputBytes = 0;
+    let outputExceeded = false;
     let settled = false;
     let timedOut = false;
+    let waitingForKillGrace = false;
+    let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
+    const cleanupParentSignalHandlers = () => {
+      for (const { signal, handler } of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.length = 0;
+    };
+    const signalChild = (signal: NodeJS.Signals) => {
+      if (useProcessGroup && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            stderr += `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`;
+          }
+        }
+      }
+      child.kill(signal);
+    };
+    const relayParentSignal = (signal: NodeJS.Signals) => {
+      const handler = () => {
+        signalChild(signal);
+        cleanupParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.push({ handler, signal });
+      process.once(signal, handler);
+    };
+    if (useProcessGroup) {
+      relayParentSignal("SIGINT");
+      relayParentSignal("SIGTERM");
+      relayParentSignal("SIGHUP");
+    }
+    const processGroupIsAlive = () => {
+      if (!useProcessGroup || typeof child.pid !== "number") {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    };
     const settle = (callback: () => void) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timeout);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      cleanupParentSignalHandlers();
       callback();
+    };
+    const finishClose = (result: { code: number | null; signal: NodeJS.Signals | null }) => {
+      settle(() => {
+        if (result.code === 0 && !timedOut && !outputExceeded) {
+          resolve(stdout);
+          return;
+        }
+        const detail = stderr.trim();
+        reject(
+          new Error(
+            options.failureMessage +
+              (outputExceeded
+                ? `: output exceeded ${maxOutputBytes} bytes`
+                : timedOut
+                  ? `: timed out after ${options.timeoutMs}ms`
+                  : detail
+                    ? `: ${detail}`
+                    : result.signal
+                      ? `: terminated by ${result.signal}`
+                      : ""),
+          ),
+        );
+      });
+    };
+    const scheduleKill = () => {
+      if (waitingForKillGrace) {
+        return;
+      }
+      waitingForKillGrace = true;
+      killTimer = setTimeout(() => {
+        waitingForKillGrace = false;
+        killTimer = undefined;
+        signalChild("SIGKILL");
+        if (childClosedResult) {
+          finishClose(childClosedResult);
+        }
+      }, killGraceMs);
+    };
+    const requestStop = () => {
+      signalChild("SIGTERM");
+      scheduleKill();
     };
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      requestStop();
     }, options.timeoutMs);
+    timeout.unref();
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
+      if (outputExceeded) {
+        return;
+      }
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > maxOutputBytes) {
+        outputExceeded = true;
+        requestStop();
+        return;
+      }
       stdout += chunk;
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
+      if (outputExceeded) {
+        return;
+      }
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > maxOutputBytes) {
+        outputExceeded = true;
+        requestStop();
+        return;
+      }
       stderr += chunk;
     });
     child.once("error", (error) => {
@@ -330,25 +453,12 @@ async function spawnText(
       });
     });
     child.once("close", (code, signal) => {
-      settle(() => {
-        if (code === 0) {
-          resolve(stdout);
-          return;
-        }
-        const detail = stderr.trim();
-        reject(
-          new Error(
-            options.failureMessage +
-              (detail
-                ? `: ${detail}`
-                : timedOut
-                  ? ": timed out"
-                  : signal
-                    ? `: terminated by ${signal}`
-                    : ""),
-          ),
-        );
-      });
+      const result = { code, signal };
+      if (waitingForKillGrace && processGroupIsAlive()) {
+        childClosedResult = result;
+        return;
+      }
+      finishClose(result);
     });
   });
 }
@@ -438,9 +548,9 @@ function renderSourceRootHelpText(
   return result.stdout ?? "";
 }
 
-function renderSourceBrowserHelpText(
+async function renderSourceBrowserHelpText(
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
+): Promise<string> {
   const browserCliUrl = pathToFileURL(
     path.join(rootDir, "extensions/browser/src/cli/browser-cli.ts"),
   ).href;
@@ -459,30 +569,15 @@ function renderSourceBrowserHelpText(
     `browser.outputHelp();`,
     "process.exit(0);",
   ].join("\n");
-  const result = spawnSync(
-    process.execPath,
-    ["--import", "tsx", "--input-type=module", "--eval", inlineModule],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: {
-        ...renderContext.env,
-        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
-      },
-      timeout: BROWSER_HELP_RENDER_TIMEOUT_MS,
+  return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
+    cwd: rootDir,
+    env: {
+      ...renderContext.env,
+      OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
     },
-  );
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(
-      "Failed to render source browser help" +
-        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
-    );
-  }
-  return result.stdout ?? "";
+    failureMessage: "Failed to render source browser help",
+    timeoutMs: BROWSER_HELP_RENDER_TIMEOUT_MS,
+  });
 }
 
 async function renderSourceCommandHelpText(
@@ -548,7 +643,7 @@ export async function writeCliStartupMetadata(options?: {
   sourceRootDir?: string;
   renderBundledRootHelpText?: typeof renderBundledRootHelpText;
   renderSourceRootHelpText?: typeof renderSourceRootHelpText;
-  renderSourceBrowserHelpText?: typeof renderSourceBrowserHelpText;
+  renderSourceBrowserHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceSecretsHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceNodesHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceSubcommandHelpTextRecord?: (
@@ -617,34 +712,50 @@ export async function writeCliStartupMetadata(options?: {
   } catch {
     rootHelpText = (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
   }
-  const browserHelpText = (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
-    renderContext,
+  const browserHelpTextPromise = Promise.resolve(
+    (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(renderContext),
   );
-  const commandHelpText =
+  const hasCustomCommandRenderer =
     options?.renderSourceSecretsHelpText ||
     options?.renderSourceNodesHelpText ||
-    options?.renderSourceSubcommandHelpTextRecord
-      ? null
-      : await renderSourceCommandHelpTextRecord(
-          ["secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
-          renderContext,
-        );
-  const secretsHelpText = commandHelpText
-    ? commandHelpText.secrets
-    : await (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext);
-  const nodesHelpText = commandHelpText
-    ? commandHelpText.nodes
-    : await (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext);
-  const subcommandHelpText = commandHelpText
-    ? (Object.fromEntries(
-        PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
-          commandName,
-          commandHelpText[commandName],
-        ]),
-      ) as PrecomputedSubcommandHelpText)
-    : await (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
+    options?.renderSourceSubcommandHelpTextRecord;
+  const commandHelpTextPromise = hasCustomCommandRenderer
+    ? null
+    : renderSourceCommandHelpTextRecord(
+        ["secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
         renderContext,
       );
+  const secretsHelpTextPromise = commandHelpTextPromise
+    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
+    : Promise.resolve(
+        (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext),
+      );
+  const nodesHelpTextPromise = commandHelpTextPromise
+    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
+    : Promise.resolve(
+        (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext),
+      );
+  const subcommandHelpTextPromise = commandHelpTextPromise
+    ? commandHelpTextPromise.then(
+        (commandHelpText) =>
+          Object.fromEntries(
+            PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
+              commandName,
+              commandHelpText[commandName],
+            ]),
+          ) as PrecomputedSubcommandHelpText,
+      )
+    : Promise.resolve(
+        (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
+          renderContext,
+        ),
+      );
+  const [browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] = await Promise.all([
+    browserHelpTextPromise,
+    secretsHelpTextPromise,
+    nodesHelpTextPromise,
+    subcommandHelpTextPromise,
+  ]);
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(
@@ -685,6 +796,7 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 
 export const testing = {
   mapWithConcurrency,
+  spawnText,
 };
 
 export { testing as __testing };

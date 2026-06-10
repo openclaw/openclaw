@@ -1,3 +1,5 @@
+// Exercises CLI run preparation: auth boundaries, prompt hooks, context
+// injection, MCP loopback setup, and reusable session decisions.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +14,7 @@ import {
 import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
@@ -26,6 +29,7 @@ import {
 } from "./prepare.js";
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
@@ -88,6 +92,8 @@ function wrappedPluginSystemContext(text: string): string {
 }
 
 function createTestMcpLoopbackServerConfig(port: number) {
+  // Mirrors the runtime loopback config shape so tests cover env placeholder
+  // substitution without starting the real MCP HTTP server.
   return {
     mcpServers: {
       openclaw: {
@@ -102,6 +108,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
           "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
           "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
+          "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
         },
@@ -149,6 +156,8 @@ function createCliBackendConfig(
 }
 
 function setClaudeCliBackendForPrepareTest() {
+  // Keep Claude-specific preparation behind the same runtime resolver seam that
+  // production uses; direct backend constants would bypass provider ownership.
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [
@@ -170,8 +179,11 @@ function setClaudeCliBackendForPrepareTest() {
 }
 
 function createSessionFile() {
+  // Prepare tests use canonical OpenClaw session paths because several cases
+  // assert that external or stale transcript paths are ignored.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+  setTestEnvValue("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
   fs.writeFileSync(
@@ -212,6 +224,8 @@ function appendTranscriptEntry(
 
 describe("shouldSkipLocalCliCredentialEpoch", () => {
   beforeEach(() => {
+    // Install narrow test doubles for external runtime seams so preparation
+    // remains about data flow, not bundled plugin or loopback startup cost.
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [],
@@ -252,6 +266,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     resetContextWindowCacheForTest();
     clearMemoryPluginState();
     vi.unstubAllEnvs();
+    sessionFileEnvSnapshot?.restore();
+    sessionFileEnvSnapshot = undefined;
   });
 
   it("skips local cli auth only when a profile-owned execution was prepared", () => {
@@ -329,6 +345,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
+      // The hook receives historical messages, while the final prompt receives
+      // only the hook-approved prepend context plus the latest user prompt.
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:test",
@@ -422,6 +440,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       };
       mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
+      // Current inbound metadata is untrusted channel context. It should shape
+      // the CLI prompt without contaminating transcript or hook inputs.
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:test",
@@ -471,6 +491,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       },
     });
     try {
+      // Room resumes carry compact event text into the CLI prompt but keep the
+      // richer room context in OpenClaw history for reseed and audits.
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:test",
@@ -1222,6 +1244,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentChannelId: undefined,
         currentThreadTs: undefined,
         currentMessageId: undefined,
+        currentInboundAudio: undefined,
         accountId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
@@ -1367,6 +1390,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
         currentMessageId: "reply-message-1",
+        currentInboundAudio: true,
         sourceReplyDeliveryMode: "message_tool_only",
       });
 
@@ -1375,6 +1399,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
         OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
         OPENCLAW_MCP_CURRENT_MESSAGE_ID: "reply-message-1",
+        OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: "true",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
       });

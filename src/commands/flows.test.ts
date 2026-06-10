@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Flows command tests cover task creation, task execution, and runtime command output.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import {
@@ -11,15 +12,15 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
+  resetConfigRuntimeState: () => undefined,
 }));
-
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function jsonRoundTrip<T>(value: T): T {
   const serialized = JSON.stringify(value);
@@ -46,12 +47,19 @@ function createRunningTaskRun(
   return task;
 }
 
-function createRuntime(): RuntimeEnv {
+type TestRuntime = RuntimeEnv & {
+  writeStdout: ReturnType<typeof vi.fn>;
+  writeJson: ReturnType<typeof vi.fn>;
+};
+
+function createRuntime(): TestRuntime {
   return {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
-  } as unknown as RuntimeEnv;
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  };
 }
 
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
@@ -76,12 +84,14 @@ async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>)
 }
 
 describe("flows commands", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
+
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -115,7 +125,8 @@ describe("flows commands", () => {
       const runtime = createRuntime();
       await flowsListCommand({ json: true, status: "blocked" }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+      expect(runtime.log).not.toHaveBeenCalled();
+      const payload = jsonRoundTrip(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]);
 
       expect(payload).toStrictEqual({
         count: 1,
@@ -147,6 +158,34 @@ describe("flows commands", () => {
             },
           },
         ],
+      });
+    });
+  });
+
+  it("shows one TaskFlow as JSON through the runtime JSON writer", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect a single flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: true }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        ...jsonRoundTrip(flow),
+        tasks: [],
+        taskSummary: {
+          total: 0,
+          active: 0,
+          terminal: 0,
+          failures: 0,
+        },
       });
     });
   });
