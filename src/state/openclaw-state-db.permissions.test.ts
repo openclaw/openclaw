@@ -34,10 +34,14 @@ const {
   runOpenClawStateWriteTransaction,
 } = await import("./openclaw-state-db.js");
 
-function enotsupError(): Error {
-  const err = new Error("ENOTSUP: operation not supported, chmod") as NodeJS.ErrnoException;
-  err.code = "ENOTSUP";
+function chmodError(code: string): Error {
+  const err = new Error(`${code}: chmod failed`) as NodeJS.ErrnoException;
+  err.code = code;
   return err;
+}
+
+function enotsupError(): Error {
+  return chmodError("ENOTSUP");
 }
 
 describe("state database permission hardening without chmod support", () => {
@@ -62,6 +66,28 @@ describe("state database permission hardening without chmod support", () => {
     expect(database.db.isOpen).toBe(true);
     // Hardening ran and failed; the failure must stay non-fatal.
     expect(chmodFailHook.calls).toBeGreaterThan(0);
+  });
+
+  it("opens the state database when chmodSync throws EPERM", () => {
+    // NFS with root_squash and Azure Files surface chmod failures as EPERM.
+    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    chmodFailHook.error = chmodError("EPERM");
+
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+
+    expect(database.db.isOpen).toBe(true);
+    expect(chmodFailHook.calls).toBeGreaterThan(0);
+  });
+
+  it("rethrows unexpected chmod errors at open", () => {
+    // EACCES is not in CHMOD_UNSUPPORTED_CODES: a real permission fault on a
+    // POSIX filesystem must keep the credentials-adjacent hardening fatal.
+    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    chmodFailHook.error = chmodError("EACCES");
+
+    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
+      /EACCES/,
+    );
   });
 
   it("repairs the schema when chmodSync throws ENOTSUP", () => {

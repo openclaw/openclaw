@@ -116,14 +116,25 @@ const stateDbLog = createSubsystemLogger("state/db");
 /** Targets already warned about, so chmod-less filesystems warn once per path. */
 const chmodWarnedTargets = new Set<string>();
 
-// Permission hardening is best-effort: some filesystems (Azure Files, NFS,
-// certain Docker volume drivers) reject chmod, and the database stays usable
-// without it. This mirrors the policy already documented in
-// runOpenClawStateWriteTransaction, so a chmod failure never aborts startup.
+// Errno codes raised when the filesystem cannot enforce POSIX modes: ENOTSUP/
+// EOPNOTSUPP (Docker volume drivers, FUSE), EINVAL (some SMB mounts), EPERM
+// (Azure Files, NFS with root_squash). EPERM also covers local not-the-owner
+// failures; the warn log keeps that case observable. Anything else (EACCES,
+// EIO, ...) is a real fault and stays fatal.
+const CHMOD_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "EINVAL", "EPERM"]);
+
+// Permission hardening is best-effort only on filesystems that cannot apply
+// it: the database stays usable without the chmod, and crashing at open would
+// take the gateway down on Azure Files/NFS/Docker volumes (#91919). Unexpected
+// chmod failures still throw so credentials-adjacent hardening stays loud.
 function bestEffortChmodSync(target: string, mode: number): void {
   try {
     chmodSync(target, mode);
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (!code || !CHMOD_UNSUPPORTED_CODES.has(code)) {
+      throw err;
+    }
     if (chmodWarnedTargets.has(target)) {
       return;
     }
