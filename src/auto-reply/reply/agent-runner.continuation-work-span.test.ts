@@ -305,6 +305,7 @@ async function runWorkTurn(
   run: ReturnType<typeof createContinuationRun>,
   sessionStore: Record<string, SessionEntry>,
   _payloadText: string,
+  isContinuationWake = false,
 ): Promise<unknown> {
   setRuntimeConfigSnapshot(run.followupRun.run.config);
   return runReplyAgent({
@@ -328,6 +329,7 @@ async function runWorkTurn(
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
+    isContinuationWake,
   });
 }
 
@@ -407,9 +409,12 @@ describe("runReplyAgent :: continuation.work span", () => {
 
     // Pre-seed the session entry with an existing chain.id at
     // continuationChainCount=1, simulating a fresh chain that has
-    // already taken its first step. The next accepted WORK should
-    // bump count to 2 and REUSE the same chain.id (mint-or-reuse
-    // contract). chain.step.remaining = max(0, maxChainLength=2 - 2) = 0.
+    // already taken its first step. This step arrives as a continuation
+    // WAKE (work-wake) — a mid-chain step, NOT a fresh entry — so the
+    // #987 chain-break reset must NOT fire and the count carries forward.
+    // The next accepted WORK should bump count to 2 and REUSE the same
+    // chain.id (mint-or-reuse contract). chain.step.remaining =
+    // max(0, maxChainLength=2 - 2) = 0.
     const seededChainId = "019dcf57-b536-77cc-834b-b803d9262032";
     const seededEntry: SessionEntry = {
       sessionId: "session",
@@ -429,7 +434,7 @@ describe("runReplyAgent :: continuation.work span", () => {
       payloads: [{ text: "Step two\nCONTINUE_WORK:1" }],
       meta: { agentMeta: { usage: { input: 1, output: 1 } } },
     });
-    await runWorkTurn(run, sessionStore, "Step two\nCONTINUE_WORK:1");
+    await runWorkTurn(run, sessionStore, "Step two\nCONTINUE_WORK:1", true);
 
     const workSpans = spans.filter((s) => s.name === "continuation.work");
     expect(workSpans).toHaveLength(1);
@@ -450,7 +455,10 @@ describe("runReplyAgent :: continuation.work span", () => {
     setContinuationTracer(tracer);
 
     // Pre-seed at maxChainLength=2 — the next CONTINUE_WORK request
-    // hits chain-cap reject and MUST NOT emit `continuation.work`.
+    // hits chain-cap reject and MUST NOT emit `continuation.work`. This is
+    // a continuation WAKE (mid-runaway chain step), so the #987 chain-break
+    // reset must NOT fire: the runaway leash's whole job is to keep tripping
+    // the cap as long as the chain advances without a fresh re-entry.
     const seededChainId = "019dcf57-aaaa-77cc-834b-b803d9262032";
     const seededEntry: SessionEntry = {
       sessionId: "session",
@@ -470,7 +478,7 @@ describe("runReplyAgent :: continuation.work span", () => {
       payloads: [{ text: "Step 3 attempts\nCONTINUE_WORK:1" }],
       meta: { agentMeta: { usage: { input: 1, output: 1 } } },
     });
-    await runWorkTurn(run, sessionStore, "Step 3 attempts\nCONTINUE_WORK:1");
+    await runWorkTurn(run, sessionStore, "Step 3 attempts\nCONTINUE_WORK:1", true);
 
     // No `continuation.work` span emitted — accept-only contract.
     const workSpans = spans.filter((s) => s.name === "continuation.work");
@@ -489,5 +497,170 @@ describe("runReplyAgent :: continuation.work span", () => {
         "chain.id": seededChainId,
       },
     });
+  });
+});
+
+describe("runReplyAgent :: continuation chain-break reset (#987)", () => {
+  const UNRELEASED_CHAIN_CONFIG = {
+    agents: {
+      defaults: {
+        continuation: {
+          enabled: true,
+          minDelayMs: 0,
+          maxDelayMs: 1_000,
+          defaultDelayMs: 1_000,
+          // High cap so a preserved wake count can still take its next step
+          // (the point under test is preservation, not the cap itself).
+          maxChainLength: 200,
+        },
+      },
+    },
+  } satisfies Record<string, unknown>;
+
+  it("resets the chain budget to 0 on a fresh (non-wake) turn-entry, upstream of inference", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    // A long session has accumulated a stale runaway budget (count=50,
+    // tokens=400k, chain id minted long ago). A genuine fresh inbound turn
+    // (NOT a continuation wake) means the prior chain ended.
+    const seededChainId = "019dcf57-cccc-77cc-834b-b803d9262032";
+    const seededStartedAt = Date.now() - 3_600_000;
+    const seededEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 50,
+      continuationChainStartedAt: seededStartedAt,
+      continuationChainTokens: 400_000,
+      continuationChainId: seededChainId,
+    };
+    const run = createContinuationRun({
+      sessionKey: "continuation-chain-reset-fresh",
+      sessionEntry: seededEntry,
+    });
+    const sessionStore = { [run.sessionKey]: seededEntry };
+
+    // Capture the entry state DURING inference — the reset must already have
+    // landed before the model call, so the resetting turn itself opens at 0.
+    let countDuringInference: number | undefined;
+    let tokensDuringInference: number | undefined;
+    let chainIdDuringInference: string | undefined;
+    let startedAtDuringInference: number | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      countDuringInference = run.sessionEntry.continuationChainCount;
+      tokensDuringInference = run.sessionEntry.continuationChainTokens;
+      chainIdDuringInference = run.sessionEntry.continuationChainId;
+      startedAtDuringInference = run.sessionEntry.continuationChainStartedAt;
+      return {
+        payloads: [{ text: "Fresh task\nCONTINUE_WORK:1" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+
+    await runWorkTurn(run, sessionStore, "Fresh task\nCONTINUE_WORK:1");
+
+    // Budget zeroed, fresh chain id minted, chainStartedAt advanced — all
+    // visible at inference time (i.e. before the post-inference chain load).
+    expect(countDuringInference).toBe(0);
+    expect(tokensDuringInference).toBe(0);
+    expect(chainIdDuringInference).not.toBe(seededChainId);
+    expect(chainIdDuringInference as string).toMatch(UUID_REGEX);
+    expect(startedAtDuringInference).toBe(Date.now());
+
+    // The fresh chain then took its FIRST work step (0 -> 1) instead of being
+    // rejected against the stale count=50 cap (maxChainLength=2 → remaining=1).
+    const workSpans = spans.filter((s) => s.name === "continuation.work");
+    expect(workSpans).toHaveLength(1);
+    expect(workSpans[0]?.attributes["chain.step.remaining"]).toBe(1);
+    expect(workSpans[0]?.attributes["chain.id"]).toBe(chainIdDuringInference);
+    expect(run.sessionEntry.continuationChainCount).toBe(1);
+    expect(run.sessionEntry.continuationChainStartedAt).toBeGreaterThan(seededStartedAt);
+  });
+
+  it("does NOT reset the chain budget on a continuation-wake turn-entry (count carries forward)", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    // A mid-chain step arriving as a continuation wake: count=50 must be
+    // preserved and advance normally (51), reusing the chain id.
+    const seededChainId = "019dcf57-dddd-77cc-834b-b803d9262032";
+    const seededStartedAt = Date.now() - 3_600_000;
+    const seededEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 50,
+      continuationChainStartedAt: seededStartedAt,
+      continuationChainTokens: 12_345,
+      continuationChainId: seededChainId,
+    };
+    const run = createContinuationRun({
+      sessionKey: "continuation-chain-reset-wake",
+      sessionEntry: seededEntry,
+      config: UNRELEASED_CHAIN_CONFIG,
+    });
+    const sessionStore = { [run.sessionKey]: seededEntry };
+
+    let countDuringInference: number | undefined;
+    let chainIdDuringInference: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      countDuringInference = run.sessionEntry.continuationChainCount;
+      chainIdDuringInference = run.sessionEntry.continuationChainId;
+      return {
+        payloads: [{ text: "Next step\nCONTINUE_WORK:1" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+
+    await runWorkTurn(run, sessionStore, "Next step\nCONTINUE_WORK:1", true);
+
+    // No reset: the wake turn sees the inherited count/chain id unchanged...
+    expect(countDuringInference).toBe(50);
+    expect(chainIdDuringInference).toBe(seededChainId);
+    // ...and the chain advances 50 -> 51, reusing the same chain id.
+    const workSpans = spans.filter((s) => s.name === "continuation.work");
+    expect(workSpans).toHaveLength(1);
+    expect(workSpans[0]?.attributes["chain.id"]).toBe(seededChainId);
+    expect(run.sessionEntry.continuationChainCount).toBe(51);
+    expect(run.sessionEntry.continuationChainStartedAt).toBe(seededStartedAt);
+  });
+
+  it("leaves an already-empty chain budget untouched on a fresh turn (no churn, no spurious mint)", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    // count=0 and tokens=0 → nothing to reset; the fresh turn must NOT mint a
+    // spurious chain id or write the entry just to re-zero it.
+    const seededEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 0,
+      continuationChainTokens: 0,
+    };
+    const run = createContinuationRun({
+      sessionKey: "continuation-chain-reset-noop",
+      sessionEntry: seededEntry,
+    });
+    const sessionStore = { [run.sessionKey]: seededEntry };
+
+    let chainIdDuringInference: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      chainIdDuringInference = run.sessionEntry.continuationChainId;
+      return {
+        payloads: [{ text: "Just a reply" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    await runWorkTurn(run, sessionStore, "Just a reply");
+
+    // No CONTINUE signal and nothing to reset: chain id stays absent.
+    expect(chainIdDuringInference).toBeUndefined();
+    expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(0);
+    expect(run.sessionEntry.continuationChainCount ?? 0).toBe(0);
+    expect(run.sessionEntry.continuationChainId).toBeUndefined();
   });
 });

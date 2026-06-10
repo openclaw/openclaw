@@ -1200,6 +1200,7 @@ export async function runReplyAgent(replyParams: {
     typingMode,
     resetTriggered,
     replyThreadingOverride,
+    isContinuationWake,
     replyOperation: providedReplyOperation,
   } = replyParams;
 
@@ -1782,6 +1783,33 @@ export async function runReplyAgent(replyParams: {
           );
         }
       }
+    }
+
+    // Continuation chain-break reset (#987). A fresh non-`[continuation:wake]`
+    // turn-entry (inbound user message, plain heartbeat, or outside-machinery
+    // system-event) means the prior auto-continuation chain ended, so the
+    // runaway leashes — chain depth (n/maxChainLength) and accumulated token
+    // cost — must zero here, BEFORE this turn's chain-state load reads the
+    // entry (guard at the post-inference dispatch reads this same
+    // `activeSessionEntry`). Continuation wakes (`work-wake`/`delegate-return`)
+    // are steps INSIDE an active chain and must NOT reset, otherwise the cap
+    // could never bound a runaway. This is the light per-turn complement to the
+    // full session-rotation clear in agent-runner-session-reset.ts: it rewinds
+    // only the chain budget (minting a fresh chain id), not the whole session.
+    if (
+      continuationFeatureEnabled &&
+      sessionKey &&
+      activeSessionEntry &&
+      !isContinuationWake &&
+      ((activeSessionEntry.continuationChainCount ?? 0) > 0 ||
+        (activeSessionEntry.continuationChainTokens ?? 0) > 0)
+    ) {
+      await persistContinuationChainState({
+        count: 0,
+        startedAt: Date.now(),
+        tokens: 0,
+        chainId: generateChainId(),
+      });
     }
 
     const runStartedAt = Date.now();
