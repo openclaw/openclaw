@@ -104,6 +104,7 @@ import {
 } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
@@ -824,7 +825,14 @@ export const dispatchTelegramMessage = async ({
     );
     replyFenceGeneration = undefined;
   };
-  const draftMaxChars = Math.min(textLimit, 4096);
+  // Block mode sizes preview rotation steps from streaming.preview.chunk (same
+  // contract as Discord's block chunker). Other modes keep one growing preview
+  // capped at Telegram's 4096 edit limit. The stream has no min-flush concept,
+  // so minChars/breakPreference do not apply here.
+  const draftMaxChars =
+    streamMode === "block"
+      ? Math.min(resolveTelegramDraftStreamingChunking(cfg, route.accountId).maxChars, 4096)
+      : Math.min(textLimit, 4096);
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
