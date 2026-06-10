@@ -176,7 +176,9 @@ describe("hub-delegated lifecycle", () => {
       const concurrent = withHubDelegatedLabelPatchLock(async () => {
         concurrentFinished = true;
       });
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
       expect(concurrentFinished).toBe(false);
       unblockClose();
       await expect(closePromise).rejects.toThrow("close failed");
