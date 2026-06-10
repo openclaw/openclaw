@@ -15,6 +15,10 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
       env: {
         ...process.env,
         HOME: home,
+        NPM_CONFIG_GLOBALCONFIG: undefined,
+        NPM_CONFIG_USERCONFIG: undefined,
+        npm_config_globalconfig: undefined,
+        npm_config_userconfig: undefined,
         ...env,
         BASH_ENV: "",
         ENV: "",

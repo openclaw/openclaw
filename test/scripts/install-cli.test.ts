@@ -23,6 +23,10 @@ function runInstallCliShell(script: string, env: NodeJS.ProcessEnv = {}) {
     env: {
       ...process.env,
       OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
+      NPM_CONFIG_GLOBALCONFIG: undefined,
+      NPM_CONFIG_USERCONFIG: undefined,
+      npm_config_globalconfig: undefined,
+      npm_config_userconfig: undefined,
       ...env,
     },
   });
