@@ -1340,6 +1340,8 @@ export const fa: TranslationMap = {
       sessionSearch: "جستجوی نشست‌ها",
       clearSessionSearch: "پاک کردن جستجوی نشست",
       loadMoreSessions: "بارگذاری نشست‌های بیشتر",
+      renameSession: "Rename session",
+      renameFailed: "Couldn't rename the session. Please try again.",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

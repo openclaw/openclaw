@@ -3646,6 +3646,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/cron.ts",
+      "text": "Command"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/cron.ts",
       "text": "Consecutive errors before alerting."
     },
     {
@@ -3661,6 +3668,13 @@
       "name": "text",
       "path": "ui/src/ui/views/cron.ts",
       "text": "Custom per-job settings"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/cron.ts",
+      "text": "CWD"
     },
     {
       "count": 1,
