@@ -2950,7 +2950,14 @@ describe("matrix monitor handler draft streaming", () => {
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
     suppressDefaultToolProgressMessages?: boolean;
-    onToolStart?: (payload: { name?: string }) => Promise<void>;
+    onToolStart?: (payload: {
+      itemId?: string;
+      toolCallId?: string;
+      name?: string;
+      phase?: string;
+      args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
+    }) => Promise<void>;
     onItemEvent?: (payload: {
       itemId?: string;
       toolCallId?: string;
@@ -3158,7 +3165,6 @@ describe("matrix monitor handler draft streaming", () => {
 
     await opts.onItemEvent?.({
       itemId: "command-1",
-      toolCallId: "call-1",
       kind: "command",
       name: "exec",
       phase: "end",
@@ -3167,7 +3173,6 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await opts.onItemEvent?.({
       itemId: "command-1",
-      toolCallId: "call-1",
       kind: "command",
       name: "exec",
       phase: "end",
@@ -3202,6 +3207,62 @@ describe("matrix monitor handler draft streaming", () => {
     );
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
+  });
+
+  it("replaces Matrix tool-start progress when command output completes", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: { mode: "progress", progress: { label: "Working" } },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onToolStart?.({
+      itemId: "fc-call-2",
+      toolCallId: "call-2",
+      name: "exec",
+      phase: "start",
+      args: { command: "npm install" },
+    });
+    await opts.onToolStart?.({
+      itemId: "fc-call-2",
+      toolCallId: "call-2",
+      name: "exec",
+      phase: "update",
+      args: { command: "npm install" },
+    });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toContain("install dependencies");
+
+    await opts.onItemEvent?.({
+      itemId: "fc-call-2",
+      toolCallId: "call-2",
+      kind: "command",
+      name: "exec",
+      phase: "update",
+      progressText: "install dependencies",
+    });
+
+    await opts.onCommandOutput?.({
+      itemId: "fc-call-2-output",
+      toolCallId: "call-2",
+      phase: "end",
+      name: "exec",
+      status: "completed",
+      exitCode: 0,
+    });
+
+    await finish();
+    const completedEdit = mockCalls(editMessageMatrixMock, "editMessageMatrix").find(
+      ([, eventId, body]) =>
+        eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
+    );
+    expect(completedEdit?.[2]).not.toContain("install dependencies");
   });
 
   it("keeps Matrix tool progress mentions inside code formatting", async () => {

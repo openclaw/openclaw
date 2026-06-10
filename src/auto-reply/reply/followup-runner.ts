@@ -156,6 +156,7 @@ async function forwardFollowupProgressEvent(params: {
   if (evt.stream === "item" && !suppressItemChannelProgress) {
     await opts?.onItemEvent?.({
       itemId: readStringValue(evt.data.itemId),
+      toolCallId: readStringValue(evt.data.toolCallId),
       kind: readStringValue(evt.data.kind),
       title: readStringValue(evt.data.title),
       name: readStringValue(evt.data.name),
