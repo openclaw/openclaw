@@ -167,4 +167,37 @@ describe("runtime parity", () => {
       "result",
     ]);
   });
+
+  it("prefers resolved transcript calls over extra planned-only mock rows", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "sessions_spawn",
+          argsHash: "spawn-args",
+          resultHash: "accepted",
+        },
+        {
+          tool: "read",
+          argsHash: "stale-plan",
+          resultHash: "missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [
+        {
+          tool: "sessions_spawn",
+          argsHash: "spawn-args",
+          resultHash: "accepted",
+        },
+      ],
+    });
+
+    expect(resolved).toEqual([
+      {
+        tool: "sessions_spawn",
+        argsHash: "spawn-args",
+        resultHash: "accepted",
+      },
+    ]);
+  });
 });
