@@ -83,7 +83,9 @@ export function normalizeAnthropicVertexResolvedModel(
   if (!normalizeLowercaseStringOrEmpty(modelId).startsWith("claude-fable-5")) {
     return undefined;
   }
-  const input = model.input.includes("image") ? model.input : [...model.input, "image"];
+  const input: ProviderRuntimeModel["input"] = model.input.includes("image")
+    ? model.input
+    : [...model.input, "image"];
   const thinkingLevelMap = {
     ...model.thinkingLevelMap,
     off: "low",
