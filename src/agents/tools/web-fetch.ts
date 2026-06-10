@@ -207,13 +207,121 @@ function hasOnlyReadableTitle(params: { text: string; title?: string }): boolean
   return title.length > 0 && normalizeComparableWebFetchText(params.text) === title;
 }
 
-function extractHtmlBody(html: string): string | undefined {
-  const bodyMatch = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
-  if (bodyMatch) {
-    return bodyMatch[1];
+const BODY_TAG_RAW_TEXT_CONTAINERS = new Set(["script", "style", "noscript", "textarea", "title"]);
+
+type HtmlTagRead = {
+  tagName: string;
+  closing: boolean;
+  end: number;
+};
+
+function findHtmlTagEnd(html: string, start: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let index = start + 1; index < html.length; index += 1) {
+    const char = html[index];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ">") {
+      return index;
+    }
   }
-  const openBodyMatch = html.match(/<body\b[^>]*>([\s\S]*)/i);
-  return openBodyMatch?.[1];
+  return -1;
+}
+
+function readHtmlTag(html: string, start: number): HtmlTagRead | null {
+  const end = findHtmlTagEnd(html, start);
+  if (end < 0) {
+    return null;
+  }
+  let inner = html.slice(start + 1, end).trimStart();
+  const closing = inner.startsWith("/");
+  if (closing) {
+    inner = inner.slice(1).trimStart();
+  }
+  const name = inner.match(/^([A-Za-z][\w:-]*)\b/);
+  if (!name) {
+    return null;
+  }
+  return {
+    tagName: name[1].toLowerCase(),
+    closing,
+    end,
+  };
+}
+
+function findRawTextElementEnd(html: string, tagName: string, from: number): number {
+  const closeMatch = new RegExp(`</\\s*${tagName}\\s*>`, "i").exec(html.slice(from));
+  return closeMatch ? from + closeMatch.index + closeMatch[0].length : html.length;
+}
+
+function skipHtmlComment(html: string, start: number): number {
+  const end = html.indexOf("-->", start + 4);
+  return end < 0 ? html.length : end + 3;
+}
+
+function findDocumentBodyClose(html: string, from: number): number {
+  let cursor = from;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf("<", cursor);
+    if (tagStart < 0) {
+      return html.length;
+    }
+    if (html.startsWith("<!--", tagStart)) {
+      cursor = skipHtmlComment(html, tagStart);
+      continue;
+    }
+    const tag = readHtmlTag(html, tagStart);
+    if (!tag) {
+      cursor = tagStart + 1;
+      continue;
+    }
+    if (tag.closing && tag.tagName === "body") {
+      return tagStart;
+    }
+    if (!tag.closing && BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName)) {
+      cursor = findRawTextElementEnd(html, tag.tagName, tag.end + 1);
+      continue;
+    }
+    cursor = tag.end + 1;
+  }
+  return html.length;
+}
+
+function extractHtmlBody(html: string): string | undefined {
+  let cursor = 0;
+  while (cursor < html.length) {
+    const tagStart = html.indexOf("<", cursor);
+    if (tagStart < 0) {
+      return undefined;
+    }
+    if (html.startsWith("<!--", tagStart)) {
+      cursor = skipHtmlComment(html, tagStart);
+      continue;
+    }
+    const tag = readHtmlTag(html, tagStart);
+    if (!tag) {
+      cursor = tagStart + 1;
+      continue;
+    }
+    if (!tag.closing && tag.tagName === "body") {
+      const bodyStart = tag.end + 1;
+      return html.slice(bodyStart, findDocumentBodyClose(html, bodyStart));
+    }
+    if (!tag.closing && BODY_TAG_RAW_TEXT_CONTAINERS.has(tag.tagName)) {
+      cursor = findRawTextElementEnd(html, tag.tagName, tag.end + 1);
+      continue;
+    }
+    cursor = tag.end + 1;
+  }
+  return undefined;
 }
 
 async function extractBasicHtmlBodyContent(params: {
