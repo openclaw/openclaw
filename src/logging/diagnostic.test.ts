@@ -168,6 +168,34 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
 
+  it("evicts stale non-idle session states after TTL", () => {
+    const now = Date.now();
+    // Insert a non-idle ("processing") entry with lastActivity well past TTL
+    diagnosticSessionStates.set("stale-processing", {
+      sessionId: "stale-processing",
+      lastActivity: now - 31 * 60 * 1000,
+      generation: 0,
+      state: "processing",
+      queueDepth: 1,
+    });
+    // Insert a fresh idle entry (should survive)
+    diagnosticSessionStates.set("fresh-idle", {
+      sessionId: "fresh-idle",
+      lastActivity: now,
+      generation: 0,
+      state: "idle",
+      queueDepth: 0,
+    });
+    expect(getDiagnosticSessionStateCountForTest()).toBe(2);
+
+    pruneDiagnosticSessionStates(now, true);
+
+    // stale processing entry pruned; fresh idle entry survives
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.has("stale-processing")).toBe(false);
+    expect(diagnosticSessionStates.has("fresh-idle")).toBe(true);
+  });
+
   it("caps tracked session states to a bounded max", () => {
     const now = Date.now();
     for (let i = 0; i < 2001; i += 1) {
@@ -213,13 +241,14 @@ describe("diagnostic session state pruning", () => {
 
   it("merges split sessionId and sessionKey state without leaving stale queued work", () => {
     const sessionKey = "agent:main:demo-channel:channel:c1";
+    const now = Date.now();
     const keyed = getDiagnosticSessionState({ sessionKey });
     keyed.queueDepth = 1;
-    keyed.lastActivity = 1;
+    keyed.lastActivity = now - 1;
     const bySessionId = getDiagnosticSessionState({ sessionId: "s1" });
     bySessionId.queueDepth = 1;
     bySessionId.state = "processing";
-    bySessionId.lastActivity = 2;
+    bySessionId.lastActivity = now;
 
     const merged = getDiagnosticSessionState({ sessionId: "s1", sessionKey });
 
