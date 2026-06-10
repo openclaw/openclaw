@@ -91,19 +91,14 @@ cd "$PROJECT_ROOT"
 # --- 🔄 1. Upstream Git Sync Loop ---
 log_section "GIT SYNCHRONIZATION" "Ensuring your fork workspace tree is pristine and synchronized"
 
-if [ -d ".git" ] && [ -f ".git/MERGE_HEAD" ]; then
-    log "⚠️ Ongoing broken merge detected. Forcing safety abort..."
-    git merge --abort || true
-fi
+# --- 🔄 1. Upstream Git Sync (Disabled for Stability) ---
+log_section "GIT STATUS CHECK" "Verifying workspace integrity"
 
-CURRENT_BRANCH=$(git branch --show-current)
-if ! git remote | grep -q "upstream"; then
-    log "ℹ️ Upstream missing. Rebaselining against origin/$CURRENT_BRANCH..."
-    git pull origin "$CURRENT_BRANCH" --rebase || log "⚠️ Git rebase skipped. Working off local head state."
+if [ -n "$(git status --porcelain)" ]; then
+    log "⚠️ Uncommitted changes detected in workspace."
+    log "ℹ️ Proceeding with current local state. Ensure you have merged manually if required."
 else
-    log "🔄 Fetching developments from master upstream matrix..."
-    git fetch upstream
-    git merge upstream/main --no-edit || git merge upstream/master --no-edit || log "⚠️ Merge conflict bypass active. Using current tree states."
+    log "✅ Workspace clean. Proceeding with build."
 fi
 
 # --- 🐳 2. Colima JIT Lifecycle Management ---

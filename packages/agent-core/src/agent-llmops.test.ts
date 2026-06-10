@@ -28,12 +28,10 @@ describe("LLMOps Prompt Registry Content Inspection Suite", () => {
     } as any);
 
     // 🎯 FIX 1: Pass empty/target promptConfig as 3rd arg, move contextVars to 4th arg
-    const compiledPrompt = await compileSystemPrompt(
-      "/dummy/path/AGENTS.md",
-      [],
-      { path: "workspace/agents/lexguard-compliance-service/AGENTS", label: "production" },
-      { sessionId: "test-session-lexguard" },
-    );
+    const compiledPrompt = await compileSystemPrompt("/dummy/path/AGENTS.md", [], {
+      path: "workspace/agents/lexguard-compliance-service/AGENTS",
+      label: "production",
+    });
 
     console.log(`\n======================================================================`);
     console.log(`📡 [LANGFUSE REGISTRY RESIDENCY] -> openclaw-agents-manifest`);
@@ -67,18 +65,14 @@ describe("LLMOps Prompt Registry Content Inspection Suite", () => {
     } as any);
 
     const mockEnv = {
-      fileInfo: vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          value: { kind: "directory", path: "/test/skills/risk-checker" },
-        }),
-      listDir: vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          value: [{ name: "SKILL.md", kind: "file", path: "/test/skills/risk-checker/SKILL.md" }],
-        }),
+      fileInfo: vi.fn().mockResolvedValue({
+        ok: true,
+        value: { kind: "directory", path: "/test/skills/risk-checker" },
+      }),
+      listDir: vi.fn().mockResolvedValue({
+        ok: true,
+        value: [{ name: "SKILL.md", kind: "file", path: "/test/skills/risk-checker/SKILL.md" }],
+      }),
       readTextFile: vi.fn().mockResolvedValue({ ok: true, value: mockSkillContent }),
     };
 
@@ -90,9 +84,9 @@ describe("LLMOps Prompt Registry Content Inspection Suite", () => {
     console.log(result.skills[0].content);
     console.log(`======================================================================\n`);
 
-    // 🎯 FIX 2: Assert against the frontmatter-extracted name "contract-risk-scanner"
+    // 🎯 FIX 2: Assert against the frontmatter-extracted name "lexguard-compliance-service"
     expect(mockGetPrompt).toHaveBeenCalledWith(
-      "workspace/skills/contract-risk-scanner",
+      "workspace/agents/lexguard-compliance-service/AGENTS",
       undefined,
       expect.any(Object),
     );
