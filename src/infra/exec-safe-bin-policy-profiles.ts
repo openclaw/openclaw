@@ -17,6 +17,7 @@ export type SafeBinProfileFixture = {
   maxPositional?: number;
   allowedValueFlags?: readonly string[];
   deniedFlags?: readonly string[];
+  knownLongFlags?: readonly string[];
 };
 
 export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
@@ -87,7 +88,26 @@ function compileSafeBinProfile(fixture: BuiltinSafeBinProfileFixture): SafeBinPr
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
   const allowedBooleanFlags = toFlagSet(fixture.allowedBooleanFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
-  const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
+  const derivedKnownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
+  // Merge user-provided knownLongFlags with the auto-derived set, but filter any
+  // user entry that is a strict prefix of a denied flag. Without this, a short form
+  // like "--rec" would gain exact-match priority in resolveCanonicalLongFlag and
+  // bypass the denial of "--recursive". Full canonical forms are unaffected — they
+  // are already auto-derived from deniedFlags and denied at validation time.
+  const userKnownLongFlags = fixture.knownLongFlags
+    ? fixture.knownLongFlags.filter((flag) => {
+        if (!flag.startsWith("--")) {
+          return true;
+        }
+        for (const denied of deniedFlags) {
+          if (denied.startsWith(flag) && denied !== flag) {
+            return false;
+          }
+        }
+        return true;
+      })
+    : [];
+  const knownLongFlags = Array.from(new Set([...derivedKnownLongFlags, ...userKnownLongFlags]));
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
@@ -338,6 +358,7 @@ function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBin
     maxPositional,
     allowedValueFlags: normalizeFixtureFlags(fixture.allowedValueFlags),
     deniedFlags: normalizeFixtureFlags(fixture.deniedFlags),
+    knownLongFlags: normalizeFixtureFlags(fixture.knownLongFlags),
   };
 }
 

@@ -140,12 +140,25 @@ Custom profile example:
           maxPositional: 0,
           allowedValueFlags: ["-n", "--limit"],
           deniedFlags: ["-f", "--file", "-c", "--command"],
+          knownLongFlags: ["--dry-run", "--verbose"],
         },
       },
     },
   },
 }
 ```
+
+`knownLongFlags` is optional. OpenClaw already auto-derives the set of canonical long options
+from `allowedValueFlags` ∪ `deniedFlags`, and that set is what drives GNU-style abbreviation
+resolution (so `--lim` resolves to `--limit`). Declare `knownLongFlags` only when a tool accepts
+a canonical long option that appears in neither list and you want unambiguous abbreviation
+resolution for it — for example a boolean long flag like `--dry-run` that takes no value and is
+never denied. Entries are merged with the auto-derived set; duplicates are harmless.
+
+For safety, any `knownLongFlags` entry that is a **strict prefix of a denied flag** is dropped at
+compile time. This prevents a short form such as `--rec` from gaining exact-match priority and
+bypassing the denial of `--recursive`. Always list **full canonical** flags (the abbreviation
+resolver derives the prefixes); never list partial forms expecting them to widen what is allowed.
 
 ## Interpreter/runtime commands
 

@@ -24,6 +24,7 @@ export function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void 
           maxPositional?: number;
           allowedValueFlags?: readonly string[];
           deniedFlags?: readonly string[];
+          knownLongFlags?: readonly string[];
         }
       >,
     );

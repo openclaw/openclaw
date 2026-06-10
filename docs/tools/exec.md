@@ -101,7 +101,7 @@ Notes:
 | `tools.exec.pathPrepend`             | unset                                                  | List of directories to prepend to `PATH` for exec runs (gateway + sandbox only).                                                                        |
 | `tools.exec.safeBins`                | unset                                                  | Stdin-only safe binaries that can run without explicit allowlist entries. See [Safe bins](/tools/exec-approvals-advanced#safe-bins-stdin-only).         |
 | `tools.exec.safeBinTrustedDirs`      | `/bin`, `/usr/bin`                                     | Additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted.                                              |
-| `tools.exec.safeBinProfiles`         | unset                                                  | Optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).                                        |
+| `tools.exec.safeBinProfiles`         | unset                                                  | Optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`, `knownLongFlags`).                                        |
 
 No-approval host exec is the default for gateway and node (`security=full`, `ask=off`) — this comes from the host-policy defaults, not from `host=auto`. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host approvals file; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval). To force gateway or node routing regardless of sandbox state, set `tools.exec.host` or use `/exec host=...`.
 
