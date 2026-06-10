@@ -86,6 +86,14 @@ function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boole
   return status?.phase === "done" || status?.phase === "interrupted";
 }
 
+function isCurrentSessionSubmittedProgress(item: ChatQueueItem, sessionKey: string): boolean {
+  return (
+    item.sessionKey === sessionKey &&
+    !item.pendingRunId &&
+    (item.sendState === "sending" || item.sendState === "waiting-model")
+  );
+}
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -1571,7 +1579,9 @@ export function renderChat(props: ChatProps) {
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
   const showAbortableUi = canAbort && !hasTerminalStatus;
-  const showSubmittedProgressUi = props.sending && !hasTerminalStatus;
+  const showSubmittedProgressUi =
+    props.queue.some((item) => isCurrentSessionSubmittedProgress(item, props.sessionKey)) &&
+    !hasTerminalStatus;
   const composerRunStatus =
     showAbortableUi || showSubmittedProgressUi
       ? { phase: "in-progress" as const }
