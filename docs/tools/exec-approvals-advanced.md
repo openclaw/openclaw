@@ -11,6 +11,73 @@ Advanced exec-approval topics: the `safeBins` fast-path, interpreter/runtime
 binding, and approval-forwarding to chat channels (including native delivery).
 For the core policy and approval flow, see [Exec approvals](/tools/exec-approvals).
 
+## Path denylist (`denyPathPatterns`)
+
+`tools.exec.denyPathPatterns` is a hard-deny gate that runs **before** the
+allowlist, approval, and `safeBins` checks. If any path-like argument matches
+one of the configured globs, the run aborts with a `SYSTEM_RUN_DENIED:
+argument matches tools.exec.denyPathPatterns` error regardless of `security`,
+`ask`, allowlist entries, or approvals.
+
+Use it for paths that an agent should never read or write through exec, even
+under operator approval — typically secret stores, SSH private keys, and
+credential files. The check is independent of the binary, so it stops the
+"lazy `cat ~/.openclaw/secrets/<file>`" exfiltration path even when `cat` is
+on the allowlist.
+
+```json5
+{
+  tools: {
+    exec: {
+      denyPathPatterns: [
+        "~/.openclaw/secrets/**",
+        "~/.ssh/id_*",
+        "~/.aws/credentials",
+        "**/.env",
+        "**/credentials.json",
+      ],
+    },
+  },
+}
+```
+
+Per-agent overrides under `agents.list[].tools.exec.denyPathPatterns` are
+**unioned** with the global list — agents can extend the deny list but cannot
+relax it. Agent and global entries are deduped before evaluation.
+
+Pattern semantics:
+
+- `*` matches any character except `/`.
+- `**` matches any character including `/`.
+- `?` matches a single character except `/`.
+- All other characters are matched literally.
+- Patterns starting with `~` or `~/` are expanded against the operator's home directory before matching.
+
+Each candidate argument is matched against the pattern in three forms:
+
+1. The literal argument.
+2. The argument with `~`/`~/` expanded to the home directory.
+3. The fully-resolved absolute path (relative paths are resolved against the run's `cwd`).
+
+Argument selection (v1):
+
+- Argv elements and best-effort tokens parsed from the inner shell payload (`bash -c "..."`, `sh -c "..."`) are scanned.
+- The scanner skips flags (`-x`, `--token=...`) and env-style assignments (`KEY=value`).
+
+v1 limitations:
+
+- The shell-payload tokenizer respects single and double quotes and a single
+  layer of `\` escapes. It does **not** parse heredocs, `eval`-style
+  indirection, command substitution, or base64-decoded paths.
+- Symlink redirection is out of scope. If `~/innocent-link` points to
+  `~/.openclaw/secrets/foo.env`, only patterns matching the symlink path
+  catch it; resolve symlinks at the filesystem-tools layer if you need
+  realpath enforcement.
+
+The denylist is defense-in-depth, not a complete sandbox. Combine it with
+filesystem permissions, agent sandbox modes, and `tools.fs.workspaceOnly` for
+robust isolation.
+
 ## Safe bins (stdin-only)
 
 `tools.exec.safeBins` defines a small list of **stdin-only** binaries (for
