@@ -490,22 +490,40 @@ describe("cron tool", () => {
       });
     });
 
-    it("honours an explicit agentId override even when the explicit sessionKey parses to a different agent", async () => {
+    it("rejects a contradictory explicit agentId + agent-prefixed sessionKey pair", async () => {
+      // The gateway target resolver treats agentId as authoritative, so a
+      // contradictory pair would silently canonicalize the wake onto a session
+      // the caller never named. The tool rejects instead of guessing.
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
-      await tool.execute("call-wake-explicit-pair", {
+      await expect(
+        tool.execute("call-wake-explicit-pair", {
+          action: "wake",
+          text: "manual",
+          sessionKey: "agent:agent-456:discord:thread-xyz",
+          agentId: "ops",
+        }),
+      ).rejects.toThrow(/contradicts/);
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts an explicit agentId that matches the agent owning the explicit sessionKey", async () => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await tool.execute("call-wake-matching-pair", {
         action: "wake",
         text: "manual",
         sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "ops",
+        agentId: "agent-456",
       });
       const params = expectSingleGatewayCallMethod("wake");
       expect(params).toEqual({
         mode: "next-heartbeat",
         text: "manual",
         sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "ops",
+        agentId: "agent-456",
       });
     });
 

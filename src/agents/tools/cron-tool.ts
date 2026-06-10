@@ -874,6 +874,22 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const agentIdFromExplicitSessionKey = explicitSessionKey
             ? parseAgentSessionKey(explicitSessionKey)?.agentId
             : undefined;
+          // A contradictory explicit pair (agentId X + a sessionKey owned by
+          // agent Y) is ambiguous: the gateway target resolver treats agentId
+          // as authoritative and would silently canonicalize the wake onto a
+          // session under X that the caller never named. Reject instead of
+          // guessing one canonical owner.
+          if (
+            explicitAgentId &&
+            agentIdFromExplicitSessionKey &&
+            normalizeLowercaseStringOrEmpty(explicitAgentId) !==
+              normalizeLowercaseStringOrEmpty(agentIdFromExplicitSessionKey)
+          ) {
+            throw new Error(
+              `wake agentId "${explicitAgentId}" contradicts the agent that owns sessionKey ` +
+                `("${agentIdFromExplicitSessionKey}"); pass a single canonical wake target`,
+            );
+          }
           const agentId =
             explicitAgentId ??
             (explicitSessionKey ? agentIdFromExplicitSessionKey : inferredAgentId);
