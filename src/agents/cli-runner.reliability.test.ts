@@ -1,3 +1,4 @@
+/** Tests CLI runner reliability paths for hooks, transcripts, failover, and reply ops. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -14,6 +16,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -38,6 +41,7 @@ vi.mock("../tts/tts.js", () => ({
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 type HookRunnerGlobalStateForTest = {
   hookRunner: unknown;
@@ -45,6 +49,7 @@ type HookRunnerGlobalStateForTest = {
 };
 
 function setHookRunnerForTest(hookRunner: unknown): void {
+  // Keep the module-level hook runner singleton aligned with the mocked getter.
   mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const state = (globalStore[hookRunnerGlobalStateKey] as
@@ -59,8 +64,11 @@ function setHookRunnerForTest(hookRunner: unknown): void {
 }
 
 function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
+  // Session files use the real JSONL shape so transcript/history readers stay
+  // covered without spinning up a full CLI process.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+  setTestEnvValue("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
   const storePath = path.join(path.dirname(sessionFile), "sessions.json");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -131,7 +139,9 @@ function buildPreparedContext(params?: {
   openClawHistoryPrompt?: string;
   provider?: string;
   model?: string;
+  allowEmptyAssistantReplyAsSilent?: boolean;
 }): PreparedCliRunContext {
+  // Common prepared context fixture for runPreparedCliAgent reliability branches.
   const provider = params?.provider ?? "codex-cli";
   const model = params?.model ?? "gpt-5.4";
   const backend = {
@@ -156,6 +166,7 @@ function buildPreparedContext(params?: {
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
       lane: params?.lane,
+      allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
     started: Date.now(),
     workspaceDir: "/tmp",
@@ -266,6 +277,8 @@ describe("runCliAgent reliability", () => {
     mockGetGlobalHookRunner.mockReset();
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
+    sessionFileEnvSnapshot?.restore();
+    sessionFileEnvSnapshot = undefined;
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -1709,6 +1722,41 @@ describe("runCliAgent reliability", () => {
     await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
       "CLI backend returned an empty response.",
     );
+    expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+  });
+
+  it("returns silent payload for empty CLI output when silence is allowed", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "   ",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        allowEmptyAssistantReplyAsSilent: true,
+      }),
+    );
+
+    expect(result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+    expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 

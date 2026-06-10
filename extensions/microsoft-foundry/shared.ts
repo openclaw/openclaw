@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements shared behavior.
 import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
@@ -16,6 +17,13 @@ export const DEFAULT_API = "openai-completions";
 export const DEFAULT_GPT5_API = "openai-responses";
 export const COGNITIVE_SERVICES_RESOURCE = "https://cognitiveservices.azure.com";
 export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+export const MAI_IMAGE_MODELS = [
+  "MAI-Image-2.5-Flash",
+  "MAI-Image-2.5",
+  "MAI-Image-2e",
+  "MAI-Image-2",
+] as const;
+export const MAI_DEFAULT_IMAGE_MODEL = "MAI-Image-2.5";
 
 export interface AzAccount {
   name: string;
@@ -86,6 +94,8 @@ type FoundryModelCapabilities = {
   reasoning: boolean;
   thinkingLevelMap?: Record<string, string | null>;
   input: Array<"text" | "image">;
+  contextWindow: number;
+  maxTokens: number;
   compat?: FoundryModelCompat;
 };
 
@@ -110,9 +120,40 @@ type FoundryConfigShape = {
   };
 };
 
+type FoundryImageDefaultPatch = {
+  agents?: {
+    defaults?: {
+      imageGenerationModel?: {
+        primary: string;
+      };
+    };
+  };
+};
+
 function normalizeFoundryModelName(value?: string | null): string | undefined {
   const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
+}
+
+export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(modelName);
+  return normalized ? normalized.startsWith("claude") : false;
+}
+
+export function partitionFoundryDeployments<T extends { name: string; modelName?: string }>(
+  deployments: readonly T[],
+): { supported: T[]; anthropic: T[] } {
+  const supported: T[] = [];
+  const anthropic: T[] = [];
+  for (const deployment of deployments) {
+    const classifier = resolveConfiguredModelNameHint(deployment.name, deployment.modelName);
+    if (isAnthropicFoundryDeployment(classifier)) {
+      anthropic.push(deployment);
+    } else {
+      supported.push(deployment);
+    }
+  }
+  return { supported, anthropic };
 }
 
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
@@ -130,6 +171,25 @@ export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   );
 }
 
+export function isFoundryMaiImageModel(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "mai-image-2.5-flash" ||
+    normalized === "mai-image-2.5" ||
+    normalized === "mai-image-2e" ||
+    normalized === "mai-image-2" ||
+    normalized === "mai-image-2-efficient"
+  );
+}
+
+export function supportsFoundryReasoningContent(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  return normalized === "mai-ds-r1" || normalized === "mai-thinking-1";
+}
+
 export function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {
@@ -142,6 +202,17 @@ export function supportsFoundryImageInput(value?: string | null): boolean {
     normalized.startsWith("o4") ||
     normalized === "computer-use-preview"
   );
+}
+
+function resolveFoundryModelTokenLimits(value?: string | null): {
+  contextWindow: number;
+  maxTokens: number;
+} {
+  const normalized = normalizeFoundryModelName(value);
+  if (normalized === "mai-ds-r1") {
+    return { contextWindow: 163_840, maxTokens: 163_840 };
+  }
+  return { contextWindow: 128_000, maxTokens: 16_384 };
 }
 
 export function requiresFoundryMaxCompletionTokens(value?: string | null): boolean {
@@ -310,10 +381,12 @@ export function resolveFoundryModelCapabilities(
   const api = resolveFoundryApi(modelId, modelName, configuredApi);
   const normalizedInput = normalizeModelInput(existingInput);
   const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
+  const tokenLimits = resolveFoundryModelTokenLimits(modelName);
   return {
     modelName,
     api,
-    reasoning: supportsFoundryReasoningEffort(modelName),
+    reasoning:
+      supportsFoundryReasoningEffort(modelName) || supportsFoundryReasoningContent(modelName),
     ...(supportedReasoningEfforts
       ? { thinkingLevelMap: buildFoundryThinkingLevelMap(supportedReasoningEfforts) }
       : {}),
@@ -321,6 +394,8 @@ export function resolveFoundryModelCapabilities(
       normalizedInput.includes("image") || supportsFoundryImageInput(modelName)
         ? ["text", "image"]
         : normalizedInput,
+    contextWindow: tokenLimits.contextWindow,
+    maxTokens: tokenLimits.maxTokens,
     compat: buildFoundryModelCompat(modelId, modelName, api),
   };
 }
@@ -382,12 +457,53 @@ function buildFoundryProviderConfig(
             : {}),
           input: capabilities.input,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128e3,
-          maxTokens: 16384,
+          contextWindow: capabilities.contextWindow,
+          maxTokens: capabilities.maxTokens,
         },
         capabilities.compat ? { compat: capabilities.compat } : {},
       );
     }),
+  };
+}
+
+function resolveSelectedDeploymentModelName(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): string | undefined {
+  const selectedDeployment = params.deployments?.find(
+    (deployment) => deployment.name === params.modelId,
+  );
+  return resolveConfiguredModelNameHint(
+    params.modelId,
+    selectedDeployment?.modelName ?? params.modelNameHint,
+  );
+}
+
+function isSelectedMaiImageDeployment(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): boolean {
+  return isFoundryMaiImageModel(resolveSelectedDeploymentModelName(params));
+}
+
+function buildFoundryImageDefaultPatch(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): FoundryImageDefaultPatch {
+  if (!isSelectedMaiImageDeployment(params)) {
+    return {};
+  }
+  return {
+    agents: {
+      defaults: {
+        imageGenerationModel: {
+          primary: `${PROVIDER_ID}/${params.modelId}`,
+        },
+      },
+    },
   };
 }
 
@@ -484,6 +600,10 @@ export function buildFoundryAuthResult(params: {
   currentProviderProfileIds?: string[];
   deployments?: FoundryDeploymentConfigInput[];
 }): ProviderAuthResult {
+  const imageDefaultPatch = buildFoundryImageDefaultPatch(params);
+  const defaultModel = isSelectedMaiImageDeployment(params)
+    ? undefined
+    : `${PROVIDER_ID}/${params.modelId}`;
   return {
     profiles: [
       {
@@ -510,6 +630,7 @@ export function buildFoundryAuthResult(params: {
         profileId: params.profileId,
         currentProviderProfileIds: params.currentProviderProfileIds,
       }),
+      ...imageDefaultPatch,
       models: {
         providers: {
           [PROVIDER_ID]: buildFoundryProviderConfig(
@@ -527,7 +648,7 @@ export function buildFoundryAuthResult(params: {
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),
     },
-    defaultModel: `${PROVIDER_ID}/${params.modelId}`,
+    ...(defaultModel ? { defaultModel } : {}),
     notes: params.notes,
   };
 }

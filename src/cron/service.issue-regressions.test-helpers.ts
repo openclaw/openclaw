@@ -1,3 +1,4 @@
+// Cron issue regression helpers share mocks for service regression tests.
 import { vi } from "vitest";
 import {
   createDefaultIsolatedRunner,
@@ -16,6 +17,7 @@ import { CronService } from "./service.js";
 
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
+/** Sets up temp store fixtures for cron service issue-regression tests. */
 export const setupCronIssueRegressionFixtures = () =>
   setupCronRegressionFixtures({ prefix: "cron-issues-" });
 

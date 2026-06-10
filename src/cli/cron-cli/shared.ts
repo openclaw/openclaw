@@ -1,3 +1,4 @@
+// Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -20,6 +21,46 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+
+export function parseCronCommandArgv(value: unknown): string[] | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("--command-argv must be a JSON array of strings");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+  }
+  return parsed;
+}
+
+export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
+  const rawValues = Array.isArray(values) ? values : typeof values === "string" ? [values] : [];
+  if (rawValues.length === 0) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const raw of rawValues) {
+    if (typeof raw !== "string") {
+      throw new Error("--command-env must be KEY=VALUE");
+    }
+    const idx = raw.indexOf("=");
+    const key = idx > 0 ? raw.slice(0, idx).trim() : "";
+    if (!key) {
+      throw new Error("--command-env must be KEY=VALUE");
+    }
+    env[key] = raw.slice(idx + 1);
+  }
+  return env;
+}
 
 export const getCronChannelOptions = () => {
   // Keep help truthful even before the plugin registry is bootstrapped.
@@ -101,6 +142,7 @@ export function handleCronCliError(err: unknown) {
 }
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
+  // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
     const res = (await callGatewayFromCli("cron.status", opts, {})) as {
       enabled?: boolean;

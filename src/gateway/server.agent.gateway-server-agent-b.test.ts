@@ -1,3 +1,5 @@
+// Gateway agent integration tests cover channel routing, session context,
+// WebSocket requests, agent event delivery, and provider/runtime error handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +8,10 @@ import { WebSocket } from "ws";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+} from "../test-utils/channel-plugins.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
@@ -16,6 +21,7 @@ import {
   connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
+  readSessionStore,
   rpcReq,
   startConnectedServerWithClient,
   startServerWithClient,
@@ -72,11 +78,7 @@ const createStubChannelPlugin = (params: {
       resolveAccount: () => ({}),
     },
   }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
-  },
+  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
 });
 
 const createConfiguredChannelPlugin = (params: {
@@ -92,11 +94,7 @@ const createConfiguredChannelPlugin = (params: {
       isConfigured: async () => true,
     },
   }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
-  },
+  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
 });
 
 const emptyRegistry = createRegistry([]);
@@ -270,14 +268,7 @@ describe("gateway server agent", () => {
     if (!sessionStorePath) {
       throw new Error("expected session store path");
     }
-    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        cliSessionBindings?: Record<string, unknown>;
-        cliSessionIds?: Record<string, string>;
-        claudeCliSessionId?: string;
-      }
-    >;
+    const stored = readSessionStore(sessionStorePath);
     expect(stored["agent:main:main"]?.cliSessionBindings).toEqual({
       "claude-cli": {
         sessionId: "cli-session-123",
@@ -365,10 +356,11 @@ describe("gateway server agent", () => {
   });
 
   test("agent errors when deliver=true and last channel is webchat", async () => {
+    testState.allowFrom = ["+1555"];
     await writeMainSessionEntry({
       sessionId: "sess-main-webchat",
       lastChannel: "webchat",
-      lastTo: "webchat-room",
+      lastTo: "+1555",
     });
     const res = await rpcReq(ws, "agent", {
       message: "hi",
@@ -498,10 +490,7 @@ describe("gateway server agent", () => {
       expect(viaAgent.ok).toBe(false);
       expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
 
-      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { sessionId?: string }
-      >;
+      const store = readSessionStore(storePath);
       expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 

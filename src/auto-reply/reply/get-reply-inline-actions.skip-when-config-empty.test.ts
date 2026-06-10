@@ -1,11 +1,14 @@
+// Tests inline action skipping when channel config does not define actions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripInlineStatus } from "./reply-inline.js";
@@ -67,8 +70,7 @@ async function writeSessionStore(
   entries: Record<string, unknown>,
 ) {
   const storePath = storeTemplate.replaceAll("{agentId}", agentId);
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+  await writeSessionStoreForTestAsync(storePath, entries);
 }
 
 const createHandleInlineActionsInput = (params: {
@@ -259,6 +261,43 @@ describe("handleInlineActions", () => {
       cleanedBody: "hi",
       command: { to: "whatsapp:+123" },
     });
+  });
+
+  it("notifies session metadata changes before continuing after a command", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/goal build the thing",
+      CommandBody: "/goal build the thing",
+    });
+    const onSessionMetadataChanges = vi.fn();
+    handleCommandsMock.mockImplementationOnce(async (params) => {
+      markCommandSessionMetadataChanged(params);
+      return { shouldContinue: true };
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/goal build the thing",
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: "/goal build the thing",
+          commandBodyNormalized: "/goal build the thing",
+        },
+        overrides: {
+          allowTextCommands: true,
+          opts: {
+            onSessionMetadataChanges,
+          } as unknown as HandleInlineActionsInput["opts"],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("continue");
+    expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+      { sessionKey: "s:main", agentId: "main", reason: "command-metadata" },
+    ]);
   });
 
   it("forwards agentDir into handleCommands", async () => {

@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -37,6 +38,15 @@ const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = [
   {
     id: "gemini-3.1-pro-preview",
     name: "Gemini 3.1 Pro Preview",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: GOOGLE_GEMINI_COST,
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash Lite",
     reasoning: true,
     input: ["text", "image"],
     cost: GOOGLE_GEMINI_COST,

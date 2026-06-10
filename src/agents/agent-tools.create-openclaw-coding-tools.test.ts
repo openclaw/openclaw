@@ -1,7 +1,13 @@
+/**
+ * Broad coverage for createOpenClawCodingTools.
+ * Verifies plugin tools, tool policy, schema cleanup, sandbox fs tools, and
+ * assembled tool allowlist behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -66,11 +72,7 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await fs.writeFile(
-    storeTemplate.replaceAll("{agentId}", agentId),
-    JSON.stringify(entries, null, 2),
-    "utf-8",
-  );
+  await writeSessionStoreForTestAsync(storeTemplate.replaceAll("{agentId}", agentId), entries);
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
@@ -762,7 +764,7 @@ describe("createOpenClawCodingTools", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig });
     expect(toolNameList(defaultTools)).toContain("exec");
     expect(toolNameList(defaultTools)).toContain("process");
-    expect(toolNameList(defaultTools)).not.toContain("apply_patch");
+    expect(toolNameList(defaultTools)).toContain("apply_patch");
 
     const openAiTools = createOpenClawCodingTools({
       config: testConfig,
@@ -830,7 +832,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("provides top-level object schemas for all tools", () => {
@@ -875,7 +877,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {

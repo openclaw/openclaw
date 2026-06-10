@@ -1,3 +1,8 @@
+/**
+ * Subagent completion announcement delivery.
+ *
+ * Routes completion payloads through gateway/channel/session paths and records delivery evidence.
+ */
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -31,6 +36,7 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
@@ -654,37 +660,56 @@ function hasGatewayAgentMessagingToolDeliveryEvidence(response: unknown): boolea
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
 }
 
+function hasGatewayAgentCompletionSideEffectEvidence(response: unknown): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  return (
+    hasMessagingToolDeliveryEvidence(result) ||
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveDeliveryCount(result.successfulCronAdds)
+  );
+}
+
 function hasIntentionalSilentGatewayAgentPayload(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   if (!result || !Array.isArray(result.payloads)) {
     return false;
   }
-  return result.payloads.some((payload) => {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      return false;
-    }
-    const record = payload as {
-      text?: unknown;
-      mediaUrl?: unknown;
-      mediaUrls?: unknown;
-      presentation?: unknown;
-      interactive?: unknown;
-      channelData?: unknown;
-    };
-    if (
-      typeof record.text !== "string" ||
-      !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
-    ) {
-      return false;
-    }
-    return !(
-      record.mediaUrl ||
-      (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
-      record.presentation ||
-      record.interactive ||
-      record.channelData
-    );
-  });
+  return result.payloads.some(isIntentionalSilentGatewayAgentPayload);
+}
+
+function isIntentionalSilentGatewayAgentPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as {
+    text?: unknown;
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  };
+  if (
+    typeof record.text !== "string" ||
+    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
+  ) {
+    return false;
+  }
+  return !(
+    record.mediaUrl ||
+    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
+    record.presentation ||
+    record.interactive ||
+    record.channelData
+  );
+}
+
+function hasPositiveDeliveryCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function requiresAgentMediatedCompletionDelivery(params: {
@@ -1111,15 +1136,30 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
     const targetMediaUrls = collectMessagingToolDeliveredMediaUrls({
       messagingToolSentTargets: [target],
     });
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      continue;
+    }
+    const targetRecord = target as Record<string, unknown>;
+    const targetTo = typeof targetRecord.to === "string" ? targetRecord.to.trim() : "";
+    if (!targetTo) {
+      if (
+        !deliveryTarget.to ||
+        !sourceDeliveryTargetsMatch({ ...targetRecord, to: deliveryTarget.to }, deliveryTarget)
+      ) {
+        for (const url of targetMediaUrls) {
+          targetedUrls.add(url);
+        }
+        continue;
+      }
+      for (const url of targetMediaUrls) {
+        urls.add(url);
+      }
+      continue;
+    }
     for (const url of targetMediaUrls) {
       targetedUrls.add(url);
     }
-    if (
-      !target ||
-      typeof target !== "object" ||
-      Array.isArray(target) ||
-      !sourceDeliveryTargetsMatch(target as Record<string, unknown>, deliveryTarget)
-    ) {
+    if (!sourceDeliveryTargetsMatch(targetRecord, deliveryTarget)) {
       continue;
     }
     for (const url of targetMediaUrls) {
@@ -1570,6 +1610,21 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "direct",
         reason: "message_tool_delivery_missing",
         error: "completion agent did not use the message tool for message-tool-only delivery",
+      };
+    }
+    if (
+      params.expectsCompletionMessage &&
+      !shouldDeliverAgentFinal &&
+      !requiresMessageToolDelivery &&
+      !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
+      !hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse) &&
+      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
       };
     }
     if (

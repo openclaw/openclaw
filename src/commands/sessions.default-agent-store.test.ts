@@ -1,3 +1,4 @@
+// Sessions default-agent store tests cover default session-store selection and runtime config loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -28,6 +29,18 @@ vi.mock("../config/sessions.js", async () => {
     loadSessionStore: loadSessionStoreMock,
   };
 });
+
+vi.mock("../infra/state-migrations.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/state-migrations.js")>(
+    "../infra/state-migrations.js",
+  )),
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
+}));
 
 import { sessionsCommand } from "./sessions.js";
 

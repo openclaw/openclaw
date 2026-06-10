@@ -1,3 +1,4 @@
+// Run main exit tests cover process exit behavior for CLI failures.
 import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -380,6 +381,33 @@ describe("runCli exit behavior", () => {
       indeterminate: true,
       delayMs: 0,
     });
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses startup progress for json output commands before full CLI parsing", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "sessions", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "sessions", "--json", "--limit", "all"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "sessions",
+      "--json",
+      "--limit",
+      "all",
+    ]);
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 

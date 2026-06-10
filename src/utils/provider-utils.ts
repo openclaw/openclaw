@@ -1,20 +1,17 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+/**
+ * Provider behavior helpers shared by reply runners, embedded agents, and provider plugins.
+ * Keep policy here generic; provider-specific reasoning rules belong in provider runtime hooks.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
 
-const BUILTIN_REASONING_OUTPUT_MODES = {
-  "google-generative-ai": "tagged",
-} as const;
-
 /**
- * Utility functions for provider-specific logic and capabilities.
+ * Resolves whether a provider should emit reasoning via native fields or tagged text,
+ * using provider runtime hooks when available and defaulting to native output.
  */
-
 export function resolveReasoningOutputMode(params: {
   provider: string | undefined | null;
   config?: OpenClawConfig;
@@ -30,7 +27,7 @@ export function resolveReasoningOutputMode(params: {
     return "native";
   }
 
-  const normalized = normalizeOptionalLowercaseString(provider) ?? "";
+  // Provider hooks own model/API-specific reasoning transport rules; core only supplies the default.
   const pluginMode = resolveProviderReasoningOutputModeWithPlugin({
     provider,
     config: params.config,
@@ -51,13 +48,6 @@ export function resolveReasoningOutputMode(params: {
     return pluginMode;
   }
 
-  const builtInMode =
-    BUILTIN_REASONING_OUTPUT_MODES[normalized as keyof typeof BUILTIN_REASONING_OUTPUT_MODES];
-  if (builtInMode) {
-    return builtInMode;
-  }
-
-  // Keep a tiny built-in fallback for non-plugin Google surfaces.
   return "native";
 }
 

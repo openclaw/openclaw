@@ -1,3 +1,4 @@
+// Verifies models.json planning applies config env vars and discovery scope.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -35,6 +38,8 @@ function createImplicitOpenRouterProvider(): ProviderConfig {
 }
 
 function createImplicitOpenAiProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+  // Minimal implicit OpenAI provider used to verify write planning without live
+  // discovery or real credentials.
   return {
     baseUrl: "https://api.openai.com/v1",
     api: "openai-responses",
@@ -75,6 +80,8 @@ async function resolveProvidersForConfigEnvTest(params: {
   cfg: OpenClawConfig;
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
 }) {
+  // Config env vars are materialized into the discovery env before implicit
+  // provider resolution.
   const env = createConfigRuntimeEnv(params.cfg);
   return await resolveProvidersForModelsJsonWithDeps(
     {
@@ -120,6 +127,8 @@ let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawMode
 let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
 
 beforeAll(async () => {
+  // Reused no-auth write plan proves generated providers stay serializable
+  // even when discovery returns auth-only provider shells.
   unauthenticatedProviderWritePlan = await planOpenClawModelsJsonWithDeps(
     {
       cfg: { models: { providers: {} } },
@@ -427,22 +436,19 @@ describe("models-config", () => {
   it("keeps google-vertex static catalog rows when an auth profile supplies the API key", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-models-"));
     try {
-      await fs.writeFile(
-        path.join(agentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "google-vertex:default": {
-                type: "api_key",
-                provider: "google-vertex",
-                keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
-              },
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "google-vertex:default": {
+              type: "api_key",
+              provider: "google-vertex",
+              keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
             },
           },
-          null,
-          2,
-        )}\n`,
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
       const plan = await planOpenClawModelsJsonWithDeps(
@@ -490,6 +496,60 @@ describe("models-config", () => {
     }
   });
 
+  it("keeps google-vertex static catalog rows when ADC auth evidence supplies the marker", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-models-"));
+    const credentialsPath = path.join(agentDir, "application_default_credentials.json");
+    await fs.writeFile(credentialsPath, JSON.stringify({ type: "authorized_user" }), "utf8");
+    try {
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                models: {
+                  "google-vertex/gemini-2.5-pro": {},
+                },
+                model: { primary: "google-vertex/gemini-2.5-pro" },
+              },
+            },
+            models: { providers: {} },
+          },
+          agentDir,
+          env: {
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          } as NodeJS.ProcessEnv,
+          existingRaw: "",
+          existingParsed: null,
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            "google-vertex": createImplicitGoogleVertexProvider(),
+          }),
+        },
+      );
+
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const parsed = JSON.parse(plan.contents) as {
+        providers?: Record<
+          string,
+          { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
+        >;
+      };
+      expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
+      expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
+      expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
+        "gemini-2.5-pro",
+      ]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
@@ -507,17 +567,23 @@ describe("models-config", () => {
 
   it("does not overwrite already-set host env vars while ensuring models.json", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
-      process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
-      process.env[TEST_ENV_VAR] = "from-host";
-      const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
-        createConfigEnvVarsConfig(),
-      );
+      await withEnvAsync(
+        {
+          OPENROUTER_API_KEY: "from-host", // pragma: allowlist secret
+          [TEST_ENV_VAR]: "from-host",
+        },
+        async () => {
+          const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
+            createConfigEnvVarsConfig(),
+          );
 
-      expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
-      expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
-      expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
-      expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
-      expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+          expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
+          expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
+          expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
+          expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
+          expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+        },
+      );
     });
   });
 });

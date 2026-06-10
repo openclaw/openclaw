@@ -1,8 +1,10 @@
+// Doctor heartbeat session-target tests cover heartbeat target checks and repair output.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 
@@ -60,8 +62,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
   function writeStore(cfg: OpenClawConfig, entries: Record<string, unknown>) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(storePath, JSON.stringify(entries, null, 2));
+    writeSessionStoreForTest(storePath, entries);
   }
 
   it("uses runtime session canonicalization before warning", () => {

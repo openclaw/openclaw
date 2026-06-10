@@ -1,10 +1,16 @@
+// Covers CLI-backed attempt execution and session-binding persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTestAsync,
+} from "../../config/sessions/test-helpers.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
@@ -48,6 +54,8 @@ vi.mock("../model-runtime-aliases.js", async () => {
       modelId?: string;
     }) => {
       const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+      // Runtime alias tests only need the model-level runtime override path;
+      // keeping the mock narrow avoids loading provider catalogs here.
       const runtime = key
         ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
         : undefined;
@@ -108,6 +116,8 @@ async function readSessionFileEntries(sessionFile: string) {
 }
 
 async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
+  // Session transcripts are JSONL; tests preserve that format so parent/child
+  // id ordering and append behavior are covered end-to-end.
   const raw = await fs.readFile(sessionFile, "utf-8");
   const entries: T[] = [];
   for (const line of raw.split(/\r?\n/)) {
@@ -168,6 +178,7 @@ describe("CLI attempt execution", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
     } else {
@@ -175,6 +186,14 @@ describe("CLI attempt execution", () => {
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
+
+  async function seedSessionStore(store: Record<string, SessionEntry>) {
+    await writeSessionStoreForTestAsync(storePath, store);
+  }
+
+  function readPersistedSessionStore(): Record<string, SessionEntry> {
+    return readSessionStoreForTest(storePath);
+  }
 
   async function runClaudeCliAttempt(params: {
     sessionKey: string;
@@ -217,6 +236,8 @@ describe("CLI attempt execution", () => {
   }
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
+    // Claude stores resumable sessions under a workspace-derived project dir,
+    // so stale-session tests must create the same on-disk shape.
     const homeDir = path.join(tmpDir, `home-${cliSessionId}`);
     const projectsDir = resolveClaudeCliProjectDirForWorkspace({
       workspaceDir: tmpDir,
@@ -276,8 +297,10 @@ describe("CLI attempt execution", () => {
       claudeCliSessionId: "stale-legacy-session",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
 
+    // The retry hook must clear poisoned bindings before the fresh CLI attempt
+    // runs, otherwise the runner would resume the same expired Claude session.
     runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
       const retry = requireRecord(args, "run CLI agent argument").onBeforeFreshCliSessionRetry;
       expect(retry).toBeTypeOf("function");
@@ -332,10 +355,7 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readPersistedSessionStore();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
@@ -346,7 +366,7 @@ describe("CLI attempt execution", () => {
     await writeClaudeCliAssistantTranscript(cliSessionId);
     const sessionEntry = makeClaudeCliSessionEntry("session-cli-abort", cliSessionId);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
     runCliAgentMock.mockRejectedValueOnce(abortError);
 
@@ -366,10 +386,7 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readPersistedSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
@@ -381,7 +398,7 @@ describe("CLI attempt execution", () => {
     await writeClaudeCliAssistantTranscript(cliSessionId);
     const sessionEntry = makeClaudeCliSessionEntry("session-cli-timeout", cliSessionId);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
       const retry = requireRecord(args, "run CLI agent argument").onBeforeFreshCliSessionRetry;
       expect(retry).toBeTypeOf("function");
@@ -424,6 +441,8 @@ describe("CLI attempt execution", () => {
     const sessionEntry = makeClaudeCliSessionEntry("session-storeless", cliSessionId);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("storeless ok"));
 
+    // Storeless attempts cannot persist binding cleanup, so installing the hook
+    // would only give callers a false sense that stale state was repaired.
     await runAgentAttempt({
       providerOverride: "claude-cli",
       originalProvider: "claude-cli",
@@ -465,7 +484,7 @@ describe("CLI attempt execution", () => {
       await writeClaudeCliAssistantTranscript(cliSessionId);
       const sessionEntry = makeClaudeCliSessionEntry(`session-cli-${reason}`, cliSessionId);
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+      await seedSessionStore(sessionStore);
       runCliAgentMock.mockRejectedValueOnce(
         new FailoverError(`${reason} failed`, {
           reason,
@@ -509,7 +528,7 @@ describe("CLI attempt execution", () => {
       claudeCliSessionId: "phantom-claude-session",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("fresh cli response"));
 
     await runClaudeCliAttempt({
@@ -527,10 +546,7 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readPersistedSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
@@ -570,7 +586,7 @@ describe("CLI attempt execution", () => {
       claudeCliSessionId: cliSessionId,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("resumed cli response"));
 
     await runClaudeCliAttempt({
@@ -615,7 +631,7 @@ describe("CLI attempt execution", () => {
     );
     const sessionEntry = makeClaudeCliSessionEntry("openclaw-session-cwd", cliSessionId);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("resumed cli response"));
 
     await runClaudeCliAttempt({
@@ -642,7 +658,7 @@ describe("CLI attempt execution", () => {
       authProfileOverrideSource: "user",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("codex cli response"));
 
     await runAgentAttempt({
@@ -681,30 +697,54 @@ describe("CLI attempt execution", () => {
 
   it("persists CLI replies into the session transcript", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript";
+    const sessionFile = path.join(tmpDir, "session-cli-transcript.jsonl");
     const sessionEntry: SessionEntry = {
       sessionId: "session-cli-transcript",
-      updatedAt: Date.now(),
+      sessionFile,
+      updatedAt: 1,
+      status: "running",
+      startedAt: 2,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-
-    const updatedEntry = await persistCliTurnTranscript({
-      body: "persist this",
-      result: makeCliResult("hello from cli"),
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
+    await seedSessionStore({
+      [sessionKey]: {
+        ...sessionEntry,
+        updatedAt: 5,
+        status: "done",
+        endedAt: 4,
+      },
     });
 
-    const sessionFile = updatedEntry?.sessionFile;
-    if (!sessionFile) {
+    const nowCalls: number[] = [];
+    let nextNow = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      nextNow += 1_000;
+      nowCalls.push(nextNow);
+      return nextNow;
+    });
+    let updatedEntry: SessionEntry | undefined;
+    try {
+      updatedEntry = await persistCliTurnTranscript({
+        body: "persist this",
+        result: makeCliResult("hello from cli"),
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        sessionAgentId: "main",
+        sessionCwd: tmpDir,
+        config: {},
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const updatedSessionFile = updatedEntry?.sessionFile;
+    if (!updatedSessionFile) {
       throw new Error("expected CLI transcript persistence to create a session file");
     }
+    expect(await fs.realpath(updatedSessionFile)).toBe(await fs.realpath(sessionFile));
     const entries = await readSessionFileEntries(sessionFile);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
@@ -732,6 +772,14 @@ describe("CLI attempt execution", () => {
       model: "opus",
       content: [{ type: "text", text: "hello from cli" }],
     });
+
+    const persisted = readPersistedSessionStore();
+    expect(await fs.realpath(persisted[sessionKey]?.sessionFile ?? "")).toBe(
+      await fs.realpath(sessionFile),
+    );
+    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
+    expect(persisted[sessionKey]?.updatedAt).toBeLessThan(nowCalls.at(-1) ?? 0);
+    expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
   it("embedded assistant gap-fill skips user mirror and dedupes identical assistant tails", async () => {
@@ -741,7 +789,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
 
     const result = makeCliResult("already mirrored");
     result.meta.executionTrace = {
@@ -798,7 +846,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
 
     const result = makeCliResult("already mirrored");
     result.meta.executionTrace = {
@@ -864,7 +912,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
 
     const result = makeCliResult("canonical answer");
     result.meta.executionTrace = {
@@ -935,7 +983,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
 
     const result = makeCliResult("same answer");
     result.meta.executionTrace = {
@@ -1010,7 +1058,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
 
     const updatedEntry = await persistCliTurnTranscript({
       body: [
@@ -1046,7 +1094,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("channel aware"));
 
     await runAgentAttempt({
@@ -1096,7 +1144,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("restricted cli"));
 
     await runAgentAttempt({
@@ -1137,6 +1185,53 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("stamps CLI prompts with current timestamp context", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
+    const sessionKey = "agent:main:direct:claude-timestamp";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-timestamp",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await seedSessionStore(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("timestamped cli"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "what time is it?",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-timestamp",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
+    });
+  });
+
   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-claude-cli";
     const sessionEntry: SessionEntry = {
@@ -1144,7 +1239,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
 
     await runAgentAttempt({
@@ -1199,7 +1294,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("shorthand cli"));
 
     await runAgentAttempt({
@@ -1254,7 +1349,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "canonical codex embedded" }],
       meta: {
@@ -1319,24 +1414,20 @@ describe("CLI attempt execution", () => {
       authProfileOverrideSource: "user",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    await fs.writeFile(
-      path.join(tmpDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "openai:backup": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-test",
-            },
+    await seedSessionStore(sessionStore);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test",
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      tmpDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     clearAgentHarnesses();
     registerAgentHarness({
@@ -1398,7 +1489,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
     } satisfies EmbeddedAgentRunResult);
@@ -1475,7 +1566,7 @@ describe("CLI attempt execution", () => {
       allowed: true,
       defaultLevel: "on" as const,
     };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
     } satisfies EmbeddedAgentRunResult);
@@ -1526,7 +1617,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await seedSessionStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("cleanup cli"));
 
     await runAgentAttempt({
@@ -1762,9 +1853,8 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "codex-auth-session",
       updatedAt: Date.now(),
     };
-    await fs.writeFile(
-      path.join(tmpDir, "auth-profiles.json"),
-      JSON.stringify({
+    saveAuthProfileStore(
+      {
         version: 1,
         profiles: {
           "openai:work": {
@@ -1775,7 +1865,9 @@ describe("embedded attempt harness pinning", () => {
             expires: Date.now() + 60_000,
           },
         },
-      }),
+      },
+      tmpDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },

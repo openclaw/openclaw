@@ -1,7 +1,8 @@
+// Memory Wiki tests cover compile plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -14,6 +15,16 @@ describe("compileMemoryWikiVault", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-suite-"));
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   afterAll(async () => {
@@ -91,7 +102,7 @@ describe("compileMemoryWikiVault", () => {
       "- Claims: 1",
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
-      "[Alpha](sources/alpha.md)",
+      "[Alpha](alpha.md)",
     );
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
@@ -108,6 +119,50 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
+  });
+
+  it("renders native directory index links relative to each generated index", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "alpha-concept.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "concept", id: "concept.alpha", title: "Alpha Concept" },
+        body: "# Alpha Concept\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha-entity.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "entity", id: "entity.alpha", title: "Alpha Entity" },
+        body: "# Alpha Entity\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "alpha-synthesis.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "synthesis", id: "synthesis.alpha", title: "Alpha Synthesis" },
+        body: "# Alpha Synthesis\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    await expect(
+      fs.readFile(path.join(rootDir, "concepts", "index.md"), "utf8"),
+    ).resolves.toContain("[Alpha Concept](alpha-concept.md)");
+    await expect(
+      fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
+    ).resolves.toContain("[Alpha Entity](alpha-entity.md)");
+    await expect(
+      fs.readFile(path.join(rootDir, "syntheses", "index.md"), "utf8"),
+    ).resolves.toContain("[Alpha Synthesis](alpha-synthesis.md)");
   });
 
   it("bounds concurrent page reads while compiling", async () => {
@@ -148,9 +203,7 @@ describe("compileMemoryWikiVault", () => {
         activePageReads += 1;
         maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
         try {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 5);
-          });
+          await Promise.resolve();
           return await originalReadFile(...args);
         } finally {
           activePageReads -= 1;
@@ -239,16 +292,69 @@ describe("compileMemoryWikiVault", () => {
       "## Related",
     );
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
-      "[Alpha](sources/alpha.md)",
+      "[Alpha](../sources/alpha.md)",
     );
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
-      "[Gamma](concepts/gamma.md)",
+      "[Gamma](../concepts/gamma.md)",
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
-      "[Beta](entities/beta.md)",
+      "[Beta](../entities/beta.md)",
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
-      "[Gamma](concepts/gamma.md)",
+      "[Gamma](../concepts/gamma.md)",
+    );
+  });
+
+  it("renders native synthesis related and source links relative to the synthesis page", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "alpha-concept.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.alpha",
+          title: "Alpha Concept",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Alpha Concept\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "alpha-synthesis.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.alpha",
+          title: "Alpha Synthesis",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Alpha Synthesis\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const synthesis = await fs.readFile(
+      path.join(rootDir, "syntheses", "alpha-synthesis.md"),
+      "utf8",
+    );
+    expect(synthesis).toContain("### Sources\n\n- [Alpha Source](../sources/alpha.md)");
+    expect(synthesis).toContain(
+      "### Related Pages\n\n- [Alpha Concept](../concepts/alpha-concept.md)",
     );
   });
 
@@ -305,7 +411,7 @@ describe("compileMemoryWikiVault", () => {
 
     const firstEntity = await fs.readFile(path.join(rootDir, "entities", "entity-0.md"), "utf8");
     const sourcePage = await fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8");
-    expect(firstEntity).toContain("[Alpha](sources/alpha.md)");
+    expect(firstEntity).toContain("[Alpha](../sources/alpha.md)");
     expect(firstEntity).not.toContain("### Related Pages");
     expect(sourcePage).not.toContain("### Referenced By");
   });
@@ -389,16 +495,16 @@ describe("compileMemoryWikiVault", () => {
     expect(result.pageCounts.report).toBeGreaterThanOrEqual(5);
     await expect(
       fs.readFile(path.join(rootDir, "reports", "open-questions.md"), "utf8"),
-    ).resolves.toContain("[Alpha](entities/alpha.md): What changed after launch?");
+    ).resolves.toContain("[Alpha](../entities/alpha.md): What changed after launch?");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "contradictions.md"), "utf8"),
-    ).resolves.toContain("Conflicts with source.beta: [Alpha](entities/alpha.md)");
+    ).resolves.toContain("Conflicts with source.beta: [Alpha](../entities/alpha.md)");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "contradictions.md"), "utf8"),
     ).resolves.toContain("`claim.alpha.db`");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "low-confidence.md"), "utf8"),
-    ).resolves.toContain("[Alpha](entities/alpha.md): confidence 0.30");
+    ).resolves.toContain("[Alpha](../entities/alpha.md): confidence 0.30");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "low-confidence.md"), "utf8"),
     ).resolves.toContain("Alpha uses PostgreSQL for production writes.");
@@ -410,7 +516,7 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain("Alpha uses PostgreSQL for production writes.");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
-    ).resolves.toContain("[Alpha](entities/alpha.md): missing updatedAt");
+    ).resolves.toContain("[Alpha](../entities/alpha.md): missing updatedAt");
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
     ) as {
@@ -512,16 +618,16 @@ describe("compileMemoryWikiVault", () => {
 
     await expect(
       fs.readFile(path.join(rootDir, "reports", "person-agent-directory.md"), "utf8"),
-    ).resolves.toContain("Microsoft Teams");
+    ).resolves.toContain("[Brad Groux](../entities/brad.md)");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "relationship-graph.md"), "utf8"),
-    ).resolves.toContain("collaborates-with");
+    ).resolves.toContain("[Brad Groux](../entities/brad.md) -> Alice");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "provenance-coverage.md"), "utf8"),
     ).resolves.toContain("maintainer-whois: 1");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
-    ).resolves.toContain("confirm-before-use");
+    ).resolves.toContain("[Brad Groux](../entities/brad.md)");
 
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
@@ -562,7 +668,7 @@ describe("compileMemoryWikiVault", () => {
       path.join(rootDir, "concepts", "gamma.md"),
       renderWikiMarkdown({
         frontmatter: { pageType: "concept", id: "concept.gamma", title: "Gamma" },
-        body: "# Gamma\n\nSee [Beta](entities/beta.md).\n",
+        body: "# Gamma\n\nSee [Beta](../entities/beta.md).\n",
       }),
       "utf8",
     );
@@ -572,10 +678,57 @@ describe("compileMemoryWikiVault", () => {
 
     expect(second.updatedFiles).toStrictEqual([]);
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
-      "[Gamma](concepts/gamma.md)",
+      "[Gamma](../concepts/gamma.md)",
     );
     await expect(
       fs.readFile(path.join(rootDir, "concepts", "gamma.md"), "utf8"),
     ).resolves.not.toContain("### Referenced By");
+  });
+
+  it("retries transient page reads during compile", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const sourcePath = path.join(rootDir, "sources", "alpha.md");
+
+    await fs.writeFile(
+      sourcePath,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    const realReadFile = fs.readFile;
+    let attempts = 0;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof realReadFile>) => {
+        const [target, options] = args;
+        if (
+          typeof target === "string" &&
+          path.resolve(target) === sourcePath &&
+          options === "utf8" &&
+          attempts++ === 0
+        ) {
+          const err = new Error(
+            "Unknown system error -11: Unknown system error -11, read",
+          ) as NodeJS.ErrnoException;
+          err.code = "EDEADLK";
+          err.errno = -11;
+          throw err;
+        }
+        return await realReadFile(target, options as never);
+      });
+
+    try {
+      const result = await compileMemoryWikiVault(config);
+      expect(result.pageCounts.source).toBe(1);
+      expect(attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 });

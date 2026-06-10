@@ -1,3 +1,5 @@
+// video_generate tool tests cover provider/model selection, plugin metadata,
+// background task handling, input media, and saved video output.
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -141,6 +143,8 @@ function createVideoProviderSnapshot(params: {
   referenceAudioInputs?: boolean;
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
+  // Plugin-backed provider snapshots are synthesized here so tool behavior can
+  // be tested without loading plugin manifests from disk.
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
   const plugin: PluginManifestRecord = {
     id: params.id,
@@ -1513,6 +1517,30 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages).toHaveLength(2);
     expect(call.inputImages?.[0]?.role).toBe("first_frame");
     expect(call.inputImages?.[1]?.role).toBe("last_frame");
+  });
+
+  it("passes direct remote reference URLs to the provider without local media loading", async () => {
+    mockVideoPluginProvider({
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    });
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoPluginTool();
+
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      image: "https://example.test/reference.png",
+    });
+
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    const call = firstMockCallArg(generateSpy) as {
+      inputImages?: Array<{ url?: string }>;
+    };
+    expect(call.inputImages).toEqual([{ url: "https://example.test/reference.png" }]);
   });
 
   it("passes web_fetch SSRF policy when loading reference assets", async () => {

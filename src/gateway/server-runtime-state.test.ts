@@ -1,3 +1,6 @@
+/**
+ * Gateway runtime state construction tests.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
@@ -10,7 +13,7 @@ import {
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createGatewayRuntimeState } from "./server-runtime-state.js";
+import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 function createRegistryWithRoute(path: string) {
   const registry = createEmptyPluginRegistry();
@@ -38,24 +41,7 @@ describe("createGatewayRuntimeState", () => {
     const fallbackRegistry = createRegistryWithRoute("/fallback");
 
     setActivePluginRegistry(startupRegistry);
-    const runtimeState = await createGatewayRuntimeState({
-      cfg: {},
-      bindHost: "127.0.0.1",
-      port: 0,
-      controlUiEnabled: false,
-      controlUiBasePath: "/",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      resolvedAuth: {} as never,
-      getResolvedAuth: () => ({}) as never,
-      hooksConfig: () => null,
-      getHookClientIpConfig: () => ({}) as never,
-      pluginRegistry: startupRegistry,
-      deps: {} as never,
-      log: { info: () => {}, warn: () => {} },
-      logHooks: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
-      logPlugins: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
-    });
+    const runtimeState = await createGatewayRuntimeStateForTest(startupRegistry);
 
     pinActivePluginHttpRouteRegistry(loadedRegistry);
     pinActivePluginChannelRegistry(loadedRegistry);
