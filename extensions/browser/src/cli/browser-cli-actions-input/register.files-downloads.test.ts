@@ -1,3 +1,4 @@
+// Browser tests cover register.files downloads plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
@@ -56,6 +57,16 @@ describe("browser action input file/download commands", () => {
     await program.parseAsync(["browser", "waitfordownload"], { from: "user" });
 
     expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(120000);
+  });
+
+  it("accepts signed and zero-padded download timeouts", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(["browser", "waitfordownload", "--timeout-ms", "+025000"], {
+      from: "user",
+    });
+
+    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25_000);
   });
 
   it("uses custom download timeouts as the inner wait plus outer slack", async () => {

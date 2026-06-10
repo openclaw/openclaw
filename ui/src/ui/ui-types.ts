@@ -1,3 +1,4 @@
+// Control UI module implements ui types behavior.
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -5,6 +6,11 @@ export type ChatAttachment = {
   mimeType: string;
   fileName?: string;
   sizeBytes?: number;
+};
+
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
 };
 
 export type ChatQueueItem = {
@@ -20,8 +26,17 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
-  sendState?: "sending" | "waiting-reconnect" | "failed";
+  sendState?: "waiting-model" | "sending" | "waiting-reconnect" | "failed";
+  sendSubmittedAtMs?: number;
+  sendRequestStartedAtMs?: number;
   sessionKey?: string;
+  agentId?: string;
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
+};
+
+export type ChatSessionRefreshTarget = {
+  sessionKey: string;
+  agentId?: string;
 };
 
 export const CRON_CHANNEL_LAST = "last";
@@ -46,6 +61,7 @@ export type CronFormState = {
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
   payloadKind: "systemEvent" | "agentTurn";
+  payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
   payloadThinking: string;

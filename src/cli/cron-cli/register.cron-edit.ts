@@ -1,13 +1,14 @@
+// Cron edit command registration and patch construction for existing jobs.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   applyExistingCronSchedulePatch,
@@ -15,6 +16,8 @@ import {
 } from "./schedule-options.js";
 import {
   getCronChannelOptions,
+  parseCronCommandArgv,
+  parseCronCommandEnv,
   parseCronToolsAllow,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
@@ -39,6 +42,7 @@ async function loadCronJobForEditSchedulePatch(
   opts: Record<string, unknown>,
   id: string,
 ): Promise<CronJob | undefined> {
+  // Schedule patches need the existing job; page defensively because gateway stores can be large.
   let offset = 0;
   for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
     const listed = (await callGatewayFromCli("cron.list", opts, {
@@ -90,12 +94,23 @@ export function registerCronEditCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
+      .option("--command <shell>", "Set command payload run as sh -lc <shell> on the Gateway")
+      .option("--command-argv <json>", "Set command payload argv as JSON array of strings")
+      .option("--command-cwd <path>", "Set command payload working directory")
+      .option(
+        "--command-env <KEY=VALUE>",
+        "Set command payload environment overrides (repeatable)",
+        (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+      )
+      .option("--command-input <text>", "Set command payload stdin")
       .option(
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs")
-      .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
+      .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
+      .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
@@ -103,6 +118,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--announce", "Fallback-deliver final text to a chat")
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
       .option("--no-deliver", "Disable runner fallback delivery")
+      .option("--webhook <url>", "POST the finished payload to a webhook URL")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
@@ -140,9 +156,9 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.session === "string" && !sessionTarget) {
             throw new Error("--session must be main, isolated, current, or session:<id>");
           }
-          if (sessionTarget === "main" && opts.message) {
+          if (sessionTarget === "main" && (opts.message || opts.command || opts.commandArgv)) {
             throw new Error(
-              "Main jobs cannot use --message; use --system-event or --session isolated.",
+              "Main jobs cannot use --message or --command; use --system-event or --session isolated.",
             );
           }
           if (
@@ -152,11 +168,17 @@ export function registerCronEditCommand(cron: Command) {
             opts.systemEvent
           ) {
             throw new Error(
-              "Isolated jobs cannot use --system-event; use --message or --session main.",
+              "Isolated jobs cannot use --system-event; use --message, --command, or --session main.",
             );
           }
-          if (opts.announce && typeof opts.deliver === "boolean") {
-            throw new Error("Choose --announce or --no-deliver (not multiple).");
+          const hasWebhookDelivery = typeof opts.webhook === "string";
+          const deliveryModeFlagCount = [
+            Boolean(opts.announce),
+            typeof opts.deliver === "boolean",
+            hasWebhookDelivery,
+          ].filter(Boolean).length;
+          if (deliveryModeFlagCount > 1) {
+            throw new Error("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
@@ -231,6 +253,13 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
+          const commandShell = normalizeOptionalString(opts.command);
+          const commandArgv = parseCronCommandArgv(opts.commandArgv);
+          if (commandShell && commandArgv) {
+            throw new Error(
+              "Pass command payload either with --command or --command-argv, not both.",
+            );
+          }
           const model = normalizeOptionalString(opts.model);
           const thinking = normalizeOptionalString(opts.thinking);
           const toolsAllow = parseCronToolsAllow(opts.tools);
@@ -248,29 +277,74 @@ export function registerCronEditCommand(cron: Command) {
           if (rawTimeoutSeconds !== undefined && !hasTimeoutSeconds) {
             throw new Error("Invalid --timeout-seconds (must be a positive integer).");
           }
-          const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
+          const rawNoOutputTimeoutSeconds =
+            opts.noOutputTimeoutSeconds ??
+            (typeof opts.outputTimeoutSeconds === "string" ||
+            typeof opts.outputTimeoutSeconds === "number"
+              ? opts.outputTimeoutSeconds
+              : undefined);
+          const noOutputTimeoutSeconds = parseStrictPositiveInteger(rawNoOutputTimeoutSeconds);
+          if (rawNoOutputTimeoutSeconds !== undefined && noOutputTimeoutSeconds === undefined) {
+            throw new Error("Invalid --no-output-timeout-seconds (must be a positive integer).");
+          }
+          const outputMaxBytes = parseStrictPositiveInteger(opts.outputMaxBytes);
+          if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
+            throw new Error("Invalid --output-max-bytes (must be a positive integer).");
+          }
+          const hasDeliveryModeFlag =
+            opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
           const threadId = parseCronThreadIdOption(opts.threadId);
           const hasDeliveryThreadId = typeof threadId === "number";
           const hasDeliveryTarget =
             typeof opts.channel === "string" || typeof opts.to === "string" || hasDeliveryThreadId;
           const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
+          if (hasWebhookDelivery && (hasDeliveryTarget || hasDeliveryAccount)) {
+            throw new Error("--webhook cannot be combined with chat delivery options.");
+          }
+          const hasCommandSpecificPayloadField =
+            Boolean(commandShell) ||
+            Boolean(commandArgv) ||
+            typeof opts.commandCwd === "string" ||
+            typeof opts.commandInput === "string" ||
+            opts.commandEnv !== undefined ||
+            noOutputTimeoutSeconds !== undefined ||
+            outputMaxBytes !== undefined;
+          let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
+          if (
+            hasTimeoutSeconds &&
+            !hasCommandSpecificPayloadField &&
+            typeof opts.message !== "string" &&
+            !model &&
+            !thinking &&
+            typeof opts.lightContext !== "boolean" &&
+            typeof opts.tools !== "string" &&
+            !Array.isArray(opts.tools) &&
+            !opts.clearTools
+          ) {
+            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+            timeoutOnlyPayloadKind = existing?.payload.kind === "command" ? "command" : "agentTurn";
+          }
           const hasAgentTurnPayloadField =
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
-            hasTimeoutSeconds ||
+            (hasTimeoutSeconds &&
+              !hasCommandSpecificPayloadField &&
+              timeoutOnlyPayloadKind !== "command") ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
             Array.isArray(opts.tools) ||
             opts.clearTools;
-          const hasAgentTurnPatch =
-            hasAgentTurnPayloadField ||
-            hasDeliveryModeFlag ||
-            hasDeliveryTarget ||
-            hasDeliveryAccount ||
-            hasBestEffort;
-          if (hasSystemEventPatch && hasAgentTurnPatch) {
+          const hasCommandPayloadField =
+            hasCommandSpecificPayloadField ||
+            (hasTimeoutSeconds &&
+              (hasCommandSpecificPayloadField || timeoutOnlyPayloadKind === "command"));
+          const hasAgentTurnPatch = hasAgentTurnPayloadField;
+          const hasCommandPatch = hasCommandPayloadField;
+          if (
+            [hasSystemEventPatch, hasAgentTurnPatch, hasCommandPatch].filter(Boolean).length > 1
+          ) {
             throw new Error("Choose at most one payload change");
           }
           if (hasSystemEventPatch) {
@@ -296,15 +370,45 @@ export function registerCronEditCommand(cron: Command) {
               payload.toolsAllow = toolsAllow;
             }
             patch.payload = payload;
+          } else if (hasCommandPatch) {
+            const payload: Record<string, unknown> = { kind: "command" };
+            assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
+            assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
+            assignIf(
+              payload,
+              "cwd",
+              normalizeOptionalString(opts.commandCwd),
+              typeof opts.commandCwd === "string",
+            );
+            assignIf(
+              payload,
+              "env",
+              parseCronCommandEnv(opts.commandEnv),
+              opts.commandEnv !== undefined,
+            );
+            assignIf(payload, "input", opts.commandInput, typeof opts.commandInput === "string");
+            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            assignIf(
+              payload,
+              "noOutputTimeoutSeconds",
+              noOutputTimeoutSeconds,
+              noOutputTimeoutSeconds !== undefined,
+            );
+            assignIf(payload, "outputMaxBytes", outputMaxBytes, outputMaxBytes !== undefined);
+            patch.payload = payload;
           }
 
           if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
-              delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
+              delivery.mode = hasWebhookDelivery
+                ? "webhook"
+                : opts.announce || opts.deliver === true
+                  ? "announce"
+                  : "none";
             } else if (
               opts.bestEffortDeliver === true ||
-              (hasAgentTurnPayloadField && hasBestEffort)
+              ((hasAgentTurnPayloadField || hasCommandPayloadField) && hasBestEffort)
             ) {
               // Back-compat: best-effort true and payload edits historically implied announce mode.
               delivery.mode = "announce";
@@ -313,7 +417,10 @@ export function registerCronEditCommand(cron: Command) {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
             }
-            if (typeof opts.to === "string") {
+            if (hasWebhookDelivery) {
+              const webhook = normalizeOptionalString(opts.webhook) ?? "";
+              delivery.to = webhook ? webhook : undefined;
+            } else if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
             }

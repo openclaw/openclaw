@@ -1,3 +1,16 @@
+/**
+ * Handles embedded-agent tool execution events and turns them into channel UI,
+ * replay state, hook calls, approval prompts, media queues, and agent-event
+ * telemetry.
+ */
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -19,13 +32,9 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  asOptionalObjectRecord,
-  asOptionalRecord as readRecordField,
-} from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -53,23 +62,21 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./agent-tools.before-tool-call.js");
+type ChannelToolProgress = {
+  text: string;
+};
 
 const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyModule>(
   () => import("../infra/exec-approval-reply.js"),
 );
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
-);
-const mediaParseModuleLoader = createLazyImportLoader<MediaParseModule>(
-  () => import("../media/parse.js"),
 );
 const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
   () => import("./agent-tools.before-tool-call.js"),
@@ -101,10 +108,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
-}
-
-function loadMediaParse(): Promise<MediaParseModule> {
-  return mediaParseModuleLoader.load();
 }
 
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
@@ -202,6 +205,7 @@ function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
+/** Returns the number of active tool executions tracked for one embedded run. */
 export function countActiveToolExecutions(runId: string): number {
   const prefix = `${runId}:`;
   let count = 0;
@@ -291,6 +295,23 @@ function isAsyncStartedToolResult(result: unknown): boolean {
   return details?.async === true && details.status === "started";
 }
 
+function readAsyncStartedTaskIds(result: unknown): {
+  asyncTaskRunId?: string;
+  asyncTaskId?: string;
+} {
+  const details = readToolResultDetailsRecord(result);
+  if (!details) {
+    return {};
+  }
+  const nestedTask = readRecordField(details.task);
+  const asyncTaskRunId = readStringValue(details.runId) ?? readStringValue(nestedTask?.runId);
+  const asyncTaskId = readStringValue(details.taskId) ?? readStringValue(nestedTask?.taskId);
+  return {
+    ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
+    ...(asyncTaskId ? { asyncTaskId } : {}),
+  };
+}
+
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
   const details = readToolResultDetailsRecord(result);
   if (!details || typeof details.status !== "string") {
@@ -344,6 +365,20 @@ function extractExecOutput(result: unknown): string | undefined {
 function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+}
+
+function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
+  const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
+  // Only an explicit typed progress field crosses into channel UI. Tool output
+  // and details may contain fetched content or private args, so never infer.
+  if (progress?.visibility !== "channel" || progress.privacy !== "public") {
+    return undefined;
+  }
+  const text = readStringValue(progress.text)?.trim();
+  if (!text) {
+    return undefined;
+  }
+  return { text: truncateLiveExecOutput(text) };
 }
 
 function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
@@ -611,20 +646,6 @@ function queuePendingToolMedia(
   }
 }
 
-async function collectEmittedToolOutputMediaUrls(
-  toolName: string,
-  outputText: string,
-  result: unknown,
-  trustedLocalMediaToolNames?: ReadonlySet<string>,
-): Promise<string[]> {
-  const { splitMediaFromOutput } = await loadMediaParse();
-  const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
-  if (mediaUrls.length === 0) {
-    return [];
-  }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result, trustedLocalMediaToolNames);
-}
-
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -731,7 +752,6 @@ async function emitToolResultOutput(params: {
     !Array.isArray((result as { details?: { media?: unknown } }).details?.media),
   );
   const approvalPending = readExecApprovalPendingDetails(result);
-  let emittedToolOutputMediaUrls: string[] = [];
   if (!isToolError && approvalPending) {
     if (!ctx.params.onToolResult) {
       return;
@@ -808,15 +828,7 @@ async function emitToolResultOutput(params: {
     }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     if (outputText) {
-      ctx.emitToolOutput(rawToolName, meta, outputText, result);
-      if (ctx.params.toolResultFormat === "plain") {
-        emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
-          rawToolName,
-          outputText,
-          result,
-          ctx.trustedLocalMediaToolNames,
-        );
-      }
+      ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
     }
     if (!hasStructuredMedia) {
       return;
@@ -830,20 +842,17 @@ async function emitToolResultOutput(params: {
   if (!mediaReply) {
     return;
   }
-  const pendingMediaUrls =
-    emittedToolOutputMediaUrls.length === 0
-      ? mediaUrls
-      : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
-  if (pendingMediaUrls.length === 0) {
+  if (mediaUrls.length === 0) {
     return;
   }
   queuePendingToolMedia(ctx, {
-    mediaUrls: pendingMediaUrls,
+    mediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
     ...(mediaReply.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
   });
 }
 
+/** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
@@ -1048,6 +1057,7 @@ export function handleToolExecutionStart(
   return continueAfterBlockReplyFlush();
 }
 
+/** Handles partial tool output and emits throttled live UI updates. */
 export function handleToolExecutionUpdate(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -1062,7 +1072,11 @@ export function handleToolExecutionUpdate(
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
-  const emitDetailedLiveUpdate = !isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId);
+  const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
+  // Typed progress already has a sanitized item update path. Suppress the raw
+  // partial-result event for those updates to avoid duplicate preview lines.
+  const emitDetailedLiveUpdate =
+    !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -1082,18 +1096,22 @@ export function handleToolExecutionUpdate(
     title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
     status: "running",
     name: toolName,
-    meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
     toolCallId,
+    ...(toolProgress
+      ? { progressText: toolProgress.text }
+      : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
   };
   emitTrackedItemEvent(ctx, itemData);
-  void ctx.params.onAgentEvent?.({
-    stream: "tool",
-    data: {
-      phase: "update",
-      name: toolName,
-      toolCallId,
-    },
-  });
+  if (!toolProgress) {
+    void ctx.params.onAgentEvent?.({
+      stream: "tool",
+      data: {
+        phase: "update",
+        name: toolName,
+        toolCallId,
+      },
+    });
+  }
   if (isExecTool) {
     const output = extractLiveExecOutput(liveResult);
     const commandData: AgentItemEventData = {
@@ -1131,6 +1149,7 @@ export function handleToolExecutionUpdate(
   }
 }
 
+/** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -1159,10 +1178,11 @@ export async function handleToolExecutionEnd(
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
-    ...(asyncStarted ? { asyncStarted: true } : {}),
+    ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
@@ -1543,7 +1563,7 @@ export async function handleToolExecutionEnd(
         runId,
         toolCallId,
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }

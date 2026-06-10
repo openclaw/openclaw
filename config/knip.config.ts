@@ -1,3 +1,6 @@
+/**
+ * Knip configuration for OpenClaw root and bundled plugin dependency hygiene.
+ */
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
 function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
@@ -27,7 +30,7 @@ const bundledPluginEntries = [
   "setup-entry.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
-  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
+  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface,mcp-serve}.ts!",
   "src/subagent-hooks-api.ts!",
 ] as const;
 
@@ -144,6 +147,7 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        "file-type",
         "playwright-core",
         "sqlite-vec",
         "tree-sitter-bash",
@@ -157,7 +161,15 @@ const config = {
       ],
     },
     ui: {
-      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
+      entry: [
+        "index.html!",
+        "src/main.ts!",
+        "src/ui/browser-redact.ts!",
+        "vite.config.ts!",
+        "vitest*.ts!",
+      ],
+      // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
+      ignoreDependencies: ["three"],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {
@@ -176,9 +188,44 @@ const config = {
       entry: ["src/index.ts!", "src/schema.ts!"],
       project: ["src/**/*.ts!"],
     },
+    "packages/net-policy": {
+      entry: ["src/index.ts!", "src/ip.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/markdown-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/media-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/acp-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/terminal-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/speech-core": {
+      entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
+      project: ["**/*.ts!"],
+      ignoreDependencies: ["openclaw"],
+    },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
+    },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
+      entry: bundledPluginEntries,
+      project: ["index.ts!", "src/**/*.{js,mjs,ts}!"],
+      ignoreDependencies: [
+        // The provider resolves node-llama-cpp from its own package at runtime
+        // so local embeddings use the plugin-owned native dependency.
+        "node-llama-cpp",
+        ...bundledPluginIgnoredRuntimeDependencies,
+      ],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in

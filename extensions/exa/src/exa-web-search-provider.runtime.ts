@@ -1,3 +1,5 @@
+// Exa provider module implements model/runtime integration.
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -171,11 +173,11 @@ function isErrorPayload(value: unknown): value is { error: string; message: stri
 }
 
 function resolveExaSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     return fallback;
   }
-  return Math.max(1, Math.min(EXA_MAX_SEARCH_COUNT, Math.floor(parsed)));
+  return Math.min(EXA_MAX_SEARCH_COUNT, parsed);
 }
 
 function parseExaContents(

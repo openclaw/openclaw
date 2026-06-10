@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+/** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   createBlockReplyContentKey,
   createBlockReplyPayloadKey,
@@ -14,6 +15,14 @@ const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
     }
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
+
+beforeEach(() => {
+  vi.useRealTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("createBlockReplyPayloadKey", () => {
   it("produces different keys for payloads differing only by replyToId", () => {
@@ -280,10 +289,37 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
     expect(sent).toEqual(["Alpha", "Beta"]);
   });
+
+  it("preserves assistant metadata on coalesced text flushes", async () => {
+    const sent: Array<{ assistantMessageIndex?: number; text?: string }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({
+          assistantMessageIndex: getReplyPayloadMetadata(payload)?.assistantMessageIndex,
+          text: payload.text,
+        });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 100,
+        maxChars: 200,
+        idleMs: 1000,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 0 }));
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Beta" }, { assistantMessageIndex: 0 }));
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ assistantMessageIndex: 0, text: "Alpha Beta" }]);
+  });
 });
 
 describe("createBlockReplyPipeline content coverage dedup", () => {
   it("matches final assembled text to successfully streamed text chunks after abort", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (_payload, options) => {
@@ -298,7 +334,9 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
     pipeline.enqueue({ text: "Third paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
@@ -306,6 +344,8 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
   });
 
   it("does not match final assembled text with content that was not streamed", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (_payload, options) => {
@@ -319,7 +359,9 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
 
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);

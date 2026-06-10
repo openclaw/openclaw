@@ -1,4 +1,6 @@
+// Assertions for minimal OpenAI web-search E2E scenarios.
 import fs from "node:fs";
+import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 
@@ -6,36 +8,6 @@ const ERROR_DETAIL_TAIL_BYTES = 64 * 1024;
 const REQUEST_LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const RESPONSE_PREVIEW_BYTES = 8 * 1024;
 const RESPONSE_PREVIEW_COUNT = 5;
-
-function tailText(text, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
-  return Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
-}
-
-function readTextFileTail(file, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    return "";
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return "";
-  }
-
-  const length = Math.min(maxBytes, stat.size);
-  const start = stat.size - length;
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
-}
 
 function scanTextFileLines(file, onLine) {
   const fd = fs.openSync(file, "r");
@@ -74,7 +46,7 @@ function scanSuccessRequest(logPath) {
       return;
     }
     const entry = JSON.parse(trimmed);
-    if (entry.path !== "/v1/responses") {
+    if (entry.method !== "POST" || entry.path !== "/v1/responses") {
       return;
     }
     responseCount += 1;
@@ -134,7 +106,7 @@ function assertSuccessRequest() {
   const { responseCount, success, recentResponses } = scanSuccessRequest(logPath);
   if (responseCount < 1) {
     throw new Error(
-      `mock OpenAI /v1/responses was not used. Request log tail: ${readTextFileTail(logPath)}`,
+      `mock OpenAI /v1/responses was not used. Request log tail: ${readTextFileTail(logPath, ERROR_DETAIL_TAIL_BYTES)}`,
     );
   }
   if (!success) {
@@ -143,15 +115,10 @@ function assertSuccessRequest() {
     );
   }
   const tools = Array.isArray(success.body.tools) ? success.body.tools : [];
-  const hasWebSearch = tools.some(
-    (tool) =>
-      tool?.type === "web_search" ||
-      (tool?.type === "function" &&
-        (tool?.name === "web_search" || tool?.function?.name === "web_search")),
-  );
-  if (!hasWebSearch) {
+  const hasNativeWebSearch = tools.some((tool) => tool?.type === "web_search");
+  if (!hasNativeWebSearch) {
     throw new Error(
-      `success request did not include web_search. Body: ${JSON.stringify(success.body)}`,
+      `success request did not include native web_search. Body: ${JSON.stringify(success.body)}`,
     );
   }
   if (success.body.reasoning?.effort === "minimal") {

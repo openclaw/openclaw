@@ -1,3 +1,4 @@
+// Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
@@ -57,6 +58,7 @@ export const AgentDefaultsSchema = z
     imageGenerationModel: AgentToolModelSchema.optional(),
     videoGenerationModel: AgentToolModelSchema.optional(),
     musicGenerationModel: AgentToolModelSchema.optional(),
+    voiceModel: AgentToolModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentToolModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),

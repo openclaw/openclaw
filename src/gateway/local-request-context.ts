@@ -1,3 +1,5 @@
+// Local embedded Gateway request context.
+// Lets local agent paths reuse Gateway server methods without starting a server.
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +13,9 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
+// Embedded/local agent calls need enough GatewayRequestContext to reuse server
+// methods without starting the full gateway. Unsupported subsystems fail loudly
+// so local command paths do not silently enqueue cron/channel work.
 type LocalGatewayRequestContextParams = {
   deps: CliDeps;
   getRuntimeConfig: () => OpenClawConfig;
@@ -41,12 +46,31 @@ const unavailableCron: CronServiceContract = {
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
 
+/** Creates the minimal gateway context used by embedded local agent execution. */
 export function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
   const sessionEvents = new Set<string>();
-  const chatRuns = new Map<string, { sessionKey: string; clientRunId: string }>();
+  const chatRuns = new Map<string, { sessionKey: string; agentId?: string; clientRunId: string }>();
+  const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
+  const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
+  const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
+  const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
+  const agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"] = new Map();
+  const bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"] = new Map();
+  // Clear every per-run buffer variant together; streamed assistant/thinking
+  // deltas share the client run id prefix but are tracked under separate keys.
+  const clearChatRunState = (runId: string) => {
+    chatRunBuffers.delete(runId);
+    chatDeltaSentAt.delete(runId);
+    chatDeltaLastBroadcastLen.delete(runId);
+    chatDeltaLastBroadcastText.delete(runId);
+    for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+      agentDeltaSentAt.delete(key);
+      bufferedAgentEvents.delete(key);
+    }
+  };
   return {
     deps: params.deps,
     cron: unavailableCron,
@@ -73,12 +97,13 @@ export function createLocalGatewayRequestContext(
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
+    chatRunBuffers,
+    chatDeltaSentAt,
+    chatDeltaLastBroadcastLen,
+    chatDeltaLastBroadcastText,
+    agentDeltaSentAt,
+    bufferedAgentEvents,
+    clearChatRunState,
     addChatRun: (sessionId, entry) => {
       chatRuns.set(sessionId, entry);
     },
@@ -127,6 +152,7 @@ export function createLocalGatewayRequestContext(
   };
 }
 
+/** Runs code inside a local gateway request scope unless an outer scope already exists. */
 export function withLocalGatewayRequestScope<T>(params: LocalGatewayScopeParams, run: () => T): T {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context) {

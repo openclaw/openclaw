@@ -1,9 +1,11 @@
+/** Builds plugin lookup tables keyed by manifest ids, channels, providers, and commands. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  createGatewayStartupMetadataPluginIdScope,
+  isMetadataSnapshotScopedForGatewayStartup,
   resolveGatewayStartupPluginPlanFromRegistry,
   type GatewayStartupPluginPlan,
 } from "./channel-plugin-ids.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
 import {
   isPluginMetadataSnapshotCompatible,
   resolvePluginMetadataSnapshot,
@@ -29,7 +31,6 @@ export type PluginLookUpTableMetrics = {
 };
 
 export type PluginLookUpTable = PluginMetadataSnapshot & {
-  key: string;
   startup: PluginLookUpTableStartupPlan;
   metrics: PluginMetadataSnapshot["metrics"] &
     Pick<
@@ -56,39 +57,28 @@ export function clearPluginLookUpTableMemoForTest(): void {
   lookupTableMemoBySnapshot = new WeakMap<PluginMetadataSnapshot, Map<string, PluginLookUpTable>>();
 }
 
-function createPluginLookUpTableMemoKey(params: {
-  config: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  index?: PluginRegistrySnapshot;
-}): string {
-  return hashJson({
-    activationSourceConfig: params.activationSourceConfig ?? null,
-    config: params.config,
-    env: params.env,
-    indexPolicyHash: params.index?.policyHash ?? null,
-    indexGeneratedAtMs: params.index?.generatedAtMs ?? null,
-    indexPlugins:
-      params.index?.plugins.map((plugin) => [
-        plugin.pluginId,
-        plugin.manifestHash,
-        plugin.installRecordHash,
-      ]) ?? null,
-    workspaceDir: params.workspaceDir ?? null,
-  });
-}
-
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
   const requestedSnapshotConfig = params.activationSourceConfig ?? params.config;
+  const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    env: params.env,
+  });
   const metadataSnapshot =
     params.metadataSnapshot &&
     isPluginMetadataSnapshotCompatible({
       snapshot: params.metadataSnapshot,
       config: requestedSnapshotConfig,
       env: params.env,
+      allowScopedSnapshot: true,
       workspaceDir: params.workspaceDir,
       index: params.index,
+    }) &&
+    isMetadataSnapshotScopedForGatewayStartup({
+      metadataSnapshot: params.metadataSnapshot,
+      pluginIdScope,
     })
       ? params.metadataSnapshot
       : resolvePluginMetadataSnapshot({
@@ -97,16 +87,9 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
           env: params.env,
           allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
+          pluginIdScope,
         });
-  const memoKey = createPluginLookUpTableMemoKey({
-    config: params.config,
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    env: params.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.index !== undefined ? { index: params.index } : {}),
-  });
+  const memoKey = pluginIdScope.key;
   const memo = lookupTableMemoBySnapshot.get(metadataSnapshot)?.get(memoKey);
   if (memo) {
     return memo;
@@ -126,16 +109,6 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
 
   const table: PluginLookUpTable = {
     ...metadataSnapshot,
-    key: hashJson({
-      policyHash: index.policyHash,
-      generatedAtMs: index.generatedAtMs,
-      plugins: index.plugins.map((plugin) => [
-        plugin.pluginId,
-        plugin.manifestHash,
-        plugin.installRecordHash,
-      ]),
-      startup,
-    }),
     startup,
     metrics: {
       ...metadataSnapshot.metrics,

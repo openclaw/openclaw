@@ -1,3 +1,4 @@
+// Diagnostic logger records structured runtime events, timings, and health snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
@@ -37,12 +38,13 @@ import {
 } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
+  requestStuckSessionRecoveryOutcome,
   resetDiagnosticSessionRecoveryCoordinatorForTest,
   type RecoverStuckSession,
 } from "./diagnostic-session-recovery-coordinator.js";
-import {
-  type StuckSessionRecoveryOutcome,
-  type StuckSessionRecoveryRequest,
+import type {
+  StuckSessionRecoveryOutcome,
+  StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
 import {
   diagnosticSessionStates,
@@ -162,7 +164,7 @@ async function recoverStuckSession(
   stuckSessionRecoveryRuntimePromise ??= import("./diagnostic-stuck-session-recovery.runtime.js");
   return stuckSessionRecoveryRuntimePromise
     .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
-    .catch((err) => {
+    .catch((err: unknown) => {
       diag.warn(`stuck session recovery unavailable: ${String(err)}`);
       return {
         status: "failed",
@@ -173,6 +175,26 @@ async function recoverStuckSession(
         error: String(err),
       };
     });
+}
+
+export function isStuckSessionRecoveryEnabled(config?: OpenClawConfig): boolean {
+  return areDiagnosticsEnabledForProcess() && isDiagnosticsEnabled(config);
+}
+
+export async function requestStuckDiagnosticSessionRecovery(
+  params: StuckSessionRecoveryRequest,
+): Promise<StuckSessionRecoveryOutcome | undefined> {
+  return requestStuckSessionRecoveryOutcome({
+    recover: recoverStuckSession,
+    classification: {
+      eventType: "session.stalled",
+      reason: "visible_reply_wait_timeout",
+      classification: "stalled_agent_run",
+      activeWorkKind: "embedded_run",
+      recoveryEligible: false,
+    },
+    request: params,
+  });
 }
 
 function formatDiagnosticWorkLabel(
@@ -1234,7 +1256,7 @@ export function startDiagnosticHeartbeat(
           pruneStaleCommandPolls(state);
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
       });
 

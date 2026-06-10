@@ -1,3 +1,10 @@
+/**
+ * Browser agent action routes for download handling.
+ *
+ * Registers endpoints that wait for a pending download or trigger a referenced
+ * page download while keeping files scoped to the configured downloads root.
+ */
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -9,8 +16,9 @@ import {
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: number | undefined) {
   return {
@@ -20,6 +28,7 @@ function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: n
   };
 }
 
+/** Register download action endpoints on the browser control server. */
 export function registerBrowserAgentActDownloadRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -30,7 +39,12 @@ export function registerBrowserAgentActDownloadRoutes(
       const body = readBody(req);
       const targetId = resolveTargetIdFromBody(body);
       const out = toStringOrEmpty(body.path) || "";
-      const timeoutMs = toNumber(body.timeoutMs);
+      let timeoutMs: number | undefined;
+      try {
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
 
       await withRouteTabContext({
         req,
@@ -78,7 +92,12 @@ export function registerBrowserAgentActDownloadRoutes(
       const targetId = resolveTargetIdFromBody(body);
       const ref = toStringOrEmpty(body.ref);
       const out = toStringOrEmpty(body.path);
-      const timeoutMs = toNumber(body.timeoutMs);
+      let timeoutMs: number | undefined;
+      try {
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
       if (!ref) {
         return jsonError(res, 400, "ref is required");
       }

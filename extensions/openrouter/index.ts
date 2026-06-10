@@ -1,3 +1,4 @@
+// Openrouter plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type ProviderReplayPolicy,
@@ -18,6 +19,7 @@ import { buildOpenRouterImageGenerationProvider } from "./image-generation-provi
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isOpenRouterMistralModelId } from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
+import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildOpenrouterProvider,
@@ -135,10 +137,11 @@ export default definePluginEntry({
             choiceLabel: "OpenRouter API key",
             groupId: "openrouter",
             groupLabel: "OpenRouter",
-            groupHint: "API key",
+            groupHint: "OAuth or API key",
             onboardingScopes: ["text-inference", "music-generation"],
           },
         }),
+        createOpenRouterOAuthAuthMethod(),
       ],
       catalog: {
         order: "simple",
@@ -172,11 +175,11 @@ export default definePluginEntry({
           : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api, baseUrl }) => {
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
         const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
           ? {
-              api,
+              api: apiLocal,
               baseUrl: normalizedBaseUrl,
             }
           : undefined;

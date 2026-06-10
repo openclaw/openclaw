@@ -1,3 +1,4 @@
+// Browser tests cover register.navigation plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "../browser-cli-resize.js";
@@ -46,6 +47,18 @@ describe("browser navigation commands", () => {
 
     const capture = getBrowserCliRuntimeCapture();
     expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: must be a positive integer");
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+  });
+
+  it("rejects excessive resize dimensions before dispatch", async () => {
+    const program = createNavigationProgram();
+
+    await expect(
+      program.parseAsync(["browser", "resize", "8193", "768"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const capture = getBrowserCliRuntimeCapture();
+    expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: maximum is 8192");
     expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
   });
 });

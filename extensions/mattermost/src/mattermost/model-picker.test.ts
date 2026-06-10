@@ -1,3 +1,4 @@
+// Mattermost tests cover model picker plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -137,6 +138,20 @@ describe("Mattermost model picker", () => {
   });
 
   it("does not coerce partial page strings in signed picker contexts", () => {
+    expect(
+      parseMattermostModelPickerContext({
+        oc_model_picker: true,
+        action: "list",
+        ownerUserId: "user-1",
+        provider: "openai",
+        page: "+02",
+      }),
+    ).toEqual({
+      action: "list",
+      ownerUserId: "user-1",
+      provider: "openai",
+      page: 2,
+    });
     expect(
       parseMattermostModelPickerContext({
         oc_model_picker: true,

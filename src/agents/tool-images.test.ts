@@ -1,3 +1,5 @@
+// Tool image tests cover image payload sanitization before tool outputs are
+// returned to model-visible content blocks.
 import { describe, expect, it } from "vitest";
 import {
   createNoisyPngBuffer,
@@ -95,7 +97,29 @@ describe("tool image sanitizing", () => {
     expect(image.mimeType).toBe("image/jpeg");
   });
 
+  it("uses default image limits for non-finite options", async () => {
+    const jpeg = createTinyJpegBuffer();
+
+    const out = await sanitizeContentBlocksImages(
+      [
+        {
+          type: "image" as const,
+          data: jpeg.toString("base64"),
+          mimeType: "image/jpeg",
+        },
+      ],
+      "test",
+      { maxDimensionPx: Number.NaN, maxBytes: Number.NaN },
+    );
+
+    const image = getImageBlock(out);
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(image.data).toBe(jpeg.toString("base64"));
+  });
+
   it("drops malformed image base64 payloads", async () => {
+    // Invalid base64 is replaced with text so malformed payloads cannot smuggle
+    // attributes or script-like text through image blocks.
     const blocks = [
       {
         type: "image" as const,

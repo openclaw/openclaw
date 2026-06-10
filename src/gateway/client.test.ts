@@ -1,3 +1,5 @@
+// Gateway client tests cover WebSocket protocol negotiation, auth persistence,
+// proxy bypass setup, command dispatch, reconnect, and error handling.
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,13 +31,13 @@ const {
   proxylineStopMock,
   proxylineUnregisterBypassMock,
 } = vi.hoisted(() => {
-  const proxylineStopMock = vi.fn();
-  const proxylineUnregisterBypassMock = vi.fn();
-  const proxylineRegisterBypassMock = vi.fn(() => proxylineUnregisterBypassMock);
+  const proxylineStopMockLocal = vi.fn();
+  const proxylineUnregisterBypassMockLocal = vi.fn();
+  const proxylineRegisterBypassMockLocal = vi.fn(() => proxylineUnregisterBypassMockLocal);
   return {
-    proxylineRegisterBypassMock,
-    proxylineStopMock,
-    proxylineUnregisterBypassMock,
+    proxylineRegisterBypassMock: proxylineRegisterBypassMockLocal,
+    proxylineStopMock: proxylineStopMockLocal,
+    proxylineUnregisterBypassMock: proxylineUnregisterBypassMockLocal,
     installGlobalProxyMock: vi.fn(() => ({
       active: true,
       createNodeAgent: vi.fn(),
@@ -43,8 +45,8 @@ const {
       createWebSocketAgent: vi.fn(),
       explain: vi.fn(),
       mode: "managed",
-      registerBypass: proxylineRegisterBypassMock,
-      stop: proxylineStopMock,
+      registerBypass: proxylineRegisterBypassMockLocal,
+      stop: proxylineStopMockLocal,
       withBypass: vi.fn(),
     })),
   };
@@ -100,9 +102,7 @@ class MockWebSocket {
         return;
       case "error":
         this.errorHandlers.push(handler as WsEventHandlers["error"]);
-        return;
       default:
-        return;
     }
   }
 
@@ -233,21 +233,6 @@ function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
   }
   return arg;
 }
-
-async function expectGatewayRequestError(
-  promise: Promise<unknown>,
-  expected: Record<string, unknown>,
-): Promise<void> {
-  let rejected: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    rejected = error;
-  }
-  const error = expectRecordFields(rejected, expected, "gateway request error");
-  expectRecordFields(error.details, { method: "chat.history" }, "gateway request error details");
-}
-
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
@@ -814,6 +799,7 @@ describe("GatewayClient close handling", () => {
 
       client.start();
       const ws = getLatestWs();
+      ws.autoCloseOnClose = false;
 
       client.stop();
 
@@ -823,6 +809,27 @@ describe("GatewayClient close handling", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(ws.terminateCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not force-terminate a socket that closes during stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+
+      client.stop();
+
+      expect(ws.closeCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(ws.terminateCalls).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -1016,7 +1023,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("surfaces connect assembly errors instead of waiting for the wrapper timeout", async () => {
     vi.useFakeTimers();
-    let client: GatewayClientInstance | null = null;
+    let client: GatewayClientInstance | null | undefined;
     try {
       const onClose = vi.fn();
       const onConnectError = vi.fn();

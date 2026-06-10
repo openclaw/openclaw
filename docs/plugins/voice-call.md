@@ -115,7 +115,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
               responseSystemPrompt: "You are a concise baseball card specialist.",
               tts: {
                 providers: {
-                  openai: { voice: "alloy" },
+                  openai: { speakerVoice: "alloy" },
                 },
               },
             },
@@ -322,7 +322,7 @@ for tool work, current information, memory lookups, or workspace state.
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
                     model: "gemini-2.5-flash-native-audio-preview-12-2025",
-                    voice: "Kore",
+                    speakerVoice: "Kore",
                     silenceDurationMs: 500,
                     startSensitivity: "high",
                   },
@@ -455,7 +455,7 @@ speech on calls. You can override it under the plugin config with the
     provider: "elevenlabs",
     providers: {
       elevenlabs: {
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
+        speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
         modelId: "eleven_multilingual_v2",
       },
     },
@@ -486,7 +486,7 @@ Behavior notes:
     tts: {
       provider: "openai",
       providers: {
-        openai: { voice: "alloy" },
+        openai: { speakerVoice: "alloy" },
       },
     },
   },
@@ -505,7 +505,7 @@ Behavior notes:
             providers: {
               elevenlabs: {
                 apiKey: "elevenlabs_key",
-                voiceId: "pMsXgVXv3BLzUgSXRplE",
+                speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
                 modelId: "eleven_multilingual_v2",
               },
             },
@@ -528,7 +528,7 @@ Behavior notes:
             providers: {
               openai: {
                 model: "gpt-4o-mini-tts",
-                voice: "marin",
+                speakerVoice: "marin",
               },
             },
           },
@@ -599,7 +599,7 @@ you can usually override only the provider voice:
   tts: {
     provider: "openai",
     providers: {
-      openai: { voice: "coral" },
+      openai: { speakerVoice: "coral" },
     },
   },
   numbers: {
@@ -608,7 +608,7 @@ you can usually override only the provider voice:
       responseSystemPrompt: "You are a concise baseball card specialist.",
       tts: {
         providers: {
-          openai: { voice: "alloy" },
+          openai: { speakerVoice: "alloy" },
         },
       },
     },

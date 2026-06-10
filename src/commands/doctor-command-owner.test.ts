@@ -1,3 +1,4 @@
+// Doctor command-owner tests cover channel sender formatting and configured owner detection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatCommandOwnerFromChannelSender,
@@ -7,7 +8,7 @@ import {
 
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 

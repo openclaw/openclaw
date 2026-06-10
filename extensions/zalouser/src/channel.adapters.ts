@@ -1,3 +1,4 @@
+// Zalouser plugin module implements channel.adapters behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
@@ -108,7 +109,7 @@ function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
 
 async function sendZalouserTextFromContext({ to, text, accountId, cfg }: ZalouserSendTextContext) {
   const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-  const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+  const account = resolveZalouserAccountSync({ cfg, accountId });
   const target = parseZalouserOutboundTarget(to);
   return await sendMessageZalouser(target.threadId, text, {
     profile: account.profile,
@@ -129,7 +130,7 @@ async function sendZalouserMediaFromContext({
   mediaReadFile,
 }: ZalouserSendMediaContext) {
   const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-  const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+  const account = resolveZalouserAccountSync({ cfg, accountId });
   const target = parseZalouserOutboundTarget(to);
   return await sendMessageZalouser(target.threadId, text, {
     profile: account.profile,
@@ -279,7 +280,7 @@ export const zalouserResolverAdapter = {
       try {
         const runtimeModule = await loadZalouserChannelRuntime();
         const account = resolveZalouserAccountSync({
-          cfg: cfg,
+          cfg,
           accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
         });
         if (kind === "user") {
@@ -329,7 +330,7 @@ export const zalouserAuthAdapter = {
   }) => {
     const { startZaloQrLogin, waitForZaloQrLogin } = await loadZalouserChannelRuntime();
     const account = resolveZalouserAccountSync({
-      cfg: cfg,
+      cfg,
       accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
     });
 
@@ -381,7 +382,7 @@ export const zalouserPairingTextAdapter = {
   normalizeAllowEntry: createPairingPrefixStripper(/^(zalouser|zlu):/i),
   notify: async ({ cfg, id, message }: { cfg: OpenClawConfig; id: string; message: string }) => {
     const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-    const account = resolveZalouserAccountSync({ cfg: cfg });
+    const account = resolveZalouserAccountSync({ cfg });
     const authenticated = await checkZcaAuthenticated(account.profile);
     if (!authenticated) {
       throw new Error("Zalouser not authenticated");

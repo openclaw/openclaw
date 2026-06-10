@@ -1,6 +1,11 @@
+/**
+ * Browser snapshot, navigation, and screenshot routes.
+ *
+ * Handles profile-aware snapshot generation across Playwright and Chrome MCP,
+ * navigation policy checks, media storage, and screenshot normalization.
+ */
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
-import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
 import {
   evaluateChromeMcpScript,
@@ -18,15 +23,17 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
-import { withBrowserNavigationPolicy } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRouteContext } from "../server-context.js";
+import { appendSnapshotUrls, type SnapshotUrlEntry } from "../snapshot-urls.js";
+import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
+  browserNavigationPolicyForProfile,
   getPwAiModule,
   handleRouteError,
   readBody,
@@ -42,26 +49,18 @@ import {
   shouldUsePlaywrightForScreenshot,
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
+import { readRoutePositiveInteger } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
-
-function browserNavigationPolicyForProfile(ctx: BrowserRouteContext, profileCtx: ProfileContext) {
-  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
-    browserProxyMode: resolveBrowserNavigationProxyMode({
-      resolved: ctx.state().resolved,
-      profile: profileCtx.profile,
-    }),
-  });
-}
 
 async function collectChromeMcpSnapshotUrls(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
-}): Promise<Array<{ text: string; url: string }>> {
+}): Promise<SnapshotUrlEntry[]> {
   const result = await evaluateChromeMcpScript({
     profileName: params.profileName,
     profile: params.profile,
@@ -93,14 +92,6 @@ async function collectChromeMcpSnapshotUrls(params: {
           typeof (entry as { url?: unknown }).url === "string",
       )
     : [];
-}
-
-function appendSnapshotUrls(snapshot: string, urls: Array<{ text: string; url: string }>): string {
-  if (urls.length === 0) {
-    return snapshot;
-  }
-  const lines = urls.map((entry, index) => `${index + 1}. ${entry.text} -> ${entry.url}`);
-  return `${snapshot}\n\nLinks:\n${lines.join("\n")}`;
 }
 
 async function clearChromeMcpOverlay(params: {
@@ -268,6 +259,7 @@ function browserStateResponseFields(state: unknown): { browserState?: unknown } 
   return hasObservableBrowserState(state) ? { browserState: state } : {};
 }
 
+/** Register snapshot, screenshot, and navigation endpoints. */
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -367,11 +359,16 @@ export function registerBrowserAgentSnapshotRoutes(
       const element = toStringOrEmpty(body.element) || undefined;
       const labels = toBoolean(body.labels) ?? false;
       const type = body.type === "jpeg" ? "jpeg" : "png";
-      const timeoutMsRaw = toNumber(body.timeoutMs);
-      const timeoutMs =
-        timeoutMsRaw !== undefined
-          ? Math.max(1, Math.floor(timeoutMsRaw))
-          : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+      let timeoutMs: number;
+      try {
+        const timeoutMsRaw = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs =
+          timeoutMsRaw !== undefined
+            ? normalizeBrowserTimerDelayMs(timeoutMsRaw)
+            : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+      } catch (err) {
+        return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+      }
 
       if (fullPage && (ref || element)) {
         return jsonError(res, 400, "fullPage is not supported for element screenshots");
@@ -711,7 +708,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const pw = await getPwAiModule();
           const snap = plan.wantsRoleSnapshot
             ? pw
-              ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs).catch(async (err) => {
+              ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs).catch(async (err: unknown) => {
                   const fallback = await cdpRoleSnapshot();
                   if (fallback) {
                     return fallback;

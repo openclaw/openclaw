@@ -1,9 +1,10 @@
+// Builds provider install catalog entries from plugin metadata.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   loadOpenClawProviderIndex,
   type OpenClawProviderIndexProvider,
 } from "../model-catalog/index.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   describePluginInstallSource,
@@ -24,6 +25,7 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
 
+/** Provider setup choice paired with install metadata for the owning plugin. */
 export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
   label: string;
   origin: PluginOrigin;
@@ -47,6 +49,20 @@ type PreferredInstallSources = {
   installedPluginIds: ReadonlySet<string>;
   installsByPluginId: Map<string, PreferredInstallSource>;
 };
+type ProviderInstallCatalogChoiceFields = Pick<
+  ProviderAuthChoiceMetadata,
+  | "choiceHint"
+  | "assistantPriority"
+  | "assistantVisibility"
+  | "groupId"
+  | "groupLabel"
+  | "groupHint"
+  | "optionKey"
+  | "cliFlag"
+  | "cliOption"
+  | "cliDescription"
+  | "onboardingScopes"
+>;
 
 const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
@@ -234,19 +250,19 @@ function resolveProviderIndexInstallCatalogEntries(params: {
         methodId: choice.method,
         choiceId: choice.choiceId,
         choiceLabel: choice.choiceLabel,
-        ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-        ...(choice.assistantPriority !== undefined
-          ? { assistantPriority: choice.assistantPriority }
-          : {}),
-        ...(choice.assistantVisibility ? { assistantVisibility: choice.assistantVisibility } : {}),
-        ...(choice.groupId ? { groupId: choice.groupId } : {}),
-        ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-        ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-        ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
-        ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
-        ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
-        ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
-        ...(choice.onboardingScopes ? { onboardingScopes: [...choice.onboardingScopes] } : {}),
+        ...resolveProviderInstallCatalogChoiceFields({
+          choiceHint: choice.choiceHint,
+          assistantPriority: choice.assistantPriority,
+          assistantVisibility: choice.assistantVisibility,
+          groupId: choice.groupId,
+          groupLabel: choice.groupLabel,
+          groupHint: choice.groupHint,
+          optionKey: choice.optionKey,
+          cliFlag: choice.cliFlag,
+          cliOption: choice.cliOption,
+          cliDescription: choice.cliDescription,
+          onboardingScopes: choice.onboardingScopes ? [...choice.onboardingScopes] : undefined,
+        }),
         label: provider.name,
         origin: "bundled",
         install,
@@ -257,6 +273,26 @@ function resolveProviderIndexInstallCatalogEntries(params: {
     }
   }
   return entries;
+}
+
+function resolveProviderInstallCatalogChoiceFields(
+  choice: ProviderInstallCatalogChoiceFields,
+): Partial<ProviderInstallCatalogChoiceFields> {
+  return {
+    ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+    ...(choice.assistantPriority !== undefined
+      ? { assistantPriority: choice.assistantPriority }
+      : {}),
+    ...(choice.assistantVisibility ? { assistantVisibility: choice.assistantVisibility } : {}),
+    ...(choice.groupId ? { groupId: choice.groupId } : {}),
+    ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+    ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+    ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
+    ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
+    ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
+    ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+    ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
+  };
 }
 
 function isProviderFlowScope(
@@ -309,23 +345,19 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           methodId,
           choiceId,
           choiceLabel,
-          ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-          ...(choice.assistantPriority !== undefined
-            ? { assistantPriority: choice.assistantPriority }
-            : {}),
-          ...(choice.assistantVisibility
-            ? { assistantVisibility: choice.assistantVisibility }
-            : {}),
-          ...(choice.groupId ? { groupId: choice.groupId } : {}),
-          ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-          ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-          ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
-          ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
-          ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
-          ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
-          ...(normalizeProviderAuthChoiceScopes(choice.onboardingScopes)
-            ? { onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes) }
-            : {}),
+          ...resolveProviderInstallCatalogChoiceFields({
+            choiceHint: choice.choiceHint,
+            assistantPriority: choice.assistantPriority,
+            assistantVisibility: choice.assistantVisibility,
+            groupId: choice.groupId,
+            groupLabel: choice.groupLabel,
+            groupHint: choice.groupHint,
+            optionKey: choice.optionKey,
+            cliFlag: choice.cliFlag,
+            cliOption: choice.cliOption,
+            cliDescription: choice.cliDescription,
+            onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes),
+          }),
           label,
           origin: "bundled",
           install,
@@ -339,6 +371,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   return entries;
 }
 
+/** Lists install catalog entries for provider setup choices. */
 export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
@@ -381,6 +414,7 @@ export function resolveProviderInstallCatalogEntries(
   );
 }
 
+/** Resolves one provider install catalog entry by setup choice id. */
 export function resolveProviderInstallCatalogEntry(
   choiceId: string,
   params?: ProviderInstallCatalogParams,

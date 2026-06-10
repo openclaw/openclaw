@@ -1,3 +1,4 @@
+// Tests ACP dispatch delivery routing and visible reply handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
@@ -13,7 +14,16 @@ const ttsMocks = vi.hoisted(() => ({
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock-message" })),
+  routeReply: vi.fn(
+    async (
+      _params: unknown,
+    ): Promise<{
+      ok: boolean;
+      messageId?: string;
+      suppressed?: boolean;
+      reason?: string;
+    }> => ({ ok: true, messageId: "mock-message" }),
+  ),
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
 
@@ -771,6 +781,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(routeParams.threadId).toBe("101.000");
   });
 
+  it("uses inherited account and thread metadata for routed ACP replies", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: "agent:main:feishu:direct:ou_123",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "feishu",
+      originatingTo: "user:ou_123",
+      originatingAccountId: "work",
+      originatingThreadId: "thread:om_123",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ accountId?: string; threadId?: string | number }]
+    >;
+    expect(routeParams.accountId).toBe("work");
+    expect(routeParams.threadId).toBe("thread:om_123");
+  });
+
   it("routes ACP replies when cfg.channels is missing", async () => {
     await expectVisibleChatBlockRoutesToAccount({} as OpenClawConfig, undefined);
   });
@@ -795,5 +831,33 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
     expect(coordinator.getRoutedCounts().block).toBe(1);
+  });
+
+  it("treats hook-suppressed routed ACP block text as handled", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    const delivered = await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+    expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 });

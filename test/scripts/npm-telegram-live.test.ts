@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
+// Npm Telegram Live tests cover npm telegram live script behavior.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -10,6 +12,19 @@ const PREPARE_PACKAGE_PATH = path.resolve(
   TEST_DIR,
   "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mjs",
 );
+const tempRoots: string[] = [];
+
+function mkTempRoot() {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-npm-telegram-live-"));
+  tempRoots.push(root);
+  return root;
+}
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 describe("package Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
@@ -46,8 +61,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(installRun).toContain(
       '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
-    expect(installRun).toContain('elif command -v gtimeout >/dev/null 2>&1; then');
-    expect(installRun).toContain("timeout_bin=\"gtimeout\"");
+    expect(installRun).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(installRun).toContain('timeout_bin="gtimeout"');
     expect(installRun).toContain(
       'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
     );
@@ -56,12 +71,16 @@ describe("package Telegram live Docker E2E", () => {
       '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
-    expect(installRun).not.toContain("running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT");
+    expect(installRun).not.toContain(
+      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
+    );
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
     expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
     expect(installRun).not.toContain("run_logged docker run --rm");
     expect(script).toContain("run_logged docker_e2e_run_with_harness");
+    expect(script).toContain('docker_e2e_print_log "$run_log"');
+    expect(script).not.toContain('cat "$run_log"');
     expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
     expect(script).toContain('credential_role="ci"');
@@ -86,6 +105,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).toContain('openclaw_e2e_print_log "$file"');
+    expect(runtimeRun).not.toContain("sed -n '1,220p'");
     expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
   });
 
@@ -100,6 +121,21 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('validate_openclaw_package_spec "$PACKAGE_SPEC"');
     expect(script.indexOf('if [ -n "$resolved_package_tgz" ]; then')).toBeLessThan(
       script.indexOf('validate_openclaw_package_spec "$PACKAGE_SPEC"'),
+    );
+  });
+
+  it("keeps live Docker artifacts isolated by default", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"',
+    );
+    expect(script).toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).not.toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
   });
 
@@ -154,5 +190,33 @@ describe("package Telegram live Docker E2E", () => {
         OPENCLAW_QA_CREDENTIAL_ROLE: "maintainer",
       }),
     ).toBe("ci");
+  });
+
+  it("gates package Telegram status on the summary artifact", async () => {
+    const summaryPath = path.join(mkTempRoot(), "telegram-qa-summary.json");
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 1, failed: 0 },
+        scenarios: [{ status: "fail" }],
+      }),
+      "utf8",
+    );
+
+    await expect(
+      testing.shouldFailPackageTelegramRun(
+        { summaryPath },
+        { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "" },
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it("does not read package Telegram summaries when failures are allowed", async () => {
+    await expect(
+      testing.shouldFailPackageTelegramRun(
+        { summaryPath: path.join(mkTempRoot(), "missing-summary.json") },
+        { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "1" },
+      ),
+    ).resolves.toBe(false);
   });
 });

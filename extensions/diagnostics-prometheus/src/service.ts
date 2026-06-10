@@ -1,3 +1,4 @@
+// Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   DiagnosticEventMetadata,
@@ -334,7 +335,9 @@ function modelCallLabels(evt: {
   };
 }
 
-function modelFailoverLabels(evt: Extract<DiagnosticEventPayload, { type: "model.failover" }>): LabelSet {
+function modelFailoverLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "model.failover" }>,
+): LabelSet {
   return {
     from_model: lowCardinalityLabel(evt.fromModel),
     from_provider: lowCardinalityLabel(evt.fromProvider),
@@ -429,7 +432,9 @@ function webhookLabels(
   };
 }
 
-function sessionStuckLabels(evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>): LabelSet {
+function sessionStuckLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>,
+): LabelSet {
   return {
     reason: lowCardinalityLabel(evt.reason, "none"),
     state: evt.state,
@@ -463,7 +468,9 @@ function livenessLabels(
   };
 }
 
-function payloadLargeLabels(evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>): LabelSet {
+function payloadLargeLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>,
+): LabelSet {
   return {
     action: evt.action,
     channel: lowCardinalityLabel(evt.channel, "none"),
@@ -981,9 +988,7 @@ function recordDiagnosticEvent(
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
-      return;
     default:
-      return;
   }
 }
 

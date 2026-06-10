@@ -1,8 +1,15 @@
+/**
+ * Gateway-host exec approval and allowlist handling.
+ * Evaluates shell allowlists, auto-review, durable approvals, follow-up routing,
+ * and approved command execution for gateway-backed exec calls.
+ */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   addDurableCommandApproval,
-  analyzeShellCommand,
+  commandRequiresSecurityAuditSuppressionApproval,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
@@ -14,9 +21,12 @@ import {
   resolveApprovalAuditTrustPath,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
+import {
+  defaultExecAutoReviewer,
+  type ExecAutoReviewer,
+  type ExecAutoReviewInput,
+} from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -51,6 +61,7 @@ import type {
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
+/** Full input bundle for gateway-host allowlist and approval processing. */
 export type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
@@ -62,6 +73,8 @@ export type ProcessGatewayAllowlistParams = {
   defaultTimeoutSec: number;
   security: ExecSecurity;
   ask: ExecAsk;
+  autoReview?: boolean;
+  autoReviewer?: ExecAutoReviewer;
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   strictInlineEval?: boolean;
@@ -69,6 +82,10 @@ export type ProcessGatewayAllowlistParams = {
   trigger?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Session UUID active when the approval was requested; pins the followup. */
+  sessionId?: string;
+  /** Session-store template, so the direct/denied followup can detect a rebind. */
+  sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -86,6 +103,7 @@ export type ProcessGatewayAllowlistParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
+/** Gateway allowlist outcome before command execution continues. */
 export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
@@ -106,109 +124,35 @@ function hasGatewayAllowlistMiss(params: {
   );
 }
 
-function normalizeCommandName(value: string | undefined): string {
-  return (value ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
-}
-
-function textMentionsSecurityAuditSuppressions(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return (
-    normalized.includes("security.audit.suppressions") ||
-    /["']?security["']?[\s\S]{0,200}["']?audit["']?[\s\S]{0,200}["']?suppressions["']?/.test(
-      normalized,
-    )
-  );
-}
-
-function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
-  const command = normalizeCommandName(argv[0]);
-  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
-  if (normalizeCommandName(argv[offset]) !== "openclaw") {
-    return false;
+function resolveGatewayAutoReviewReason(params: {
+  requiresInlineEvalApproval: boolean;
+  requiresHeredocApproval: boolean;
+  requiresAllowlistPlanApproval: boolean;
+  hostSecurity: ExecSecurity;
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+  durableApprovalSatisfied: boolean;
+}): ExecAutoReviewInput["reason"] {
+  if (params.requiresInlineEvalApproval) {
+    return "strict-inline-eval";
   }
-  offset += 1;
-  while (offset < argv.length) {
-    const arg = argv[offset];
-    if (["--dev", "--no-color"].includes(arg ?? "")) {
-      offset += 1;
-      continue;
-    }
-    if (["--profile", "--container", "--log-level"].includes(arg ?? "")) {
-      offset += 2;
-      continue;
-    }
-    if (
-      arg?.startsWith("--profile=") ||
-      arg?.startsWith("--container=") ||
-      arg?.startsWith("--log-level=")
-    ) {
-      offset += 1;
-      continue;
-    }
-    break;
+  if (params.requiresHeredocApproval) {
+    return "heredoc";
   }
-  return (
-    argv[offset] === "config" && ["get", "schema", "validate"].includes(argv[offset + 1] ?? "")
-  );
-}
-
-function removeParsedSegmentText(command: string, segments: Array<{ raw?: string }>): string {
-  let remaining = command;
-  for (const segment of segments) {
-    const raw = segment.raw?.trim();
-    if (!raw) {
-      continue;
-    }
-    remaining = remaining.replace(raw, " ");
+  if (params.requiresAllowlistPlanApproval) {
+    return "execution-plan-miss";
   }
-  return remaining;
-}
-
-function commandRequiresSecurityAuditSuppressionApproval(params: {
-  command: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  segments: Array<{ argv: string[]; raw?: string }>;
-}): boolean {
-  let sawSegmentMention = false;
-  for (const segment of params.segments) {
-    const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
-    if (!textMentionsSecurityAuditSuppressions(segmentText)) {
-      continue;
-    }
-    sawSegmentMention = true;
-    if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
-      return true;
-    }
+  if (
+    hasGatewayAllowlistMiss({
+      hostSecurity: params.hostSecurity,
+      analysisOk: params.analysisOk,
+      allowlistSatisfied: params.allowlistSatisfied,
+      durableApprovalSatisfied: params.durableApprovalSatisfied,
+    })
+  ) {
+    return "allowlist-miss";
   }
-  if (sawSegmentMention) {
-    const rawAnalysis = analyzeShellCommand({
-      command: params.command,
-      cwd: params.cwd,
-      env: params.env,
-      platform: process.platform,
-    });
-    if (!rawAnalysis.ok) {
-      return textMentionsSecurityAuditSuppressions(params.command);
-    }
-    for (const segment of rawAnalysis.segments) {
-      if (
-        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
-        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
-      ) {
-        return true;
-      }
-    }
-    if (
-      textMentionsSecurityAuditSuppressions(
-        removeParsedSegmentText(params.command, rawAnalysis.segments),
-      )
-    ) {
-      return true;
-    }
-    return false;
-  }
-  return textMentionsSecurityAuditSuppressions(params.command);
+  return "approval-required";
 }
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
@@ -400,6 +344,7 @@ async function resolveGatewayExecApprovalFollowupText(params: {
   }
 }
 
+/** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -433,7 +378,7 @@ export async function processGatewayAllowlist(
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
   if (inlineEvalHit) {
     params.warnings.push(
-      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+      `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
         inlineEvalHit,
       )}.`,
     );
@@ -493,12 +438,12 @@ export async function processGatewayAllowlist(
     requiresSecurityAuditSuppressionApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
-      "Warning: heredoc execution requires explicit approval in allowlist mode.",
+      "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
     );
   }
   if (requiresAllowlistPlanApproval) {
     params.warnings.push(
-      `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
+      `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
   if (requiresSecurityAuditSuppressionApproval) {
@@ -506,8 +451,73 @@ export async function processGatewayAllowlist(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
   }
-
   if (requiresAsk) {
+    const [autoReviewSegment] = allowlistEval.segments;
+    const autoReviewArgv =
+      allowlistEval.segments.length === 1 &&
+      (autoReviewSegment?.raw === undefined ||
+        autoReviewSegment.raw.trim() === params.command.trim())
+        ? autoReviewSegment.argv
+        : undefined;
+    const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
+    const canAutoReviewApprovalMiss =
+      params.autoReview === true &&
+      hostAsk !== "always" &&
+      autoReviewHasBoundCommand &&
+      !requiresSecurityAuditSuppressionApproval;
+    let autoReviewRequiresHumanApproval =
+      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
+      requiresSecurityAuditSuppressionApproval;
+    if (canAutoReviewApprovalMiss) {
+      const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
+      const decision = await reviewer({
+        command: params.command,
+        argv: autoReviewArgv,
+        cwd: params.workdir,
+        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+        host: "gateway",
+        reason: resolveGatewayAutoReviewReason({
+          requiresInlineEvalApproval,
+          requiresHeredocApproval,
+          requiresAllowlistPlanApproval,
+          hostSecurity,
+          analysisOk,
+          allowlistSatisfied,
+          durableApprovalSatisfied,
+        }),
+        analysis: {
+          parsed: analysisOk,
+          allowlistMatched: allowlistSatisfied,
+          durableApprovalMatched: durableApprovalSatisfied,
+          inlineEval: requiresInlineEvalApproval,
+          heredoc: requiresHeredocApproval,
+        },
+        agent: {
+          id: params.agentId,
+          sessionKey: params.sessionKey,
+        },
+      });
+      if (decision.decision === "allow-once") {
+        params.warnings.push(
+          `Exec auto-review allowed once (risk=${decision.risk}): ${decision.rationale}`,
+        );
+        recordMatchedAllowlistUse(
+          resolveApprovalAuditTrustPath(
+            allowlistEval.segments[0]?.resolution ?? null,
+            params.workdir,
+          ),
+        );
+        return {
+          execCommandOverride: enforcedCommand,
+          allowWithoutEnforcedCommand: enforcedCommand === undefined,
+        };
+      }
+      params.warnings.push(
+        `Exec auto-review deferred to human approval (risk=${decision.risk}): ${decision.rationale}`,
+      );
+      autoReviewRequiresHumanApproval = true;
+    }
+
     const requestArgs = buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
@@ -565,6 +575,7 @@ export async function processGatewayAllowlist(
         approvedByAsk,
         deniedReason,
         requiresInlineEvalApproval,
+        requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
       });
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
@@ -606,17 +617,18 @@ export async function processGatewayAllowlist(
 
       const {
         baseDecision,
-        approvedByAsk: initialApprovedByAsk,
-        deniedReason: initialDeniedReason,
+        approvedByAsk: baseApprovedByAsk,
+        deniedReason: baseDeniedReason,
       } = createExecApprovalDecisionState({
         decision,
         askFallback,
       });
-      let approvedByAsk = initialApprovedByAsk;
-      let deniedReason = initialDeniedReason;
+      let approvedByAsk = baseApprovedByAsk;
+      let deniedReason = baseDeniedReason;
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
+          approvedByAsk = false;
           // Use a colon separator rather than nested parens so the
           // `Exec denied (gateway id=..., <deniedReason>): cmd` wire format
           // stays unambiguous for parsers that close on the first `):`.
@@ -644,12 +656,15 @@ export async function processGatewayAllowlist(
         }
       }
 
-      ({ approvedByAsk, deniedReason } = enforceStrictInlineEvalApprovalBoundary({
+      const strictBoundaryDecision = enforceStrictInlineEvalApprovalBoundary({
         baseDecision,
         approvedByAsk,
         deniedReason,
         requiresInlineEvalApproval,
-      }));
+        requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+      });
+      approvedByAsk = strictBoundaryDecision.approvedByAsk;
+      deniedReason = strictBoundaryDecision.deniedReason;
 
       if (
         !approvedByAsk &&
@@ -691,6 +706,8 @@ export async function processGatewayAllowlist(
     const followupTarget = buildExecApprovalFollowupTarget({
       approvalId,
       sessionKey: params.notifySessionKey ?? params.sessionKey,
+      expectedSessionId: params.sessionId,
+      sessionStore: params.sessionStore,
       bashElevated: params.bashElevated,
       turnSourceChannel: params.turnSourceChannel,
       turnSourceTo: params.turnSourceTo,
@@ -721,7 +738,7 @@ export async function processGatewayAllowlist(
 
       recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
-      let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
+      let run: Awaited<ReturnType<typeof runExecProcess>> | null;
       try {
         run = await runExecProcess({
           command: params.command,

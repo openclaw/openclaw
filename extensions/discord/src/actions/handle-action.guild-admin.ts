@@ -1,3 +1,4 @@
+// Discord plugin module implements handle action.guild admin behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
@@ -355,7 +356,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         message: "deleteDays must be an integer from 0 to 7",
       }),
     });
-    const senderUserId = normalizeOptionalString(ctx.requesterSenderId);
+    const senderUserIdLocal = normalizeOptionalString(ctx.requesterSenderId);
     return await handleDiscordAction(
       {
         action: moderation.action,
@@ -366,7 +367,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         until: moderation.until,
         reason: moderation.reason,
         deleteMessageDays: moderation.deleteMessageDays,
-        senderUserId,
+        senderUserId: senderUserIdLocal,
       },
       cfg,
     );

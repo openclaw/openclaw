@@ -215,7 +215,17 @@ describe("createOpenRouterCostReconciliationWrapper", () => {
     });
     expect(wrappedStreamFn).toBeDefined();
 
-    const wrapped = await wrappedStreamFn!({} as Model, {} as Context, { apiKey: "sk-or-test" });
+    const wrapped = await wrappedStreamFn!(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/auto",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as Model,
+      {} as Context,
+      { apiKey: "sk-or-test" },
+    );
     const observed: string[] = [];
     for await (const event of wrapped) {
       observed.push(event.type);

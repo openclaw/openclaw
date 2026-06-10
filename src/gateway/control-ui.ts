@@ -1,7 +1,14 @@
+// Gateway Control UI HTTP handler.
+// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
+import {
+  asDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
@@ -17,7 +24,6 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
-import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -408,7 +414,14 @@ function signAssistantMediaTicketPayload(encodedPayload: string): string {
 }
 
 function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
-  const exp = nowMs + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS;
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return {};
+  }
+  const exp = asDateTimestampMs(now + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS);
+  if (exp === undefined) {
+    return {};
+  }
   const payload: AssistantMediaTicketPayload = {
     scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
     source,
@@ -418,11 +431,15 @@ function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
   const sig = signAssistantMediaTicketPayload(encodedPayload);
   return {
     mediaTicket: `v1.${encodedPayload}.${sig}`,
-    mediaTicketExpiresAt: new Date(exp).toISOString(),
+    mediaTicketExpiresAt: resolveTimestampMsToIsoString(exp),
   };
 }
 
 function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return false;
+  }
   const parts = ticket?.split(".");
   if (!parts || parts.length !== 3 || parts[0] !== "v1") {
     return false;
@@ -446,7 +463,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
       payload.source === source &&
       typeof payload.exp === "number" &&
       Number.isFinite(payload.exp) &&
-      payload.exp >= nowMs
+      payload.exp >= now
     );
   } catch {
     return false;
@@ -573,7 +590,7 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
-  let localPath = source;
+  let localPath;
   let handleClosed = false;
   const closeOpenedHandle = async () => {
     if (!opened || handleClosed) {
@@ -737,6 +754,22 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(body);
+}
+
+function readOpenedFile(fd: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    fs.readFile(fd, (error, data) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(data);
+    });
+  });
+}
+
+async function readOpenedFileText(fd: number): Promise<string> {
+  return (await readOpenedFile(fd)).toString("utf8");
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -980,10 +1013,10 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
         return true;
       }
-      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
+      serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
       return true;
     } finally {
       fs.closeSync(safeFile.fd);
@@ -1008,7 +1041,7 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

@@ -61,6 +61,14 @@
       "destination": "/channels/matrix-migration"
     },
     {
+      "source": "/concepts/openclaw-sdk",
+      "destination": "/gateway/external-apps"
+    },
+    {
+      "source": "/reference/openclaw-sdk-api-design",
+      "destination": "/gateway/external-apps"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -749,6 +757,14 @@
       "destination": "/tools/skills"
     },
     {
+      "source": "/skill-workshop",
+      "destination": "/tools/skill-workshop"
+    },
+    {
+      "source": "/tools/skills-workshop",
+      "destination": "/tools/skill-workshop"
+    },
+    {
       "source": "/skills-config",
       "destination": "/tools/skills-config"
     },
@@ -1228,13 +1244,14 @@
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
+                  "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/llama-cpp",
                   "plugins/memory-lancedb",
                   "plugins/oc-path",
-                  "plugins/skill-workshop",
                   "plugins/zalouser"
                 ]
               },
@@ -1255,6 +1272,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/skill-workshop",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
@@ -1280,6 +1298,7 @@
                   "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
+                  "tools/permission-modes",
                   "tools/exec-approvals",
                   "tools/exec-approvals-advanced",
                   "tools/exec",
@@ -1321,6 +1340,7 @@
                       "tools/kimi-search",
                       "tools/minimax-search",
                       "tools/ollama-search",
+                      "tools/parallel-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
                       "tools/tavily"
@@ -1332,6 +1352,7 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/goal",
                   "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
@@ -1353,6 +1374,7 @@
                 "pages": [
                   "clawhub/cli",
                   "clawhub/publishing",
+                  "clawhub/plugin-validation-fixes",
                   "clawhub/skill-format",
                   "clawhub/soul-format",
                   "clawhub/auth",
@@ -1403,6 +1425,7 @@
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
+                  "providers/gmi",
                   "providers/google",
                   "providers/gradium",
                   "providers/groq",
@@ -1415,8 +1438,10 @@
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
+                  "providers/novita",
                   "providers/nvidia",
                   "providers/ollama",
+                  "providers/ollama-cloud",
                   "providers/openai",
                   "providers/opencode",
                   "providers/opencode-go",
@@ -1425,6 +1450,7 @@
                   "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
+                  "providers/qwen-oauth",
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",
@@ -1694,7 +1720,13 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/path", "cli/policy", "cli/skills"]
+                    "pages": [
+                      "cli/plugins",
+                      "cli/path",
+                      "cli/policy",
+                      "cli/skills",
+                      "cli/workboard"
+                    ]
                   },
                   {
                     "group": "Interfaces",
@@ -1719,8 +1751,7 @@
                 "group": "RPC and API",
                 "pages": [
                   "reference/rpc",
-                  "concepts/openclaw-sdk",
-                  "reference/openclaw-sdk-api-design",
+                  "gateway/external-apps",
                   "reference/code-mode",
                   "reference/device-models"
                 ]

@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+// Delivery context tests cover context normalization for channel delivery.
+import { describe, expect, it } from "vitest";
 import {
   formatConversationTarget,
   deliveryContextKey,
@@ -12,62 +11,6 @@ import {
 } from "./delivery-context.js";
 
 describe("delivery context helpers", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "room-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "room-chat", label: "Room chat" }),
-            messaging: {
-              resolveDeliveryTarget: ({
-                conversationId,
-                parentConversationId,
-              }: {
-                conversationId: string;
-                parentConversationId?: string;
-              }) =>
-                conversationId.startsWith("$")
-                  ? {
-                      to: parentConversationId ? `room:${parentConversationId}` : undefined,
-                      threadId: conversationId,
-                    }
-                  : {
-                      to: `room:${conversationId}`,
-                    },
-            },
-          },
-        },
-        {
-          pluginId: "thread-child-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "thread-child-chat",
-              label: "Thread child chat",
-            }),
-            messaging: {
-              resolveDeliveryTarget: ({
-                conversationId,
-                parentConversationId,
-              }: {
-                conversationId: string;
-                parentConversationId?: string;
-              }) => {
-                const parent = parentConversationId?.trim();
-                const child = conversationId.trim();
-                return parent && parent !== child
-                  ? { to: `channel:${parent}`, threadId: child }
-                  : { to: `channel:${child}` };
-              },
-            },
-          },
-        },
-      ]),
-    );
-  });
-
   it("normalizes channel/to/accountId and drops empty contexts", () => {
     expect(
       normalizeDeliveryContext({
@@ -148,43 +91,14 @@ describe("delivery context helpers", () => {
     );
   });
 
-  it("formats plugin-defined conversation targets via channel messaging hooks", () => {
-    expect(
-      formatConversationTarget({ channel: "room-chat", conversationId: "!room:example" }),
-    ).toBe("room:!room:example");
-    expect(
-      formatConversationTarget({
-        channel: "room-chat",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toBe("room:!room:example");
-    expect(
-      formatConversationTarget({ channel: "room-chat", conversationId: "  " }),
-    ).toBeUndefined();
-  });
-
-  it("resolves delivery targets for plugin-defined child threads", () => {
-    expect(
-      resolveConversationDeliveryTarget({
-        channel: "room-chat",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toEqual({
-      to: "room:!room:example",
-      threadId: "$thread",
-    });
-  });
-
-  it("resolves parent-scoped thread delivery targets through channel messaging hooks", () => {
+  it("resolves generic parent-scoped thread delivery targets without channel runtime", () => {
     expect(
       resolveConversationDeliveryTarget({
         channel: "thread-child-chat",
         conversationId: "msg-child-id",
         parentConversationId: "channel-parent-id",
       }),
-    ).toEqual({ to: "channel:channel-parent-id", threadId: "msg-child-id" });
+    ).toEqual({ to: "channel:msg-child-id" });
   });
 
   it("derives delivery context from a session entry", () => {
@@ -258,6 +172,131 @@ describe("delivery context helpers", () => {
       to: "-1001",
       accountId: undefined,
       threadId: "777",
+    });
+  });
+
+  it("prefers explicit external delivery context over stale webchat legacy fields", () => {
+    expect(
+      deliveryContextFromSession({
+        channel: "webchat",
+        deliveryContext: {
+          channel: "room-chat",
+          to: " peer-1 ",
+          accountId: " acct-1 ",
+          threadId: " thread-1 ",
+        },
+      }),
+    ).toEqual({
+      channel: "room-chat",
+      to: "peer-1",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
+
+    expect(
+      deliveryContextFromSession({
+        channel: "webchat",
+        lastChannel: "webchat",
+        lastTo: "session:dashboard",
+        lastAccountId: "work",
+        lastThreadId: "thread-2",
+        deliveryContext: {
+          channel: "room-chat",
+          to: "peer-2",
+        },
+      }),
+    ).toEqual({
+      channel: "room-chat",
+      to: "peer-2",
+      accountId: "work",
+      threadId: "thread-2",
+    });
+
+    expect(
+      deliveryContextFromSession({
+        lastChannel: "heartbeat",
+        lastTo: "heartbeat",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+        },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "-100123",
+      accountId: undefined,
+    });
+
+    const routeNormalized = normalizeSessionDeliveryFields({
+      route: {
+        channel: "webchat",
+        accountId: "work",
+        target: { to: "session:dashboard" },
+        thread: { id: "thread-route" },
+      },
+      deliveryContext: {
+        channel: "room-chat",
+        to: "peer-route",
+      },
+    });
+    expect(routeNormalized.deliveryContext).toEqual({
+      channel: "room-chat",
+      to: "peer-route",
+      accountId: "work",
+      threadId: "thread-route",
+    });
+    expect(routeNormalized.route).toEqual({
+      channel: "room-chat",
+      accountId: "work",
+      target: { to: "peer-route" },
+      thread: { id: "thread-route" },
+    });
+  });
+
+  it("does not promote tool-only context over internal session delivery", () => {
+    const normalized = normalizeSessionDeliveryFields({
+      route: {
+        channel: "webchat",
+        accountId: "work",
+        target: { to: "session:dashboard" },
+      },
+      deliveryContext: {
+        channel: "sessions_send",
+        to: "session:handoff",
+      },
+    });
+
+    expect(normalized.deliveryContext).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
+      accountId: "work",
+    });
+    expect(normalized.route).toEqual({
+      channel: "webchat",
+      accountId: "work",
+      target: { to: "session:dashboard" },
+    });
+
+    const staleLegacyExternal = normalizeSessionDeliveryFields({
+      route: {
+        channel: "webchat",
+        accountId: "work",
+        target: { to: "session:dashboard" },
+      },
+      lastChannel: "room-chat",
+      lastTo: "peer-old",
+      lastAccountId: "old-workspace",
+    });
+
+    expect(staleLegacyExternal.deliveryContext).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
+      accountId: "work",
+    });
+    expect(staleLegacyExternal.route).toEqual({
+      channel: "webchat",
+      accountId: "work",
+      target: { to: "session:dashboard" },
     });
   });
 

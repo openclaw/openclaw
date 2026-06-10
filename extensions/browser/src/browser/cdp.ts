@@ -1,3 +1,10 @@
+/**
+ * Chrome DevTools Protocol browser operations.
+ *
+ * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
+ * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
+ */
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
@@ -21,6 +28,7 @@ export {
   isWebSocketUrl,
 } from "./cdp.helpers.js";
 
+/** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
   const cdp = new URL(cdpUrl);
@@ -57,6 +65,7 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   return ws.toString();
 }
 
+/** Capture a PNG screenshot through CDP. */
 export async function captureScreenshotPng(opts: {
   wsUrl: string;
   fullPage?: boolean;
@@ -70,6 +79,7 @@ export async function captureScreenshotPng(opts: {
   });
 }
 
+/** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
 export async function captureScreenshot(opts: {
   wsUrl: string;
   fullPage?: boolean;
@@ -182,11 +192,13 @@ export async function captureScreenshot(opts: {
   );
 }
 
+/** HTTP and WebSocket timeout options for CDP actions that need discovery. */
 export type CdpActionTimeouts = {
   httpTimeoutMs?: number;
   handshakeTimeoutMs?: number;
 };
 
+/** Create a new browser target after applying navigation and CDP SSRF policy. */
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
@@ -301,6 +313,7 @@ async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promi
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
 
+/** Runtime.evaluate remote-object subset used by CDP helpers. */
 export type CdpRemoteObject = {
   type: string;
   subtype?: string;
@@ -310,6 +323,7 @@ export type CdpRemoteObject = {
   preview?: unknown;
 };
 
+/** Exception details surfaced from CDP Runtime.evaluate. */
 export type CdpExceptionDetails = {
   text?: string;
   lineNumber?: number;
@@ -318,6 +332,7 @@ export type CdpExceptionDetails = {
   stackTrace?: unknown;
 };
 
+/** Evaluate JavaScript in a CDP target and return by value when possible. */
 export async function evaluateJavaScript(opts: {
   wsUrl: string;
   expression: string;
@@ -348,6 +363,7 @@ export async function evaluateJavaScript(opts: {
   });
 }
 
+/** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;
   role: string;
@@ -358,9 +374,11 @@ export type AriaSnapshotNode = {
   depth: number;
 };
 
+/** Prefix assigned to generated accessibility-node refs. */
 export const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
+/** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
 export type RawAXNode = {
   nodeId?: string;
   role?: { value?: string };
@@ -385,6 +403,7 @@ function axValue(v: unknown): string {
   return "";
 }
 
+/** Format raw AX nodes into bounded ARIA snapshot nodes. */
 export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
   const byId = new Map<string, RawAXNode>();
   for (const n of nodes) {
@@ -453,12 +472,13 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   return out;
 }
 
+/** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
   limit?: number;
   timeoutMs?: number;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
-  const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
+  const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
@@ -473,6 +493,7 @@ export async function snapshotAria(opts: {
   );
 }
 
+/** Role snapshot ref metadata used by agent-facing snapshots. */
 export type CdpRoleRef = {
   role: string;
   name?: string;
@@ -481,6 +502,7 @@ export type CdpRoleRef = {
   frameId?: string;
 };
 
+/** Options for CDP role snapshot extraction and compaction. */
 export type CdpRoleSnapshotOptions = {
   interactive?: boolean;
   compact?: boolean;
@@ -918,6 +940,7 @@ async function buildCdpRoleSnapshot(params: {
   };
 }
 
+/** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 export async function snapshotRoleViaCdp(opts: {
   wsUrl: string;
   options?: CdpRoleSnapshotOptions;
@@ -957,6 +980,7 @@ export async function snapshotRoleViaCdp(opts: {
   );
 }
 
+/** Capture a raw DOM snapshot through CDP. */
 export async function snapshotDom(opts: {
   wsUrl: string;
   limit?: number;
@@ -964,8 +988,8 @@ export async function snapshotDom(opts: {
 }): Promise<{
   nodes: DomSnapshotNode[];
 }> {
-  const limit = Math.max(1, Math.min(5000, Math.floor(opts.limit ?? 800)));
-  const maxTextChars = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 220)));
+  const limit = resolveIntegerOption(opts.limit, 800, { min: 1, max: 5000 });
+  const maxTextChars = resolveIntegerOption(opts.maxTextChars, 220, { min: 0, max: 5000 });
 
   const expression = `(() => {
     const maxNodes = ${JSON.stringify(limit)};
@@ -1027,6 +1051,7 @@ export async function snapshotDom(opts: {
   return { nodes: Array.isArray(nodes) ? (nodes as DomSnapshotNode[]) : [] };
 }
 
+/** Simplified DOM node returned by DOM snapshot helpers. */
 export type DomSnapshotNode = {
   ref: string;
   parentRef: string | null;
@@ -1042,13 +1067,14 @@ export type DomSnapshotNode = {
   value?: string;
 };
 
+/** Extract visible DOM text from a CDP target. */
 export async function getDomText(opts: {
   wsUrl: string;
   format: "html" | "text";
   maxChars?: number;
   selector?: string;
 }): Promise<{ text: string }> {
-  const maxChars = Math.max(0, Math.min(5_000_000, Math.floor(opts.maxChars ?? 200_000)));
+  const maxChars = resolveIntegerOption(opts.maxChars, 200_000, { min: 0, max: 5_000_000 });
   const selectorExpr = opts.selector ? JSON.stringify(opts.selector) : "null";
   const expression = `(() => {
     const fmt = ${JSON.stringify(opts.format)};
@@ -1083,6 +1109,7 @@ export async function getDomText(opts: {
   return { text };
 }
 
+/** Query a selector in a CDP target and return matching node metadata. */
 export async function querySelector(opts: {
   wsUrl: string;
   selector: string;
@@ -1092,9 +1119,9 @@ export async function querySelector(opts: {
 }): Promise<{
   matches: QueryMatch[];
 }> {
-  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 20)));
-  const maxText = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 500)));
-  const maxHtml = Math.max(0, Math.min(20000, Math.floor(opts.maxHtmlChars ?? 1500)));
+  const limit = resolveIntegerOption(opts.limit, 20, { min: 1, max: 200 });
+  const maxText = resolveIntegerOption(opts.maxTextChars, 500, { min: 0, max: 5000 });
+  const maxHtml = resolveIntegerOption(opts.maxHtmlChars, 1500, { min: 0, max: 20_000 });
 
   const expression = `(() => {
     const sel = ${JSON.stringify(opts.selector)};
@@ -1138,6 +1165,7 @@ export async function querySelector(opts: {
   return { matches: Array.isArray(matches) ? (matches as QueryMatch[]) : [] };
 }
 
+/** Selector match metadata returned by querySelector. */
 export type QueryMatch = {
   index: number;
   tag: string;

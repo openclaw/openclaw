@@ -1,3 +1,5 @@
+// Music generation tool tests cover provider selection, task lifecycle updates,
+// duplicate guards, media persistence, and result delivery metadata.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
@@ -41,6 +43,8 @@ const musicGenerationRuntimeMocks = vi.hoisted(() => ({
 }));
 
 const musicGenerateBackgroundMocks = vi.hoisted(() => ({
+  // Mirror the background lifecycle contract so tool tests can assert task-run
+  // effects without spawning detached completion workers.
   musicGenerationTaskLifecycle: {
     createTaskRun: (
       params: Parameters<typeof musicGenerateBackground.createMusicGenerationTaskRun>[0],
@@ -629,7 +633,7 @@ describe("createMusicGenerateTool", () => {
       applied: 120_000,
       minimum: 120_000,
     });
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     if (!scheduledWork) {
       throw new Error("expected scheduled music generation work");
     }

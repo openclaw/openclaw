@@ -1,8 +1,14 @@
+/**
+ * Subagent spawn planning helpers.
+ *
+ * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
+ */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
+/** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
   if (!ref) {
     return { provider: undefined, model: undefined };
@@ -25,6 +31,7 @@ export function splitModelRef(ref?: string) {
   return { provider: undefined, model: trimmed };
 }
 
+/** Resolves the effective subagent run timeout from per-call override or config default. */
 export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
   cfg: OpenClawConfig;
   runTimeoutSeconds?: number;
@@ -39,12 +46,15 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
     : cfgSubagentTimeout;
 }
 
+/** Resolves the subagent model plus thinking patch to apply to the spawned session. */
 export function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
+  requesterAgentConfig?: unknown;
   targetAgentConfig?: unknown;
   modelOverride?: string;
   thinkingOverrideRaw?: string;
+  callerThinkingRaw?: string;
 }) {
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg: params.cfg,
@@ -54,11 +64,14 @@ export function resolveSubagentModelAndThinkingPlan(params: {
 
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,
+    requesterAgentConfig: params.requesterAgentConfig,
     targetAgentConfig: params.targetAgentConfig,
     thinkingOverrideRaw: params.thinkingOverrideRaw,
+    callerThinkingRaw: params.callerThinkingRaw,
   });
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(resolvedModel);
+    // The hint is provider/model-specific because valid thinking levels vary by backend.
     const hint = formatThinkingLevels(provider, model);
     return {
       status: "error" as const,

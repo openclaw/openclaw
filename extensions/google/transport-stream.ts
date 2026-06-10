@@ -1,3 +1,4 @@
+// Google plugin module implements transport stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,
@@ -7,6 +8,7 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -26,6 +28,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
+import { stripGoogleProviderPrefix } from "./model-id.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
   isGoogleGemini25ThinkingBudgetModel,
@@ -321,7 +324,7 @@ function resolveGoogleModelPath(modelId: string): string {
   if (modelId.startsWith("models/") || modelId.startsWith("tunedModels/")) {
     return modelId;
   }
-  return `models/${modelId}`;
+  return `models/${stripGoogleProviderPrefix(modelId)}`;
 }
 
 function buildGoogleGenerativeAiRequestUrl(model: GoogleTransportModel): string {
@@ -354,7 +357,10 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
+export function resolveGoogleVertexBaseOrigin(
+  model: GoogleTransportModel,
+  location: string,
+): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {
@@ -369,6 +375,12 @@ function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: st
   }
   if (location === "global") {
     return "https://aiplatform.googleapis.com";
+  }
+  // Multi-region locations (eu, us) use the dedicated .rep.googleapis.com host
+  // with the location embedded in the host, matching @google/genai SDK behavior.
+  // A regional prefix (eu-aiplatform.googleapis.com) returns an HTML 404.
+  if (location === "eu" || location === "us") {
+    return `https://aiplatform.${location}.rep.googleapis.com`;
   }
   return `https://${location}-aiplatform.googleapis.com`;
 }
@@ -417,7 +429,7 @@ function getGoogleThinkingBudget(
   effort: ThinkingLevel,
   customBudgets?: GoogleTransportOptions["thinkingBudgets"],
 ): number | undefined {
-  const normalizedEffort = effort === "xhigh" ? "high" : effort;
+  const normalizedEffort = effort === "xhigh" || effort === "max" ? "high" : effort;
   if (customBudgets?.[normalizedEffort] !== undefined) {
     return customBudgets[normalizedEffort];
   }
@@ -702,6 +714,9 @@ export function buildGoogleGenerativeAiParams(
   if (typeof options?.maxTokens === "number") {
     generationConfig.maxOutputTokens = options.maxTokens;
   }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    generationConfig.stopSequences = options.stop;
+  }
   const thinkingConfig = resolveGoogleThinkingConfig(model, options);
   if (thinkingConfig) {
     generationConfig.thinkingConfig = thinkingConfig;
@@ -807,16 +822,12 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
   }
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
+export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   if (raw === undefined || raw.trim() === "") {
     return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
-  }
-  return Math.floor(parsed);
+  return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
 function shouldRetryGoogleGemini3FirstResponse(params: {
@@ -845,7 +856,8 @@ function resolveGoogleGemini3RetryThinkingLevel(modelId: string): GoogleThinking
 function cloneGoogleGenerateContentRequest(
   params: GoogleGenerateContentRequest,
 ): GoogleGenerateContentRequest {
-  return JSON.parse(JSON.stringify(params)) as GoogleGenerateContentRequest;
+  const serialized = JSON.stringify(params);
+  return JSON.parse(serialized) as GoogleGenerateContentRequest;
 }
 
 export function buildGoogleGemini3FirstResponseRetryParams(params: {
@@ -1100,6 +1112,7 @@ async function* parseGoogleSseChunks(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   const abortHandler = () => {
     void reader.cancel().catch(() => undefined);
   };
@@ -1111,6 +1124,7 @@ async function* parseGoogleSseChunks(
       }
       const { done, value } = await reader.read();
       if (done) {
+        completed = true;
         break;
       }
       buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
@@ -1136,6 +1150,10 @@ async function* parseGoogleSseChunks(
     }
   } finally {
     signal?.removeEventListener("abort", abortHandler);
+    if (!completed) {
+      await reader.cancel(signal?.reason).catch(() => undefined);
+    }
+    reader.releaseLock();
   }
 }
 

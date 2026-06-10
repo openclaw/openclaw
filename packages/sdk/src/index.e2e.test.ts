@@ -1,3 +1,4 @@
+// OpenClaw SDK tests cover index behavior.
 import type { AddressInfo } from "node:net";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,7 +45,9 @@ function readRawMessage(raw: RawData): string {
 
 async function reservePort(): Promise<number> {
   const server = net.createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const { port } = server.address() as AddressInfo;
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
@@ -71,7 +74,9 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 async function createFakeGateway(port = 0): Promise<FakeGateway> {
   const server = new WebSocketServer({ host: "127.0.0.1", port });
   servers.push(server);
-  await new Promise<void>((resolve) => server.once("listening", resolve));
+  await new Promise<void>((resolve) => {
+    server.once("listening", resolve);
+  });
   let seq = 1;
   const requests: FakeGatewayRequest[] = [];
   const sockets = new Set<WebSocket>();

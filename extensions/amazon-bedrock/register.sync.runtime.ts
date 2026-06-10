@@ -1,3 +1,7 @@
+/**
+ * Synchronous Amazon Bedrock provider registration. It wires Bedrock streaming,
+ * model discovery, thinking policy, guardrails, and embedding integration.
+ */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
@@ -13,7 +17,10 @@ import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
-import { isOpus47BedrockModelRef, resolveBedrockClaudeThinkingProfile } from "./thinking-policy.js";
+import {
+  isOpus47OrNewerBedrockModelRef,
+  resolveBedrockClaudeThinkingProfile,
+} from "./thinking-policy.js";
 
 type GuardrailConfig = {
   guardrailIdentifier: string;
@@ -212,10 +219,12 @@ type BedrockControlPlaneFactory = (region: string | undefined) => BedrockControl
 
 let bedrockControlPlaneOverride: BedrockControlPlaneFactory | undefined;
 
+/** Reset app-profile prompt-cache eligibility state for tests. */
 export function resetBedrockAppProfileCacheEligibilityForTest(): void {
   appProfileTraitsCache.clear();
 }
 
+/** Override Bedrock app-profile control-plane checks for tests. */
 export function setBedrockAppProfileControlPlaneForTest(
   controlPlane: BedrockControlPlaneFactory | undefined,
 ): void {
@@ -252,7 +261,7 @@ async function resolveAppProfileTraits(
     const traits = {
       cacheEligible:
         models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
-      omitTemperature: modelArns.some(isOpus47BedrockModelRef),
+      omitTemperature: modelArns.some(isOpus47OrNewerBedrockModelRef),
     };
     appProfileTraitsCache.set(modelId, traits);
     return traits;
@@ -261,7 +270,7 @@ async function resolveAppProfileTraits(
     // return the heuristic fallback but allow retry on the next request.
     return {
       cacheEligible: isAnthropicBedrockModel(modelId),
-      omitTemperature: isOpus47BedrockModelRef(modelId),
+      omitTemperature: isOpus47OrNewerBedrockModelRef(modelId),
     };
   }
 }
@@ -334,6 +343,7 @@ function patchOpus47MaxThinkingEffort(payload: Record<string, unknown>): void {
   payload.additionalModelRequestFields = fields;
 }
 
+/** Register Amazon Bedrock provider, discovery catalog, stream wrappers, and embeddings. */
 export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
@@ -388,7 +398,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     modelId: string,
     options: TOptions,
   ): TOptions {
-    if (!isOpus47BedrockModelRef(modelId) || !("temperature" in options)) {
+    if (!isOpus47OrNewerBedrockModelRef(modelId) || !("temperature" in options)) {
       return options;
     }
     const next = { ...options } as typeof options & { temperature?: unknown };
@@ -513,7 +523,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
-      const shouldOmitTemperature = isOpus47BedrockModelRef(modelId);
+      const shouldOmitTemperature = isOpus47OrNewerBedrockModelRef(modelId);
       const shouldPatchMaxThinking = shouldOmitTemperature && thinkingLevel === "max";
 
       // For known Anthropic models (heuristic match), enable injection immediately.
@@ -548,7 +558,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                 ? {
                     onPayload: (payload: unknown, payloadModel: unknown) => {
                       if (payload && typeof payload === "object") {
-                        patchOpus47MaxThinkingEffort(payload as Record<string, unknown>);
+                        const payloadRecord = payload as Record<string, unknown>;
+                        patchOpus47MaxThinkingEffort(payloadRecord);
+                        omitDeprecatedOpus47PayloadTemperature(payloadRecord);
                       }
                       return originalOnPayload?.(payload, payloadModel);
                     },
@@ -584,7 +596,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                   if (shouldPatchMaxThinking) {
                     patchOpus47MaxThinkingEffort(payloadRecord);
                   }
-                  if (mayNeedTemperatureTrait) {
+                  if (shouldOmitTemperature) {
+                    omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                  } else if (mayNeedTemperatureTrait) {
                     const traits = await resolveAppProfileTraits(modelId, region);
                     if (traits.omitTemperature) {
                       omitDeprecatedOpus47PayloadTemperature(payloadRecord);

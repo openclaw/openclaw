@@ -15,7 +15,7 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 ## Quick start
 
 <Note>
-Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
+Requires OpenClaw 2026.5.29 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
 </Note>
 
 <Steps>
@@ -42,7 +42,7 @@ Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade
 Configure `dmPolicy` to control who can DM the bot:
 
 - `"pairing"` - unknown users receive a pairing code; approve via CLI
-- `"allowlist"` - only users listed in `allowFrom` can chat (default: bot owner only)
+- `"allowlist"` - only users listed in `allowFrom` can chat
 - `"open"` - allow public DMs only when `allowFrom` includes `"*"`; with restrictive entries, only matching users can chat
 - `"disabled"` - disable all DMs
 
@@ -567,8 +567,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                       | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                      | `feishu`                             |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                         | `messages.tts`                       |
-| `channels.feishu.dmPolicy`                               | DM policy                                                                        | `allowlist`                          |
-| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | [BotOwnerId]                         |
+| `channels.feishu.dmPolicy`                               | DM policy                                                                        | `pairing`                            |
+| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy                                                                     | `allowlist`                          |
 | `channels.feishu.groupAllowFrom`                         | Group allowlist                                                                  | -                                    |
 | `channels.feishu.requireMention`                         | Require @mention in groups                                                       | `true`                               |
@@ -584,6 +584,10 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
+| `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                        | `true`                               |
+| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set | `true`                               |
+| `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                               | inherited                            |
+| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                            | inherited                            |
 
 ---
 

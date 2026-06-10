@@ -1,3 +1,4 @@
+// Whatsapp tests cover inbound dispatch plugin behavior.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 
@@ -25,6 +26,7 @@ type CapturedDispatchParams = {
   replyOptions?: {
     disableBlockStreaming?: boolean;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    suppressTyping?: boolean;
   };
 };
 
@@ -1068,6 +1070,7 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
   });
 
@@ -1084,7 +1087,35 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
+  });
+
+  it("suppresses typing for message-tool-only group chat without mention", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: false }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(true);
+  });
+
+  it("does not suppress typing for group chat when mentioned", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "@bot hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: true }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
+  });
+
+  it("does not suppress typing for direct chat", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "direct" },
+      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
   });
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {
@@ -1107,6 +1138,31 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns success when shared dispatch observes message-tool delivery", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        return {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+          observedReplyDelivery: true,
+        };
+      },
+    );
+
+    await expect(
+      dispatchBufferedReply({
+        deliverReply,
+        rememberSentText,
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("does not treat generated WhatsApp text as sent when the provider did not accept it", async () => {
@@ -1136,7 +1192,7 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).not.toHaveBeenCalled();
-    const warnMock = replyLogger.warn as unknown as { mock: { calls: unknown[][] } };
+    const warnMock = replyLogger["warn"] as unknown as { mock: { calls: unknown[][] } };
     const warningContext = requireMockArg(warnMock, 0, 0, "warning context");
     expectRecordFields(warningContext, {
       replyKind: "final",
@@ -1232,7 +1288,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.(error, { kind: "final" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       {
         err: { type: "Error", message: "send failed", stack: error.stack },
         replyKind: "final",
@@ -1281,7 +1337,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.(error, { kind: "final" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.objectContaining({
           type: "BoomLikeError",
@@ -1319,7 +1375,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.("plain string rejection", { kind: "block" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: "plain string rejection",
         replyKind: "block",
@@ -1356,7 +1412,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.(objectRejection, { kind: "tool" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: objectRejection,
         replyKind: "tool",

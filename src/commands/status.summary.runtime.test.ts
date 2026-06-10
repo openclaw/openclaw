@@ -1,3 +1,4 @@
+// Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
 import { statusSummaryRuntime } from "./status.summary.runtime.js";
 
@@ -26,13 +27,13 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
             },
           },
         },
       } as never,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       fallbackContextTokens: 999,
     });
@@ -177,13 +178,13 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
   it("prefers explicit overrides ahead of fallback runtime fields", () => {
     expect(
       statusSummaryRuntime.resolveSessionModelRef(cfg, {
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.4",
         modelProvider: "amazon-bedrock",
         model: "minimax.minimax-m2.5",
       }),
     ).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
     });
   });

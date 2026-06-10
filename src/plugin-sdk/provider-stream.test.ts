@@ -1,3 +1,4 @@
+// Provider stream tests cover shared stream-wrapper families and payload compatibility.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -370,7 +371,9 @@ describe("createPlainTextToolCallCompatWrapper", () => {
 
     const firstResult = await Promise.race([
       first,
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 20)),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 20);
+      }),
     ]);
     expect(firstResult).not.toBe("timeout");
     expect(firstResult).toMatchObject({

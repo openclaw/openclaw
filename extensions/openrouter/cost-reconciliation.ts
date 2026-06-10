@@ -18,7 +18,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import { normalizeOpenRouterBaseUrl, OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const log = createSubsystemLogger("openrouter-stream");
 
@@ -49,6 +49,9 @@ export async function reconcileOpenRouterUsageCost(params: {
   }
   if (!apiKey || apiKey.trim().length === 0) {
     return skipped("missing OpenRouter API key");
+  }
+  if (message.stopReason === "aborted" || message.stopReason === "error") {
+    return skipped(`terminal stopReason ${message.stopReason}`);
   }
   const usage = message.usage;
   if (!usage || !usage.cost || typeof usage.cost.total !== "number") {
@@ -136,6 +139,18 @@ function skipped(reason: string): ReconciliationOutcome {
   return { status: "skipped", reason };
 }
 
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+function shouldReconcileOpenRouterGenerationCost(model: Parameters<StreamFn>[0]): boolean {
+  const baseUrl = readString(model.baseUrl);
+  if (baseUrl) {
+    return normalizeOpenRouterBaseUrl(baseUrl) === OPENROUTER_BASE_URL;
+  }
+  return readString(model.provider)?.toLowerCase() === "openrouter";
+}
+
 /**
  * Wrap a base StreamFn so the final assistant message carries OpenRouter's
  * authoritative billed total_cost when the lookup succeeds. The wrapper is
@@ -154,6 +169,9 @@ export function createOpenRouterCostReconciliationWrapper(
   }
   const wrapped: StreamFn = (model, context, options) => {
     const baseStreamResult = baseStreamFn(model, context, options);
+    if (!shouldReconcileOpenRouterGenerationCost(model)) {
+      return baseStreamResult;
+    }
     const apiKey = options?.apiKey;
     return wrapStreamWithReconciliation({
       baseStreamPromise: Promise.resolve(baseStreamResult),
@@ -177,6 +195,38 @@ function wrapStreamWithReconciliation(params: {
   // Lazy-defer base-stream side effects until iteration begins so the consumer
   // sees identical timing to the unwrapped stream up through the "done" event.
   let baseStreamFinalResult: Promise<AssistantMessage> | null = null;
+  const reconciledMessages = new WeakSet<AssistantMessage>();
+  const activeReconciliations = new WeakMap<AssistantMessage, Promise<void>>();
+
+  async function reconcileMessageOnce(message: AssistantMessage): Promise<void> {
+    if (reconciledMessages.has(message)) {
+      return;
+    }
+    const active = activeReconciliations.get(message);
+    if (active) {
+      await active;
+      return;
+    }
+    const reconciliation = (async () => {
+      const outcome = await reconcileOpenRouterUsageCost({
+        message,
+        apiKey: params.apiKey,
+        deps: params.deps,
+      });
+      if (outcome.status === "updated") {
+        log.info(
+          `openrouter cost reconciled: ${outcome.previousCost} -> ${outcome.updatedCost} (responseId=${message.responseId})`,
+        );
+      }
+      reconciledMessages.add(message);
+    })();
+    activeReconciliations.set(message, reconciliation);
+    try {
+      await reconciliation;
+    } finally {
+      activeReconciliations.delete(message);
+    }
+  }
 
   const iterate = async function* (): AsyncGenerator<AssistantMessageEventLike> {
     const baseStream = await baseStreamPromise;
@@ -189,16 +239,7 @@ function wrapStreamWithReconciliation(params: {
         maybeDone.message &&
         typeof maybeDone.message === "object"
       ) {
-        const outcome = await reconcileOpenRouterUsageCost({
-          message: maybeDone.message,
-          apiKey: params.apiKey,
-          deps: params.deps,
-        });
-        if (outcome.status === "updated") {
-          log.info(
-            `openrouter cost reconciled: ${outcome.previousCost} -> ${outcome.updatedCost} (responseId=${maybeDone.message.responseId})`,
-          );
-        }
+        await reconcileMessageOnce(maybeDone.message);
       }
       yield event;
     }
@@ -211,7 +252,9 @@ function wrapStreamWithReconciliation(params: {
         const baseStream = await baseStreamPromise;
         baseStreamFinalResult = baseStream.result();
       }
-      return baseStreamFinalResult;
+      const message = await baseStreamFinalResult;
+      await reconcileMessageOnce(message);
+      return message;
     },
   } as AssistantMessageEventStreamLike;
 

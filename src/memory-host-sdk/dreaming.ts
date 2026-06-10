@@ -1,13 +1,14 @@
+// Memory host dreaming helpers record and load memory dreaming artifacts.
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
@@ -151,6 +152,7 @@ export type MemoryDreamingWorkspace = {
 export type MemoryDreamingWorkspaceOptions = {
   primaryWorkspaceDir?: string | null;
   primaryAgentId?: string | null;
+  env?: NodeJS.ProcessEnv;
 };
 
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
@@ -654,7 +656,7 @@ export function resolveMemoryDreamingWorkspaces(
   };
 
   for (const agentId of agentIds) {
-    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId), agentId);
+    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
   addWorkspace(
     options.primaryWorkspaceDir ?? undefined,

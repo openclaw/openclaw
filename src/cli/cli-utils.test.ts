@@ -1,3 +1,4 @@
+// CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerDnsCli } from "./dns-cli.js";
@@ -149,5 +150,10 @@ describe("parseDurationMs", () => {
   it("rejects invalid composite strings", () => {
     expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
     expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  });
+
+  it("rejects unsafe millisecond results", () => {
+    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
   });
 });

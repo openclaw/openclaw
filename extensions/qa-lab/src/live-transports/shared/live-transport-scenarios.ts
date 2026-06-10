@@ -1,9 +1,11 @@
+// Qa Lab plugin module implements live transport scenarios behavior.
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   collectLiveTransportStandardScenarioCoverage,
   findMissingLiveTransportStandardScenarios,
+  type LiveTransportScenarioDefinition,
   type LiveTransportStandardScenarioId,
-} from "openclaw/plugin-sdk/qa-runtime";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
 export {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
@@ -12,7 +14,7 @@ export {
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
   type LiveTransportStandardScenarioId,
-} from "openclaw/plugin-sdk/qa-runtime";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
 export type LiveTransportCoverageMember = {
   scenarioId?: string;
@@ -70,8 +72,12 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
     commandName: "whatsapp",
     members: [
       { standardId: "canary", scenarioId: "whatsapp-canary" },
-      { standardId: "allowlist-block", scenarioId: "whatsapp-pairing-block" },
       { standardId: "mention-gating", scenarioId: "whatsapp-mention-gating" },
+      { standardId: "top-level-reply-shape", scenarioId: "whatsapp-top-level-reply-shape" },
+      { standardId: "restart-resume", scenarioId: "whatsapp-restart-resume" },
+      { standardId: "help-command", scenarioId: "whatsapp-help-command" },
+      { standardId: "reaction-observation", scenarioId: "whatsapp-status-reactions" },
+      { standardId: "allowlist-block", scenarioId: "whatsapp-group-allowlist-block" },
     ],
   },
 ] as const;
@@ -81,14 +87,13 @@ export function buildLiveTransportCoverageLaneSummaries(
 ): LiveTransportCoverageLaneSummary[] {
   return lanes
     .map((lane) => {
-      const standardScenarioIds = collectLiveTransportStandardScenarioCoverage({
-        scenarios: lane.members.map((member) => ({
-          id: member.scenarioId ?? `${lane.transportId}:${member.standardId}`,
-          standardId: member.standardId,
-          timeoutMs: 0,
-          title: member.standardId,
-        })),
-      });
+      const scenarios: LiveTransportScenarioDefinition[] = lane.members.map((member) => ({
+        id: member.scenarioId ?? `${lane.transportId}:${member.standardId}`,
+        standardId: member.standardId,
+        timeoutMs: 0,
+        title: member.standardId,
+      }));
+      const standardScenarioIds = collectLiveTransportStandardScenarioCoverage({ scenarios });
       return {
         baselineMissingStandardScenarioIds: findMissingLiveTransportStandardScenarios({
           coveredStandardScenarioIds: standardScenarioIds,

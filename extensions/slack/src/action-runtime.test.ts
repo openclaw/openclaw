@@ -1,3 +1,4 @@
+// Slack tests cover action runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
@@ -234,7 +235,7 @@ describe("handleSlackAction", () => {
       cfg,
     );
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
-    expect(JSON.parse((result.content?.[0] as { type: "text"; text: string }).text)).toEqual({
+    expect(JSON.parse((result.content[0] as { type: "text"; text: string }).text)).toEqual({
       ok: true,
       added: "✅",
     });

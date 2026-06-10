@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements runtime parity behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -79,8 +80,8 @@ export function runtimeParityCellStatus(
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
   return (
     result.drift !== "failure-mode" &&
-    runtimeParityCellStatus(result.cells.openclaw) === "pass" &&
-    runtimeParityCellStatus(result.cells.codex) === "pass"
+    isRuntimeParityCellPassable(result.cells.openclaw) &&
+    isRuntimeParityCellPassable(result.cells.codex)
   );
 }
 
@@ -133,6 +134,7 @@ const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
+const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
@@ -324,7 +326,9 @@ function extractToolResults(message: Record<string, unknown>): Array<{
     results.push({
       tool: toolName,
       result: message.content,
-      ...(TOOL_RESULT_ERROR_RE.test(contentText) ? { errorClass: "tool-result-error" } : {}),
+      ...(message.isError === true || TOOL_RESULT_ERROR_RE.test(contentText)
+        ? { errorClass: "tool-result-error" }
+        : {}),
     });
   }
   const rawContent = message.content;
@@ -390,6 +394,17 @@ function classifyToolResultError(params: {
     }
   }
   return undefined;
+}
+
+function finalizeToolCallOrder(ordered: RuntimeParityPendingToolCall[]): RuntimeParityToolCall[] {
+  return ordered.map(({ _resolved, ...toolCall }) =>
+    _resolved
+      ? toolCall
+      : {
+          ...toolCall,
+          errorClass: toolCall.errorClass ?? TOOL_RESULT_MISSING_ERROR_CLASS,
+        },
+  );
 }
 
 function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): RuntimeParityToolCall[] {
@@ -480,7 +495,7 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
     }
   }
 
-  return ordered.map(({ _resolved: _ignored, ...toolCall }) => toolCall);
+  return finalizeToolCallOrder(ordered);
 }
 
 function resolveToolCallOrderFromMockRequests(
@@ -544,7 +559,7 @@ function resolveToolCallOrderFromMockRequests(
     enqueueUnresolved(ordered.length - 1);
   }
 
-  return ordered.map(({ _resolved: _ignored, ...toolCall }) => toolCall);
+  return finalizeToolCallOrder(ordered);
 }
 
 function classifyScenarioError(details: string | undefined): string | undefined {
@@ -729,6 +744,12 @@ function compareToolResultShape(
       continue;
     }
     if (
+      leftCall.errorClass === "tool-result-error" &&
+      rightCall.errorClass === "tool-result-error"
+    ) {
+      continue;
+    }
+    if (
       leftCall.resultHash !== rightCall.resultHash ||
       (leftCall.errorClass ?? "") !== (rightCall.errorClass ?? "")
     ) {
@@ -747,6 +768,34 @@ function isHardFailureRuntimeError(errorClass: string | undefined) {
     errorClass === "capture-missing" ||
     errorClass?.startsWith("sentinel:") === true
   );
+}
+
+export function isRuntimeParityCellPassable(cell: RuntimeParityCell | undefined) {
+  if (!cell || cell.transportErrorClass || isHardFailureRuntimeError(cell.runtimeErrorClass)) {
+    return false;
+  }
+  return !cell.runtimeErrorClass || cell.runtimeErrorClass === "tool-error";
+}
+
+function hasMissingToolResult(toolCalls: readonly RuntimeParityToolCall[]) {
+  return toolCalls.some((toolCall) => toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS);
+}
+
+function resolveRuntimeParityToolCalls(params: {
+  mockToolCalls: RuntimeParityToolCall[] | null;
+  transcriptToolCalls: RuntimeParityToolCall[];
+}): RuntimeParityToolCall[] {
+  if (!params.mockToolCalls) {
+    return params.transcriptToolCalls;
+  }
+  if (
+    hasMissingToolResult(params.mockToolCalls) &&
+    !hasMissingToolResult(params.transcriptToolCalls) &&
+    compareToolCallShape(params.mockToolCalls, params.transcriptToolCalls) === undefined
+  ) {
+    return params.transcriptToolCalls;
+  }
+  return params.mockToolCalls;
 }
 
 function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFinding[]) {
@@ -780,6 +829,16 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
+  if (
+    hasMissingToolResult(params.openclaw.toolCalls) ||
+    hasMissingToolResult(params.codex.toolCalls)
+  ) {
+    return {
+      drift: "failure-mode",
+      driftDetails: "at least one runtime planned a tool call without a tool result",
+    };
+  }
+
   const toolCallShapeDetails = compareToolCallShape(
     params.openclaw.toolCalls,
     params.codex.toolCalls,
@@ -804,8 +863,8 @@ function classifyRuntimeParityCells(params: {
     : 0;
   if (
     openclawTranscriptLines !== codexTranscriptLines ||
-    (!params.openclaw.finalText && !!params.codex.finalText) ||
-    (!!params.openclaw.finalText && !params.codex.finalText)
+    (!params.openclaw.finalText && Boolean(params.codex.finalText)) ||
+    (Boolean(params.openclaw.finalText) && !params.codex.finalText)
   ) {
     return {
       drift: "structural",
@@ -816,8 +875,8 @@ function classifyRuntimeParityCells(params: {
   if (
     params.openclawScenarioStatus === "fail" ||
     params.codexScenarioStatus === "fail" ||
-    params.openclaw.runtimeErrorClass ||
-    params.codex.runtimeErrorClass
+    !isRuntimeParityCellPassable(params.openclaw) ||
+    !isRuntimeParityCellPassable(params.codex)
   ) {
     return {
       drift: "failure-mode",
@@ -979,6 +1038,7 @@ export async function captureRuntimeParityCell(
     agentId,
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
+  const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
   const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
   const gatewayLogs = params.gateway.logs?.();
   const sentinelFindings = [
@@ -990,7 +1050,7 @@ export async function captureRuntimeParityCell(
   return {
     runtime: params.runtime,
     transcriptBytes,
-    toolCalls: mockToolCalls ?? resolveToolCallOrder(transcriptRecords),
+    toolCalls: resolveRuntimeParityToolCalls({ mockToolCalls, transcriptToolCalls }),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
@@ -1024,3 +1084,11 @@ export async function runRuntimeParityScenario(params: {
     ...(drift.driftDetails ? { driftDetails: drift.driftDetails } : {}),
   };
 }
+
+export const testing = {
+  classifyRuntimeParityCells,
+  resolveRuntimeParityToolCalls,
+  resolveToolCallOrderFromMockRequests,
+};
+
+export { testing as __testing };

@@ -1,3 +1,4 @@
+// Browser tests cover runtime lifecycle.unhandled rejections plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, resetHandlers } =
@@ -25,14 +26,14 @@ const {
   stopKnownBrowserProfilesMock,
   trackedTabCleanupMock,
 } = vi.hoisted(() => {
-  const trackedTabCleanupMock = vi.fn();
+  const trackedTabCleanupMockLocal = vi.fn();
   return {
     ensureExtensionRelayForProfilesMock: vi.fn(async () => {}),
     getPwAiModuleMock: vi.fn(),
     isPwAiLoadedMock: vi.fn(() => false),
-    startTrackedBrowserTabCleanupTimerMock: vi.fn(() => trackedTabCleanupMock),
+    startTrackedBrowserTabCleanupTimerMock: vi.fn(() => trackedTabCleanupMockLocal),
     stopKnownBrowserProfilesMock: vi.fn(async () => {}),
-    trackedTabCleanupMock,
+    trackedTabCleanupMock: trackedTabCleanupMockLocal,
   };
 });
 

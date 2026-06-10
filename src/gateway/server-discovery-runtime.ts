@@ -1,9 +1,9 @@
+// Gateway discovery runtime.
+// Starts local mDNS plugin discovery and optional wide-area DNS-SD publishing.
 import { isTruthyEnvValue } from "../infra/env.js";
-import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "../infra/parse-finite-number.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 import {
@@ -26,6 +26,7 @@ function resolveDiscoveryAdvertiseTimeoutMs(env: NodeJS.ProcessEnv): number {
   return parsed;
 }
 
+/** Start configured Gateway discovery publishers and return their shutdown hook. */
 export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
@@ -55,12 +56,9 @@ export async function startGatewayDiscovery(params: {
   const tailnetDns = needsTailnetDns
     ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
     : undefined;
-  const sshPortEnv = mdnsMinimal ? undefined : process.env.OPENCLAW_SSH_PORT?.trim();
-  const sshPortParsed = parseStrictNonNegativeInteger(sshPortEnv);
-  const sshPort =
-    sshPortParsed !== undefined && sshPortParsed > 0 && sshPortParsed <= 65535
-      ? sshPortParsed
-      : undefined;
+  const sshPort = mdnsMinimal
+    ? undefined
+    : (parseTcpPort(process.env.OPENCLAW_SSH_PORT) ?? undefined);
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
   if (localDiscoveryEnabled) {
@@ -106,7 +104,7 @@ export async function startGatewayDiscovery(params: {
               }
               return started;
             },
-            (err) => {
+            (err: unknown) => {
               params.logDiscovery.warn(
                 `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
               );

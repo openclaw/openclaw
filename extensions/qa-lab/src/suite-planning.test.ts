@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite planning plugin behavior.
 import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -198,7 +199,7 @@ describe("qa suite planning helpers", () => {
       makeQaSuiteTestScenario("anthropic-only", {
         config: {
           requiredProvider: "anthropic",
-          requiredModel: "claude-opus-4-7",
+          requiredModel: "claude-opus-4-8",
         },
       }),
     ];
@@ -384,7 +385,7 @@ describe("qa suite planning helpers", () => {
         config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
-        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-7" },
+        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-8" },
       }),
       makeQaSuiteTestScenario("claude-subscription", {
         config: { requiredProvider: "claude-cli", authMode: "subscription" },

@@ -1,3 +1,4 @@
+// Agent Core module implements storage base behavior.
 import {
   type LeafEntry,
   SessionError,
@@ -37,6 +38,7 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
   return uuidv7();
 }
 
+/** Return the effective branch leaf after applying a session tree entry. */
 export function leafIdAfterEntry(entry: SessionTreeEntry): string | null {
   return entry.type === "leaf" ? entry.targetId : entry.id;
 }
@@ -102,6 +104,8 @@ export abstract class BaseSessionStorage<
   }
 
   protected recordEntry(entry: SessionTreeEntry): void {
+    // Leaf and label entries are append-only state changes; keep derived indexes
+    // synchronized here so memory and JSONL storage expose identical behavior.
     this.entries.push(entry);
     this.byId.set(entry.id, entry);
     updateLabelCache(this.labelsById, entry);

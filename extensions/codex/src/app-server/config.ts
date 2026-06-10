@@ -1,6 +1,18 @@
+// Codex helper module supports config behavior.
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import path from "node:path";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveExecApprovalsFromFile,
+  type ExecApprovalsFile,
+} from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
@@ -10,15 +22,33 @@ const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStart
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
+const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
+const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
+type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
+type OpenClawExecSecurity = "deny" | "allowlist" | "full";
+type OpenClawExecAsk = "off" | "on-miss" | "always";
+type OpenClawExecApprovalFloorsForCodexAppServer = {
+  security?: OpenClawExecSecurity;
+  ask?: OpenClawExecAsk;
+};
+export type OpenClawExecPolicyForCodexAppServer = {
+  mode?: OpenClawExecMode;
+  security: OpenClawExecSecurity;
+  ask: OpenClawExecAsk;
+  touched: boolean;
+};
+type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
+type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
   approvalPolicy?: CodexAppServerApprovalPolicy;
   approvalsReviewer?: CodexAppServerApprovalsReviewer;
   sandbox?: CodexAppServerSandboxMode;
+  dangerFullAccessAllowed?: boolean;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
@@ -118,6 +148,15 @@ export type CodexAppServerRuntimeOptions = {
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
+};
+
+export type CodexModelBackedReviewerContext = {
+  modelProvider?: string;
+  model?: string;
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
+  agentDir?: string;
+  codexConfigToml?: string | null;
 };
 
 export type CodexPluginConfig = {
@@ -369,12 +408,20 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
 export function resolveCodexAppServerRuntimeOptions(
   params: {
     pluginConfig?: unknown;
+    execMode?: OpenClawExecMode;
+    execPolicy?: OpenClawExecPolicyForCodexAppServer;
+    modelProvider?: string;
+    model?: string;
+    config?: ProviderAuthAliasConfig;
     env?: NodeJS.ProcessEnv;
+    agentDir?: string;
+    codexConfigToml?: string | null;
     requirementsToml?: string | null;
     requirementsPath?: string;
     readRequirementsFile?: (path: string) => string | undefined;
     platform?: NodeJS.Platform;
     hostName?: string;
+    openClawSandboxActive?: boolean;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
@@ -396,20 +443,87 @@ export function resolveCodexAppServerRuntimeOptions(
   const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
+  const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
+    execMode: params.execMode,
+    execPolicy: params.execPolicy,
+  });
+  assertCodexAppServerAllowedForOpenClawExecMode(execMode);
   const explicitPolicyMode =
     resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
-  const defaultPolicy = explicitPolicyMode
-    ? undefined
-    : resolveDefaultCodexAppServerPolicy({
-        transport,
-        env,
-        requirementsToml: params.requirementsToml,
-        requirementsPath: params.requirementsPath,
-        readRequirementsFile: params.readRequirementsFile,
-        platform: params.platform,
-        hostName: params.hostName,
-      });
-  const policyMode = explicitPolicyMode ?? defaultPolicy?.mode ?? "yolo";
+  const configuredSandbox =
+    resolveSandbox(config.sandbox) ?? resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX);
+  const explicitApprovalsReviewer = resolveApprovalsReviewer(config.approvalsReviewer);
+  const normalizedPolicyMode = resolveCodexPolicyModeForOpenClawExecMode(execMode);
+  const ignoreLegacyYoloPolicyMode =
+    normalizedPolicyMode === "guardian" && explicitPolicyMode === "yolo";
+  const canUseModelBackedReviewer = canUseCodexModelBackedApprovalsReviewerForModel({
+    modelProvider: params.modelProvider,
+    model: params.model,
+    config: params.config,
+    env,
+    agentDir: params.agentDir,
+    codexConfigToml: params.codexConfigToml,
+  });
+  const explicitModelBackedReviewer =
+    explicitApprovalsReviewer === "auto_review" ||
+    explicitApprovalsReviewer === "guardian_subagent";
+  const forceUserReviewerForUnknownModel =
+    !canUseModelBackedReviewer &&
+    (explicitModelBackedReviewer ||
+      (explicitPolicyMode === "guardian" && explicitApprovalsReviewer !== "user"));
+  const forceUserReviewerForExecMode =
+    execMode !== undefined &&
+    execMode !== "full" &&
+    (execMode !== "auto" || !canUseModelBackedReviewer);
+  const forceUserReviewer = forceUserReviewerForUnknownModel || forceUserReviewerForExecMode;
+  const forceGuardianReviewer = execMode === "auto" && canUseModelBackedReviewer;
+  const execModeRequiringPromptingApprovals: Extract<OpenClawExecMode, "auto" | "ask"> | undefined =
+    execMode === "auto" || execMode === "ask" ? execMode : forceUserReviewer ? "ask" : undefined;
+  const forceDangerFullAccessSandbox =
+    params.execPolicy?.touched === true &&
+    params.execPolicy.security === "full" &&
+    params.execPolicy.ask === "always";
+  const forceRuntimePolicy =
+    forceUserReviewer || forceGuardianReviewer || forceDangerFullAccessSandbox;
+  const defaultPolicy =
+    explicitPolicyMode && !forceRuntimePolicy && !ignoreLegacyYoloPolicyMode
+      ? undefined
+      : resolveDefaultCodexAppServerPolicy({
+          transport,
+          env,
+          forceGuardian: normalizedPolicyMode === "guardian",
+          forceUserReviewer: forceUserReviewer || !canUseModelBackedReviewer,
+          execModeRequiringPromptingApprovals,
+          requirementsToml: params.requirementsToml,
+          requirementsPath: params.requirementsPath,
+          readRequirementsFile: params.readRequirementsFile,
+          platform: params.platform,
+          hostName: params.hostName,
+          execModeRequiringUserReviewer: forceUserReviewer ? execMode : undefined,
+        });
+  const preserveExplicitAutoSandbox = forceGuardianReviewer && configuredSandbox === "read-only";
+  const forcedPolicy = forceRuntimePolicy
+    ? {
+        approvalPolicy: defaultPolicy?.approvalPolicy ?? "on-request",
+        sandbox: preserveExplicitAutoSandbox
+          ? undefined
+          : forceDangerFullAccessSandbox
+            ? selectForcedDangerFullAccessSandbox({
+                configuredSandbox,
+                defaultPolicy,
+                openClawSandboxActive: Boolean(params.openClawSandboxActive),
+              })
+            : selectForcedPromptingSandbox({
+                configuredSandbox,
+                defaultSandbox: defaultPolicy?.sandbox,
+              }),
+        approvalsReviewer:
+          defaultPolicy?.approvalsReviewer ?? (forceUserReviewer ? "user" : "auto_review"),
+      }
+    : undefined;
+  const policyMode = ignoreLegacyYoloPolicyMode
+    ? normalizedPolicyMode
+    : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
@@ -457,15 +571,16 @@ export function resolveCodexAppServerRuntimeOptions(
           ),
         }
       : {}),
-    approvalPolicy,
+    approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
     approvalPolicySource,
     sandbox:
-      resolveSandbox(config.sandbox) ??
-      resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
+      forcedPolicy?.sandbox ??
+      configuredSandbox ??
       defaultPolicy?.sandbox ??
       (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
     approvalsReviewer:
-      resolveApprovalsReviewer(config.approvalsReviewer) ??
+      forcedPolicy?.approvalsReviewer ??
+      explicitApprovalsReviewer ??
       defaultPolicy?.approvalsReviewer ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
@@ -488,6 +603,93 @@ export function isCodexAppServerApprovalPolicyAllowedByRequirements(
   }
   const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
   return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
+}
+
+export function canUseCodexModelBackedApprovalsReviewerForModel(
+  params: CodexModelBackedReviewerContext,
+): boolean {
+  const explicitProvider = params.modelProvider?.trim().toLowerCase();
+  const inferredProvider = inferProviderFromModelRef(params.model);
+  if (explicitProvider && explicitProvider !== "codex") {
+    return (
+      isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params) &&
+      (inferredProvider === undefined ||
+        isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params))
+    );
+  }
+  if (inferredProvider !== undefined) {
+    return isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params);
+  }
+  return isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params);
+}
+
+export function isTrustedCodexModelBackedOpenAIProvider(params: {
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
+  model?: string;
+  agentDir?: string;
+  codexConfigToml?: string | null;
+}): boolean {
+  if (!openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(params.env)) {
+    return false;
+  }
+  const codexBaseUrlOverrides = readCodexBaseUrlOverridesForModelBackedReview(params);
+  if (
+    codexBaseUrlOverrides === false ||
+    !codexBaseUrlOverrides.openAI.every(isNativeOpenAIBaseUrl) ||
+    !codexBaseUrlOverrides.chatGPT.every(isNativeChatGPTBaseUrl)
+  ) {
+    return false;
+  }
+  const openAIProviders = readConfiguredOpenAIProvidersForModelBackedReview(params.config);
+  if (openAIProviders.length === 0) {
+    return true;
+  }
+  return openAIProviders.every((openAIProvider) =>
+    configuredOpenAIProviderIsTrustedForModelBackedReview(openAIProvider, params.model),
+  );
+}
+
+export function resolveCodexModelBackedReviewerPolicyContext(params: {
+  provider?: string;
+  model?: string;
+  bindingModelProvider?: string;
+  bindingModel?: string;
+  nativeAuthProfile?: boolean;
+}): CodexModelBackedReviewerContext {
+  const provider = params.provider?.trim();
+  if (provider && provider.toLowerCase() !== "codex") {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(provider),
+      model: params.model,
+    };
+  }
+  const bindingModelProvider = params.bindingModelProvider?.trim();
+  const currentModel = params.model?.trim();
+  const bindingModel = params.bindingModel?.trim();
+  if (bindingModelProvider && currentModel && bindingModel && currentModel === bindingModel) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
+      model: params.model ?? params.bindingModel,
+    };
+  }
+  const currentModelProvider = inferProviderFromModelRef(params.model);
+  if (currentModelProvider) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(currentModelProvider),
+      model: params.model,
+    };
+  }
+  if (bindingModelProvider) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
+      model: params.model ?? params.bindingModel,
+    };
+  }
+  return {
+    modelProvider: params.nativeAuthProfile === true ? "openai" : undefined,
+    model: params.model ?? params.bindingModel,
+  };
 }
 
 export function resolveCodexComputerUseConfig(
@@ -634,6 +836,10 @@ function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined
 
 function resolveDefaultCodexAppServerPolicy(params: {
   transport: CodexAppServerTransportMode;
+  forceGuardian?: boolean;
+  forceUserReviewer?: boolean;
+  execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">;
+  execModeRequiringUserReviewer?: OpenClawExecMode;
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
   requirementsPath?: string;
@@ -642,11 +848,28 @@ function resolveDefaultCodexAppServerPolicy(params: {
   hostName?: string;
 }): CodexAppServerDefaultPolicy {
   if (params.transport !== "stdio") {
-    return { mode: "yolo" };
+    return { mode: "yolo", dangerFullAccessAllowed: true };
   }
   const content = readCodexRequirementsToml(params);
   if (content === undefined) {
-    return { mode: "yolo" };
+    if (!params.forceGuardian) {
+      return { mode: "yolo", dangerFullAccessAllowed: true };
+    }
+    return {
+      mode: "guardian",
+      dangerFullAccessAllowed: true,
+      approvalPolicy: selectGuardianApprovalPolicy(
+        undefined,
+        params.execModeRequiringPromptingApprovals,
+      ),
+      approvalsReviewer: params.forceUserReviewer
+        ? selectUserApprovalsReviewer(undefined, params.execModeRequiringUserReviewer)
+        : selectGuardianApprovalsReviewer(
+            undefined,
+            params.execModeRequiringPromptingApprovals === "auto" ? "auto" : undefined,
+          ),
+      sandbox: selectGuardianSandbox(undefined),
+    };
   }
   const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(
     content,
@@ -660,13 +883,22 @@ function resolveDefaultCodexAppServerPolicy(params: {
     allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("never");
   const yoloReviewerAllowed =
     allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user");
-  if (yoloSandboxAllowed && yoloApprovalAllowed && yoloReviewerAllowed) {
-    return { mode: "yolo" };
+  if (!params.forceGuardian && yoloSandboxAllowed && yoloApprovalAllowed && yoloReviewerAllowed) {
+    return { mode: "yolo", dangerFullAccessAllowed: true };
   }
   return {
     mode: "guardian",
-    approvalPolicy: selectGuardianApprovalPolicy(allowedApprovalPolicies),
-    approvalsReviewer: selectGuardianApprovalsReviewer(allowedApprovalsReviewers),
+    dangerFullAccessAllowed: yoloSandboxAllowed,
+    approvalPolicy: selectGuardianApprovalPolicy(
+      allowedApprovalPolicies,
+      params.execModeRequiringPromptingApprovals,
+    ),
+    approvalsReviewer: params.forceUserReviewer
+      ? selectUserApprovalsReviewer(allowedApprovalsReviewers, params.execModeRequiringUserReviewer)
+      : selectGuardianApprovalsReviewer(
+          allowedApprovalsReviewers,
+          params.execModeRequiringPromptingApprovals === "auto" ? "auto" : undefined,
+        ),
     sandbox: selectGuardianSandbox(allowedSandboxModes),
   };
 }
@@ -681,14 +913,14 @@ function readCodexRequirementsToml(params: {
   if (params.requirementsToml !== undefined) {
     return params.requirementsToml ?? undefined;
   }
-  const path =
+  const requirementsPath =
     readNonEmptyString(params.requirementsPath) ??
     resolveCodexRequirementsPath(params.env ?? process.env, params.platform ?? process.platform);
   try {
     if (params.readRequirementsFile) {
-      return params.readRequirementsFile(path);
+      return params.readRequirementsFile(requirementsPath);
     }
-    return readFileSync(path, "utf8");
+    return readFileSync(requirementsPath, "utf8");
   } catch {
     return undefined;
   }
@@ -780,6 +1012,34 @@ function parseTopLevelRequirementsStringArray(content: string, key: string): str
   return parseRequirementsStringArray(topLevelContent, key);
 }
 
+function parseTomlStringValue(content: string, key: string): string | undefined {
+  const match = parseTomlStringAssignment(content, tomlDottedKeyPattern(key));
+  return match ? (match[1] ?? match[2] ?? "") : undefined;
+}
+
+function parseInlineOpenAIModelProviderBaseUrl(content: string): string | undefined {
+  const match = parseTomlStringAssignment(
+    content,
+    `${tomlKeyPattern("model_providers")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("openai")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("base_url")}`,
+  );
+  return match ? (match[1] ?? match[2] ?? "") : undefined;
+}
+
+function parseTomlStringAssignment(content: string, keyPattern: string): RegExpMatchArray | null {
+  return content.match(
+    new RegExp(`(?:^|\\n)\\s*${keyPattern}\\s*=\\s*(?:"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"|'([^']*)')`),
+  );
+}
+
+function tomlDottedKeyPattern(key: string): string {
+  return key.split(".").map(tomlKeyPattern).join("\\s*\\.\\s*");
+}
+
+function tomlKeyPattern(key: string): string {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `(?:"${escaped}"|'${escaped}'|${escaped})`;
+}
+
 function parseRequirementsStringArray(content: string, key: string): string[] | undefined {
   const match = content.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
   if (!match) {
@@ -791,6 +1051,20 @@ function parseRequirementsStringArray(content: string, key: string): string[] | 
     return undefined;
   }
   return stringMatches.map((entry) => entry[1] ?? entry[2] ?? "");
+}
+
+function parseTomlTableSection(content: string, table: string): string | undefined {
+  const strippedContent = stripTomlLineComments(content);
+  const tablePattern = tomlDottedKeyPattern(table);
+  const headerPattern = new RegExp(`^\\s*\\[\\s*${tablePattern}\\s*\\]\\s*$`, "m");
+  const match = headerPattern.exec(strippedContent);
+  if (!match) {
+    return undefined;
+  }
+  const sectionStart = match.index + match[0].length;
+  const rest = strippedContent.slice(sectionStart);
+  const nextTableOffset = rest.search(/^\s*\[/m);
+  return nextTableOffset === -1 ? rest : rest.slice(0, nextTableOffset);
 }
 
 function parseTomlArrayTableSections(content: string, table: string): string[] {
@@ -913,9 +1187,15 @@ function normalizeRequirementsApprovalsReviewer(
 
 function selectGuardianApprovalPolicy(
   allowedApprovalPolicies: Set<CodexAppServerApprovalPolicy> | undefined,
+  execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">,
 ): CodexAppServerApprovalPolicy {
   if (allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("on-request")) {
     return "on-request";
+  }
+  if (execModeRequiringPromptingApprovals) {
+    throw new Error(
+      `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
+    );
   }
   if (allowedApprovalPolicies.has("on-failure")) {
     return "on-failure";
@@ -931,6 +1211,7 @@ function selectGuardianApprovalPolicy(
 
 function selectGuardianApprovalsReviewer(
   allowedApprovalsReviewers: Set<CodexAppServerApprovalsReviewer> | undefined,
+  execModeRequiringAutoReviewer?: Extract<OpenClawExecMode, "auto">,
 ): CodexAppServerApprovalsReviewer {
   if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("auto_review")) {
     return "auto_review";
@@ -938,10 +1219,256 @@ function selectGuardianApprovalsReviewer(
   if (allowedApprovalsReviewers.has("guardian_subagent")) {
     return "guardian_subagent";
   }
+  if (execModeRequiringAutoReviewer) {
+    throw new Error(
+      `tools.exec.mode=${execModeRequiringAutoReviewer} requires Codex app-server auto approvals`,
+    );
+  }
   if (allowedApprovalsReviewers.has("user")) {
     return "user";
   }
   return "auto_review";
+}
+
+function selectUserApprovalsReviewer(
+  allowedApprovalsReviewers: Set<CodexAppServerApprovalsReviewer> | undefined,
+  execModeRequiringUserReviewer?: OpenClawExecMode,
+): CodexAppServerApprovalsReviewer {
+  if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user")) {
+    return "user";
+  }
+  throw new Error(
+    `tools.exec.mode=${execModeRequiringUserReviewer ?? "ask"} requires Codex app-server user approvals`,
+  );
+}
+
+function isCodexModelBackedApprovalsReviewerProvider(provider: string | undefined): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "openai";
+}
+
+function isTrustedCodexModelBackedApprovalsReviewerProvider(
+  provider: string | undefined,
+  params: CodexModelBackedReviewerContext,
+): boolean {
+  return (
+    isCodexModelBackedApprovalsReviewerProvider(provider) &&
+    isTrustedCodexModelBackedOpenAIProvider({
+      config: params.config,
+      env: params.env,
+      model: params.model,
+      agentDir: params.agentDir,
+      codexConfigToml: params.codexConfigToml,
+    })
+  );
+}
+
+function readCodexBaseUrlOverridesForModelBackedReview(
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+): { openAI: string[]; chatGPT: string[] } | false {
+  const configToml = readCodexAppServerConfigToml(params);
+  if (configToml === false) {
+    return false;
+  }
+  if (configToml === undefined) {
+    return { openAI: [], chatGPT: [] };
+  }
+  const topLevelContent = stripTomlLineComments(configToml).slice(
+    0,
+    firstTomlTableOffset(configToml),
+  );
+  const modelProviderOpenAISection = parseTomlTableSection(configToml, "model_providers.openai");
+  return {
+    openAI: [
+      parseTomlStringValue(topLevelContent, "openai_base_url"),
+      parseTomlStringValue(topLevelContent, "model_providers.openai.base_url"),
+      parseInlineOpenAIModelProviderBaseUrl(topLevelContent),
+      modelProviderOpenAISection
+        ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
+        : undefined,
+    ].filter((entry): entry is string => entry !== undefined),
+    chatGPT: [parseTomlStringValue(topLevelContent, "chatgpt_base_url")].filter(
+      (entry): entry is string => entry !== undefined,
+    ),
+  };
+}
+
+function readCodexAppServerConfigToml(
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+): string | undefined | false {
+  if (params.codexConfigToml !== undefined) {
+    return params.codexConfigToml ?? undefined;
+  }
+  const configPath = resolveCodexAppServerConfigPath(params);
+  if (!configPath) {
+    return undefined;
+  }
+  try {
+    return readFileSync(configPath, "utf8");
+  } catch (error) {
+    return readErrorCode(error) === "ENOENT" ? undefined : false;
+  }
+}
+
+function resolveCodexAppServerConfigPath(
+  params: Pick<CodexModelBackedReviewerContext, "agentDir">,
+): string | undefined {
+  const agentDir = readNonEmptyString(params.agentDir);
+  const codexHome = agentDir
+    ? path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME)
+    : undefined;
+  return codexHome ? path.join(codexHome, CODEX_CONFIG_TOML_FILENAME) : undefined;
+}
+
+function readErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+function readConfiguredOpenAIProvidersForModelBackedReview(
+  config: ProviderAuthAliasConfig | undefined,
+): Array<Record<string, unknown>> {
+  const providerRecords = readRecord(readRecord(readRecord(config)?.models)?.providers);
+  if (!providerRecords) {
+    return [];
+  }
+  const openAIProviders: Array<Record<string, unknown>> = [];
+  for (const [providerId, providerConfig] of Object.entries(providerRecords)) {
+    if (resolveProviderIdForAuth(providerId, { config }) !== "openai") {
+      continue;
+    }
+    const record = readRecord(providerConfig);
+    if (record) {
+      openAIProviders.push(record);
+    }
+  }
+  return openAIProviders;
+}
+
+function configuredOpenAIProviderIsTrustedForModelBackedReview(
+  openAIProvider: Record<string, unknown>,
+  modelInput: string | undefined,
+): boolean {
+  if (
+    readRecord(openAIProvider.localService) ||
+    hasNonEmptyRecord(openAIProvider.headers) ||
+    hasNonEmptyRecord(openAIProvider.request) ||
+    typeof openAIProvider.authHeader === "boolean" ||
+    !isNativeOpenAIBaseUrl(openAIProvider.baseUrl)
+  ) {
+    return false;
+  }
+  const models = openAIProvider.models;
+  if (!Array.isArray(models)) {
+    return true;
+  }
+  const modelId = normalizeOpenAIModelBackedReviewerModelId(modelInput);
+  if (!modelId) {
+    return false;
+  }
+  for (const entry of models) {
+    const model = readRecord(entry);
+    if (typeof model?.id !== "string" || !matchesConfiguredOpenAIModelId(modelId, model.id)) {
+      continue;
+    }
+    if (
+      hasNonEmptyRecord(model.headers) ||
+      hasNonEmptyRecord(model.request) ||
+      !isNativeOpenAIBaseUrl(model.baseUrl)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeOpenAIModelBackedReviewerModelId(modelInput: string | undefined): string {
+  const normalized = modelInput?.trim() ?? "";
+  const authProfileIndex = normalized.indexOf("@");
+  const withoutAuthProfile =
+    authProfileIndex > 0 ? normalized.slice(0, authProfileIndex) : normalized;
+  const slashIndex = withoutAuthProfile.indexOf("/");
+  return slashIndex > 0 ? withoutAuthProfile.slice(slashIndex + 1).trim() : withoutAuthProfile;
+}
+
+function matchesConfiguredOpenAIModelId(modelId: string, configuredModelId: string): boolean {
+  const configured = normalizeOpenAIModelBackedReviewerModelId(configuredModelId);
+  return Boolean(configured) && (modelId === configured || modelId.startsWith(`${configured}@`));
+}
+
+function hasNonEmptyRecord(value: unknown): boolean {
+  const record = readRecord(value);
+  return record !== undefined && Object.keys(record).length > 0;
+}
+
+function isNativeOpenAIBaseUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+function openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(
+  env: NodeJS.ProcessEnv | undefined,
+): boolean {
+  return [env?.OPENAI_BASE_URL, env?.OPENAI_API_BASE].every(isNativeOpenAIBaseUrl);
+}
+
+function isNativeChatGPTBaseUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "chatgpt.com";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCodexModelBackedReviewerPolicyProvider(provider: string): string {
+  return provider.toLowerCase() === "openai" ? "openai" : provider;
+}
+
+function inferProviderFromModelRef(model: string | undefined): string | undefined {
+  const normalized = model?.trim().toLowerCase();
+  const slashIndex = normalized?.indexOf("/") ?? -1;
+  return slashIndex > 0 ? normalized?.slice(0, slashIndex) : undefined;
+}
+
+function selectForcedPromptingSandbox(params: {
+  configuredSandbox?: CodexAppServerSandboxMode;
+  defaultSandbox?: CodexAppServerSandboxMode;
+}): CodexAppServerSandboxMode {
+  if (params.configuredSandbox === "read-only" || params.defaultSandbox === "read-only") {
+    return "read-only";
+  }
+  return params.defaultSandbox ?? "workspace-write";
+}
+
+function selectForcedDangerFullAccessSandbox(params: {
+  configuredSandbox?: CodexAppServerSandboxMode;
+  defaultPolicy: CodexAppServerDefaultPolicy | undefined;
+  openClawSandboxActive: boolean;
+}): CodexAppServerSandboxMode {
+  if (params.configuredSandbox === "read-only") {
+    return "read-only";
+  }
+  if (params.defaultPolicy?.dangerFullAccessAllowed === false) {
+    if (params.openClawSandboxActive) {
+      return params.defaultPolicy.sandbox ?? "workspace-write";
+    }
+    throw new Error(
+      "legacy full exec security with ask requires Codex app-server danger-full-access",
+    );
+  }
+  return "danger-full-access";
 }
 
 function selectGuardianSandbox(
@@ -980,6 +1507,238 @@ function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReview
     : undefined;
 }
 
+export function resolveOpenClawExecModeFromConfig(params: {
+  config?: unknown;
+  agentId?: string;
+}): OpenClawExecMode | undefined {
+  const policy = resolveOpenClawExecPolicyFromConfig(params);
+  return policy.touched ? policy.mode : undefined;
+}
+
+function resolveOpenClawExecPolicyFromConfig(params: {
+  config?: unknown;
+  agentId?: string;
+}): OpenClawExecPolicy {
+  const root = readRecord(params.config);
+  const globalExec = readRecord(readRecord(root?.tools)?.exec);
+  const globalPolicy = applyOpenClawExecPolicyLayer(createDefaultOpenClawExecPolicy(), globalExec);
+  const agentId = params.agentId?.trim();
+  if (!agentId) {
+    return globalPolicy;
+  }
+  const agents = readRecord(root?.agents);
+  const agentList = Array.isArray(agents?.list) ? agents.list : [];
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const agentEntry = agentList.find((entry) => {
+    const id = readRecord(entry)?.id;
+    return typeof id === "string" && normalizeAgentId(id) === normalizedAgentId;
+  });
+  const agentExec = readRecord(readRecord(readRecord(agentEntry)?.tools)?.exec);
+  return applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
+}
+
+export function resolveOpenClawExecModeForCodexAppServer(params: {
+  execOverrides?: {
+    security?: unknown;
+    ask?: unknown;
+  };
+  approvals?: ExecApprovalsFile;
+  config?: unknown;
+  agentId?: string;
+}): OpenClawExecMode | undefined {
+  const policy = resolveOpenClawExecPolicyForCodexAppServer(params);
+  return policy.touched ? policy.mode : undefined;
+}
+
+export function resolveOpenClawExecPolicyForCodexAppServer(params: {
+  execOverrides?: {
+    security?: unknown;
+    ask?: unknown;
+  };
+  approvals?: ExecApprovalsFile;
+  config?: unknown;
+  agentId?: string;
+}): OpenClawExecPolicyForCodexAppServer {
+  const basePolicy = resolveOpenClawExecPolicyFromConfig({
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const overridePolicy = applyOpenClawExecPolicyLayer(basePolicy, params.execOverrides);
+  const approvalFloors = resolveOpenClawExecApprovalFloorsForCodexAppServer({
+    approvals: params.approvals,
+    agentId: params.agentId,
+    policy: overridePolicy,
+  });
+  return applyOpenClawExecApprovalFloors(overridePolicy, approvalFloors);
+}
+
+function resolveEffectiveOpenClawExecModeForCodexAppServer(params: {
+  execMode?: OpenClawExecMode;
+  execPolicy?: OpenClawExecPolicyForCodexAppServer;
+}): OpenClawExecMode | undefined {
+  if (params.execPolicy?.touched === true) {
+    return params.execPolicy.mode;
+  }
+  return params.execMode;
+}
+
+function resolveCodexPolicyModeForOpenClawExecMode(
+  mode: OpenClawExecMode | undefined,
+): CodexAppServerPolicyMode | undefined {
+  if (!mode || mode === "full") {
+    return undefined;
+  }
+  return "guardian";
+}
+
+function assertCodexAppServerAllowedForOpenClawExecMode(mode: OpenClawExecMode | undefined): void {
+  if (mode === "deny" || mode === "allowlist") {
+    throw new Error(
+      `Codex app-server local execution is not available when tools.exec.mode=${mode}`,
+    );
+  }
+}
+
+function createDefaultOpenClawExecPolicy(): OpenClawExecPolicy {
+  return {
+    security: "full",
+    ask: "off",
+    touched: false,
+  };
+}
+
+function applyOpenClawExecPolicyLayer(
+  base: OpenClawExecPolicy,
+  exec?: { mode?: unknown; security?: unknown; ask?: unknown },
+): OpenClawExecPolicy {
+  if (!exec) {
+    return base;
+  }
+  const mode = readExecMode(exec.mode);
+  if (mode !== undefined) {
+    return {
+      ...resolveOpenClawExecPolicyForMode(mode),
+      touched: true,
+    };
+  }
+  const security = readExecSecurity(exec.security);
+  const ask = readExecAsk(exec.ask);
+  if (security === undefined && ask === undefined) {
+    return base;
+  }
+  const nextSecurity = security ?? base.security;
+  const nextAsk = ask ?? base.ask;
+  return {
+    mode: resolveOpenClawExecModeFromPolicy({ security: nextSecurity, ask: nextAsk }),
+    security: nextSecurity,
+    ask: nextAsk,
+    touched: true,
+  };
+}
+
+function resolveOpenClawExecApprovalFloorsForCodexAppServer(params: {
+  approvals?: ExecApprovalsFile;
+  agentId?: string;
+  policy: OpenClawExecPolicy;
+}): OpenClawExecApprovalFloorsForCodexAppServer | undefined {
+  if (!params.approvals) {
+    return undefined;
+  }
+  return resolveExecApprovalsFromFile({
+    file: params.approvals,
+    agentId: params.agentId,
+    overrides: {
+      security: params.policy.security,
+      ask: params.policy.ask,
+    },
+  }).agent;
+}
+
+function applyOpenClawExecApprovalFloors(
+  base: OpenClawExecPolicy,
+  approvalFloors?: OpenClawExecApprovalFloorsForCodexAppServer,
+): OpenClawExecPolicy {
+  if (!approvalFloors) {
+    return base;
+  }
+  const nextSecurity = approvalFloors.security
+    ? minOpenClawExecSecurity(base.security, approvalFloors.security)
+    : base.security;
+  const nextAsk = approvalFloors.ask ? maxOpenClawExecAsk(base.ask, approvalFloors.ask) : base.ask;
+  if (nextSecurity === base.security && nextAsk === base.ask) {
+    return base;
+  }
+  return {
+    mode: resolveOpenClawExecModeFromPolicy({ security: nextSecurity, ask: nextAsk }),
+    security: nextSecurity,
+    ask: nextAsk,
+    touched: true,
+  };
+}
+
+function resolveOpenClawExecPolicyForMode(
+  mode: OpenClawExecMode,
+): Omit<OpenClawExecPolicy, "touched"> {
+  switch (mode) {
+    case "deny":
+      return { mode, security: "deny", ask: "off" };
+    case "allowlist":
+      return { mode, security: "allowlist", ask: "off" };
+    case "ask":
+    case "auto":
+      return { mode, security: "allowlist", ask: "on-miss" };
+    case "full":
+      return { mode, security: "full", ask: "off" };
+  }
+  const exhaustiveMode: never = mode;
+  return exhaustiveMode;
+}
+
+function resolveOpenClawExecModeFromPolicy(params: {
+  security: OpenClawExecSecurity;
+  ask: OpenClawExecAsk;
+}): OpenClawExecMode {
+  if (params.security === "deny") {
+    return "deny";
+  }
+  if (params.security === "allowlist" && params.ask === "off") {
+    return "allowlist";
+  }
+  if (params.security === "full" && params.ask !== "always") {
+    return "full";
+  }
+  return "ask";
+}
+
+function minOpenClawExecSecurity(
+  left: OpenClawExecSecurity,
+  right: OpenClawExecSecurity,
+): OpenClawExecSecurity {
+  const order: Record<OpenClawExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+  return order[left] <= order[right] ? left : right;
+}
+
+function maxOpenClawExecAsk(left: OpenClawExecAsk, right: OpenClawExecAsk): OpenClawExecAsk {
+  const order: Record<OpenClawExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
+  return order[left] >= order[right] ? left : right;
+}
+
+function readExecMode(value: unknown): OpenClawExecMode | undefined {
+  return value === "deny" ||
+    value === "allowlist" ||
+    value === "ask" ||
+    value === "auto" ||
+    value === "full"
+    ? value
+    : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -1003,7 +1762,7 @@ export function isCodexFastServiceTier(value: unknown): boolean {
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return resolvePositiveTimerTimeoutMs(value, fallback);
 }
 
 function normalizeHeaders(value: unknown): Record<string, string> {
@@ -1033,6 +1792,14 @@ function readBooleanEnv(value: string | undefined): boolean | undefined {
     return false;
   }
   return undefined;
+}
+
+function readExecSecurity(value: unknown): OpenClawExecSecurity | undefined {
+  return value === "deny" || value === "allowlist" || value === "full" ? value : undefined;
+}
+
+function readExecAsk(value: unknown): OpenClawExecAsk | undefined {
+  return value === "off" || value === "on-miss" || value === "always" ? value : undefined;
 }
 
 function readNumberEnv(value: string | undefined): number | undefined {

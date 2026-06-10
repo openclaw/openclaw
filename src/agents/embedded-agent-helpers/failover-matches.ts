@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+/**
+ * Shared text-pattern matchers for failover, auth, billing, and rate-limit errors.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ErrorPattern = RegExp | string;
 
@@ -47,10 +50,13 @@ const CJK_AUTH_ERROR_PATTERNS = [
   "鉴权失败",
   "密钥无效",
   "apikey 无效",
+  /(?:当前\s*ak|ce-011).*?(?:违规请求|禁止访问)|(?:违规请求|禁止访问).*?(?:当前\s*ak|ce-011)/i,
+  /\bce-011\b/i,
 ] as const satisfies readonly ErrorPattern[];
 
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
+const VOLCENGINE_INVALID_SUBSCRIPTION_RE = /"code"\s*:\s*"InvalidSubscription"/i;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
 const STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE =
   /^(?=[\s\S]*\bstatus:\s*internal server error\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i;
@@ -171,7 +177,7 @@ const ERROR_PATTERNS = {
     /^terminated$/i,
     /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
-    // shared model runtime's openai-codex provider surfaces `Request failed` when the HTTP
+    // shared model runtime's openai provider surfaces `Request failed` when the HTTP
     // response has no body and no status text (typical of Cloudflare 502s
     // from the upstream Codex service). Treat it as a transport failure so
     // the configured fallback chain runs instead of surfacing the error.
@@ -202,6 +208,10 @@ const ERROR_PATTERNS = {
     "账户余额不足",
     "欠费",
     "账户已欠费",
+    // Volcengine Coding Plan entitlement failure. Official Ark error code:
+    // HTTP 400 + InvalidSubscription means the plan is missing or expired.
+    VOLCENGINE_INVALID_SUBSCRIPTION_RE,
+    /\bdoes not have a valid coding\s*plan subscription\b/i,
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
     /\bcurrent\s+subscription\s+plan\b.*\b(?:does\s+not|doesn't|not)\b.*\binclude\s+access\b/i,
@@ -276,7 +286,11 @@ export function isBillingErrorMessage(raw: string): boolean {
   }
 
   if (raw.length > BILLING_ERROR_MAX_LENGTH) {
-    return BILLING_ERROR_HARD_402_RE.test(value) || ZAI_BILLING_CODE_1311_RE.test(value);
+    return (
+      BILLING_ERROR_HARD_402_RE.test(value) ||
+      ZAI_BILLING_CODE_1311_RE.test(value) ||
+      VOLCENGINE_INVALID_SUBSCRIPTION_RE.test(value)
+    );
   }
   if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
     return true;

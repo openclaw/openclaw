@@ -1,4 +1,6 @@
+// Qa Matrix tests cover runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as liveTesting } from "./runtime.js";
@@ -96,12 +98,16 @@ describe("matrix live qa runtime", () => {
     try {
       process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "12345";
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(12345);
+      process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "+012345";
+      expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(12345);
       process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "nope";
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
       process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "1e3";
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
       process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "1.5";
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
+      process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = String(Number.MAX_SAFE_INTEGER);
+      expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS;
@@ -148,6 +154,8 @@ describe("matrix live qa runtime", () => {
       delete process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS;
       expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(45_000);
       process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = "90000";
+      expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(90_000);
+      process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = "+090000";
       expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(90_000);
       process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = "nope";
       expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(45_000);
@@ -605,6 +613,7 @@ describe("matrix live qa runtime", () => {
     await liveTesting.patchMatrixQaGatewayConfig({
       gateway: gateway as never,
       patch,
+      replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
       restartDelayMs: 250,
     });
 
@@ -615,6 +624,7 @@ describe("matrix live qa runtime", () => {
       {
         baseHash: "hash-old",
         raw: JSON.stringify(patch, null, 2),
+        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
         restartDelayMs: 250,
       },
       { timeoutMs: 60_000 },
@@ -626,6 +636,7 @@ describe("matrix live qa runtime", () => {
       {
         baseHash: "hash-fresh",
         raw: JSON.stringify(patch, null, 2),
+        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
         restartDelayMs: 250,
       },
       { timeoutMs: 60_000 },

@@ -1,4 +1,10 @@
+/**
+ * Exec runtime tests.
+ * Covers target resolution, cursor mode tracking, exit outcome classification,
+ * system events, and process lifecycle behavior.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -28,6 +34,7 @@ let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").forma
 let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
+let sanitizeHostBaseEnv: typeof import("./bash-tools.exec-runtime.js").sanitizeHostBaseEnv;
 
 beforeAll(async () => {
   ({ markBackgrounded } = await import("./bash-process-registry.js"));
@@ -39,6 +46,7 @@ beforeAll(async () => {
     renderExecUpdateText,
     resolveExecTarget,
     runExecProcess,
+    sanitizeHostBaseEnv,
   } = await import("./bash-tools.exec-runtime.js"));
 });
 
@@ -104,6 +112,33 @@ describe("detectCursorKeyMode", () => {
     expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
     // Multiple toggles - last one wins
     expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
+  });
+});
+
+describe("sanitizeHostBaseEnv", () => {
+  it("uses value-aware Git protocol inherited env sanitization", () => {
+    expect(
+      sanitizeHostBaseEnv({
+        PATH: "/usr/bin:/bin",
+        GIT_ALLOW_PROTOCOL: "https:ext:ssh",
+        GIT_PROTOCOL_FROM_USER: "1",
+        GIT_SSH_COMMAND: "touch /tmp/pwned",
+        SAFE: "ok",
+      }),
+    ).toEqual({
+      PATH: "/usr/bin:/bin",
+      GIT_ALLOW_PROTOCOL: "https:ssh",
+      GIT_PROTOCOL_FROM_USER: "0",
+      SAFE: "ok",
+    });
+
+    expect(
+      sanitizeHostBaseEnv({
+        GIT_PROTOCOL_FROM_USER: "false",
+      }),
+    ).toEqual({
+      GIT_PROTOCOL_FROM_USER: "false",
+    });
   });
 });
 
@@ -395,7 +430,9 @@ describe("exec notifyOnExit suppression", () => {
           startedAtMs: Date.now(),
           pid: 123,
           wait: async () => {
-            await new Promise((resolve) => setImmediate(resolve));
+            await new Promise((resolve) => {
+              setImmediate(resolve);
+            });
             return {
               reason: params.reason,
               exitCode: null,
@@ -720,6 +757,48 @@ describe("buildExecExitOutcome", () => {
 });
 
 describe("runExecProcess POSIX command wrapper", () => {
+  it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
+    supervisorMock.spawn.mockResolvedValue({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const baseParams = {
+      command: "echo test",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      pathPrepend: [],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+    };
+
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: Number.POSITIVE_INFINITY,
+    });
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: 3_000_000,
+    });
+
+    expect(supervisorMock.spawn.mock.calls[0]?.[0].timeoutMs).toBeUndefined();
+    expect(supervisorMock.spawn.mock.calls[1]?.[0].timeoutMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
   it("wraps command with PATH export if OPENCLAW_PREPEND_PATH is present", async () => {
     if (process.platform === "win32") {
       return;
@@ -741,7 +820,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "/tmp",
       env: { PATH: "/usr/bin" },
@@ -753,6 +832,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
@@ -784,7 +864,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "C:\\tmp",
       env: { Path: "C:\\Windows\\System32" },
@@ -796,6 +876,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];

@@ -1,3 +1,4 @@
+// Control UI tests cover cron filters behavior.
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../types.ts";
 import { getVisibleCronJobs } from "./cron.ts";
@@ -40,6 +41,19 @@ describe("getVisibleCronJobs", () => {
       cronJobsLastStatusFilter: "all",
     });
     expect(visible.map((entry) => entry.id)).toEqual(["c"]);
+  });
+
+  it("drops jobs with unsupported schedules before rendering", () => {
+    const jobs = [
+      job("valid", { schedule: { kind: "cron", expr: "0 9 * * *" } }),
+      job("invalid", { schedule: {} as CronJob["schedule"] }),
+    ];
+    const visible = getVisibleCronJobs({
+      cronJobs: jobs,
+      cronJobsScheduleKindFilter: "all",
+      cronJobsLastStatusFilter: "all",
+    });
+    expect(visible.map((entry) => entry.id)).toEqual(["valid"]);
   });
 
   it("filters by last status", () => {

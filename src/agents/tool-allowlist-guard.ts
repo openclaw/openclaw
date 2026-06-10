@@ -1,4 +1,9 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+/**
+ * Explicit tool allowlist guard.
+ *
+ * Collects operator/user allowlist sources and explains when no callable tools remain.
+ */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
@@ -7,6 +12,7 @@ type ExplicitToolAllowlistSource = {
   enforceWhenToolsDisabled?: boolean;
 };
 
+/** Normalize explicit allowlist sources, dropping empty source entries. */
 export function collectExplicitToolAllowlistSources(
   sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
 ): ExplicitToolAllowlistSource[] {
@@ -25,6 +31,7 @@ export function collectExplicitToolAllowlistSources(
   });
 }
 
+/** Build an actionable error when explicit allowlists remove every callable tool. */
 export function buildEmptyExplicitToolAllowlistError(params: {
   sources: ExplicitToolAllowlistSource[];
   callableToolNames: string[];

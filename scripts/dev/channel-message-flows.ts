@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Channel Message Flows script supports OpenClaw repository automation.
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Bot, type ApiClientOptions } from "grammy";
@@ -50,6 +51,18 @@ type TelegramFlowResult = {
   finalMessageId?: string;
   previewUpdates: number;
 };
+
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
+function requireFinalMessageId(final: { messageId?: string }, flow: SupportedFlow): string {
+  const messageId = final.messageId?.trim();
+  if (!messageId) {
+    throw new Error(`${flow} final send did not return a durable Telegram message id`);
+  }
+  return messageId;
+}
 
 type TelegramThinkingFinalDeps = {
   createDraftStream?: (params: {
@@ -310,15 +323,35 @@ export async function runTelegramThinkingFinalFlow(
   });
   const wait = deps.sleep ?? sleep;
 
-  for (const update of thinkingUpdates) {
-    stream.update(formatReasoningMessage(update));
-    await stream.flush();
-    if (delayMs > 0) {
-      await wait(delayMs);
+  let previewStarted = false;
+  let flowError: unknown;
+  try {
+    for (const update of thinkingUpdates) {
+      previewStarted = true;
+      stream.update(formatReasoningMessage(update));
+      await stream.flush();
+      if (delayMs > 0) {
+        await wait(delayMs);
+      }
+    }
+  } catch (error) {
+    flowError = error;
+  }
+  let cleanupError: unknown;
+  if (previewStarted) {
+    try {
+      await stream.clear();
+    } catch (error) {
+      cleanupError = error;
     }
   }
+  if (flowError) {
+    throw toError(flowError);
+  }
+  if (cleanupError) {
+    throw toError(cleanupError);
+  }
 
-  await stream.clear();
   const final = await (deps.sendFinal ?? sendTelegramFinal)({
     accountId: options.accountId,
     cfg: options.cfg,
@@ -327,8 +360,9 @@ export async function runTelegramThinkingFinalFlow(
     threadId: options.threadId,
   });
 
+  const finalMessageId = requireFinalMessageId(final, "thinking-final");
   return {
-    finalMessageId: final.messageId,
+    finalMessageId,
     previewUpdates: thinkingUpdates.length,
   };
 }
@@ -350,19 +384,39 @@ export async function runTelegramWorkingFinalFlow(
   let previewUpdates = 0;
   let lastPreviewText = "";
   const updateIntervalMs = delayMs > 0 ? delayMs : 1_000;
-  for (let elapsedMs = 0; elapsedMs < durationMs; elapsedMs += updateIntervalMs) {
-    const previewText = formatWorkingProgressPreview(elapsedMs);
-    if (previewText !== lastPreviewText) {
-      await draft.update(previewText);
-      lastPreviewText = previewText;
-      previewUpdates += 1;
+  let draftStarted = false;
+  let flowError: unknown;
+  try {
+    for (let elapsedMs = 0; elapsedMs < durationMs; elapsedMs += updateIntervalMs) {
+      const previewText = formatWorkingProgressPreview(elapsedMs);
+      if (previewText !== lastPreviewText) {
+        draftStarted = true;
+        await draft.update(previewText);
+        lastPreviewText = previewText;
+        previewUpdates += 1;
+      }
+      if (delayMs > 0 && elapsedMs + updateIntervalMs < durationMs) {
+        await wait(delayMs);
+      }
     }
-    if (delayMs > 0 && elapsedMs + updateIntervalMs < durationMs) {
-      await wait(delayMs);
+  } catch (error) {
+    flowError = error;
+  }
+  let cleanupError: unknown;
+  if (draftStarted) {
+    try {
+      draft.stop();
+    } catch (error) {
+      cleanupError = error;
     }
   }
+  if (flowError) {
+    throw toError(flowError);
+  }
+  if (cleanupError) {
+    throw toError(cleanupError);
+  }
 
-  draft.stop();
   const final = await (deps.sendFinal ?? sendTelegramFinal)({
     accountId: options.accountId,
     cfg: options.cfg,
@@ -371,8 +425,9 @@ export async function runTelegramWorkingFinalFlow(
     threadId: options.threadId,
   });
 
+  const finalMessageId = requireFinalMessageId(final, "working-final");
   return {
-    finalMessageId: final.messageId,
+    finalMessageId,
     previewUpdates,
   };
 }

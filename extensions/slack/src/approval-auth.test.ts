@@ -1,5 +1,6 @@
+// Slack tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
-import { slackApprovalAuth } from "./approval-auth.js";
+import { isSlackApprovalAuthorizedSender, slackApprovalAuth } from "./approval-auth.js";
 
 describe("slackApprovalAuth", () => {
   it("authorizes general Slack approvers from allowFrom and defaultTo", () => {
@@ -95,5 +96,30 @@ describe("slackApprovalAuth", () => {
         }),
       ).toEqual({ authorized: true });
     }
+  });
+
+  it("allows same-chat plugin approval when no concrete Slack approvers are configured", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          allowFrom: ["*"],
+        },
+      },
+    };
+
+    expect(
+      slackApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "U123OWNER",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+    expect(
+      isSlackApprovalAuthorizedSender({
+        cfg,
+        senderId: "U123OWNER",
+      }),
+    ).toBe(true);
   });
 });

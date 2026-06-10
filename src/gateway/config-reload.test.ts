@@ -1,9 +1,7 @@
+// Gateway config reload tests cover changed-path detection, reload planning,
+// plugin registry refresh, skill snapshot invalidation, and watcher behavior.
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getSkillsSnapshotVersion,
-  resetSkillsRefreshStateForTest,
-} from "../agents/skills/refresh-state.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type {
@@ -17,6 +15,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
@@ -158,7 +160,10 @@ describe("buildGatewayReloadPlan", () => {
       listAccountIds: () => [],
       resolveAccount: () => ({}),
     },
-    reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
+    reload: {
+      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      noopPrefixes: ["channels.whatsapp"],
+    },
   };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
@@ -217,6 +222,25 @@ describe("buildGatewayReloadPlan", () => {
     );
     expect(expected.size).toBeGreaterThan(0);
     expect(plan.restartChannels).toEqual(expected);
+  });
+
+  it("restarts the channel when a per-account config field changes (more specific configPrefix wins over the broad noop prefix)", () => {
+    const changedPaths = [
+      "channels.whatsapp.accounts.default.enabled",
+      "channels.whatsapp.accounts.default.authDir",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("keeps other channels.whatsapp.* changes as hot no-ops", () => {
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.replyToMode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.noopPaths).toContain("channels.whatsapp.replyToMode");
   });
 
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {
@@ -394,6 +418,17 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("secrets.providers.default.path");
   });
 
+  it("treats TUI display preferences as no-op for gateway restart planning", () => {
+    const path = "tui.footer.showRemoteHost";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.noopPaths).toContain(path);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("none");
+  });
+
   it("treats diagnostics stuck-session thresholds as no-op for gateway restart planning", () => {
     const plan = buildGatewayReloadPlan([
       "diagnostics.stuckSessionWarnMs",
@@ -409,6 +444,20 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.hotReasons).toContain("diagnostics.memoryPressureSnapshot");
     expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("hot-reloads auth cooldown changes without a gateway restart", () => {
+    const changedPaths = [
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata("auth.cooldowns.billingBackoffHours").kind).toBe("hot");
   });
 
   it("restarts for gateway.auth.token changes", () => {
@@ -463,6 +512,16 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "tui.footer.showRemoteHost",
+      expectRestartGateway: false,
+      expectNoopPath: "tui.footer.showRemoteHost",
+    },
+    {
+      path: "auth.cooldowns.billingBackoffHours",
+      expectRestartGateway: false,
+      expectHotPath: "auth.cooldowns.billingBackoffHours",
     },
     {
       path: "gateway.auth.token",
@@ -1329,6 +1388,57 @@ describe("startGatewayConfigReloader", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.hotReasons).toEqual(["plugins.entries.telegram.enabled"]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("keeps external auth cooldown writes on the hot reload path", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      auth: {
+        cooldowns: {
+          billingBackoffHours: 1,
+          billingBackoffHoursByProvider: { anthropic: 2 },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      auth: {
+        cooldowns: {
+          billingBackoffHours: 3,
+          billingBackoffHoursByProvider: { anthropic: 4 },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "external-auth-cooldowns-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.changedPaths).toEqual([
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual([
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ]);
+    expect(plan.noopPaths).toStrictEqual([]);
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

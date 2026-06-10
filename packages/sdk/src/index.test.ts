@@ -1,3 +1,4 @@
+// OpenClaw SDK tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import { EventHub, OpenClaw, normalizeGatewayEvent } from "./index.js";
 import type {
@@ -50,6 +51,18 @@ class FakeTransport implements OpenClawTransport {
 
   close(): void {
     this.eventHub.close();
+  }
+}
+
+class EventsOnlyTransport implements OpenClawTransport {
+  constructor(private readonly eventSource: AsyncIterable<GatewayEvent>) {}
+
+  async request<T = unknown>(): Promise<T> {
+    return {} as T;
+  }
+
+  events(): AsyncIterable<GatewayEvent> {
+    return this.eventSource;
   }
 }
 
@@ -143,6 +156,79 @@ describe("OpenClaw SDK", () => {
     expect(result.error?.message).toBe("aborted by operator");
   });
 
+  it("maps provider-started rpc timeout wait snapshots to timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_hard_timeout",
+        stopReason: "rpc",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "provider request timed out",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_hard_timeout");
+
+    expect(result.runId).toBe("run_hard_timeout");
+    expect(result.status).toBe("timed_out");
+    expect(result.error?.message).toBe("provider request timed out");
+  });
+
+  it("maps provider timeout wait errors to timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "error",
+        runId: "run_timeout_error",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "provider request timed out",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_timeout_error");
+
+    expect(result.runId).toBe("run_timeout_error");
+    expect(result.status).toBe("timed_out");
+    expect(result.error?.message).toBe("provider request timed out");
+  });
+
+  it("does not map provider-started wait errors to timed_out without timeout attribution", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "error",
+        runId: "run_provider_error",
+        providerStarted: true,
+        error: "provider authentication failed",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_provider_error");
+
+    expect(result.runId).toBe("run_provider_error");
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toBe("provider authentication failed");
+  });
+
+  it("does not treat successful provider-started wait snapshots as timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "ok",
+        runId: "run_provider_started_ok",
+        providerStarted: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_provider_started_ok");
+
+    expect(result.runId).toBe("run_provider_started_ok");
+    expect(result.status).toBe("completed");
+  });
+
   it("maps auth-revoked wait snapshots to cancelled", async () => {
     const transport = new FakeTransport({
       "agent.wait": {
@@ -190,6 +276,26 @@ describe("OpenClaw SDK", () => {
     expect(result.runId).toBe("run_pending_error");
     expect(result.status).toBe("accepted");
     expect(result.error?.message).toBe("429 RESOURCE_EXHAUSTED");
+  });
+
+  it("keeps provider-attributed pending-error wait deadlines non-terminal", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_pending_provider_error",
+        error: "provider request timed out",
+        pendingError: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_pending_provider_error");
+
+    expect(result.runId).toBe("run_pending_provider_error");
+    expect(result.status).toBe("accepted");
+    expect(result.error?.message).toBe("provider request timed out");
   });
 
   it("maps terminal runtime timeout snapshots to timed_out", async () => {
@@ -589,6 +695,84 @@ describe("OpenClaw SDK", () => {
     expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
   });
 
+  it("rejects normalized event streams when the event pump fails before yielding", async () => {
+    const failure = new Error("synthetic transport event failure");
+    const transport = new EventsOnlyTransport({
+      [Symbol.asyncIterator](): AsyncIterator<GatewayEvent> {
+        return {
+          next: async () => {
+            throw failure;
+          },
+        };
+      },
+    });
+    const oc = new OpenClaw({ transport });
+    const iterator = oc.events()[Symbol.asyncIterator]();
+    let futureIterator: AsyncIterator<OpenClawEvent> | undefined;
+
+    try {
+      await expect(iterator.next()).rejects.toThrow("synthetic transport event failure");
+
+      futureIterator = oc.events()[Symbol.asyncIterator]();
+      await expect(futureIterator.next()).rejects.toThrow("synthetic transport event failure");
+    } finally {
+      await futureIterator?.return?.();
+      await iterator.return?.();
+      await oc.close();
+    }
+  });
+
+  it("rejects run event streams after replaying events when the event pump fails", async () => {
+    const failure = new Error("synthetic post-yield transport event failure");
+    const rawEvent: GatewayEvent = {
+      event: "agent",
+      seq: 1,
+      payload: {
+        runId: "run_pump_failure",
+        stream: "lifecycle",
+        ts: 1_777_000_000_050,
+        data: { phase: "start" },
+      },
+    };
+    const transport = new EventsOnlyTransport({
+      async *[Symbol.asyncIterator]() {
+        yield rawEvent;
+        throw failure;
+      },
+    });
+    const oc = new OpenClaw({ transport });
+    const run = await oc.runs.get("run_pump_failure");
+    const iterator = run.events()[Symbol.asyncIterator]();
+    let futureIterator: AsyncIterator<OpenClawEvent> | undefined;
+
+    try {
+      const first = await iterator.next();
+      expect(first.done).toBe(false);
+      if (first.done !== false) {
+        throw new Error("expected first run event");
+      }
+      expect(first.value.type).toBe("run.started");
+      expect(first.value.runId).toBe("run_pump_failure");
+
+      await expect(iterator.next()).rejects.toThrow("synthetic post-yield transport event failure");
+
+      futureIterator = run.events()[Symbol.asyncIterator]();
+      const replayed = await futureIterator.next();
+      expect(replayed.done).toBe(false);
+      if (replayed.done !== false) {
+        throw new Error("expected replayed run event");
+      }
+      expect(replayed.value.type).toBe("run.started");
+      await expect(futureIterator.next()).rejects.toThrow(
+        "synthetic post-yield transport event failure",
+      );
+    } finally {
+      await futureIterator?.return?.();
+      await iterator.return?.();
+      await oc.close();
+    }
+  });
+
   it("does not surface raw chat projection events in per-run streams", async () => {
     const ts = 1_777_000_000_100;
     const transport = new FakeTransport({
@@ -899,7 +1083,7 @@ describe("OpenClaw SDK", () => {
       await oc.connect();
       const observedLast = (async () => {
         for await (const event of oc.events(
-          (event) => event.raw?.event === "chat" && event.raw.seq === 501,
+          (eventLocal) => eventLocal.raw?.event === "chat" && eventLocal.raw.seq === 501,
         )) {
           return event;
         }
@@ -1025,9 +1209,123 @@ describe("OpenClaw SDK", () => {
     expect(cancelled.runId).toBe("run_1");
     expect(cancelled.data).toEqual({ phase: "end", aborted: true, stopReason: "rpc" });
 
-    const authRevoked = normalizeGatewayEvent({
+    const hardTimeout = normalizeGatewayEvent({
       event: "agent",
       seq: 6,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "rpc",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(hardTimeout.type).toBe("run.timed_out");
+    expect(hardTimeout.runId).toBe("run_1");
+    expect(hardTimeout.data).toEqual({
+      phase: "end",
+      aborted: true,
+      stopReason: "rpc",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const hardTimeoutError = normalizeGatewayEvent({
+      event: "agent",
+      seq: 7,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "error",
+          error: "provider request timed out",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(hardTimeoutError.type).toBe("run.timed_out");
+    expect(hardTimeoutError.runId).toBe("run_1");
+    expect(hardTimeoutError.data).toEqual({
+      phase: "error",
+      error: "provider request timed out",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const providerStartedError = normalizeGatewayEvent({
+      event: "agent",
+      seq: 8,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "error",
+          error: "provider authentication failed",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(providerStartedError.type).toBe("run.failed");
+    expect(providerStartedError.runId).toBe("run_1");
+    expect(providerStartedError.data).toEqual({
+      phase: "error",
+      error: "provider authentication failed",
+      providerStarted: true,
+    });
+
+    const hardTimeoutEnd = normalizeGatewayEvent({
+      event: "agent",
+      seq: 9,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "end",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(hardTimeoutEnd.type).toBe("run.timed_out");
+    expect(hardTimeoutEnd.runId).toBe("run_1");
+    expect(hardTimeoutEnd.data).toEqual({
+      phase: "end",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const providerStartedEnd = normalizeGatewayEvent({
+      event: "agent",
+      seq: 10,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "end",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(providerStartedEnd.type).toBe("run.completed");
+    expect(providerStartedEnd.runId).toBe("run_1");
+    expect(providerStartedEnd.data).toEqual({
+      phase: "end",
+      providerStarted: true,
+    });
+
+    const authRevoked = normalizeGatewayEvent({
+      event: "agent",
+      seq: 10,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1045,7 +1343,7 @@ describe("OpenClaw SDK", () => {
 
     const timedOut = normalizeGatewayEvent({
       event: "agent",
-      seq: 7,
+      seq: 11,
       payload: {
         runId: "run_1",
         stream: "lifecycle",

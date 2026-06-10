@@ -1,5 +1,10 @@
+// CLI for showing and applying exec policy presets across config and approvals.
 import crypto from "node:crypto";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-command-display.js";
@@ -20,10 +25,6 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
 
@@ -128,6 +129,7 @@ function sanitizeExecPolicyMessage(value: unknown): string {
 }
 
 function hashExecApprovalsFile(file: ExecApprovalsFile): string {
+  // Match the persisted formatting hash so restore/set operations can detect drift.
   const raw = `${JSON.stringify(file, null, 2)}\n`;
   return crypto.createHash("sha256").update(raw).digest("hex");
 }

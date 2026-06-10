@@ -1,15 +1,16 @@
+/** Windows Task Scheduler installer, startup fallback, and lifecycle controls. */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
@@ -43,6 +44,8 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 }
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
+  // Permission failures and hung schtasks calls can still be served by the
+  // per-user Startup folder fallback.
   return (
     params.code === 1 ||
     /(?:access is denied|acceso denegado)/i.test(params.detail) ||
@@ -93,6 +96,8 @@ function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vb
 function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
   const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
+  // Hidden VBS launchers supersede cmd launchers, but uninstall must remove the
+  // legacy cmd path from older installs too.
   return uniqueStrings([primaryPath, legacyCmdPath]);
 }
 
@@ -257,6 +262,7 @@ export async function readScheduledTaskCommand(
       if (lower.startsWith("set ")) {
         const assignment = parseCmdSetAssignment(line.slice(4));
         if (assignment) {
+          // Generated cmd launchers inline service env before the final command.
           environment[assignment.key] = assignment.value;
         }
         continue;
@@ -500,23 +506,11 @@ async function launchFallbackTaskScript(env: GatewayServiceEnv): Promise<void> {
 }
 
 function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
-  const raw = env.OPENCLAW_GATEWAY_PORT?.trim();
-  if (!raw) {
-    return null;
-  }
-  return parseStrictPositiveInteger(raw) ?? null;
+  return parseTcpPort(env.OPENCLAW_GATEWAY_PORT);
 }
 
 function parsePositivePort(raw: string | undefined): number | null {
-  const value = raw?.trim();
-  if (!value) {
-    return null;
-  }
-  if (!/^\d+$/.test(value)) {
-    return null;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  return parsed !== undefined && parsed <= 65535 ? parsed : null;
+  return parseTcpPort(raw);
 }
 
 function parsePortFromProgramArguments(programArguments?: string[]): number | null {

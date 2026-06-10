@@ -1,5 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+// Tavily plugin module implements tavily extract tool behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
@@ -8,19 +7,8 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
 import { runTavilyExtract } from "./tavily-client.js";
+import { resolveTavilyToolConfig, type TavilyToolConfigContext } from "./tavily-tool-config.js";
 import { optionalStringEnum } from "./tavily-tool-schema.js";
-
-type TavilyToolConfigContext = Pick<
-  OpenClawPluginToolContext,
-  "config" | "runtimeConfig" | "getRuntimeConfig"
->;
-
-function resolveTavilyToolConfig(
-  api: OpenClawPluginApi,
-  ctx?: TavilyToolConfigContext,
-): OpenClawConfig {
-  return ctx?.getRuntimeConfig?.() ?? ctx?.runtimeConfig ?? ctx?.config ?? api.config;
-}
 
 const TavilyExtractToolSchema = Type.Object(
   {

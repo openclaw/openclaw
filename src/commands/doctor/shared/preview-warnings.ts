@@ -1,7 +1,10 @@
+// Doctor preview warning aggregation for config that can surprise users before repair.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import {
   isToolAllowedByPolicies,
@@ -13,8 +16,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -305,6 +306,7 @@ function formatTargets(targets: string[]): string {
   return `${targets.slice(0, 2).join(", ")}, and ${targets.length - 2} more`;
 }
 
+/** Warn when visible-reply policy selects message_tool but message is unavailable. */
 export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
   const warnings: string[] = [];
@@ -345,6 +347,7 @@ function formatChannelList(channels: string[]): string {
     .join(", ")}, and ${channels.length - 2} more`;
 }
 
+/** Warn when routed channel agents lack the message tool required for channel actions. */
 export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectChannelRouteTargets(cfg).flatMap((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
@@ -686,6 +689,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   });
 }
 
+/** Warn when configured tool sections no longer widen restrictive tool profiles. */
 export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
@@ -754,10 +758,13 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
 }
 
 export type DoctorPreviewNotes = {
+  /** Non-warning doctor notes shown during preview. */
   infoNotes: string[];
+  /** Warning notes shown during preview. */
   warningNotes: string[];
 };
 
+/** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
@@ -772,6 +779,9 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
+  const { collectBlockedLegacyOpenAICodexProviderWarnings } =
+    await import("./legacy-config-migrations.runtime.models.js");
+  warnings.push(...collectBlockedLegacyOpenAICodexProviderWarnings(params.cfg));
 
   const { collectActiveToolSchemaProjectionWarnings } =
     await import("./active-tool-schema-warnings.js");
@@ -899,7 +909,7 @@ export async function collectDoctorPreviewNotes(params: {
         ),
     );
     if (emptyAllowlistWarnings.length > 0) {
-      const { sanitizeForLog } = await import("../../../terminal/ansi.js");
+      const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
       warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
     }
   }
@@ -959,6 +969,7 @@ export async function collectDoctorPreviewNotes(params: {
   return { infoNotes, warningNotes: warnings };
 }
 
+/** Collect warning notes only for callers that do not display info notes. */
 export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;

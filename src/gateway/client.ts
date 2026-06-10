@@ -1,3 +1,5 @@
+// OpenClaw Gateway client facade.
+// Wraps the shared gateway-client package with OpenClaw host dependencies.
 import {
   GatewayClient as BaseGatewayClient,
   GATEWAY_CLOSE_CODE_HINTS as BASE_GATEWAY_CLOSE_CODE_HINTS,
@@ -149,6 +151,13 @@ export type GatewayClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export type GatewayClientConnectionMetadata = {
+  clientName?: GatewayClientName;
+  hasDeviceIdentity: boolean;
+  mode?: GatewayClientMode;
+  preauthHandshakeTimeoutMs?: number;
+};
+
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
 ): GatewayClientHostDeps {
@@ -184,6 +193,8 @@ export class GatewayClient {
   #client: BaseGatewayClient;
 
   constructor(opts: GatewayClientOptions) {
+    // Inject host deps here so the reusable package stays decoupled from
+    // OpenClaw device identity, token storage, proxy routing, and logging.
     this.#client = new BaseGatewayClient({
       ...opts,
       clientVersion: opts.clientVersion ?? VERSION,
@@ -209,6 +220,16 @@ export class GatewayClient {
     opts?: GatewayClientRequestOptions,
   ): Promise<T> {
     return this.#client.request<T>(method, params, opts);
+  }
+
+  getConnectionMetadata(): GatewayClientConnectionMetadata {
+    const opts = (this.#client as unknown as { opts: GatewayClientOptions }).opts;
+    return {
+      clientName: opts.clientName,
+      hasDeviceIdentity: Boolean(opts.deviceIdentity),
+      mode: opts.mode,
+      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+    };
   }
 }
 

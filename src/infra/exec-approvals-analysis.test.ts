@@ -1,3 +1,4 @@
+// Covers exec approval shell and argv analysis.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -563,9 +564,9 @@ describe("exec approvals shell analysis", () => {
   describe("shell allowlist (chained commands)", () => {
     it.each([
       {
-        allowlist: [{ pattern: "/usr/bin/obsidian-cli" }, { pattern: "/usr/bin/head" }],
+        allowlist: [{ pattern: "/usr/bin/obsidian-cli" }, { pattern: "/opt/openclaw-test/head" }],
         command:
-          "/usr/bin/obsidian-cli print-default && /usr/bin/obsidian-cli search foo | /usr/bin/head",
+          "/usr/bin/obsidian-cli print-default && /usr/bin/obsidian-cli search foo | /opt/openclaw-test/head",
         expectedAnalysisOk: true,
         expectedAllowlistSatisfied: true,
       },
@@ -689,12 +690,12 @@ describe("exec approvals shell analysis", () => {
       expect(result.segmentSatisfiedBy).toEqual([null]);
     });
 
-    it.each(['/usr/bin/echo "foo && bar"', '/usr/bin/echo "foo\\" && bar"'])(
+    it.each(['/opt/openclaw-test/echo "foo && bar"', '/opt/openclaw-test/echo "foo\\" && bar"'])(
       "respects quoted chain separator for %s",
       (command) => {
         const result = evaluateShellAllowlist({
           command,
-          allowlist: [{ pattern: "/usr/bin/echo" }],
+          allowlist: [{ pattern: "/opt/openclaw-test/echo" }],
           safeBins: new Set(),
           cwd: "/tmp",
         });

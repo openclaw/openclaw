@@ -1,3 +1,4 @@
+// Telegram helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -20,6 +21,22 @@ export const telegramChannelConfigUiHints = {
   configWrites: {
     label: "Telegram Config Writes",
     help: "Allow Telegram to write config in response to channel events/commands (default: true).",
+  },
+  mentionPatterns: {
+    label: "Telegram Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Telegram group chat IDs or chatId:topic:threadId topic IDs. Native Telegram bot mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Telegram Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Telegram Mention Pattern Allowlist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Telegram Mention Pattern Denylist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
   },
   "commands.native": {
     label: "Telegram Native Commands",
@@ -92,6 +109,10 @@ export const telegramChannelConfigUiHints = {
   "streaming.progress.commandText": {
     label: "Telegram Progress Command Text",
     help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  "streaming.progress.commentary": {
+    label: "Telegram Progress Commentary",
+    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
   },
   "retry.attempts": {
     label: "Telegram Retry Attempts",

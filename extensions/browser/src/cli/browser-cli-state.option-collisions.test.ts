@@ -1,3 +1,4 @@
+// Browser tests cover browser cli state.option collisions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliResizeModule from "./browser-cli-resize.js";
@@ -161,6 +162,14 @@ describe("browser state option collisions", () => {
 
     expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
     expectErrorMessage("Invalid width: must be a positive integer");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects excessive viewport dimensions before resize dispatch", async () => {
+    await runBrowserCommand(["set", "viewport", "8193", "768"]);
+
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid width: maximum is 8192");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 

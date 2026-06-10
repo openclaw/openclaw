@@ -1,3 +1,8 @@
+/**
+ * Session settings manager.
+ *
+ * Loads and persists user/session defaults for models, transports, retry policy, UI, packages, and telemetry.
+ */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -47,6 +52,7 @@ export interface ThinkingBudgetsSettings {
   low?: number;
   medium?: number;
   high?: number;
+  max?: number;
 }
 
 export interface MarkdownSettings {
@@ -78,7 +84,7 @@ export interface Settings {
   lastChangelogVersion?: string;
   defaultProvider?: string;
   defaultModel?: string;
-  defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   transport?: TransportSetting; // default: "auto"
   steeringMode?: "all" | "one-at-a-time";
   followUpMode?: "all" | "one-at-a-time";
@@ -488,7 +494,7 @@ export class SettingsManager {
         task();
         this.clearModifiedScope(scope);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.recordError(scope, error);
       });
   }
@@ -668,11 +674,21 @@ export class SettingsManager {
     this.save();
   }
 
-  getDefaultThinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
+  getDefaultThinkingLevel():
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max"
+    | undefined {
     return this.settings.defaultThinkingLevel;
   }
 
-  setDefaultThinkingLevel(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
+  setDefaultThinkingLevel(
+    level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
+  ): void {
     this.globalSettings.defaultThinkingLevel = level;
     this.markModified("defaultThinkingLevel");
     this.save();

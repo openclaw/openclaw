@@ -1,3 +1,5 @@
+// Covers outbound session-route resolution through plugin hooks and fallback
+// target parsing, plus best-effort session metadata persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
@@ -422,6 +424,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "user:123",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:guildchat:direct:123",
@@ -438,6 +441,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "channel:456",
         kind: "channel" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:guildchat:channel:456",
@@ -456,6 +460,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "user:dthcxgoxhifn3pwh65cut3ud3w",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:boardchat:direct:dthcxgoxhifn3pwh65cut3ud3w",

@@ -1,14 +1,11 @@
+// Memory Host SDK tests cover embeddings behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
-import {
-  createLocalEmbeddingProvider,
-  createLocalEmbeddingProviderInProcess,
-  DEFAULT_LOCAL_MODEL,
-} from "./embeddings.js";
+import { createLocalEmbeddingProviderInProcess, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
 const nodeLlamaMock = vi.hoisted(() => ({
   importNodeLlamaCpp: vi.fn(),
@@ -114,6 +111,24 @@ describe("local embedding provider", () => {
 
     expect(runtime.createEmbeddingContext).toHaveBeenCalledWith(
       expect.objectContaining({ contextSize: 4096, createSignal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("imports node-llama-cpp from an explicit module URL when provided", async () => {
+    mockLocalEmbeddingRuntime();
+
+    await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: {
+        nodeLlamaCppImportUrl: "file:///plugins/llama-cpp/node-llama-cpp.js",
+      } as never,
+    });
+
+    expect(nodeLlamaMock.importNodeLlamaCpp).toHaveBeenCalledWith(
+      "file:///plugins/llama-cpp/node-llama-cpp.js",
     );
   });
 
@@ -344,6 +359,10 @@ describe("local embedding provider", () => {
       `
 process.on("message", (message) => {
   if (message.type === "initialize") {
+    if (message.options.local?.nodeLlamaCppImportUrl !== "file:///plugin/node-llama-cpp.js") {
+      process.send({ id: message.id, ok: false, error: "missing nodeLlamaCppImportUrl" });
+      return;
+    }
     process.send({ id: message.id, ok: true });
     return;
   }
@@ -367,7 +386,10 @@ process.on("message", (message) => {
         model: "",
         fallback: "none",
       },
-      { workerScriptPath: workerScript },
+      {
+        workerScriptPath: workerScript,
+        nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js",
+      },
     );
 
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
@@ -418,7 +440,7 @@ process.on("message", (message) => {
     const embedPromise = provider.embedQuery("stuck");
     const embedError = embedPromise.then(
       () => undefined,
-      (err) => err,
+      (err: unknown) => err,
     );
     await expect
       .poll(async () => {
@@ -434,7 +456,9 @@ process.on("message", (message) => {
     const closePromise = provider.close?.() ?? Promise.resolve();
     const closeResult = await Promise.race([
       closePromise.then(() => "closed" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 1_000);
+      }),
     ]);
 
     expect(closeResult).toBe("closed");

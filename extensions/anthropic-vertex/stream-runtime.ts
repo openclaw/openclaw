@@ -1,3 +1,7 @@
+/**
+ * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
+ * OpenClaw stream options into Anthropic Messages payload policy.
+ */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -26,6 +30,7 @@ type AnthropicVertexClientOptions = {
   region: string;
 };
 
+/** Injectable dependencies for Anthropic Vertex stream tests. */
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
   streamAnthropic: typeof streamDefault;
@@ -36,8 +41,13 @@ const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   streamAnthropic: streamDefault,
 };
 
-function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+function isClaudeOpus47OrNewerModel(modelId: string): boolean {
+  return (
+    modelId.includes("opus-4-8") ||
+    modelId.includes("opus-4.8") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("opus-4.7")
+  );
 }
 
 function isClaudeOpus46Model(modelId: string): boolean {
@@ -46,7 +56,7 @@ function isClaudeOpus46Model(modelId: string): boolean {
 
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
-    isClaudeOpus47Model(modelId) ||
+    isClaudeOpus47OrNewerModel(modelId) ||
     isClaudeOpus46Model(modelId) ||
     modelId.includes("sonnet-4-6") ||
     modelId.includes("sonnet-4.6")
@@ -62,7 +72,12 @@ function mapAnthropicAdaptiveEffort(
     low: "low",
     medium: "medium",
     high: "high",
-    xhigh: isClaudeOpus47Model(modelId) ? "xhigh" : isClaudeOpus46Model(modelId) ? "max" : "high",
+    xhigh: isClaudeOpus47OrNewerModel(modelId)
+      ? "xhigh"
+      : isClaudeOpus46Model(modelId)
+        ? "max"
+        : "high",
+    max: isClaudeOpus47OrNewerModel(modelId) ? "max" : "high",
   };
   return effortMap[reasoning] ?? "high";
 }
@@ -148,9 +163,10 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
+    const temperature = isClaudeOpus47OrNewerModel(model.id) ? undefined : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {
       client,
-      temperature: options?.temperature,
+      ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,
       cacheRetention: options?.cacheRetention,
@@ -211,6 +227,7 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
   }
 }
 
+/** Create an Anthropic Vertex stream function from model metadata and env. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

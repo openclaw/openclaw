@@ -1,3 +1,4 @@
+// Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -25,7 +26,24 @@ const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
   "category-edit",
   "category-delete",
   "event-create",
+  "timeout",
+  "kick",
+  "ban",
 ]);
+
+const localExecutionActions = new Set<ChannelMessageActionName>([
+  "send",
+  "upload-file",
+  "thread-reply",
+  "sticker",
+  "emoji-upload",
+  "sticker-upload",
+  "event-create",
+]);
+
+function resolveDiscordActionExecutionMode({ action }: { action: ChannelMessageActionName }) {
+  return localExecutionActions.has(action) ? "local" : "gateway";
+}
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -178,8 +196,10 @@ function describeDiscordMessageTool({
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
-  resolveExecutionMode: ({ action }) =>
-    action === "read" || action === "search" ? "gateway" : "local",
+  // Credential-only Discord actions run in the gateway when one is available.
+  // Send/file-style actions stay local because core owns their thread, media,
+  // component, and client-local payload semantics.
+  resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
     normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === "discord" &&

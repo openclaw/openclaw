@@ -1,8 +1,10 @@
+// Outbound session context carries canonical hook/session policy keys plus
+// requester metadata used by delivery policies and media roots.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type OutboundSessionContext = {
   /**
@@ -47,6 +49,7 @@ export type OutboundSessionContext = {
   requesterSenderE164?: string;
 };
 
+/** Builds the outbound delivery session context, omitting empty policy fields. */
 export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string | null;
@@ -82,6 +85,8 @@ export function buildOutboundSessionContext(params: {
   const derivedAgentId = key
     ? resolveSessionAgentId({ sessionKey: key, config: params.cfg })
     : undefined;
+  // Prefer explicit caller ownership, but derive from the canonical session key
+  // so redirected deliveries still get workspace-scoped media policy.
   const agentId = explicitAgentId ?? derivedAgentId;
   if (
     !key &&

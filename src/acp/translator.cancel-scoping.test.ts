@@ -1,8 +1,9 @@
+/** Tests prompt cancellation scoping across concurrent ACP sessions and Gateway runs. */
 import type { CancelNotification, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -79,7 +80,7 @@ function createHarness(sessions: Array<{ sessionId: string; sessionKey: string }
   return {
     agent,
     requestSpy,
-    sessionUpdateSpy: connection.sessionUpdate as unknown as ReturnType<typeof vi.fn>,
+    sessionUpdateSpy: connection["sessionUpdate"] as unknown as ReturnType<typeof vi.fn>,
     sessionStore,
     sentRunIds,
   };

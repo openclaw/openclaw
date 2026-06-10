@@ -15,9 +15,8 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 <Steps>
   <Step title="Add a one-shot reminder">
     ```bash
-    openclaw cron add \
+    openclaw cron create "2026-02-01T16:00:00Z" \
       --name "Reminder" \
-      --at "2026-02-01T16:00:00Z" \
       --session main \
       --system-event "Reminder: check the cron docs draft" \
       --wake now \
@@ -41,10 +40,9 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
-- Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
-- After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
-- When `jobs.json` is edited while the Gateway is running or stopped, OpenClaw compares the changed schedule fields with pending runtime slot metadata and clears stale `nextRunAtMs` values. Pure formatting or key-order-only rewrites preserve the pending slot.
+- Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database so restarts do not lose schedules.
+- On upgrade, run `openclaw doctor --fix` to import legacy `~/.openclaw/cron/jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files into SQLite and rename them with a `.migrated` suffix. Malformed job rows are skipped from runtime and copied to `jobs-quarantine.json` for later repair or review.
+- `cron.store` still names the logical cron store key and doctor import path. After import, editing that JSON file no longer changes active cron jobs; use `openclaw cron add|edit|remove` or the Gateway cron RPC methods instead.
 - All cron executions create [background task](/automation/tasks) records.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled out of the channel-connect window instead of replaying immediately, so Discord/Telegram startup and native-command setup stay responsive after restarts.
 - One-shot jobs (`--at`) auto-delete after success by default.
@@ -124,6 +122,33 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
   </Accordion>
 </AccordionGroup>
 
+### Command payloads
+
+Use command payloads for deterministic scripts that should run inside the Gateway scheduler without starting a model-backed isolated agent turn. Command jobs execute on the Gateway host, capture stdout/stderr, record the run in cron history, and reuse the same `announce`, `webhook`, and `none` delivery modes as isolated jobs.
+
+<Note>
+Command cron is an operator-admin Gateway automation surface, not an agent
+`tools.exec` call. Creating, updating, removing, or manually running cron jobs
+requires `operator.admin`; scheduled command runs later execute inside the
+Gateway process as that admin-authored automation. Agent exec policy such as
+`tools.exec.mode`, approval prompts, and per-agent tool allowlists governs
+model-visible exec tools, not command cron payloads.
+</Note>
+
+```bash
+openclaw cron create "*/15 * * * *" \
+  --name "Queue depth probe" \
+  --command "scripts/check-queue.sh" \
+  --command-cwd "/srv/app" \
+  --announce \
+  --channel telegram \
+  --to "-1001234567890"
+```
+
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` when you want exact argv execution without shell parsing. Optional `--command-env KEY=VALUE`, `--command-input`, `--timeout-seconds`, `--no-output-timeout-seconds`, and `--output-max-bytes` fields control the process environment, stdin, and output bounds.
+
+If stdout is non-empty, that text is the delivered result. If stdout is empty and stderr is non-empty, stderr is delivered. If both streams are present, cron delivers a small `stdout:` / `stderr:` block. A zero exit code records the run as `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
+
 ### Payload options for isolated jobs
 
 <ParamField path="--message" type="string" required>
@@ -145,6 +170,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 `--model` uses the selected allowed model as that job's primary model. It is not the same as a chat-session `/model` override: configured fallback chains still apply when the job primary fails. If the requested model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of silently falling back to the job's agent/default model selection.
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
+
+Local-provider preflight checks walk configured fallbacks before marking a cron run `skipped`; `fallbacks: []` keeps that preflight path strict.
 
 Model-selection precedence for isolated jobs is:
 
@@ -215,12 +242,11 @@ Failure notifications follow a separate destination path:
   </Tab>
   <Tab title="Recurring isolated job">
     ```bash
-    openclaw cron add \
+    openclaw cron create "0 7 * * *" \
+      "Summarize overnight updates." \
       --name "Morning brief" \
-      --cron "0 7 * * *" \
       --tz "America/Los_Angeles" \
       --session isolated \
-      --message "Summarize overnight updates." \
       --announce \
       --channel slack \
       --to "channel:C1234567890"
@@ -237,6 +263,25 @@ Failure notifications follow a separate destination path:
       --model "opus" \
       --thinking high \
       --announce
+    ```
+  </Tab>
+  <Tab title="Webhook output">
+    ```bash
+    openclaw cron create "0 18 * * 1-5" \
+      "Summarize today's deploys as JSON." \
+      --name "Deploy digest" \
+      --webhook "https://example.invalid/openclaw/cron"
+    ```
+  </Tab>
+  <Tab title="Command output">
+    ```bash
+    openclaw cron create "*/15 * * * *" \
+      --name "Queue depth probe" \
+      --command "scripts/check-queue.sh" \
+      --command-cwd "/srv/app" \
+      --announce \
+      --channel telegram \
+      --to "-1001234567890"
     ```
   </Tab>
 </Tabs>
@@ -411,11 +456,13 @@ openclaw cron runs --id <jobId> --run-id <runId>
 openclaw cron remove <jobId>
 
 # Agent selection (multi-agent setups)
-openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
+openclaw cron create "0 6 * * *" "Check ops queue" --name "Ops sweep" --session isolated --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes. Wait mode polls the exact returned `runId`; it exits `0` for status `ok` and non-zero for `error`, `skipped`, or a wait timeout.
+
+`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
 <Note>
 Model override note:
@@ -423,6 +470,7 @@ Model override note:
 - `openclaw cron add|edit --model ...` changes the job's selected model.
 - If the model is allowed, that exact provider/model reaches the isolated agent run.
 - If it is not allowed or cannot be resolved, cron fails the run with an explicit validation error.
+- API `cron.update` payload patches can set `model: null` to clear a stored job model override.
 - Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
 - Payload `fallbacks` replaces configured fallbacks for that job; `fallbacks: []` disables fallback and makes the run strict.
 - A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
@@ -451,9 +499,7 @@ Model override note:
 
 `maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
 
-The runtime state sidecar is derived from `cron.store`: a `.json` store such as `~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path without a `.json` suffix appends `-state.json`.
-
-If you hand-edit `jobs.json`, leave `jobs-state.json` out of source control. OpenClaw uses that sidecar for pending slots, active markers, last-run metadata, and the schedule identity that tells the scheduler when an externally edited job needs a fresh `nextRunAtMs`.
+`cron.store` is a logical store key and legacy doctor import path. Run `openclaw doctor --fix` to import existing JSON stores into SQLite and archive them; future cron changes should go through the CLI or Gateway API.
 
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
@@ -465,7 +511,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`) prunes isolated run-session entries. `cron.runLog.maxBytes` / `cron.runLog.keepLines` auto-prune run-log files.
+    `cron.sessionRetention` (default `24h`) prunes isolated run-session entries. `cron.runLog.keepLines` limits retained SQLite run-history rows per job; `maxBytes` is retained for config compatibility with older file-backed run logs.
   </Accordion>
 </AccordionGroup>
 

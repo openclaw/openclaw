@@ -1,4 +1,6 @@
+/** Runs queued follow-up agent turns and routes their delivery payloads. */
 import crypto from "node:crypto";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -26,11 +28,16 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import { readStringValue } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { runCliAgentWithLifecycle } from "./agent-runner-cli-dispatch.js";
 import {
+  clearDroppedCliSessionBinding,
+  keepCliSessionBindingOnlyWhenReused,
+  runCliAgentWithLifecycle,
+} from "./agent-runner-cli-dispatch.js";
+import {
+  buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
@@ -41,6 +48,13 @@ import {
   resolveModelFallbackOptions,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
+import {
+  createCompactionHookNoticePayload,
+  createCompactionNoticePayload,
+  readCompactionHookMessages,
+  shouldNotifyUserAboutCompaction,
+  type CompactionNoticePhase,
+} from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -50,6 +64,7 @@ import {
   refreshQueuedFollowupSession,
   type FollowupRun,
 } from "./queue.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -107,6 +122,9 @@ async function forwardFollowupProgressEvent(params: {
   detailMode?: "explain" | "raw";
   emitChannelProgress?: boolean;
   onCompactionComplete?: () => void;
+  notifyUserAboutCompaction?: boolean;
+  currentMessageId?: string;
+  onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
 }) {
   const { evt, opts } = params;
   const emitChannelProgress = params.emitChannelProgress !== false;
@@ -212,18 +230,46 @@ async function forwardFollowupProgressEvent(params: {
 
   if (evt.stream === "compaction") {
     const phase = readStringValue(evt.data.phase) ?? "";
+    const hookMessages = readCompactionHookMessages(evt.data.messages);
+    const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
+      const hookPayload = createCompactionHookNoticePayload({
+        messages: hookMessages,
+        currentMessageId: params.currentMessageId,
+      });
+      if (hookPayload) {
+        await params.onCompactionNoticePayload?.(hookPayload);
+      }
+      if (params.notifyUserAboutCompaction === true) {
+        await params.onCompactionNoticePayload?.(
+          createCompactionNoticePayload({
+            phase: noticePhase,
+            currentMessageId: params.currentMessageId,
+          }),
+        );
+      }
+    };
     if (phase === "start" && emitChannelProgress) {
       await opts?.onCompactionStart?.();
+    }
+    if (phase === "start") {
+      await sendCompactionUserNotices("start");
     }
     if (phase === "end" && evt.data?.completed === true) {
       params.onCompactionComplete?.();
       if (emitChannelProgress) {
         await opts?.onCompactionEnd?.();
       }
+      if (evt.data?.willRetry === true) {
+        return;
+      }
+      await sendCompactionUserNotices("end");
+    } else if (phase === "end") {
+      await sendCompactionUserNotices("incomplete");
     }
   }
 }
 
+/** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -266,7 +312,7 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
-    options: { mirror?: boolean } = {},
+    options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
   ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
@@ -298,6 +344,16 @@ export function createFollowupRunner(params: {
 
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
+    const replyKind = options.kind ?? "final";
+    const sendDispatcherPayload = async (payload: ReplyPayload) => {
+      if (!opts?.onBlockReply) {
+        return;
+      }
+      if (deliveryPlan.isSilentPayload(payload)) {
+        return;
+      }
+      await opts.onBlockReply(payload);
+    };
     for (const payload of sendablePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
@@ -339,6 +395,8 @@ export function createFollowupRunner(params: {
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
           mirror: options.mirror,
+          replyKind,
+          runId: options.runId,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
@@ -351,7 +409,7 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
-              await opts.onBlockReply(payload);
+              await sendDispatcherPayload(payload);
             } else {
               crossChannelRouteFailureNeedsNotice = true;
             }
@@ -369,8 +427,8 @@ export function createFollowupRunner(params: {
             routedAnyCrossChannelPayloadToOrigin = true;
           }
         }
-      } else if (deliveryRoute === "dispatcher" && opts?.onBlockReply) {
-        await opts.onBlockReply(payload);
+      } else if (deliveryRoute === "dispatcher") {
+        await sendDispatcherPayload(payload);
       }
     }
     if (
@@ -378,7 +436,7 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
-      await opts.onBlockReply({
+      await sendDispatcherPayload({
         text:
           "Follow-up completed, but OpenClaw could not deliver it to the originating " +
           "channel. The reply content was not forwarded to this channel to avoid " +
@@ -471,7 +529,7 @@ export function createFollowupRunner(params: {
       let progressDeliveryChain: Promise<void> = Promise.resolve();
       const pendingProgressDeliveries = new Set<Promise<void>>();
       const enqueueProgressDelivery = (deliver: () => Promise<void>) => {
-        progressDeliveryChain = progressDeliveryChain.then(deliver).catch((err) => {
+        progressDeliveryChain = progressDeliveryChain.then(deliver).catch((err: unknown) => {
           logVerbose(`followup queue: progress delivery failed: ${formatErrorMessage(err)}`);
         });
         const task = progressDeliveryChain.finally(() => {
@@ -490,6 +548,7 @@ export function createFollowupRunner(params: {
         sessionKey: replySessionKey ?? "",
         kind: "queued_followup",
         resetTriggered: false,
+        routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: queued.abortSignal,
       });
       if (admission.status === "skipped") {
@@ -524,30 +583,98 @@ export function createFollowupRunner(params: {
           provider: run.messageProvider,
         }),
       );
-      if (run.sessionKey) {
-        registerAgentRunContext(runId, {
-          sessionKey: run.sessionKey,
-          verboseLevel: run.verboseLevel,
-          isControlUiVisible: shouldSurfaceToControlUi,
-        });
-      }
       let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      activeSessionEntry = await runPreflightCompactionIfNeeded({
-        cfg: runtimeConfig,
-        followupRun: effectiveQueued,
-        promptForEstimate: queued.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore,
-        sessionKey: replySessionKey,
-        storePath,
-        isHeartbeat: opts?.isHeartbeat === true,
-        replyOperation,
-      });
+      const resolveFollowupCurrentMessageId = () =>
+        run.inputProvenance?.kind === "internal_system" &&
+        run.inputProvenance.sourceTool === "restart-sentinel"
+          ? queued.originatingReplyToId
+          : queued.messageId;
+      const compactionNoticeReplyToId = resolveFollowupCurrentMessageId();
+      const sendCompactionNoticePayload = async (
+        payload: ReplyPayload,
+        resolvedRun: { provider: string; modelId: string } = {
+          provider: fallbackProvider,
+          modelId: fallbackModel,
+        },
+      ) => {
+        const noticePayloads = resolveFollowupDeliveryPayloads({
+          cfg: runtimeConfig,
+          payloads: [payload],
+          messageProvider: run.messageProvider,
+          originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
+          originatingChannel: queued.originatingChannel,
+          originatingChatType: queued.originatingChatType,
+          originatingTo: queued.originatingTo,
+        });
+        if (noticePayloads.length === 0) {
+          return;
+        }
+        await sendFollowupPayloads(noticePayloads, effectiveQueued, resolvedRun, {
+          kind: "block",
+          mirror: false,
+          runId,
+        });
+      };
+      const notifyPreflightCompaction = shouldNotifyUserAboutCompaction(runtimeConfig)
+        ? async (phase: CompactionNoticePhase) => {
+            await sendCompactionNoticePayload(
+              createCompactionNoticePayload({
+                phase,
+                currentMessageId: compactionNoticeReplyToId,
+              }),
+            );
+          }
+        : undefined;
+      try {
+        activeSessionEntry = await runPreflightCompactionIfNeeded({
+          cfg: runtimeConfig,
+          followupRun: effectiveQueued,
+          promptForEstimate: queued.prompt,
+          defaultModel,
+          agentCfgContextTokens,
+          sessionEntry: activeSessionEntry,
+          sessionStore,
+          sessionKey: replySessionKey,
+          storePath,
+          isHeartbeat: opts?.isHeartbeat === true,
+          replyOperation,
+          onCompactionNotice: notifyPreflightCompaction,
+        });
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        replyOperation.fail("run_failed", err);
+        const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
+          includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
+        });
+        if (preflightCompactionFailureText) {
+          await sendFollowupPayloads(
+            [
+              markReplyPayloadForSourceSuppressionDelivery({
+                text: preflightCompactionFailureText,
+              }),
+            ],
+            effectiveQueued,
+            { provider: fallbackProvider, modelId: fallbackModel },
+          );
+          return;
+        }
+        throw err;
+      }
+      if (run.sessionKey) {
+        const owningSessionId =
+          activeSessionEntry?.sessionId === run.sessionId
+            ? activeSessionEntry.sessionId
+            : run.sessionId;
+        registerAgentRunContext(runId, {
+          sessionKey: run.sessionKey,
+          ...(owningSessionId ? { sessionId: owningSessionId } : {}),
+          verboseLevel: run.verboseLevel,
+          isControlUiVisible: shouldSurfaceToControlUi,
+        });
+      }
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
@@ -640,6 +767,7 @@ export function createFollowupRunner(params: {
           ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
           runId,
+          sessionId: run.sessionId,
           abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
@@ -700,16 +828,18 @@ export function createFollowupRunner(params: {
             };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
-                const isRoomEventCliRun = queued.currentInboundEventKind === "room_event";
-                const cliSessionBinding = isRoomEventCliRun
-                  ? undefined
-                  : getCliSessionBinding(activeSessionEntry, cliExecutionProvider);
+                const cliSessionBinding = getCliSessionBinding(
+                  activeSessionEntry,
+                  cliExecutionProvider,
+                );
                 const cliLifecycleStartedAt = Date.now();
+                let droppedCliSessionReplacement = false;
                 pendingDeferredCliTerminal = {
                   provider,
                   model,
                   startedAt: cliLifecycleStartedAt,
                 };
+                const followupCurrentMessageId = resolveFollowupCurrentMessageId();
                 const result = await runCliAgentWithLifecycle({
                   runId,
                   provider: cliExecutionProvider,
@@ -717,6 +847,41 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onToolEvent: async ({ name, phase, args }) => {
+                    await forwardFollowupProgressEvent({
+                      evt: {
+                        stream: "tool",
+                        data: { name, phase, args },
+                      },
+                      opts,
+                      detailMode: toolProgressDetail,
+                      emitChannelProgress: shouldEmitToolResultProgress(),
+                    });
+                  },
+                  onCommentaryText:
+                    opts?.commentaryProgressEnabled === true && opts.onItemEvent
+                      ? async ({ text, itemId }) => {
+                          await forwardFollowupProgressEvent({
+                            evt: {
+                              stream: "item",
+                              data: { kind: "preamble", progressText: text, itemId },
+                            },
+                            opts,
+                            detailMode: toolProgressDetail,
+                          });
+                        }
+                      : undefined,
+                  transformResult:
+                    queued.currentInboundEventKind === "room_event"
+                      ? (resultLocal) =>
+                          keepCliSessionBindingOnlyWhenReused({
+                            result: resultLocal,
+                            existingSessionId: cliSessionBinding?.sessionId,
+                            onDroppedReplacement: () => {
+                              droppedCliSessionReplacement = true;
+                            },
+                          })
+                      : undefined,
                   runParams: {
                     replyOperation,
                     sessionId: run.sessionId,
@@ -733,6 +898,7 @@ export function createFollowupRunner(params: {
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: queued.currentInboundEventKind,
+                    currentInboundAudio: queued.currentInboundAudio,
                     currentInboundContext: queued.currentInboundContext,
                     inputProvenance: run.inputProvenance,
                     provider: cliExecutionProvider,
@@ -740,12 +906,14 @@ export function createFollowupRunner(params: {
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
                     }),
+                    classifyCommentaryText: opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: run.thinkLevel,
                     timeoutMs: run.timeoutMs,
                     runId,
                     extraSystemPrompt: run.extraSystemPrompt,
                     sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                     silentReplyPromptMode: run.silentReplyPromptMode,
+                    allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: run.extraSystemPromptStatic,
                     ownerNumbers: run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
@@ -763,34 +931,33 @@ export function createFollowupRunner(params: {
                       originatingChannel: queued.originatingChannel,
                       provider: run.messageProvider,
                     }),
+                    currentChannelId: queued.originatingTo,
+                    currentThreadTs:
+                      queued.originatingThreadId != null
+                        ? String(queued.originatingThreadId)
+                        : undefined,
+                    currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
                   },
-                  transformResult: (rawResult) =>
-                    isRoomEventCliRun && rawResult.meta.agentMeta
-                      ? (() => {
-                          const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
-                            rawResult.meta.agentMeta;
-                          return {
-                            ...rawResult,
-                            meta: {
-                              ...rawResult.meta,
-                              agentMeta: {
-                                ...agentMeta,
-                                sessionId: "",
-                              },
-                            },
-                          };
-                        })()
-                      : rawResult,
                 });
+                if (droppedCliSessionReplacement) {
+                  await clearDroppedCliSessionBinding({
+                    provider: cliExecutionProvider,
+                    sessionKey: replySessionKey,
+                    sessionStore,
+                    storePath,
+                    activeSessionEntry,
+                  });
+                }
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
                 return result;
               }
               pendingDeferredCliTerminal = undefined;
+              const followupCurrentMessageId = resolveFollowupCurrentMessageId();
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
@@ -808,6 +975,7 @@ export function createFollowupRunner(params: {
                   queued.originatingThreadId != null
                     ? String(queued.originatingThreadId)
                     : undefined,
+                currentMessageId: followupCurrentMessageId,
                 groupId: run.groupId,
                 groupChannel: run.groupChannel,
                 groupSpace: run.groupSpace,
@@ -825,6 +993,7 @@ export function createFollowupRunner(params: {
                 transcriptPrompt: queued.transcriptPrompt,
                 userTurnTranscriptRecorder,
                 currentInboundEventKind: queued.currentInboundEventKind,
+                currentInboundAudio: queued.currentInboundAudio,
                 currentInboundContext: queued.currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
@@ -880,7 +1049,7 @@ export function createFollowupRunner(params: {
                         provider,
                         modelId: model,
                       },
-                      { mirror: false },
+                      { kind: "tool", mirror: false, runId },
                     );
                     if (payload.isError === true) {
                       markVisibleToolErrorProgress();
@@ -896,6 +1065,10 @@ export function createFollowupRunner(params: {
                       onCompactionComplete: () => {
                         attemptCompactionCount += 1;
                       },
+                      notifyUserAboutCompaction: shouldNotifyUserAboutCompaction(runtimeConfig),
+                      currentMessageId: compactionNoticeReplyToId,
+                      onCompactionNoticePayload: (payload) =>
+                        sendCompactionNoticePayload(payload, { provider, modelId: model }),
                     });
                     if (
                       hasFailedFollowupProgressEvent(evt) &&
@@ -970,6 +1143,7 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
+      const usedCliProvider = isCliProvider(providerUsed, runtimeConfig);
       const contextTokensUsed =
         resolveContextTokensForModel({
           cfg: queued.run.config,
@@ -996,6 +1170,8 @@ export function createFollowupRunner(params: {
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
+          clearCliSessionBinding:
+            usedCliProvider && runResult.meta?.agentMeta?.clearCliSessionBinding === true,
           logLabel: "followup",
         });
       }
@@ -1068,10 +1244,15 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      await sendFollowupPayloads(deliveryPayloads, effectiveQueued, {
-        provider: providerUsed,
-        modelId: modelUsed,
-      });
+      await sendFollowupPayloads(
+        deliveryPayloads,
+        effectiveQueued,
+        {
+          provider: providerUsed,
+          modelId: modelUsed,
+        },
+        { runId },
+      );
     } finally {
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {

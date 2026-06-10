@@ -1,4 +1,7 @@
+// Outbound delivery core runs plugin hooks, queue durability, channel adapter
+// sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
@@ -64,6 +67,7 @@ import {
   failDelivery,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
+  type QueuedReplyPayloadSendingHook,
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
@@ -83,7 +87,7 @@ import {
 } from "./payloads.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import { stripInternalRuntimeScaffolding } from "./sanitize-text.js";
-import { type OutboundSendDeps } from "./send-deps.js";
+import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -124,6 +128,8 @@ let transcriptRuntimePromise:
   | undefined;
 
 async function loadTranscriptRuntime() {
+  // Transcript writes are optional side effects; keep this lazy for import-only
+  // delivery policy checks and tests.
   transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
   return await transcriptRuntimePromise;
 }
@@ -641,6 +647,7 @@ type DeliverOutboundPayloadsCoreParams = {
   mediaAccess?: OutboundMediaAccess;
   gifPlayback?: boolean;
   forceDocument?: boolean;
+  replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
@@ -656,10 +663,6 @@ type DeliverOutboundPayloadsCoreParams = {
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
   onPlatformSendStart?: () => Promise<void>;
 };
-
-function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {
-  return plan.flatMap((entry) => entry.parts.mediaUrls);
-}
 
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate.
@@ -1163,6 +1166,35 @@ async function applyMessageSendingHook(params: {
   }
 }
 
+async function applyReplyPayloadSendingHook(params: {
+  hook: QueuedReplyPayloadSendingHook | undefined;
+  payload: ReplyPayload;
+}): Promise<{
+  cancelled: boolean;
+  payload: ReplyPayload;
+  changed: boolean;
+}> {
+  if (!params.hook) {
+    return { cancelled: false, payload: params.payload, changed: false };
+  }
+  const nextPayload = await runReplyPayloadSendingHook({
+    payload: params.payload,
+    kind: params.hook.kind,
+    ...(params.hook.channel ? { channel: params.hook.channel } : {}),
+    ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
+    ...(params.hook.runId ? { runId: params.hook.runId } : {}),
+    context: params.hook.context,
+  });
+  if (!nextPayload) {
+    return { cancelled: true, payload: params.payload, changed: false };
+  }
+  return {
+    cancelled: false,
+    payload: nextPayload,
+    changed: nextPayload !== params.payload,
+  };
+}
+
 function toOutboundDeliveryError(params: {
   error: unknown;
   results: readonly OutboundDeliveryResult[];
@@ -1239,6 +1271,7 @@ export async function deliverOutboundPayloadsInternal(
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         forceDocument: params.forceDocument,
+        replyPayloadSendingHook: params.replyPayloadSendingHook,
         silent: params.silent,
         mirror: params.mirror,
         session: params.session,
@@ -1384,8 +1417,7 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const mediaSources = collectPayloadMediaSources(outboundPayloadPlan);
-  const mediaAccess =
+  const resolveMediaAccess = (mediaSources: readonly string[]): OutboundMediaAccess =>
     mediaSources.length > 0
       ? resolveAgentScopedOutboundMediaAccess({
           cfg,
@@ -1401,25 +1433,42 @@ async function deliverOutboundPayloadsCore(
           requesterSenderE164: params.session?.requesterSenderE164,
         })
       : (params.mediaAccess ?? {});
+  const createHandler = (mediaSources: readonly string[]) =>
+    createChannelHandler({
+      cfg,
+      channel,
+      to,
+      deps,
+      accountId,
+      replyToId: params.replyToId,
+      replyToMode: params.replyToMode,
+      formatting: params.formatting,
+      threadId: params.threadId,
+      identity: params.identity,
+      gifPlayback: params.gifPlayback,
+      forceDocument: params.forceDocument,
+      silent: params.silent,
+      mediaAccess: resolveMediaAccess(mediaSources),
+      gatewayClientScopes: params.gatewayClientScopes,
+      ...(params.onPlatformSendStart ? { onPlatformSendStart: params.onPlatformSendStart } : {}),
+    });
+  const baseHandler = await createHandler([]);
+  const handlerByMediaSources = new Map<string, Promise<ChannelHandler>>();
+  const getDeliveryHandler = (mediaSources: readonly string[]): Promise<ChannelHandler> => {
+    if (mediaSources.length === 0) {
+      return Promise.resolve(baseHandler);
+    }
+    const key = JSON.stringify(mediaSources);
+    const cached = handlerByMediaSources.get(key);
+    if (cached) {
+      return cached;
+    }
+    const created = createHandler(mediaSources);
+    handlerByMediaSources.set(key, created);
+    return created;
+  };
   const results: OutboundDeliveryResult[] = [];
-  const handler = await createChannelHandler({
-    cfg,
-    channel,
-    to,
-    deps,
-    accountId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
-    formatting: params.formatting,
-    threadId: params.threadId,
-    identity: params.identity,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    silent: params.silent,
-    mediaAccess,
-    gatewayClientScopes: params.gatewayClientScopes,
-    ...(params.onPlatformSendStart ? { onPlatformSendStart: params.onPlatformSendStart } : {}),
-  });
+  const handler = baseHandler;
   const configuredTextLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
         fallbackLimit: handler.textChunkLimit,
@@ -1438,13 +1487,17 @@ async function deliverOutboundPayloadsCore(
     replyToMode: params.replyToMode,
   });
 
-  const sendTextChunks = async (text: string, overrides: OutboundMessageSendOverrides = {}) => {
+  const sendTextChunks = async (
+    sendHandler: ChannelHandler,
+    text: string,
+    overrides: OutboundMessageSendOverrides = {},
+  ) => {
     const units = planOutboundTextMessageUnits({
       text,
       overrides,
-      chunker: handler.chunker,
-      chunkerMode: handler.chunkerMode,
-      chunkedTextFormatting: handler.chunkedTextFormatting,
+      chunker: sendHandler.chunker,
+      chunkerMode: sendHandler.chunkerMode,
+      chunkedTextFormatting: sendHandler.chunkedTextFormatting,
       textLimit,
       chunkMode,
       formatting: params.formatting,
@@ -1458,7 +1511,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(unit.text, unit.overrides));
+      results.push(await sendHandler.sendText(unit.text, unit.overrides));
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
@@ -1472,6 +1525,16 @@ async function deliverOutboundPayloadsCore(
       recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
     });
   }
+  const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
+  const recordDeliveredMirrorPayload = (
+    payloadSummary: NormalizedOutboundPayload,
+    deliveredResults: readonly OutboundDeliveryResult[],
+  ): void => {
+    if (!params.mirror || !params.replyPayloadSendingHook || deliveredResults.length === 0) {
+      return;
+    }
+    deliveredMirrorPayloads.push(payloadSummary);
+  };
   const hookRunner = getGlobalHookRunner();
   // Canonical session key forwarded to internal lifecycle hooks
   // (`message:sent` event, `message_sending` plugin hook ctx, etc.). Mirror
@@ -1552,16 +1615,32 @@ async function deliverOutboundPayloadsCore(
     try {
       throwIfAborted(abortSignal);
 
+      const replyHookResult = await applyReplyPayloadSendingHook({
+        hook: params.replyPayloadSendingHook,
+        payload,
+      });
+      if (replyHookResult.cancelled) {
+        recordPayloadOutcome(
+          suppressedPayloadOutcome({
+            index: payloadIndex,
+            reason: "cancelled_by_reply_payload_sending_hook",
+          }),
+        );
+        continue;
+      }
+      let deliveryPayload = replyHookResult.payload;
+      payloadSummary = buildPayloadSummary(deliveryPayload);
+
       // Run message_sending plugin hook (may modify content or cancel)
       const hookResult = await applyMessageSendingHook({
         hookRunner,
         enabled: hasMessageSendingHooks,
-        payload,
+        payload: deliveryPayload,
         payloadSummary,
         to,
         channel,
         accountId,
-        replyToId: resolveCurrentReplyTo(payload).replyToId,
+        replyToId: resolveCurrentReplyTo(deliveryPayload).replyToId,
         threadId: params.threadId,
         sessionKey: sessionKeyForInternalHooks,
       });
@@ -1582,11 +1661,18 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
-      const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
-        await renderPresentationForDelivery(handler, hookResult.payload),
+      deliveryPayload = hookResult.payload;
+      const presentationHandler = await getDeliveryHandler(
+        buildPayloadSummary(deliveryPayload).mediaUrls,
       );
-      const normalizedEffectivePayload = handler.normalizePayload
-        ? handler.normalizePayload(renderedPayload)
+      const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
+        await renderPresentationForDelivery(presentationHandler, deliveryPayload),
+      );
+      const renderedHandler = await getDeliveryHandler(
+        buildPayloadSummary(renderedPayload).mediaUrls,
+      );
+      const normalizedEffectivePayload = renderedHandler.normalizePayload
+        ? renderedHandler.normalizePayload(renderedPayload)
         : renderedPayload;
       const effectivePayload = normalizedEffectivePayload
         ? normalizeEmptyPayloadForDelivery(
@@ -1599,12 +1685,15 @@ async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             reason: hookResult.contentRewritten
               ? "empty_after_message_sending_hook"
-              : "no_visible_payload",
+              : replyHookResult.changed
+                ? "empty_after_reply_payload_sending_hook"
+                : "no_visible_payload",
           }),
         );
         continue;
       }
       payloadSummary = buildPayloadSummary(effectivePayload);
+      const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
 
       params.onPayload?.(payloadSummary);
@@ -1622,10 +1711,11 @@ async function deliverOutboundPayloadsCore(
         applyReplyToConsumption(overrides, {
           consumeImplicitReply: replyToResolution.source === "implicit",
         });
-      const deliveryTarget = handler.buildTargetRef({ threadId: sendOverrides.threadId });
+      const deliveryTarget = deliveryHandler.buildTargetRef({ threadId: sendOverrides.threadId });
       if (
-        handler.sendPayload &&
-        ((effectivePayload.isError === true && handler.sendTextOnlyErrorPayloads === true) ||
+        deliveryHandler.sendPayload &&
+        ((effectivePayload.isError === true &&
+          deliveryHandler.sendTextOnlyErrorPayloads === true) ||
           hasReplyPayloadContent({
             presentation: effectivePayload.presentation,
             interactive: effectivePayload.interactive,
@@ -1633,7 +1723,7 @@ async function deliverOutboundPayloadsCore(
           }) ||
           effectivePayload.audioAsVoice === true)
       ) {
-        const delivery = await handler.sendPayload(
+        const delivery = await deliveryHandler.sendPayload(
           effectivePayload,
           applySendReplyToConsumption(sendOverrides),
         );
@@ -1649,15 +1739,16 @@ async function deliverOutboundPayloadsCore(
         }
         results.push(delivery);
         recordPayloadOutcome({ index: payloadIndex, status: "sent", results: [delivery] });
+        recordDeliveredMirrorPayload(payloadSummary, [delivery]);
         await maybePinDeliveredMessage({
-          handler,
+          handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
           messageId: delivery.messageId,
           gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
-          handler,
+          handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
           results: [delivery],
@@ -1672,15 +1763,15 @@ async function deliverOutboundPayloadsCore(
       }
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
-        if (handler.sendFormattedText) {
+        if (deliveryHandler.sendFormattedText) {
           results.push(
-            ...(await handler.sendFormattedText(
+            ...(await deliveryHandler.sendFormattedText(
               payloadSummary.text,
               applySendReplyToConsumption(sendOverrides),
             )),
           );
         } else {
-          await sendTextChunks(payloadSummary.text, sendOverrides);
+          await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
         }
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length > 0) {
@@ -1689,6 +1780,7 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
+          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -1700,14 +1792,14 @@ async function deliverOutboundPayloadsCore(
         const messageId = results.at(-1)?.messageId;
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
-          handler,
+          handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
           messageId: pinMessageId,
           gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
-          handler,
+          handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
           results: deliveredResults,
@@ -1721,7 +1813,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
 
-      if (!handler.supportsMedia) {
+      if (!deliveryHandler.supportsMedia) {
         log.warn(
           "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
           {
@@ -1737,7 +1829,7 @@ async function deliverOutboundPayloadsCore(
           );
         }
         const beforeCount = results.length;
-        await sendTextChunks(fallbackText, sendOverrides);
+        await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length > 0) {
           recordPayloadOutcome({
@@ -1745,6 +1837,7 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
+          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -1756,14 +1849,14 @@ async function deliverOutboundPayloadsCore(
         const messageId = results.at(-1)?.messageId;
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
-          handler,
+          handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
           messageId: pinMessageId,
           gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
-          handler,
+          handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
           results: deliveredResults,
@@ -1791,22 +1884,26 @@ async function deliverOutboundPayloadsCore(
           continue;
         }
         throwIfAborted(abortSignal);
-        const delivery = handler.sendFormattedMedia
-          ? await handler.sendFormattedMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides)
-          : await handler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
+        const delivery = deliveryHandler.sendFormattedMedia
+          ? await deliveryHandler.sendFormattedMedia(
+              unit.caption ?? "",
+              unit.mediaUrl,
+              unit.overrides,
+            )
+          : await deliveryHandler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
         results.push(delivery);
         firstMessageId ??= delivery.messageId;
         lastMessageId = delivery.messageId;
       }
       await maybePinDeliveredMessage({
-        handler,
+        handler: deliveryHandler,
         payload: effectivePayload,
         target: deliveryTarget,
         messageId: firstMessageId,
         gatewayClientScopes: params.gatewayClientScopes,
       });
       await maybeNotifyAfterDeliveredPayload({
-        handler,
+        handler: deliveryHandler,
         payload: effectivePayload,
         target: deliveryTarget,
         results: results.slice(beforeCount),
@@ -1818,6 +1915,7 @@ async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
+        recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({
@@ -1858,19 +1956,45 @@ async function deliverOutboundPayloadsCore(
     }
   }
   if (params.mirror && results.length > 0) {
+    const deliveredMirror =
+      deliveredMirrorPayloads.length > 0
+        ? {
+            text: deliveredMirrorPayloads
+              .map((payload) => payload.hookContent ?? payload.text)
+              .filter((text) => text.trim())
+              .join("\n"),
+            mediaUrls: deliveredMirrorPayloads.flatMap((payload) => payload.mediaUrls),
+          }
+        : params.mirror;
     const mirrorText = resolveMirroredTranscriptText({
-      text: params.mirror.text,
-      mediaUrls: params.mirror.mediaUrls,
+      text: deliveredMirror.text,
+      mediaUrls: deliveredMirror.mediaUrls,
     });
     if (mirrorText) {
-      const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
-      await appendAssistantMessageToSessionTranscript({
-        agentId: params.mirror.agentId,
-        sessionKey: params.mirror.sessionKey,
-        text: mirrorText,
-        idempotencyKey: params.mirror.idempotencyKey,
-        config: params.cfg,
-      });
+      // Transcript mirroring is best-effort bookkeeping after platform send.
+      // Keep mirror failures non-fatal so callers do not retry an already-sent
+      // channel payload and create duplicate delivery.
+      try {
+        const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+        const mirrorResult = await appendAssistantMessageToSessionTranscript({
+          agentId: params.mirror.agentId,
+          sessionKey: params.mirror.sessionKey,
+          text: mirrorText,
+          idempotencyKey: params.mirror.idempotencyKey,
+          config: params.cfg,
+        });
+        if (!mirrorResult.ok) {
+          log.warn(
+            `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${mirrorResult.reason}`,
+            { channel, to, sessionKey: params.mirror.sessionKey },
+          );
+        }
+      } catch (err) {
+        log.warn(
+          `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${formatErrorMessage(err)}`,
+          { channel, to, sessionKey: params.mirror.sessionKey },
+        );
+      }
     }
   }
 

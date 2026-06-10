@@ -181,12 +181,14 @@ prompt surface that matches their lifetime:
 On the native Codex harness, OpenClaw avoids repeating stable workspace files
 in every user turn. Codex loads `AGENTS.md` through its own project-doc
 discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
-Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
-turns get a collaboration-mode note pointing to the file when it exists and is
-non-empty. `MEMORY.md` content from the configured agent workspace is not pasted
-into every native Codex turn; when memory tools are available for that workspace,
-Codex turns get a small workspace-memory note and should use `memory_search` or
-`memory_get` when durable memory is relevant. If tools are disabled, memory
+Codex developer instructions. The compact OpenClaw skills list is also forwarded
+as turn-scoped collaboration developer instructions. `HEARTBEAT.md` content is
+not injected; heartbeat turns get a collaboration-mode note pointing to the file
+when it exists and is non-empty. `MEMORY.md` content from the configured agent
+workspace is not pasted into every native Codex turn; when memory tools are
+available for that workspace, Codex turns get a small workspace-memory note in
+turn-scoped collaboration developer instructions and should use `memory_search`
+or `memory_get` when durable memory is relevant. If tools are disabled, memory
 search is unavailable, or the active workspace differs from the agent memory
 workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
 `BOOTSTRAP.md` content keeps the normal turn-context role for now.
@@ -206,7 +208,7 @@ because of the bootstrap file limits below.
 </Note>
 
 Large files are truncated with a marker. The max per-file size is controlled by
-`agents.defaults.bootstrapMaxChars` (default: 12000). Total injected bootstrap
+`agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap
 content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
 (default: 60000). Missing files inject a short missing-file marker. When truncation
 occurs, OpenClaw can inject a concise system-prompt warning notice; control this with
@@ -253,10 +255,16 @@ See [Date & Time](/date-time) for full behavior details.
 ## Skills
 
 When eligible skills exist, OpenClaw injects a compact **available skills list**
-(`formatSkillsForPrompt`) that includes the **file path** for each skill. The
-prompt instructs the model to use `read` to load the SKILL.md at the listed
-location (workspace, managed, or bundled). If no skills are eligible, the
-Skills section is omitted.
+(`formatSkillsForPrompt`) that includes the **file path** and content-derived
+`<version>` marker for each skill. The prompt instructs the model to use `read`
+to load the SKILL.md at the listed location (workspace, managed, or bundled),
+and to re-read a skill when its `<version>` differs from a previous turn. If no
+skills are eligible, the Skills section is omitted.
+
+Native Codex turns receive this list as turn-scoped collaboration developer
+instructions instead of per-turn user input, except lightweight cron turns that
+preserve the exact scheduled prompt. Other harnesses keep the normal prompt
+section.
 
 The location can point at a nested skill, such as
 `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt still
@@ -276,6 +284,7 @@ that guidance directly in every tool description.
     <name>...</name>
     <description>...</description>
     <location>...</location>
+    <version>sha256:...</version>
   </skill>
 </available_skills>
 ```

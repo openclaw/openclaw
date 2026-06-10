@@ -1,3 +1,4 @@
+// Browser tests cover browser cli actions observe plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
@@ -61,7 +62,7 @@ describe("browser action observe commands", () => {
     const program = createActionObserveProgram();
 
     await program.parseAsync(
-      ["browser", "responsebody", "**/api", "--timeout-ms", "30000", "--max-chars", "100"],
+      ["browser", "responsebody", "**/api", "--timeout-ms", "+030000", "--max-chars", "0100"],
       { from: "user" },
     );
 
