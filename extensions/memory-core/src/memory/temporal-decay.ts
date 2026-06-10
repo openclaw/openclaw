@@ -2,9 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  createSubsystemLogger,
   resolveMemorySearchConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+
+const log = createSubsystemLogger("memory");
 
 export type TemporalDecayConfig = {
   enabled: boolean;
@@ -16,19 +19,32 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
   halfLifeDays: 30,
 };
 
+const decayConfigWarningsByAgent = new Set<string>();
+
 export function resolveTemporalDecaySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): TemporalDecayConfig {
   try {
-    return (
-      resolveMemorySearchConfig(cfg, agentId)?.query.hybrid.temporalDecay ??
-      DEFAULT_TEMPORAL_DECAY_CONFIG
-    );
-  } catch {
+    const resolved = resolveMemorySearchConfig(cfg, agentId)?.query.hybrid.temporalDecay;
+    if (resolved) {
+      decayConfigWarningsByAgent.delete(agentId);
+      return resolved;
+    }
+    return DEFAULT_TEMPORAL_DECAY_CONFIG;
+  } catch (error) {
     // Invalid memorySearch config (e.g. multimodal validation errors) is
     // surfaced on the search config path; keep callers decay-neutral instead
-    // of failing manager construction here.
+    // of failing manager construction here, but say so once per agent so an
+    // explicitly enabled decay never turns off silently.
+    if (!decayConfigWarningsByAgent.has(agentId)) {
+      decayConfigWarningsByAgent.add(agentId);
+      log.warn(
+        `temporal decay disabled for agent ${agentId}: memorySearch config failed to resolve (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      );
+    }
     return DEFAULT_TEMPORAL_DECAY_CONFIG;
   }
 }
