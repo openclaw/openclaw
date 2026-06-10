@@ -37,6 +37,7 @@ import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { loadChatComposerSnapshot, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
+import { clearToolStreamSegments } from "./chat/stream-reconciliation.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   recordControlUiConnectTiming,
@@ -954,6 +955,7 @@ function handleTerminalChatEvent(
   // with the persisted copy and causes a visible disappear/reappear flicker.
   if (hadToolEvents && state === "final") {
     if (activeRunIdBeforeEvent && !shouldReloadHistoryForFinalEvent(payload)) {
+      clearToolStreamSegments(toolHost);
       flushQueue();
       return false;
     }
