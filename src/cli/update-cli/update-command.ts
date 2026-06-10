@@ -3757,10 +3757,6 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       result: resultWithPostUpdate,
       jsonMode: Boolean(opts.json),
     });
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop,
-      jsonMode: Boolean(opts.json),
-    });
     if (opts.json) {
       defaultRuntime.writeJson(resultWithPostUpdate);
     } else {

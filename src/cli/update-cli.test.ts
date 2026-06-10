@@ -1011,7 +1011,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("restarts a stopped managed gateway after post-core plugin errors", async () => {
+  it("does not restart a stopped managed gateway after post-core plugin errors", async () => {
     const root = createCaseDir("openclaw-update");
     const entryPath = path.join(root, "dist", "index.js");
     mockPackageInstallStatus(root);
@@ -1071,14 +1071,9 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expect(serviceStop).toHaveBeenCalled();
-    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(
-      requireValue(serviceStop.mock.invocationCallOrder[0], "service stop call order"),
-    ).toBeLessThan(
-      requireValue(serviceRestart.mock.invocationCallOrder[0], "service restart call order"),
-    );
   });
 
   it("does not carry gateway service markers into the post-core update process", async () => {
@@ -2916,7 +2911,7 @@ describe("update-cli", () => {
     expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("restarts a stopped git service before exiting on plugin post-update failure", async () => {
+  it("leaves a stopped git service down when plugin post-update fails", async () => {
     const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
     const invalidPostUpdateSnapshot: ConfigFileSnapshot = {
       ...baseSnapshot,
@@ -2946,13 +2941,9 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(
-      requireValue(serviceStop.mock.invocationCallOrder[0], "service stop call order"),
-    ).toBeLessThan(
-      requireValue(serviceRestart.mock.invocationCallOrder[0], "service restart call order"),
-    );
   });
 
   it("keeps managed service stop output off stdout during json package updates", async () => {
