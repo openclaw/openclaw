@@ -791,8 +791,8 @@ function resolveRuntimeParityToolCalls(params: {
   }
   if (
     hasMissingToolResult(params.mockToolCalls) &&
-    !hasMissingToolResult(params.transcriptToolCalls) &&
-    compareToolCallShape(params.mockToolCalls, params.transcriptToolCalls) === undefined
+    params.transcriptToolCalls.length > 0 &&
+    !hasMissingToolResult(params.transcriptToolCalls)
   ) {
     return params.transcriptToolCalls;
   }
