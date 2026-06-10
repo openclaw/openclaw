@@ -554,26 +554,36 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
-  it("preserves stable ids on named tool and command-output progress lines", () => {
+  it("normalizes command progress ids across tool and output lines", () => {
     const toolLine = buildChannelProgressDraftLine({
       event: "tool",
-      itemId: "tool:item-1",
+      itemId: "tool:call-1",
       toolCallId: "call-1",
       name: "bash",
       phase: "start",
     });
     const commandLine = buildChannelProgressDraftLine({
       event: "command-output",
-      itemId: "command:item-1",
+      itemId: "tool:call-1-output",
       toolCallId: "call-1",
       name: "bash",
       phase: "end",
       exitCode: 0,
     });
+    const itemLine = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "tool:call-1",
+      toolCallId: "call-1",
+      itemKind: "command",
+      name: "bash",
+      phase: "update",
+      progressText: "install dependencies",
+    });
 
-    expect(toolLine).toMatchObject({ id: "tool:item-1", kind: "tool", toolName: "bash" });
+    expect(toolLine).toMatchObject({ id: "command:call-1", kind: "tool", toolName: "bash" });
+    expect(itemLine).toMatchObject({ id: "command:call-1", kind: "item", toolName: "bash" });
     expect(commandLine).toMatchObject({
-      id: "command:item-1",
+      id: "command:call-1",
       kind: "command-output",
       status: "completed",
       toolName: "bash",

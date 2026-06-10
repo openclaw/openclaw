@@ -1911,6 +1911,8 @@ describe("createFollowupRunner progress forwarding", () => {
         await args.onAgentEvent?.({
           stream: "tool",
           data: {
+            itemId: "tool:queued-progress",
+            toolCallId: "queued-progress",
             phase: "start",
             name: "exec",
             args: { command: "echo queued-progress" },
@@ -1932,6 +1934,8 @@ describe("createFollowupRunner progress forwarding", () => {
     await runner(queued);
 
     expect(onToolStart).toHaveBeenCalledWith({
+      itemId: "tool:queued-progress",
+      toolCallId: "queued-progress",
       name: "exec",
       phase: "start",
       args: { command: "echo queued-progress" },
@@ -2010,6 +2014,7 @@ describe("createFollowupRunner progress forwarding", () => {
 
   it("preserves queued verbose progress when default tool progress is suppressed", async () => {
     const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
     const queued = createQueuedRun({
       originatingChannel: "discord",
@@ -2041,6 +2046,18 @@ describe("createFollowupRunner progress forwarding", () => {
           },
         });
         await args.onAgentEvent?.({
+          stream: "item",
+          data: {
+            itemId: "command:queued-suppressed-preview",
+            toolCallId: "queued-suppressed-preview",
+            kind: "command",
+            name: "exec",
+            phase: "update",
+            status: "running",
+            progressText: "queued output",
+          },
+        });
+        await args.onAgentEvent?.({
           stream: "command_output",
           data: { phase: "chunk", output: "queued output" },
         });
@@ -2050,7 +2067,12 @@ describe("createFollowupRunner progress forwarding", () => {
     );
 
     const runner = createFollowupRunner({
-      opts: { suppressDefaultToolProgressMessages: true, onToolStart, onCommandOutput },
+      opts: {
+        suppressDefaultToolProgressMessages: true,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "claude",
@@ -2065,6 +2087,15 @@ describe("createFollowupRunner progress forwarding", () => {
       args: { command: "echo queued-suppressed-preview" },
       detailMode: "raw",
     });
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:queued-suppressed-preview",
+        toolCallId: "queued-suppressed-preview",
+        kind: "command",
+        name: "exec",
+        phase: "update",
+      }),
+    );
     expect(onCommandOutput).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "chunk", output: "queued output" }),
     );

@@ -230,6 +230,7 @@ export type ChannelProgressDraftLineInput =
   | {
       event: "item";
       itemId?: string;
+      toolCallId?: string;
       itemKind?: string;
       title?: string;
       name?: string;
@@ -376,6 +377,38 @@ function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { e
   return itemKind === "command" || isCommandToolName(input.name);
 }
 
+function resolveProgressDraftLineId(
+  input: {
+    itemId?: string;
+    toolCallId?: string;
+    itemKind?: string;
+    name?: string;
+  },
+  params?: {
+    commandLike?: boolean;
+    useToolCallIdFallback?: boolean;
+  },
+): string | undefined {
+  const itemId = input.itemId?.trim();
+  const toolCallId = input.toolCallId?.trim();
+  const commandLike =
+    params?.commandLike ??
+    (normalizeOptionalLowercaseString(input.itemKind) === "command" ||
+      isCommandToolName(input.name));
+  if (commandLike) {
+    if (itemId && /^command(?::|-)/i.test(itemId)) {
+      return itemId;
+    }
+    if (toolCallId) {
+      return `command:${toolCallId}`;
+    }
+  }
+  if (itemId) {
+    return itemId;
+  }
+  return params?.useToolCallIdFallback === true ? toolCallId : undefined;
+}
+
 function isEmptyReasoningProgressItem(
   input: Extract<ChannelProgressDraftLineInput, { event: "item" }>,
   meta: string | undefined,
@@ -460,7 +493,7 @@ export function buildChannelProgressDraftLine(
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
-        { id: input.itemId ?? input.toolCallId },
+        { id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }) },
       );
     }
     case "item": {
@@ -476,14 +509,17 @@ export function buildChannelProgressDraftLine(
       }
       if (name) {
         return buildNamedProgressLine(input.event, name, [meta], options, {
-          id: input.itemId,
+          id: resolveProgressDraftLineId(input, {
+            commandLike: isCommandProgressItem(input),
+          }),
           status: input.status,
         });
       }
       const text = compactStrings([meta, input.title]).at(0);
+      const id = resolveProgressDraftLineId(input, { commandLike: isCommandProgressItem(input) });
       return text
         ? {
-            ...(input.itemId ? { id: input.itemId } : {}),
+            ...(id ? { id } : {}),
             kind: input.event,
             text,
             label: input.title?.trim() || input.itemKind?.trim() || "Update",
@@ -529,7 +565,13 @@ export function buildChannelProgressDraftLine(
         input.name ?? "exec",
         [status, input.title],
         options,
-        { id: input.itemId ?? input.toolCallId, status },
+        {
+          id: resolveProgressDraftLineId(input, {
+            commandLike: true,
+            useToolCallIdFallback: true,
+          }),
+          status,
+        },
       );
     }
     case "patch": {
