@@ -75,6 +75,24 @@ function isDisabledReasoningEffort(effort: string): boolean {
   return effort === "none" || effort === "off";
 }
 
+// Disabled intent has two config vocabularies: OpenAI-style "none" and the
+// "off" used by self-hosted binary-thinking model metadata. Alias between the
+// two fallback-map KEYS so a map written in either vocabulary still resolves
+// the user's configured disabled value. Only the lookup key is aliased; the
+// resolved value always comes from the map, because inventing a wire value
+// from advertised metadata can produce strings the server's API schema
+// rejects (LM Studio accepts only none/minimal/.../xhigh as reasoning_effort
+// even when the model advertises allowed_options ["off", "on"]).
+function resolveDisabledReasoningEffortAliasKey(effort: string): string | undefined {
+  if (effort === "none") {
+    return "off";
+  }
+  if (effort === "off") {
+    return "none";
+  }
+  return undefined;
+}
+
 /** Resolve the reasoning efforts accepted by a specific OpenAI-compatible model. */
 export function resolveOpenAISupportedReasoningEfforts(
   model: OpenAIReasoningModel,
@@ -129,7 +147,11 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   fallbackMap?: Record<string, string>;
 }): OpenAIApiReasoningEffort | undefined {
   const requested = normalizeOpenAIReasoningEffort(params.effort);
-  const mapped = params.fallbackMap?.[requested] ?? requested;
+  const requestedAliasKey = resolveDisabledReasoningEffortAliasKey(requested);
+  const mapped =
+    params.fallbackMap?.[requested] ??
+    (requestedAliasKey === undefined ? undefined : params.fallbackMap?.[requestedAliasKey]) ??
+    requested;
   const normalized = normalizeOpenAIReasoningEffort(mapped);
   const supported = resolveOpenAISupportedReasoningEfforts(params.model);
   if (supported.includes(normalized as OpenAIApiReasoningEffort)) {
