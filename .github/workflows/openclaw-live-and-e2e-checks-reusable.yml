@@ -1629,7 +1629,7 @@ jobs:
           file: ./Dockerfile
           target: build
           build-args: |
-            OPENCLAW_EXTENSIONS=matrix
+            OPENCLAW_EXTENSIONS=matrix,acpx
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
           sbom: true
