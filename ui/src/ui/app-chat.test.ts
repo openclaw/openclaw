@@ -3210,7 +3210,7 @@ describe("handleAbortChat", () => {
   });
 
   it("preserves the draft for connected toolbar aborts", async () => {
-    const request = vi.fn(async () => ({ aborted: true }));
+    const request = vi.fn(async () => ({ aborted: true, runIds: ["run-main"] }));
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatRunId: "run-main",
@@ -3229,7 +3229,7 @@ describe("handleAbortChat", () => {
   });
 
   it("clears typed stop commands after aborting the active run", async () => {
-    const request = vi.fn(async () => ({ aborted: true }));
+    const request = vi.fn(async () => ({ aborted: true, runIds: ["run-main"] }));
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatRunId: "run-main",
