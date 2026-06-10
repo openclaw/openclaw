@@ -189,6 +189,13 @@ for h in $SELECT; do
   else echo "ISSUE|P0|$h|-|Host unreachable|SSH to ${ip} failed or returned nothing (down, overloaded, or key/network issue)." >>"$TMP"; fi
 done
 
+# ── Merge model-connectivity issues (state file from models_connectivity_check.sh,
+#    run by cron at 05:50; ignored when stale > 6 h) ───────────────────────────
+MODEL_ISSUES_FILE="${MODEL_ISSUES_FILE:-/var/tmp/agentglob-model-issues.txt}"
+if [[ -f "$MODEL_ISSUES_FILE" && -n "$(find "$MODEL_ISSUES_FILE" -mmin -360 2>/dev/null)" ]]; then
+  grep '^ISSUE|' "$MODEL_ISSUES_FILE" >>"$TMP" 2>/dev/null || true
+fi
+
 # ── A+B report ───────────────────────────────────────────────────────────────
 echo; echo "════════ A+B. SERVER HEALTH & AGENT STATUS ════════"
 for h in $SELECT; do

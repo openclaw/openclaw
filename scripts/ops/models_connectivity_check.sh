@@ -15,8 +15,13 @@
 # — keep the two in sync when models are added or retired.
 #
 # Usage:
-#   ./models_connectivity_check.sh                 # print report
+#   ./models_connectivity_check.sh                 # print report + write state files
 #   EMAIL_TO=liran@agentglob.com ./models_connectivity_check.sh   # + email it
+#
+# State files (consumed by the 06:00 fleet diagnostic for ONE combined email
+# and a single bug_list AUTOSCAN entry per failing model):
+#   REPORT_FILE  human report           (default /var/tmp/agentglob-models-report.txt)
+#   ISSUES_FILE  ISSUE|... lines        (default /var/tmp/agentglob-model-issues.txt)
 #
 # Env overrides:
 #   SSH_KEY     ssh key for the key host       (default ~/.ssh/hetzner-openclaw)
@@ -32,6 +37,8 @@ KEY_HOST="${KEY_HOST:-89.167.70.46}"
 KEY_AGENT="${KEY_AGENT:-cashtronics}"   # donor must have both provider keys
 TIMEOUT_S="${TIMEOUT_S:-45}"
 EMAIL_TO="${EMAIL_TO:-}"
+REPORT_FILE="${REPORT_FILE:-/var/tmp/agentglob-models-report.txt}"
+ISSUES_FILE="${ISSUES_FILE:-/var/tmp/agentglob-model-issues.txt}"
 
 # ── Active model catalog (sync with the dashboard models route) ──────────────
 NVIDIA_MODELS="z-ai/glm-5.1 deepseek-ai/deepseek-r1 qwen/qwen3.5-397b-a17b minimaxai/minimax-m2.7 nvidia/nemotron-3-super-120b-a12b"
@@ -128,6 +135,24 @@ report="$(
 )"
 
 echo "$report"
+
+# ── State files for the fleet diagnostic to ingest ───────────────────────────
+printf '%s\n' "$report" > "$REPORT_FILE" 2>/dev/null || true
+{
+  seen_nokey=""
+  while IFS='|' read -r _ p model verdict http dur; do
+    case "$verdict" in
+      OK) ;;
+      SKIP_NO_KEY)
+        case " $seen_nokey " in *" $p "*) ;; *)
+          seen_nokey="$seen_nokey $p"
+          echo "ISSUE|P2|models|$p|Provider key missing|Donor agent ${KEY_AGENT} has no $p API key; provider unprobed." ;;
+        esac ;;
+      *)
+        echo "ISSUE|P1|models|$p/$model|Model not responding|$verdict (HTTP $http, $dur) on a 1-token probe via $p API." ;;
+    esac
+  done <<<"$results"
+} > "$ISSUES_FILE" 2>/dev/null || true
 
 # ── Optional email ───────────────────────────────────────────────────────────
 if [[ -n "$EMAIL_TO" ]] && command -v msmtp >/dev/null 2>&1; then

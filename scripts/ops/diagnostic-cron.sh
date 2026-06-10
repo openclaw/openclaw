@@ -73,6 +73,10 @@ if command -v msmtp >/dev/null 2>&1; then
     printf 'To: %s\n' "$EMAIL_TO"
     printf 'Content-Type: text/plain; charset=UTF-8\n\n'
     printf '%s\n\n' "$REPORT"
+    MODELS_REPORT_FILE=/var/tmp/agentglob-models-report.txt
+    if [[ -f "$MODELS_REPORT_FILE" && -n "$(find "$MODELS_REPORT_FILE" -mmin -360 2>/dev/null)" ]]; then
+      printf '═══════ MODEL CONNECTIVITY (05:50 UTC run) ═══════\n%s\n\n' "$(cat "$MODELS_REPORT_FILE")"
+    fi
     printf 'Bug list: %s\n' "$BUG_LIST_URL"
   } | msmtp "$EMAIL_TO" \
       && echo "→ summary emailed to $EMAIL_TO" \
