@@ -45,7 +45,10 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
-import { resolveCodexAppServerForOpenClawToolPolicy } from "./app-server-policy.js";
+import {
+  resolveCodexAppServerForModelProvider,
+  resolveCodexAppServerForOpenClawToolPolicy,
+} from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
@@ -127,9 +130,11 @@ import {
   readCodexPluginConfig,
   resolveCodexComputerUseConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
+  type OpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 import {
   projectContextEngineAssemblyForCodex,
@@ -213,6 +218,7 @@ import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.
 import {
   clearCodexAppServerBinding,
   clearCodexAppServerBindingForThread,
+  isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
@@ -428,63 +434,6 @@ export async function runCodexAppServerAttempt(
     config: params.config,
     agentId: sessionAgentId,
   });
-  const configuredAppServer = resolveCodexAppServerRuntimeOptions({
-    pluginConfig,
-    execPolicy,
-    openClawSandboxActive: sandbox?.enabled === true,
-  });
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed Codex app-server runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
-  preDynamicStartupStages.mark("effective-workspace");
-  const appServer = resolveCodexAppServerForOpenClawToolPolicy({
-    appServer: configuredAppServer,
-    pluginConfig,
-    env: process.env,
-    shouldPromote:
-      beforeToolCallPolicy.hasBeforeToolCallHook ||
-      beforeToolCallPolicy.trustedToolPolicies.length > 0,
-    execPolicy,
-    canUseUntrustedApprovalPolicy:
-      configuredAppServer.start.transport !== "stdio" ||
-      isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
-  });
-  if (configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted") {
-    embeddedAgentLog.info("codex app-server approval policy promoted for OpenClaw tool policy", {
-      from: "never",
-      to: "untrusted",
-      beforeToolCallHook: beforeToolCallPolicy.hasBeforeToolCallHook,
-      trustedToolPolicies: beforeToolCallPolicy.trustedToolPolicies,
-    });
-  }
-  preDynamicStartupStages.mark("app-server-policy");
-  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
-  preDynamicStartupStages.mark("native-hook-relay");
-
-  const runAbortController = new AbortController();
-  const abortFromUpstream = () => {
-    runAbortController.abort(params.abortSignal?.reason ?? "upstream_abort");
-  };
-  if (params.abortSignal?.aborted) {
-    abortFromUpstream();
-  } else {
-    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
-  }
-
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   preDynamicStartupStages.mark("session-agent");
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
@@ -497,17 +446,6 @@ export async function runCodexAppServerAttempt(
   const startupBindingAuthProfileId = startupBinding?.authProfileId;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
-  startupBinding = await rotateOversizedCodexAppServerStartupBinding({
-    binding: startupBinding,
-    sessionFile: params.sessionFile,
-    agentDir,
-    codexHome: appServer.start.env?.CODEX_HOME,
-    config: params.config,
-    contextEngineActive: Boolean(activeContextEngine),
-  });
-  const initialInactiveThreadBootstrapBindingForcedFreshStart =
-    initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
-  preDynamicStartupStages.mark("rotate-binding");
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
     params.authProfileId ??
@@ -524,7 +462,145 @@ export async function runCodexAppServerAttempt(
         agentDir,
         config: params.config,
       });
+  let reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+    provider: params.provider,
+    model: params.modelId,
+    bindingModelProvider: startupBinding?.modelProvider,
+    bindingModel: startupBinding?.model,
+    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+      authProfileId: startupAuthProfileId,
+      authProfileStore: params.authProfileStore,
+      agentDir,
+      config: params.config,
+    }),
+  });
   preDynamicStartupStages.mark("auth-profile");
+  let configuredAppServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    agentDir,
+    openClawSandboxActive: sandbox?.enabled === true,
+  });
+  const effectiveWorkspace = sandbox?.enabled
+    ? sandbox.workspaceAccess === "rw"
+      ? resolvedWorkspace
+      : sandbox.workspaceDir
+    : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed Codex app-server runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
+  await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
+  preDynamicStartupStages.mark("effective-workspace");
+  let policyAppServer = resolveCodexAppServerForOpenClawToolPolicy({
+    appServer: configuredAppServer,
+    pluginConfig,
+    env: process.env,
+    shouldPromote:
+      beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    execPolicy,
+    canUseUntrustedApprovalPolicy:
+      configuredAppServer.start.transport !== "stdio" ||
+      isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
+  });
+  let appServer = resolveCodexAppServerForModelProvider({
+    appServer: policyAppServer,
+    provider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    env: process.env,
+    agentDir,
+  });
+  if (configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted") {
+    embeddedAgentLog.info("codex app-server approval policy promoted for OpenClaw tool policy", {
+      from: "never",
+      to: "untrusted",
+      beforeToolCallHook: beforeToolCallPolicy.hasBeforeToolCallHook,
+      trustedToolPolicies: beforeToolCallPolicy.trustedToolPolicies,
+    });
+  }
+  preDynamicStartupStages.mark("app-server-policy");
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
+  let nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
+  preDynamicStartupStages.mark("native-hook-relay");
+
+  const runAbortController = new AbortController();
+  const abortFromUpstream = () => {
+    runAbortController.abort(params.abortSignal?.reason ?? "upstream_abort");
+  };
+  if (params.abortSignal?.aborted) {
+    abortFromUpstream();
+  } else {
+    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
+  }
+
+  startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+    binding: startupBinding,
+    sessionFile: params.sessionFile,
+    agentDir,
+    codexHome: appServer.start.env?.CODEX_HOME,
+    config: params.config,
+    contextEngineActive: Boolean(activeContextEngine),
+  });
+  const initialInactiveThreadBootstrapBindingForcedFreshStart =
+    initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
+  preDynamicStartupStages.mark("rotate-binding");
+  reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+    provider: params.provider,
+    model: params.modelId,
+    bindingModelProvider: startupBinding?.modelProvider,
+    bindingModel: startupBinding?.model,
+    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+      authProfileId: startupAuthProfileId,
+      authProfileStore: params.authProfileStore,
+      agentDir,
+      config: params.config,
+    }),
+  });
+  configuredAppServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    agentDir,
+    openClawSandboxActive: sandbox?.enabled === true,
+  });
+  policyAppServer = resolveCodexAppServerForOpenClawToolPolicy({
+    appServer: configuredAppServer,
+    pluginConfig,
+    env: process.env,
+    shouldPromote:
+      beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    execPolicy,
+    canUseUntrustedApprovalPolicy:
+      configuredAppServer.start.transport !== "stdio" ||
+      isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
+  });
+  appServer = resolveCodexAppServerForModelProvider({
+    appServer: policyAppServer,
+    provider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    env: process.env,
+    agentDir,
+  });
+  pluginAppServer = appServer;
+  nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
   const runtimeParams = {
     ...params,
     sessionKey: contextSessionKey,
@@ -1687,6 +1763,9 @@ export async function runCodexAppServerAttempt(
             threadId: thread.threadId,
             turnId,
             nativeHookRelay,
+            execPolicy,
+            execReviewerAgentId: sessionAgentId,
+            internalExecAutoReview: appServer.approvalsReviewer === "user",
             autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal: runAbortController.signal,
           });
@@ -1955,6 +2034,8 @@ export async function runCodexAppServerAttempt(
       promptText: codexTurnPromptText,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
+      model: thread.model,
+      modelProvider: thread.modelProvider,
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
       skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
@@ -2907,6 +2988,9 @@ function handleApprovalRequest(params: {
   threadId: string;
   turnId: string;
   nativeHookRelay?: NativeHookRelayRegistrationHandle;
+  execPolicy?: Pick<OpenClawExecPolicyForCodexAppServer, "mode">;
+  execReviewerAgentId?: string;
+  internalExecAutoReview?: boolean;
   autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
@@ -2917,6 +3001,9 @@ function handleApprovalRequest(params: {
     threadId: params.threadId,
     turnId: params.turnId,
     nativeHookRelay: params.nativeHookRelay,
+    execPolicy: params.execPolicy,
+    execReviewerAgentId: params.execReviewerAgentId,
+    internalExecAutoReview: params.internalExecAutoReview,
     autoApprove: params.autoApprove,
     signal: params.signal,
   });

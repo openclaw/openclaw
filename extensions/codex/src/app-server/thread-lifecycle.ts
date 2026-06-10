@@ -338,6 +338,24 @@ export async function startOrResumeThread(params: {
       config: params.params.config,
     }),
   );
+  let startModelProvider: string | undefined;
+  if (binding?.threadId) {
+    const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+    startModelProvider =
+      resolveCodexAppServerModelProvider({
+        provider: params.params.provider,
+        authProfileId,
+        authProfileStore: params.params.authProfileStore,
+        agentDir: params.params.agentDir,
+        config: params.params.config,
+      }) ??
+      resolveCodexBindingModelProviderFallback({
+        provider: params.params.provider,
+        currentModel: params.params.modelId,
+        bindingModel: binding.model,
+        bindingModelProvider: binding.modelProvider,
+      });
+  }
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
@@ -535,6 +553,7 @@ export async function startOrResumeThread(params: {
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
             authProfileId,
+            modelProvider: startModelProvider,
             appServer: params.appServer,
             dynamicTools: params.dynamicTools,
             developerInstructions: params.developerInstructions,
@@ -543,6 +562,10 @@ export async function startOrResumeThread(params: {
             nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
           }),
         );
+        const requestModelProvider =
+          typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
+            ? resumeParams.modelProvider
+            : undefined;
         const response = assertCodexThreadResumeResponse(
           await lifecycleTiming.measure("thread-resume-request", () =>
             params.client.request("thread/resume", resumeParams, { signal: params.signal }),
@@ -550,13 +573,6 @@ export async function startOrResumeThread(params: {
         );
         throwIfAborted();
         const boundAuthProfileId = authProfileId;
-        const fallbackModelProvider = resolveCodexAppServerModelProvider({
-          provider: params.params.provider,
-          authProfileId: boundAuthProfileId,
-          authProfileStore: params.params.authProfileStore,
-          agentDir: params.params.agentDir,
-          config: params.params.config,
-        });
         const nextMcpServersFingerprint =
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
@@ -568,8 +584,8 @@ export async function startOrResumeThread(params: {
               threadId: response.thread.id,
               cwd: params.cwd,
               authProfileId: boundAuthProfileId,
-              model: params.params.modelId,
-              modelProvider: response.modelProvider ?? fallbackModelProvider,
+              model: response.model ?? resumeParams.model ?? params.params.modelId,
+              modelProvider: response.modelProvider ?? requestModelProvider ?? startModelProvider,
               dynamicToolsFingerprint,
               dynamicToolsContainDeferred,
               userMcpServersFingerprint,
@@ -615,8 +631,8 @@ export async function startOrResumeThread(params: {
           threadId: response.thread.id,
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
-          model: params.params.modelId,
-          modelProvider: response.modelProvider ?? fallbackModelProvider,
+          model: response.model ?? resumeParams.model ?? params.params.modelId,
+          modelProvider: response.modelProvider ?? requestModelProvider ?? startModelProvider,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           userMcpServersFingerprint,
@@ -673,8 +689,13 @@ export async function startOrResumeThread(params: {
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
       environmentSelection: params.environmentSelection,
+      modelProvider: startModelProvider,
     }),
   );
+  const requestModelProvider =
+    typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
+      ? startParams.modelProvider
+      : undefined;
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
       return await params.client.request("thread/start", startParams, { signal: params.signal });
@@ -705,8 +726,9 @@ export async function startOrResumeThread(params: {
           threadId: response.thread.id,
           cwd: params.cwd,
           authProfileId: params.params.authProfileId,
-          model: response.model ?? params.params.modelId,
-          modelProvider: response.modelProvider ?? modelProvider,
+          model: response.model ?? startParams.model ?? params.params.modelId,
+          modelProvider:
+            response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           userMcpServersFingerprint,
@@ -752,8 +774,9 @@ export async function startOrResumeThread(params: {
     sessionFile: params.params.sessionFile,
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
-    model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? modelProvider,
+    model: response.model ?? startParams.model ?? params.params.modelId,
+    modelProvider:
+      response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
     userMcpServersFingerprint,
@@ -901,18 +924,27 @@ export function buildThreadStartParams(
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
     environmentSelection?: CodexTurnEnvironmentParams[];
+    modelProvider?: string | null;
   },
 ): CodexThreadStartParams {
-  const modelProvider = resolveCodexAppServerModelProvider({
+  const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
     agentDir: params.agentDir,
     config: params.config,
   });
-  return {
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
     model: params.modelId,
-    ...(modelProvider ? { modelProvider } : {}),
+    modelProvider: options.modelProvider ?? resolvedModelProvider,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  return {
+    model: modelSelection.model,
+    ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
@@ -939,6 +971,7 @@ export function buildThreadResumeParams(
   options: {
     threadId: string;
     authProfileId?: string;
+    modelProvider?: string | null;
     appServer: CodexAppServerRuntimeOptions;
     dynamicTools?: CodexDynamicToolSpec[];
     developerInstructions?: string;
@@ -947,8 +980,16 @@ export function buildThreadResumeParams(
     nativeCodeModeOnlyEnabled?: boolean;
   },
 ): CodexThreadResumeParams {
-  const modelProvider = resolveCodexAppServerModelProvider({
+  const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
+    authProfileId: options.authProfileId ?? params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
+    model: params.modelId,
+    modelProvider: options.modelProvider ?? resolvedModelProvider,
     authProfileId: options.authProfileId ?? params.authProfileId,
     authProfileStore: params.authProfileStore,
     agentDir: params.agentDir,
@@ -956,8 +997,8 @@ export function buildThreadResumeParams(
   });
   return {
     threadId: options.threadId,
-    model: params.modelId,
-    ...(modelProvider ? { modelProvider } : {}),
+    model: modelSelection.model,
+    ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
@@ -972,6 +1013,68 @@ export function buildThreadResumeParams(
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
     persistExtendedHistory: true,
   };
+}
+
+export function resolveCodexBindingModelProviderFallback(params: {
+  provider?: string;
+  currentModel: string | undefined;
+  bindingModel: string | undefined;
+  bindingModelProvider: string | undefined;
+}): string | undefined {
+  const provider = params.provider?.trim().toLowerCase();
+  if (provider && provider !== "codex") {
+    return undefined;
+  }
+  const currentModel = params.currentModel?.trim();
+  const bindingModel = params.bindingModel?.trim();
+  if (
+    currentModel &&
+    bindingModel &&
+    currentModel === bindingModel &&
+    params.bindingModelProvider
+  ) {
+    return params.bindingModelProvider;
+  }
+  return hasProviderQualifiedModelRef(currentModel) ? undefined : params.bindingModelProvider;
+}
+
+export function resolveCodexAppServerRequestModelSelection(params: {
+  model: string;
+  modelProvider?: string | null;
+  authProfileId?: string;
+  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): { model: string; modelProvider?: string } {
+  const model = params.model.trim();
+  const modelProvider = params.modelProvider?.trim();
+  if (modelProvider) {
+    return { model, modelProvider };
+  }
+  // Codex app-server expects provider-qualified refs as separate fields. Keep
+  // explicit providers intact so provider-owned slashy model ids are not split.
+  const slashIndex = model.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= model.length - 1) {
+    return { model };
+  }
+  const inferredProvider = model.slice(0, slashIndex);
+  const inferredModelProvider = resolveCodexAppServerModelProvider({
+    provider: inferredProvider,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  return {
+    model: model.slice(slashIndex + 1).trim(),
+    ...(inferredModelProvider ? { modelProvider: inferredModelProvider } : {}),
+  };
+}
+
+function hasProviderQualifiedModelRef(model: string | undefined): boolean {
+  const trimmed = model?.trim();
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 && slashIndex < (trimmed?.length ?? 0) - 1;
 }
 
 export function buildCodexRuntimeThreadConfig(
@@ -1044,12 +1147,22 @@ export function buildTurnStartParams(
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
+    model?: string | null;
+    modelProvider?: string | null;
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
+    model: options.model ?? params.modelId,
+    modelProvider: options.modelProvider,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
   return {
     threadId: options.threadId,
     input: buildUserInput(params, options.promptText),
@@ -1058,12 +1171,13 @@ export function buildTurnStartParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandboxPolicy:
       options.sandboxPolicy ?? codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
-    model: params.modelId,
+    model: modelSelection.model,
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+    effort: resolveReasoningEffort(params.thinkLevel, modelSelection.model),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
+      model: modelSelection.model,
       turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
       skillsCollaborationInstructions: options.skillsCollaborationInstructions,
       memoryCollaborationInstructions: options.memoryCollaborationInstructions,
@@ -1090,17 +1204,19 @@ type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaboratio
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
   options: {
+    model?: string;
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
+  const model = options.model ?? params.modelId;
   return {
     mode: "default",
     settings: {
-      model: params.modelId,
-      reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+      model,
+      reasoning_effort: resolveReasoningEffort(params.thinkLevel, model),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };

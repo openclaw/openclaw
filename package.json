@@ -586,6 +586,10 @@
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
       "default": "./dist/plugin-sdk/agent-harness.js"
     },
+    "./plugin-sdk/agent-harness-exec-review-runtime": {
+      "types": "./dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
+    },
     "./plugin-sdk/agent-harness-runtime": {
       "types": "./dist/plugin-sdk/agent-harness-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-harness-runtime.js"
