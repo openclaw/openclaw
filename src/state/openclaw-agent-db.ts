@@ -219,20 +219,6 @@ function registerAgentDatabase(params: {
   );
 }
 
-function closeCachedOpenClawAgentDatabase(pathname: string): boolean {
-  const database = cachedDatabases.get(pathname);
-  if (!database) {
-    return false;
-  }
-  database.walMaintenance.close();
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
-  if (database.db.isOpen) {
-    database.db.close();
-  }
-  cachedDatabases.delete(pathname);
-  return true;
-}
-
 /** List agent databases recorded in the shared OpenClaw state registry. */
 export function listOpenClawRegisteredAgentDatabases(
   options: OpenClawStateDatabaseOptions = {},
@@ -311,23 +297,12 @@ export function runOpenClawAgentWriteTransaction<T>(
   return result;
 }
 
-/** Close one cached agent database handle if this process opened it. */
-export function closeOpenClawAgentDatabase(options: OpenClawAgentDatabaseOptions): boolean {
-  return closeCachedOpenClawAgentDatabase(
-    resolveOpenClawAgentSqlitePath({
-      ...options,
-      agentId: normalizeAgentId(options.agentId),
-    }),
-  );
-}
-
 /** Close cached agent databases so tests can remove temp dirs and reopen cleanly. */
 export function closeOpenClawAgentDatabasesForTest(): void {
-  while (cachedDatabases.size > 0) {
-    const pathname = cachedDatabases.keys().next().value;
-    if (pathname === undefined) {
-      break;
-    }
-    closeCachedOpenClawAgentDatabase(pathname);
+  for (const database of cachedDatabases.values()) {
+    database.walMaintenance.close();
+    clearNodeSqliteKyselyCacheForDatabase(database.db);
+    database.db.close();
   }
+  cachedDatabases.clear();
 }

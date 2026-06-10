@@ -470,9 +470,7 @@ export function createAgentEventHandler({
         receivedToPhaseMs: roundedChatSendTimingMs(nowMs - timing.receivedAtMs),
         ...(timing.dispatchStartedAtMs !== undefined
           ? {
-              dispatchStartedToPhaseMs: roundedChatSendTimingMs(
-                nowMs - timing.dispatchStartedAtMs,
-              ),
+              dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - timing.dispatchStartedAtMs),
             }
           : {}),
       },

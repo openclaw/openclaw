@@ -17,6 +17,24 @@ vi.mock("../../messaging/sender.js", () => ({
   sendText: vi.fn(async () => undefined),
 }));
 
+type WrittenQQBotConfigWithAllways = {
+  defaultRequireMention?: unknown;
+  accounts?: Record<string, { defaultRequireMention?: unknown }>;
+};
+
+type RunCommandParams = {
+  account?: GatewayAccount;
+  arg?: string;
+  config?: OpenClawConfig;
+};
+
+const queueSnapshot = {
+  totalPending: 0,
+  activeUsers: 0,
+  maxConcurrentUsers: 1,
+  senderPending: 0,
+};
+
 function createGroupAllwaysMessage(arg = ""): QueuedMessage {
   return {
     type: "c2c",
@@ -27,24 +45,7 @@ function createGroupAllwaysMessage(arg = ""): QueuedMessage {
   };
 }
 
-function createDefaultAccount(overrides?: Record<string, unknown>): GatewayAccount {
-  return {
-    accountId: "default",
-    appId: "app",
-    clientSecret: "",
-    markdownSupport: true,
-    config: {
-      allowFrom: ["*"],
-      defaultRequireMention: true,
-      ...overrides,
-    },
-  };
-}
-
-function createNamedAccount(
-  accountId = "bot-a",
-  overrides?: Record<string, unknown>,
-): GatewayAccount {
+function createAccount(accountId = "default", overrides?: Record<string, unknown>): GatewayAccount {
   return {
     accountId,
     appId: "app",
@@ -52,15 +53,20 @@ function createNamedAccount(
     markdownSupport: true,
     config: {
       allowFrom: ["*"],
+      ...(accountId === "default" ? { defaultRequireMention: true } : {}),
       ...overrides,
     },
   };
 }
 
-type WrittenQQBotConfigWithAllways = {
-  defaultRequireMention?: unknown;
-  accounts?: Record<string, { defaultRequireMention?: unknown }>;
-};
+function createConfig(qqbot: NonNullable<OpenClawConfig["channels"]>["qqbot"]): OpenClawConfig {
+  return {
+    commands: {
+      allowFrom: { qqbot: ["TRUSTED_OPENID"] },
+    },
+    channels: { qqbot },
+  };
+}
 
 function getAllwaysConfig(
   write: OpenClawConfig | undefined,
@@ -68,244 +74,136 @@ function getAllwaysConfig(
   return write?.channels?.qqbot as WrittenQQBotConfigWithAllways | undefined;
 }
 
+async function runGroupAllwaysCommand({
+  account = createAccount(),
+  arg = "",
+  config = createConfig({ allowFrom: ["*"], defaultRequireMention: true }),
+}: RunCommandParams = {}) {
+  const writes: OpenClawConfig[] = [];
+  installCommandRuntime(config, writes);
+
+  const result = await trySlashCommand(createGroupAllwaysMessage(arg), {
+    account,
+    cfg: config,
+    getMessagePeerId: () => "c2c:TRUSTED_OPENID",
+    getQueueSnapshot: () => queueSnapshot,
+  });
+
+  return {
+    result,
+    writes,
+    reply: vi.mocked(sendText).mock.calls.at(0)?.[1] ?? "",
+  };
+}
+
 describe("bot-group-allways command", () => {
   beforeEach(() => {
     vi.mocked(sendText).mockClear();
   });
 
-  describe("no args — show current status", () => {
-    it("shows requireMention=true (off) when defaultRequireMention is true", async () => {
-      const writes: OpenClawConfig[] = [];
-      const config: OpenClawConfig = {
-        commands: {
-          allowFrom: { qqbot: ["TRUSTED_OPENID"] },
-        },
-        channels: {
-          qqbot: {
-            allowFrom: ["*"],
-            defaultRequireMention: true,
-          },
-        },
-      };
-      installCommandRuntime(config, writes);
-
-      const result = await trySlashCommand(createGroupAllwaysMessage(), {
-        account: createDefaultAccount(),
-        cfg: config,
-        getMessagePeerId: () => "c2c:TRUSTED_OPENID",
-        getQueueSnapshot: () => ({
-          totalPending: 0,
-          activeUsers: 0,
-          maxConcurrentUsers: 1,
-          senderPending: 0,
-        }),
-      });
-
-      expect(result).toBe("handled");
-      expect(writes).toHaveLength(0);
-      expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("仅被 @ 时回复");
+  it.each([
+    {
+      defaultRequireMention: true,
+      expectedReply: "仅被 @ 时回复",
+    },
+    {
+      defaultRequireMention: false,
+      expectedReply: "自主判断何时发言",
+    },
+  ])("shows current status for defaultRequireMention=$defaultRequireMention", async (testCase) => {
+    const config = createConfig({
+      allowFrom: ["*"],
+      defaultRequireMention: testCase.defaultRequireMention,
     });
 
-    it("shows requireMention=false (on) when defaultRequireMention is false", async () => {
-      const writes: OpenClawConfig[] = [];
-      const config: OpenClawConfig = {
-        commands: {
-          allowFrom: { qqbot: ["TRUSTED_OPENID"] },
-        },
-        channels: {
-          qqbot: {
-            allowFrom: ["*"],
-            defaultRequireMention: false,
-          },
-        },
-      };
-      installCommandRuntime(config, writes);
-
-      const result = await trySlashCommand(createGroupAllwaysMessage(), {
-        account: createDefaultAccount({ defaultRequireMention: false }),
-        cfg: config,
-        getMessagePeerId: () => "c2c:TRUSTED_OPENID",
-        getQueueSnapshot: () => ({
-          totalPending: 0,
-          activeUsers: 0,
-          maxConcurrentUsers: 1,
-          senderPending: 0,
-        }),
-      });
-
-      expect(result).toBe("handled");
-      expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("自主判断何时发言");
+    const { result, reply, writes } = await runGroupAllwaysCommand({
+      account: createAccount("default", {
+        defaultRequireMention: testCase.defaultRequireMention,
+      }),
+      config,
     });
+
+    expect(result).toBe("handled");
+    expect(writes).toHaveLength(0);
+    expect(reply).toContain(testCase.expectedReply);
   });
 
-  describe("toggle on/off", () => {
-    it("writes defaultRequireMention=false (on) for default account", async () => {
-      const writes: OpenClawConfig[] = [];
-      const config: OpenClawConfig = {
-        commands: {
-          allowFrom: { qqbot: ["TRUSTED_OPENID"] },
-        },
-        channels: {
-          qqbot: {
-            allowFrom: ["*"],
-            defaultRequireMention: true,
-          },
-        },
-      };
-      installCommandRuntime(config, writes);
-
-      const result = await trySlashCommand(createGroupAllwaysMessage("on"), {
-        account: createDefaultAccount(),
-        cfg: config,
-        getMessagePeerId: () => "c2c:TRUSTED_OPENID",
-        getQueueSnapshot: () => ({
-          totalPending: 0,
-          activeUsers: 0,
-          maxConcurrentUsers: 1,
-          senderPending: 0,
-        }),
-      });
-
-      expect(result).toBe("handled");
-      expect(writes).toHaveLength(1);
-      const qqbot = getAllwaysConfig(writes[0]);
-      expect(qqbot?.defaultRequireMention).toBe(false);
-      expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("**on**");
+  it.each([
+    {
+      arg: "on",
+      currentDefaultRequireMention: true,
+      expectedDefaultRequireMention: false,
+      expectedReply: "**on**",
+    },
+    {
+      arg: "off",
+      currentDefaultRequireMention: false,
+      expectedDefaultRequireMention: true,
+      expectedReply: "**off**",
+    },
+  ])("writes defaultRequireMention for default account when toggled $arg", async (testCase) => {
+    const config = createConfig({
+      allowFrom: ["*"],
+      defaultRequireMention: testCase.currentDefaultRequireMention,
     });
 
-    it("writes defaultRequireMention=true (off) for default account", async () => {
-      const writes: OpenClawConfig[] = [];
-      const config: OpenClawConfig = {
-        commands: {
-          allowFrom: { qqbot: ["TRUSTED_OPENID"] },
-        },
-        channels: {
-          qqbot: {
-            allowFrom: ["*"],
-            defaultRequireMention: false,
-          },
-        },
-      };
-      installCommandRuntime(config, writes);
-
-      const result = await trySlashCommand(createGroupAllwaysMessage("off"), {
-        account: createDefaultAccount({ defaultRequireMention: false }),
-        cfg: config,
-        getMessagePeerId: () => "c2c:TRUSTED_OPENID",
-        getQueueSnapshot: () => ({
-          totalPending: 0,
-          activeUsers: 0,
-          maxConcurrentUsers: 1,
-          senderPending: 0,
-        }),
-      });
-
-      expect(result).toBe("handled");
-      expect(writes).toHaveLength(1);
-      const qqbot = getAllwaysConfig(writes[0]);
-      expect(qqbot?.defaultRequireMention).toBe(true);
-      expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("**off**");
+    const { result, reply, writes } = await runGroupAllwaysCommand({
+      account: createAccount("default", {
+        defaultRequireMention: testCase.currentDefaultRequireMention,
+      }),
+      arg: testCase.arg,
+      config,
     });
 
-    it("writes to accounts.{accountId}.defaultRequireMention for named accounts", async () => {
-      const writes: OpenClawConfig[] = [];
-      const config: OpenClawConfig = {
-        commands: {
-          allowFrom: { qqbot: ["TRUSTED_OPENID"] },
-        },
-        channels: {
-          qqbot: {
-            allowFrom: ["*"],
-            accounts: {
-              "bot-a": {},
-            },
-          },
-        },
-      };
-      installCommandRuntime(config, writes);
-
-      const result = await trySlashCommand(createGroupAllwaysMessage("on"), {
-        account: createNamedAccount("bot-a"),
-        cfg: config,
-        getMessagePeerId: () => "c2c:TRUSTED_OPENID",
-        getQueueSnapshot: () => ({
-          totalPending: 0,
-          activeUsers: 0,
-          maxConcurrentUsers: 1,
-          senderPending: 0,
-        }),
-      });
-
-      expect(result).toBe("handled");
-      expect(writes).toHaveLength(1);
-      const qqbot = getAllwaysConfig(writes[0]);
-      expect(qqbot?.accounts?.["bot-a"]?.defaultRequireMention).toBe(false);
-    });
+    expect(result).toBe("handled");
+    expect(writes).toHaveLength(1);
+    expect(getAllwaysConfig(writes[0])?.defaultRequireMention).toBe(
+      testCase.expectedDefaultRequireMention,
+    );
+    expect(reply).toContain(testCase.expectedReply);
   });
 
-  describe("edge cases", () => {
-    it("returns no-op when toggling to same state", async () => {
-      const writes: OpenClawConfig[] = [];
-      const config: OpenClawConfig = {
-        commands: {
-          allowFrom: { qqbot: ["TRUSTED_OPENID"] },
+  it("writes to accounts.{accountId}.defaultRequireMention for named accounts", async () => {
+    const { result, writes } = await runGroupAllwaysCommand({
+      account: createAccount("bot-a"),
+      arg: "on",
+      config: createConfig({
+        allowFrom: ["*"],
+        accounts: {
+          "bot-a": {},
         },
-        channels: {
-          qqbot: {
-            allowFrom: ["*"],
-            defaultRequireMention: true,
-          },
-        },
-      };
-      installCommandRuntime(config, writes);
-
-      // current is true (requireMention), try off → same state
-      const result = await trySlashCommand(createGroupAllwaysMessage("off"), {
-        account: createDefaultAccount(),
-        cfg: config,
-        getMessagePeerId: () => "c2c:TRUSTED_OPENID",
-        getQueueSnapshot: () => ({
-          totalPending: 0,
-          activeUsers: 0,
-          maxConcurrentUsers: 1,
-          senderPending: 0,
-        }),
-      });
-
-      expect(result).toBe("handled");
-      expect(writes).toHaveLength(0);
-      expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("无需操作");
+      }),
     });
 
-    it("returns error for invalid argument", async () => {
-      const writes: OpenClawConfig[] = [];
-      const config: OpenClawConfig = {
-        commands: {
-          allowFrom: { qqbot: ["TRUSTED_OPENID"] },
-        },
-        channels: {
-          qqbot: {
-            allowFrom: ["*"],
-          },
-        },
-      };
-      installCommandRuntime(config, writes);
+    expect(result).toBe("handled");
+    expect(writes).toHaveLength(1);
+    expect(getAllwaysConfig(writes[0])?.accounts?.["bot-a"]?.defaultRequireMention).toBe(false);
+  });
 
-      const result = await trySlashCommand(createGroupAllwaysMessage("invalid"), {
-        account: createDefaultAccount(),
-        cfg: config,
-        getMessagePeerId: () => "c2c:TRUSTED_OPENID",
-        getQueueSnapshot: () => ({
-          totalPending: 0,
-          activeUsers: 0,
-          maxConcurrentUsers: 1,
-          senderPending: 0,
-        }),
-      });
-
-      expect(result).toBe("handled");
-      expect(writes).toHaveLength(0);
-      expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("参数错误");
+  it("returns no-op when toggling to same state", async () => {
+    const { result, reply, writes } = await runGroupAllwaysCommand({
+      arg: "off",
+      config: createConfig({
+        allowFrom: ["*"],
+        defaultRequireMention: true,
+      }),
     });
+
+    expect(result).toBe("handled");
+    expect(writes).toHaveLength(0);
+    expect(reply).toContain("无需操作");
+  });
+
+  it("returns error for invalid argument", async () => {
+    const { result, reply, writes } = await runGroupAllwaysCommand({
+      arg: "invalid",
+      config: createConfig({
+        allowFrom: ["*"],
+      }),
+    });
+
+    expect(result).toBe("handled");
+    expect(writes).toHaveLength(0);
+    expect(reply).toContain("参数错误");
   });
 });

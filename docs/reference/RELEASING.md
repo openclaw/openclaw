@@ -209,13 +209,15 @@ vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helpe
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
   - `custom`: exact `docker_lanes` selection for a focused rerun
-- Run the manual `CI` workflow directly when you only need full normal CI
-  coverage for the release candidate. Manual CI dispatches bypass changed
+- Run the manual `CI` workflow directly when you only need deterministic normal
+  CI coverage for the release candidate. Manual CI dispatches bypass changed
   scoping and force the Linux Node shards, bundled-plugin shards, plugin and
   channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`,
-  built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
-  Android, and Control UI i18n lanes.
-  Example: `gh workflow run ci.yml --ref release/YYYY.M.PATCH`
+  built-artifact smoke checks, docs checks, Python skills, Windows, macOS, and
+  Control UI i18n lanes. Standalone manual CI runs Android only when dispatched
+  with `include_android=true`; `Full Release Validation` passes that input for
+  its CI child.
+  Example with Android: `gh workflow run ci.yml --ref release/YYYY.M.PATCH -f include_android=true`
 - Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
   QA-lab through a local OTLP/HTTP receiver and verifies trace, metric, and log
   export plus bounded trace attributes and content/identifier redaction without
@@ -502,7 +504,9 @@ bypasses changed scoping and forces the normal test graph for the release
 candidate: Linux Node shards, bundled-plugin shards, plugin and channel contract
 shards, Node 22 compatibility, `check-*`, `check-additional-*`,
 built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
-Android, and Control UI i18n.
+and Control UI i18n. Android is included when `Full Release Validation` runs the
+box because the umbrella passes `include_android=true`; standalone manual CI
+requires `include_android=true` for Android coverage.
 
 Use this box to answer "did the source tree pass the full normal test suite?"
 It is not the same as release-path product validation. Evidence to keep:
@@ -514,10 +518,13 @@ It is not the same as release-path product validation. Evidence to keep:
   a run needs performance analysis
 
 Run manual CI directly only when the release needs deterministic normal CI but
-not the Docker, QA Lab, live, cross-OS, or package boxes:
+not the Docker, QA Lab, live, cross-OS, or package boxes. Use the first command
+for non-Android direct CI. Add `include_android=true` when direct
+release-candidate CI must cover Android:
 
 ```bash
 gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH
+gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH -f include_android=true
 ```
 
 ### Docker

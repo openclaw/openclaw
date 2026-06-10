@@ -32,7 +32,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     handleCommandsMock.mockReset();
   });
 
-  it("marks native /compact terminal replies for delivery under message_tool_only (#87107)", async () => {
+  it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,
       reply: { text: "⚙️ Compaction skipped: no real conversation messages yet • Context 12.1k" },
@@ -50,6 +50,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         kind: "native",
         source: "native",
         authorized: true,
+        commandName: "compact",
         body: "/compact",
       },
     });
@@ -82,9 +83,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     if (!result.handled) {
       throw new Error("expected handled");
     }
-    expect(
-      getReplyPayloadMetadata(result.reply as object)?.deliverDespiteSourceReplySuppression,
-    ).toBe(true);
+    if (!result.reply || Array.isArray(result.reply)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 });

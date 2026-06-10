@@ -82,6 +82,7 @@ import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   getTelegramTextParts,
   hasBotMention,
+  buildTelegramThreadParams,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   isTelegramCommandsAllowFromConfigured,
@@ -89,6 +90,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramThreadSpec,
   loadTelegramPairingStoreIfNeeded,
   resolveTelegramBotHasTopicsEnabled,
   TelegramPairingStoreReadError,
@@ -1958,15 +1960,11 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
-    const answerCallbackQuery =
-      typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
-        ? () => ctx.answerCallbackQuery()
-        : () => bot.api.answerCallbackQuery(callback.id);
     // Answer immediately to prevent Telegram from retrying while we process
     await withTelegramApiErrorLogging({
       operation: "answerCallbackQuery",
       runtime,
-      fn: answerCallbackQuery,
+      fn: () => bot.api.answerCallbackQuery(callback.id),
     }).catch(() => {});
     try {
       const data = (callback.data ?? "").trim();
@@ -1974,44 +1972,31 @@ export const registerTelegramHandlers = ({
       if (!data || !callbackMessage) {
         return;
       }
+      const callbackBusinessParams =
+        callbackMessage.business_connection_id !== undefined
+          ? { business_connection_id: callbackMessage.business_connection_id }
+          : undefined;
+      const withCallbackBusinessParams = <T extends object>(params: T) =>
+        callbackBusinessParams ? { ...callbackBusinessParams, ...params } : params;
       const editCallbackMessage = async (
         text: string,
         params?: Parameters<typeof bot.api.editMessageText>[3],
       ) => {
-        const editTextFn = (ctx as { editMessageText?: unknown }).editMessageText;
-        if (typeof editTextFn === "function") {
-          return await ctx.editMessageText(text, params);
-        }
         return await bot.api.editMessageText(
           callbackMessage.chat.id,
           callbackMessage.message_id,
           text,
-          params,
+          params ? withCallbackBusinessParams(params) : callbackBusinessParams,
         );
       };
       const clearCallbackButtons = async () => {
         const emptyKeyboard = { inline_keyboard: [] };
         const replyMarkup = { reply_markup: emptyKeyboard };
-        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
-          .editMessageReplyMarkup;
-        if (typeof editReplyMarkupFn === "function") {
-          return await ctx.editMessageReplyMarkup(replyMarkup);
-        }
-        const apiEditReplyMarkupFn = (bot.api as { editMessageReplyMarkup?: unknown })
-          .editMessageReplyMarkup;
-        if (typeof apiEditReplyMarkupFn === "function") {
-          return await bot.api.editMessageReplyMarkup(
-            callbackMessage.chat.id,
-            callbackMessage.message_id,
-            replyMarkup,
-          );
-        }
-        // Fallback path for older clients that do not expose editMessageReplyMarkup.
-        const messageText = callbackMessage.text ?? callbackMessage.caption;
-        if (typeof messageText !== "string" || messageText.trim().length === 0) {
-          return undefined;
-        }
-        return await editCallbackMessage(messageText, replyMarkup);
+        return await bot.api.editMessageReplyMarkup(
+          callbackMessage.chat.id,
+          callbackMessage.message_id,
+          withCallbackBusinessParams(replyMarkup),
+        );
       };
       const editCallbackButtons = async (
         buttons: Array<
@@ -2020,33 +2005,36 @@ export const registerTelegramHandlers = ({
       ) => {
         const keyboard = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
         const replyMarkup = { reply_markup: keyboard };
-        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
-          .editMessageReplyMarkup;
-        if (typeof editReplyMarkupFn === "function") {
-          return await ctx.editMessageReplyMarkup(replyMarkup);
-        }
         return await bot.api.editMessageReplyMarkup(
           callbackMessage.chat.id,
           callbackMessage.message_id,
-          replyMarkup,
+          withCallbackBusinessParams(replyMarkup),
         );
       };
       const deleteCallbackMessage = async () => {
-        const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
-        if (typeof deleteFn === "function") {
-          return await ctx.deleteMessage();
-        }
         return await bot.api.deleteMessage(callbackMessage.chat.id, callbackMessage.message_id);
       };
       const replyToCallbackChat = async (
         text: string,
         params?: Parameters<typeof bot.api.sendMessage>[2],
       ) => {
-        const replyFn = (ctx as { reply?: unknown }).reply;
-        if (typeof replyFn === "function") {
-          return await ctx.reply(text, params);
-        }
-        return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
+        const threadParams = buildTelegramThreadParams(
+          resolveTelegramThreadSpec({
+            isGroup,
+            isForum,
+            messageThreadId: callbackMessage.message_thread_id,
+          }),
+        );
+        const topicParams = {
+          ...callbackBusinessParams,
+          ...threadParams,
+          ...(callbackMessage.direct_messages_topic?.topic_id != null
+            ? { direct_messages_topic_id: callbackMessage.direct_messages_topic.topic_id }
+            : {}),
+        };
+        const replyParams =
+          Object.keys(topicParams).length > 0 || params ? { ...topicParams, ...params } : params;
+        return await bot.api.sendMessage(callbackMessage.chat.id, text, replyParams);
       };
 
       const chatId = callbackMessage.chat.id;

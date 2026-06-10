@@ -127,7 +127,6 @@ export const forcedUnitFastTestFiles = [
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/library.test.ts",
-  "src/memory-host-sdk/host/backend-config.test.ts",
   "src/media-generation/provider-capabilities.contract.test.ts",
   "src/music-generation/runtime.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
