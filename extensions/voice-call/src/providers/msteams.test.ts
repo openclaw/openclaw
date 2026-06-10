@@ -6,6 +6,10 @@ import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceProviderPlugin,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { VoiceCallConfig } from "../config.js";
@@ -43,6 +47,38 @@ const STREAM_PATH = "/voice/msteams/stream";
 
 function signHmac(ts: number, callId: string): string {
   return crypto.createHmac("sha256", SECRET).update(`${ts}.${callId}`).digest("hex");
+}
+
+/**
+ * Minimal realtime-voice provider whose bridge does nothing. `created()` flips once the
+ * provider bridges a call, so tests can wait for the realtime session.start to register.
+ */
+function createMockRealtimeProvider(): {
+  plugin: RealtimeVoiceProviderPlugin;
+  created: () => boolean;
+} {
+  let created = false;
+  const bridge: RealtimeVoiceBridge = {
+    supportsToolResultContinuation: true,
+    connect: async () => {},
+    sendAudio: () => {},
+    sendImage: () => {},
+    setMediaTimestamp: () => {},
+    submitToolResult: () => {},
+    acknowledgeMark: () => {},
+    close: () => {},
+    isConnected: () => true,
+  };
+  const plugin = {
+    id: "openai",
+    label: "Mock Realtime",
+    isConfigured: () => true,
+    createBridge: () => {
+      created = true;
+      return bridge;
+    },
+  } as unknown as RealtimeVoiceProviderPlugin;
+  return { plugin, created: () => created };
 }
 
 function randomPort(): number {
@@ -932,5 +968,36 @@ describe("MsteamsProvider (audio loop wiring)", () => {
       const ended = internalCallId ? manager.getCall(internalCallId) : undefined;
       return ended === undefined || ended.endReason !== undefined;
     });
+  });
+
+  it("getCallStatus reports in-progress for an active realtime call (no streaming `calls` state)", async () => {
+    const { port } = await setup();
+    // Realtime calls live only in `realtimeCalls`; without the realtime check getCallStatus would
+    // report them terminal and the manager would reap an active outbound callback on restore.
+    const realtime = createMockRealtimeProvider();
+    provider.setRealtimeRuntime({
+      provider: realtime.plugin,
+      providerConfig: {} as never,
+      inboundPolicy: "open",
+    });
+    const callId = "teams-realtime-1";
+    const { ws } = await connect(port, callId);
+
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "thread-rt",
+        caller: { aadId: "aad-rt", displayName: "Rita", tenantId: "tenant-rt" },
+        recordingStatus: "active",
+      }),
+    );
+    await waitFor(() => realtime.created());
+
+    const status = await provider.getCallStatus({ providerCallId: callId });
+    expect(status.status).toBe("in-progress");
+    expect(status.isTerminal).toBe(false);
+
+    ws.close();
   });
 });
