@@ -48,7 +48,10 @@ function createMockSession(recordingStatus: MsteamsSession["recordingStatus"] = 
     threadId: "thread-1",
     caller: { aadId: "aad-1", displayName: "Caller", tenantId: "tenant-1" },
     recordingStatus,
-    send: (message) => sent.push(message),
+    send: (message) => {
+      sent.push(message);
+      return true;
+    },
     close: (reason) => {
       closedReason = reason;
     },
