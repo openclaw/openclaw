@@ -42,7 +42,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 import { inferEmotion } from "./expression.js";
-import type { GroupCallGateConfig } from "./group-call-gate.js";
+import { type GroupCallGateConfig, shouldRespondToGroupTurn } from "./group-call-gate.js";
 import {
   MSTEAMS_PCM_SAMPLE_RATE_HZ,
   type MsteamsLogger,
@@ -187,10 +187,19 @@ const MSTEAMS_LOOK_TOOL: RealtimeVoiceTool = {
     "Look at what the caller is currently showing on the Teams call — their shared screen or " +
     "camera — and answer a question about it. Use this whenever the caller refers to something " +
     'visual ("what\'s on my screen?", "read this error", "what am I holding?"). ' +
-    "Defaults to the screen-share when present, otherwise the camera.",
+    "Defaults to the screen-share when present, otherwise the camera. " +
+    'Set scope to "history" when the caller asks about something shown EARLIER in the call ' +
+    '("what did the previous slide say?", "catch me up on what was shown") — you then see the ' +
+    "recent scene-change keyframes instead of only the live frame.",
   parameters: {
     type: "object",
     properties: {
+      scope: {
+        type: "string",
+        enum: ["live", "history"],
+        description:
+          '"live" (default) looks at the current frame; "history" reviews keyframes from earlier in the call.',
+      },
       question: {
         type: "string",
         description: "What the caller wants to know about what they are showing.",
@@ -241,6 +250,9 @@ const MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT =
 
 /** Max bytes for an agent-produced image we'll display (safety bound). */
 const MSTEAMS_MAX_DISPLAY_IMAGE_BYTES = 4_000_000;
+
+/** Keyframes attached to a history-scope look_at_screen (one budgeted vision consult reads them all). */
+const MSTEAMS_LOOK_HISTORY_FRAMES = 6;
 
 /** Per-image hold time when show_to_caller produces more than one image (slideshow pacing). */
 const DISPLAY_SLIDESHOW_MS = 4_000;
@@ -369,6 +381,8 @@ export interface MsteamsRealtimeDeps {
    * the tool. Uses the shared `MsteamsVideoFrame` type (type-only import → no runtime cycle).
    */
   getLatestFrame?: (source?: "camera" | "screenshare") => MsteamsVideoFrame | undefined;
+  /** Scene-change keyframes from earlier in the call, oldest first (retroactive vision). */
+  getFrameHistory?: (limit?: number) => MsteamsVideoFrame[];
 
   /**
    * Half-duplex echo guard (default ON): while assistant audio is playing, drop caller-leg input to
@@ -405,6 +419,8 @@ export interface MsteamsRealtimeCall {
    * waiting for the ambient backstop poll.
    */
   notifyInboundFrame(): void;
+  /** Live human participant count (excludes the bot); drives the deterministic group-call gate. */
+  setHumanCount(count: number): void;
   /** Update Teams recording status (gates the consult tool + background task). */
   setRecordingActive(active: boolean): void;
   /**
@@ -433,7 +449,11 @@ export function createMsteamsRealtimeCall(params: {
   // calls; "per-call" keys by callId. An anonymous caller (no aadId) falls back to per-call so distinct
   // anonymous callers never collide into one session.
   const sessionScopeId =
-    deps.voiceConfig?.sessionScope === "per-call" ? callId : (session.caller.aadId ?? callId);
+    deps.voiceConfig?.sessionScope === "per-call"
+      ? callId
+      : deps.voiceConfig?.sessionScope === "per-thread"
+        ? session.threadId?.trim() || (session.caller.aadId ?? callId)
+        : (session.caller.aadId ?? callId);
 
   let outboundSeq = 0;
   let outboundTimestampMs = 0;
@@ -476,6 +496,11 @@ export function createMsteamsRealtimeCall(params: {
   /** Phase 6b: last emotion cued to the worker, so we only send on change (early + self-correcting). */
   let lastSentExpression: string | undefined;
   let thinking = false;
+  // Deterministic group-call gate state (mirrors the streaming path's per-call fields): in a meeting
+  // the bot speaks only when the last caller turn addressed it; 1:1 calls are never gated.
+  let humanCount = 1;
+  let lastAddressedAt: number | undefined;
+  let groupGateOpen = true;
 
   function recordTranscript(role: "user" | "assistant", text: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
@@ -599,6 +624,12 @@ export function createMsteamsRealtimeCall(params: {
         if (closed || pcm24k.length === 0) {
           return;
         }
+        // Deterministic group-gate enforcement (audio egress): in a meeting, when the last caller
+        // turn did not address the bot, drop the model's reply audio before it reaches the call.
+        // The gate instruction remains the first line; this makes the gate hold deterministically.
+        if (humanCount >= 2 && !groupGateOpen) {
+          return;
+        }
         const pcm16k = resamplePcm(pcm24k, REALTIME_SAMPLE_RATE_HZ, MSTEAMS_SAMPLE_RATE_HZ);
         // 16 kHz × 16-bit mono = 32 bytes/ms; extend the playout estimate by this chunk's duration.
         playbackEndAt = Math.max(playbackEndAt, Date.now()) + pcm16k.length / 32;
@@ -640,6 +671,23 @@ export function createMsteamsRealtimeCall(params: {
       }
       if (isFinal) {
         recordTranscript(role, text);
+        // Deterministic group-gate: evaluate each finished caller turn with the same core the
+        // streaming path uses (wake phrase + follow-up window); the result gates the model's reply
+        // AUDIO below, so "speak only when addressed" holds even if the model ignores instructions.
+        if (role === "user" && deps.groupCallGate) {
+          const gateNow = Date.now();
+          const gate = shouldRespondToGroupTurn({
+            transcript: text,
+            isGroup: humanCount >= 2,
+            config: deps.groupCallGate,
+            lastAddressedAt,
+            now: gateNow,
+          });
+          if (gate.addressed) {
+            lastAddressedAt = gateNow;
+          }
+          groupGateOpen = gate.respond;
+        }
         // Notify mode (outbound result callback): after the model's first finished response, wait for
         // its audio to drain before signalling delivery-complete so the hangup never clips the result.
         if (role === "assistant" && !deliveryComplete && deps.onDeliveryComplete) {
@@ -870,14 +918,21 @@ export function createMsteamsRealtimeCall(params: {
 
     const sourceArg = readArgText(event.args, "source");
     const source = sourceArg === "camera" || sourceArg === "screenshare" ? sourceArg : undefined;
-    const frame = deps.getLatestFrame(source);
+    // Retroactive vision: scope "history" reviews the recent scene-change keyframes (oldest first)
+    // so the caller can ask about EARLIER shared content ("what did the previous slide say?").
+    const historyScope = readArgText(event.args, "scope") === "history";
+    const historyFrames = historyScope
+      ? (deps.getFrameHistory?.(MSTEAMS_LOOK_HISTORY_FRAMES) ?? [])
+      : [];
+    const frame = historyScope ? historyFrames.at(-1) : deps.getLatestFrame(source);
     if (!frame) {
       rtSession.submitToolResult(event.callId, MSTEAMS_LOOK_NO_FRAME);
       return;
     }
 
     // Rate-limit: the same frame was already described → return the cached answer without a re-run.
-    if (lastLookData === frame.dataBase64 && lastLookText) {
+    // History runs skip the cache (the question targets different frames each time).
+    if (!historyScope && lastLookData === frame.dataBase64 && lastLookText) {
       logger?.debug?.(`MsteamsRealtime: look cache hit for ${callId} (unchanged frame)`);
       rtSession.submitToolResult(event.callId, { text: lastLookText });
       return;
@@ -904,6 +959,7 @@ export function createMsteamsRealtimeCall(params: {
         );
       }
 
+      const lookFrames = historyScope ? historyFrames : [frame];
       const result = await runMsteamsConsult({
         agentRuntime,
         voiceConfig,
@@ -912,13 +968,25 @@ export function createMsteamsRealtimeCall(params: {
         sessionKey,
         runIdPrefix: `voice-realtime-look:${callId}`,
         args: event.args,
-        images: [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }],
-        surface: (() => {
-          const owner = describeMsteamsVideoFrameOwner(frame);
-          return owner
-            ? `a live Microsoft Teams call — the attached image is ${owner}`
-            : "a live Microsoft Teams call (a participant is sharing video)";
-        })(),
+        images: lookFrames.map((f) => ({
+          type: "image" as const,
+          data: f.dataBase64,
+          mimeType: f.mime,
+        })),
+        surface: historyScope
+          ? `a live Microsoft Teams call — the attached images are scene-change keyframes from earlier in the call, oldest first: ${lookFrames
+              .map((f, i) => {
+                const owner = describeMsteamsVideoFrameOwner(f);
+                const age = Math.max(0, Math.round((Date.now() - f.ts) / 1000));
+                return `image ${i + 1} (~${age}s ago${owner ? `, ${owner}` : ""})`;
+              })
+              .join("; ")}`
+          : (() => {
+              const owner = describeMsteamsVideoFrameOwner(frame);
+              return owner
+                ? `a live Microsoft Teams call — the attached image is ${owner}`
+                : "a live Microsoft Teams call (a participant is sharing video)";
+            })(),
         extraSystemPrompt: MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT,
         toolPolicy,
         timeoutMs: voiceConfig.responseTimeoutMs,
@@ -1230,6 +1298,9 @@ export function createMsteamsRealtimeCall(params: {
     },
     notifyInboundFrame: () => {
       pushLatestFrameToModel();
+    },
+    setHumanCount: (count: number) => {
+      humanCount = count;
     },
     setRecordingActive: (active: boolean) => {
       recordingActive = active;

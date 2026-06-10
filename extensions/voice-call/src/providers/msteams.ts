@@ -423,6 +423,7 @@ export class MsteamsProvider implements VoiceCallProvider {
           ...this.realtimeDeps,
           // Per-call accessor for the look_at_screen vision tool (inbound video only).
           getLatestFrame: (source) => this.getLatestVideoFrame(providerCallId, source),
+          getFrameHistory: (limit) => this.vision.getHistory(providerCallId, limit),
         },
       });
       this.realtimeCalls.set(providerCallId, realtimeCall);
@@ -450,7 +451,12 @@ export class MsteamsProvider implements VoiceCallProvider {
     // (subject to inbound policy); `call.answered` starts timers and triggers
     // the configured initial greeting via provider.playTts.
     this.manager.processEvent(
-      this.buildEvent(providerCallId, { type: "call.initiated", from, to }),
+      this.buildEvent(providerCallId, {
+        type: "call.initiated",
+        from,
+        to,
+        threadId: session.threadId,
+      }),
     );
     const record = this.manager.getCallByProviderCallId(providerCallId);
     if (!record) {
@@ -568,6 +574,7 @@ export class MsteamsProvider implements VoiceCallProvider {
         // Wire vision on outbound realtime too (parity with inbound) so look_at_screen works if the
         // callee shares video on the call-back.
         getLatestFrame: (source) => this.getLatestVideoFrame(providerCallId, source),
+        getFrameHistory: (limit) => this.vision.getHistory(providerCallId, limit),
         // Notify mode: once the model has delivered the result (its first turn, after its audio has
         // drained) hang up after a short grace, instead of lingering in conversation.
         onDeliveryComplete: notify
@@ -654,6 +661,8 @@ export class MsteamsProvider implements VoiceCallProvider {
     if (state) {
       state.humanCount = info.count;
     }
+    // Realtime calls gate deterministically too (audio egress), so keep their count live.
+    this.realtimeCalls.get(info.callId)?.setHumanCount(info.count);
     this.logger?.debug?.(
       `MsteamsProvider: participants ${info.callId} humanCount=${info.count}` +
         (info.count >= 2 ? " (group)" : " (1:1)"),
@@ -1050,7 +1059,12 @@ export class MsteamsProvider implements VoiceCallProvider {
 
   private buildEvent(
     providerCallId: string,
-    fields: { type: "call.initiated" | "call.answered"; from: string; to: string },
+    fields: {
+      type: "call.initiated" | "call.answered";
+      from: string;
+      to: string;
+      threadId?: string;
+    },
   ): NormalizedEvent {
     return {
       id: `msteams-${fields.type}-${providerCallId}-${Date.now()}`,
@@ -1061,6 +1075,8 @@ export class MsteamsProvider implements VoiceCallProvider {
       direction: "inbound",
       from: fields.from,
       to: fields.to,
+      // Teams chat thread for sessionScope "per-thread" (separate sessions per meeting/chat).
+      ...(fields.threadId ? { threadId: fields.threadId } : {}),
     };
   }
 
