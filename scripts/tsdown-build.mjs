@@ -39,6 +39,8 @@ const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
 const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
+const CONFIG_INDEX_ARG = "--config-index";
+const ALLOW_INEFFECTIVE_DYNAMIC_IMPORT_ARG = "--allow-ineffective-dynamic-import";
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -487,7 +489,9 @@ export function tsdownBuildUsage() {
     "Builds OpenClaw with tsdown and validates emitted import diagnostics.",
     "",
     "Options:",
-    "  -h, --help  Show this help without starting tsdown.",
+    "  -h, --help                         Show this help without starting tsdown.",
+    "  --config-index <number>            Run one config from tsdown.config.ts via a temporary local config.",
+    "  --allow-ineffective-dynamic-import  Let diagnostic shard runs exit with tsdown's status when this warning appears.",
     "",
     "Other arguments are forwarded to tsdown.",
   ].join("\n");
@@ -498,12 +502,59 @@ export function parseTsdownBuildArgs(argv) {
     return {
       forwardedArgs: [],
       help: true,
+      configIndex: null,
+      allowIneffectiveDynamicImport: false,
     };
   }
+
+  const forwardedArgs = [];
+  let configIndex = null;
+  let allowIneffectiveDynamicImport = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === ALLOW_INEFFECTIVE_DYNAMIC_IMPORT_ARG) {
+      allowIneffectiveDynamicImport = true;
+      continue;
+    }
+    if (arg !== CONFIG_INDEX_ARG) {
+      forwardedArgs.push(arg);
+      continue;
+    }
+
+    if (configIndex !== null) {
+      throw new Error(`${CONFIG_INDEX_ARG} can only be passed once`);
+    }
+    const value = argv[index + 1];
+    const parsed = parseNonNegativeIntegerEnv(value, CONFIG_INDEX_ARG);
+    if (parsed === null) {
+      throw new Error(`${CONFIG_INDEX_ARG} requires a non-negative integer value`);
+    }
+    configIndex = parsed;
+    index += 1;
+  }
+
   return {
-    forwardedArgs: argv,
+    forwardedArgs,
     help: false,
+    configIndex,
+    allowIneffectiveDynamicImport,
   };
+}
+
+export function createTsdownConfigIndexFile(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const configIndex = params.configIndex;
+  if (!Number.isSafeInteger(configIndex) || configIndex < 0) {
+    throw new Error("configIndex must be a non-negative safe integer");
+  }
+  const fileName = `.openclaw-tsdown-config-${configIndex}-${process.pid}-${Date.now()}.ts`;
+  const filePath = path.join(cwd, fileName);
+  const fsImpl = params.fs ?? fs;
+  fsImpl.writeFileSync(
+    filePath,
+    `import configs from "./tsdown.config.ts";\nexport default configs[${configIndex}];\n`,
+  );
+  return fileName;
 }
 
 export function createTsdownOutputScanner(params = {}) {
@@ -697,39 +748,59 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  const args = parseTsdownBuildArgs(process.argv.slice(2));
+  let args;
+  try {
+    args = parseTsdownBuildArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error(tsdownBuildUsage());
+    process.exit(2);
+  }
   if (args.help) {
     console.log(tsdownBuildUsage());
     process.exit(0);
   }
-  pruneSourceCheckoutBundledPluginNodeModules();
-  pruneUntrackedGeneratedSourceDeclarations();
-  pruneStaleRuntimeSymlinks();
-  cleanTsdownOutputRoots();
-  const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
-  const result = await runTsdownBuildInvocation(invocation);
+  let temporaryConfigPath = null;
+  try {
+    if (args.configIndex !== null) {
+      temporaryConfigPath = createTsdownConfigIndexFile({ configIndex: args.configIndex });
+      args.forwardedArgs = ["--config", temporaryConfigPath, ...args.forwardedArgs];
+    }
+    pruneSourceCheckoutBundledPluginNodeModules();
+    pruneUntrackedGeneratedSourceDeclarations();
+    pruneStaleRuntimeSymlinks();
+    cleanTsdownOutputRoots();
+    const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
+    const result = await runTsdownBuildInvocation(invocation);
 
-  if (result.status === 0 && result.hasIneffectiveDynamicImport) {
-    console.error(
-      "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
-    );
-    process.exit(1);
+    if (
+      result.status === 0 &&
+      result.hasIneffectiveDynamicImport &&
+      !args.allowIneffectiveDynamicImport
+    ) {
+      console.error(
+        "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
+      );
+      process.exitCode = 1;
+    } else if (result.status === 0 && result.fatalUnresolvedImport) {
+      console.error(
+        `Build emitted [UNRESOLVED_IMPORT] outside extensions: ${result.fatalUnresolvedImport}`,
+      );
+      process.exitCode = 1;
+    } else if (result.timedOut) {
+      process.exitCode = 124;
+    } else if (typeof result.status === "number") {
+      process.exitCode = result.status;
+    } else {
+      process.exitCode = 1;
+    }
+  } finally {
+    if (temporaryConfigPath) {
+      try {
+        fs.rmSync(path.join(process.cwd(), temporaryConfigPath), { force: true });
+      } catch {
+        // Best-effort cleanup for diagnostic config files.
+      }
+    }
   }
-
-  if (result.status === 0 && result.fatalUnresolvedImport) {
-    console.error(
-      `Build emitted [UNRESOLVED_IMPORT] outside extensions: ${result.fatalUnresolvedImport}`,
-    );
-    process.exit(1);
-  }
-
-  if (result.timedOut) {
-    process.exit(124);
-  }
-
-  if (typeof result.status === "number") {
-    process.exit(result.status);
-  }
-
-  process.exit(1);
 }

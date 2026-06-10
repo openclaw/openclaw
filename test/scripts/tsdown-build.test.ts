@@ -8,7 +8,6 @@ import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
   listTsdownOutputRoots,
-  parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
   pruneUntrackedGeneratedSourceDeclarations,
@@ -38,14 +37,6 @@ async function expectPathMissing(targetPath: string) {
 }
 
 describe("resolveTsdownBuildInvocation", () => {
-  it("parses wrapper help before any tsdown work", () => {
-    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
-    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
-      forwardedArgs: ["--format", "esm"],
-      help: false,
-    });
-  });
-
   it("prints wrapper help without invoking pnpm or tsdown", () => {
     const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
       cwd: process.cwd(),

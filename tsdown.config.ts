@@ -40,6 +40,7 @@ const env = {
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
+const RUN_ROOT_UNIFIED_DTS_BUILD = process.env.OPENCLAW_RUN_ROOT_UNIFIED_DTS_BUILD === "1";
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -798,8 +799,13 @@ export default defineConfig([
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
+    // The package-level configs above remain responsible for declaration output.
+    // Keep the unified runtime graph JS-only by default: the bundled-plugin DTS
+    // graph is large enough to hit rolldown-plugin-dts timeout/resource limits
+    // in constrained environments. Set OPENCLAW_RUN_ROOT_UNIFIED_DTS_BUILD=1
+    // only for focused declaration-regression diagnostics.
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: RUN_NODE_SKIP_DTS_BUILD || !RUN_ROOT_UNIFIED_DTS_BUILD ? false : undefined,
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
