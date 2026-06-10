@@ -8,6 +8,7 @@ import {
   clampThinkingLevel,
   stream as streamDefault,
   type Model,
+  type ModelThinkingLevel,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import {
@@ -62,7 +63,7 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 }
 
 function mapAnthropicAdaptiveEffort(
-  reasoning: NonNullable<ProviderStreamOptions["reasoning"]>,
+  reasoning: ModelThinkingLevel,
   model: Model<"anthropic-messages">,
   modelId: string,
 ): AnthropicVertexAdaptiveEffort {
@@ -172,8 +173,9 @@ export function createAnthropicVertexStreamFn(
     });
     const contractModelId = resolveClaudeModelIdentity(model);
     const fable5 = isClaudeFable5Model(contractModelId);
+    const reasoning = options?.reasoning as ModelThinkingLevel | undefined;
     const adaptiveThinking =
-      fable5 || Boolean(options?.reasoning && supportsAdaptiveThinking(contractModelId));
+      fable5 || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
     const temperature =
       adaptiveThinking || isClaudeOpus47OrNewerModel(contractModelId)
         ? undefined
@@ -195,20 +197,20 @@ export function createAnthropicVertexStreamFn(
       metadata: options?.metadata,
     };
 
-    if (options?.reasoning) {
+    if (reasoning) {
       if (supportsAdaptiveThinking(contractModelId)) {
         opts.thinkingEnabled = true;
         opts.effort = mapAnthropicAdaptiveEffort(
-          options.reasoning,
+          reasoning,
           transportModel,
           contractModelId,
         ) as AnthropicVertexEffort;
       } else {
         opts.thinkingEnabled = true;
-        const budgets = options.thinkingBudgets;
+        const budgets = options?.thinkingBudgets;
         opts.thinkingBudgetTokens =
-          (budgets && options.reasoning in budgets
-            ? budgets[options.reasoning as keyof typeof budgets]
+          (budgets && reasoning in budgets
+            ? budgets[reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
       }
     } else if (fable5) {

@@ -58,7 +58,6 @@ import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 const PROVIDER_ID = "anthropic";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-8";
-const ANTHROPIC_FABLE_5_MODEL_ID = "claude-fable-5";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
 const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
