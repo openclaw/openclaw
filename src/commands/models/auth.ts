@@ -26,13 +26,12 @@ import {
   removeProviderAuthProfilesWithLock,
 } from "../../agents/auth-profiles.js";
 import {
-  listProfilesForProvider,
   promoteAuthProfileInOrder,
   upsertAuthProfileWithLock,
 } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
+import { clearProviderAuthProfileCooldowns } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
@@ -904,10 +903,7 @@ async function clearStaleProfileLockouts(provider: string, agentDir: string): Pr
     const store = loadAuthProfileStoreForRuntime(agentDir, {
       externalCli: externalCliDiscoveryForProviderAuth({ provider }),
     });
-    const profileIds = listProfilesForProvider(store, provider);
-    for (const profileId of profileIds) {
-      await clearAuthProfileCooldown({ store, profileId, agentDir });
-    }
+    await clearProviderAuthProfileCooldowns({ store, provider, agentDir });
   } catch {
     // Best-effort housekeeping — never block re-authentication.
   }
