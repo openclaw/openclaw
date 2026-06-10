@@ -159,6 +159,24 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("does not duplicate implicit runtime context in a hook-expanded model prompt", () => {
+    const effectivePrompt = "exec completed (abc123, code 0) :: output text";
+    const transcriptPrompt = "[OpenClaw heartbeat poll]";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt,
+        modelPrompt: ["hook prefix", effectivePrompt, "hook suffix"].join("\n\n"),
+        unmatchedTranscriptMode: "runtime-context",
+      }),
+    ).toEqual({
+      prompt: transcriptPrompt,
+      modelPrompt: ["hook prefix", transcriptPrompt, "hook suffix"].join("\n\n"),
+      runtimeContext: effectivePrompt,
+    });
+  });
+
   it("does not treat unmatched user prompt text as implicit runtime context", () => {
     const effectivePrompt = ["media note", "reply hint", "user body"].join("\n\n");
 

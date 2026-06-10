@@ -76,6 +76,18 @@ function removeLastPromptOccurrence(text: string, prompt: string): string | null
     .trim();
 }
 
+function replaceLastPromptOccurrence(
+  text: string,
+  prompt: string,
+  replacement: string,
+): string | null {
+  const index = text.lastIndexOf(prompt);
+  if (index === -1) {
+    return null;
+  }
+  return `${text.slice(0, index)}${replacement}${text.slice(index + prompt.length)}`;
+}
+
 /**
  * Separates user-authored prompt text from hidden runtime context. Transcript
  * prompt stays user-visible; model prompt may carry runtime-only additions that
@@ -99,7 +111,7 @@ export function resolveRuntimeContextPromptParts(params: {
       : shouldExtractInternalRuntimeContext
         ? extractInternalRuntimeContext(params.modelPrompt)
         : { text: params.modelPrompt };
-  const modelPromptText = modelPrompt?.text ?? transcriptPrompt ?? extracted.text;
+  let modelPromptText = modelPrompt?.text ?? transcriptPrompt ?? extracted.text;
   const prompt = transcriptPrompt ?? extracted.text;
   if (!prompt.trim() && params.emptyTranscriptMode === "model-prompt") {
     return {
@@ -128,6 +140,11 @@ export function resolveRuntimeContextPromptParts(params: {
     params.unmatchedTranscriptMode === "runtime-context" && hiddenRuntimeContext === undefined
       ? extracted.text.trim()
       : undefined;
+  if (implicitRuntimeContext && modelPrompt && transcriptPrompt !== undefined) {
+    modelPromptText =
+      replaceLastPromptOccurrence(modelPrompt.text, extracted.text, transcriptPrompt) ??
+      modelPromptText;
+  }
   const runtimeContext =
     [hiddenRuntimeContext, implicitRuntimeContext, extracted.runtimeContext]
       .filter((value): value is string => Boolean(value?.trim()))
