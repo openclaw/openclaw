@@ -5198,6 +5198,8 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("uses compact generic copy for raw external chat errors when verbose is off", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
     );
@@ -5210,7 +5212,7 @@ describe("runAgentTurnWithFallback", () => {
         Provider: "whatsapp",
         MessageSid: "msg",
       } as unknown as TemplateContext,
-      opts: {},
+      opts: { runId: "run-provider-failure" } as GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -5230,6 +5232,21 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     }
+    const terminalFailureEvent = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .find((event) => {
+        if (!event || typeof event !== "object") {
+          return false;
+        }
+        const data = (event as { data?: Record<string, unknown> }).data;
+        return (
+          (event as { runId?: unknown }).runId === "run-provider-failure" &&
+          (event as { stream?: unknown }).stream === "lifecycle" &&
+          data?.phase === "error" &&
+          data.fallbackExhaustedFailure === true
+        );
+      });
+    expect(terminalFailureEvent).toBeDefined();
   });
 
   it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {

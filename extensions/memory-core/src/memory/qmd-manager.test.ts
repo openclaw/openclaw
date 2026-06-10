@@ -123,6 +123,14 @@ function firstWatchOptions(): WatchOptions {
   return call[1];
 }
 
+function firstWatchPaths(): string[] {
+  const call = watchMock.mock.calls[0] as unknown as [string[], WatchOptions] | undefined;
+  if (!call) {
+    throw new Error("Expected watch call");
+  }
+  return call[0];
+}
+
 function firstEmbedLockCall(): EmbedLockCall {
   const call = withFileLockMock.mock.calls.find((entry) =>
     entry[0].endsWith(path.join("qmd", "embed.lock")),
@@ -575,6 +583,92 @@ describe("QmdMemoryManager", () => {
     const updateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(updateCalls).toHaveLength(1);
     expect(manager.status().dirty).toBe(false);
+
+    await manager.close();
+  });
+
+  it("keeps explicit qmd collection roots watchable when their directory name is ignored", async () => {
+    const rootNames = ["build", "dist", "vendor", ".cache"];
+    const roots = rootNames.map((name) => path.join(workspaceDir, name));
+    cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: roots.map((root) => ({
+            path: root,
+            pattern: "**/*.md",
+            name: path.basename(root),
+          })),
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    expect(firstWatchPaths().toSorted()).toEqual(
+      roots.map((root) => path.join(root, "**/*.md")).toSorted(),
+    );
+    const ignored = firstWatchOptions().ignored;
+    for (const root of roots) {
+      expect(ignored?.(root)).toBe(false);
+      expect(ignored?.(path.join(root, "note.md"))).toBe(false);
+      expect(ignored?.(path.join(root, "..notes", "daily.md"))).toBe(false);
+      expect(ignored?.(path.join(root, "notes", "daily.md"))).toBe(false);
+      expect(ignored?.(path.join(root, "node_modules", "pkg", "note.md"))).toBe(true);
+      expect(ignored?.(path.join(root, "build", "artifact.md"))).toBe(true);
+    }
+
+    await manager.close();
+  });
+
+  it("prefers a nested explicit qmd collection root over a broader watched root", async () => {
+    const nestedRoot = path.join(workspaceDir, "build");
+    cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: nestedRoot, pattern: "**/*.md", name: "build" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+    const ignored = firstWatchOptions().ignored;
+    expect(ignored?.(path.join(nestedRoot, "note.md"))).toBe(false);
+    expect(ignored?.(path.join(nestedRoot, "..notes", "daily.md"))).toBe(false);
+    expect(ignored?.(path.join(nestedRoot, "node_modules", "pkg", "note.md"))).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(true);
 
     await manager.close();
   });

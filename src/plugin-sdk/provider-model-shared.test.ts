@@ -8,7 +8,10 @@ import {
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+  resolveClaudeFable5ModelIdentity,
   resolveClaudeThinkingProfile,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeXhighEffort,
 } from "./provider-model-shared.js";
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -33,6 +36,28 @@ function expectLevelIdsInclude(profile: unknown, expectedIds: readonly string[])
     expect(ids.includes(id), `level ${id}`).toBe(true);
   }
 }
+
+describe("Claude model contracts", () => {
+  it("recognizes Vertex date suffixes", () => {
+    expect(resolveClaudeFable5ModelIdentity({ id: "claude-fable-5@20260601" })).toBe(
+      "claude-fable-5@20260601",
+    );
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-6@20260301" })).toBe(true);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-8@20260401" })).toBe(true);
+  });
+
+  it("does not classify later numeric model versions as supported aliases", () => {
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-60" })).toBe(false);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-80" })).toBe(false);
+    expect(readLevelIds(resolveClaudeThinkingProfile("claude-opus-4-80"))).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+});
 
 describe("buildProviderReplayFamilyHooks", () => {
   it("covers the replay family matrix", () => {
@@ -282,6 +307,15 @@ describe("buildProviderReplayFamilyHooks", () => {
 });
 
 describe("resolveClaudeThinkingProfile", () => {
+  it("exposes Fable 5's always-adaptive profile to Claude providers", () => {
+    const profile = resolveClaudeThinkingProfile("claude-fable-5");
+    expectFields(profile, {
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expectLevelIdsInclude(profile, ["xhigh", "adaptive", "max"]);
+  });
+
   it("leaves Opus 4.8 thinking off by default with xhigh/adaptive/max options", () => {
     const profile = resolveClaudeThinkingProfile("claude-opus-4-8");
     expectFields(profile, {

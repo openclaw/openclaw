@@ -83,7 +83,7 @@ Precedence is intentional:
 ```bash
 openclaw approvals set --file ./exec-approvals.json
 openclaw approvals set --stdin <<'EOF'
-{ version: 1, defaults: { security: "full", ask: "off" } }
+{ version: 1, defaults: { security: "full", ask: "off", askFallback: "full" } }
 EOF
 openclaw approvals set --node <id|name|ip> --file ./exec-approvals.json
 openclaw approvals set --gateway --file ./exec-approvals.json
@@ -137,7 +137,8 @@ Why `tools.exec.host=gateway` in this example:
 - YOLO is about approvals, not routing.
 - If you want host exec even when a sandbox is configured, make the host choice explicit with `gateway` or `/exec host=gateway`.
 
-This matches the current host-default YOLO behavior. Tighten it if you want approvals.
+Omitted `askFallback` defaults to `deny`. Set `askFallback: "full"`
+explicitly when upgrading a no-UI host that should keep never-prompt behavior.
 
 Local shortcut:
 
