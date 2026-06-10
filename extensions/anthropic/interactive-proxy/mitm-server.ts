@@ -27,6 +27,194 @@ export type MitmProxyHandle = {
 
 const UPSTREAM_HOST = "api.anthropic.com";
 
+// ---------------------------------------------------------------------------
+// Request classification (primary turn vs. sub-agent).
+//
+// The wrapper needs to know whether a given /v1/messages stream's `end_turn`
+// should end the USER-facing turn (the primary) or be neutralized (a
+// sub-agent: Task/research/Explore, web search, or any disguised agent).
+// Exported as a pure function so it can be unit-tested independently of the
+// proxy. Layered, first-decisive-layer-wins; biased to never mis-suppress the
+// primary (which would hang) while still catching every sub-agent form.
+// ---------------------------------------------------------------------------
+
+export type InteractiveRequestType =
+  | "normal"
+  | "compaction"
+  | "tool_followup"
+  | "auxiliary"
+  | "subagent";
+
+export type ClassifyState = {
+  // True once any request this run advertised a primary "spawner" tool (the
+  // Task/Agent tool that launches sub-agents). Gates the by-absence sub-agent
+  // layer: an Agent-less request only becomes a sub-agent once a spawner has
+  // actually been seen, so a deny-listed-Agent run keeps its primary turn-end
+  // instead of hanging.
+  primarySpawnerSeen: boolean;
+};
+
+export type ClassifyOptions = {
+  // Tool names that mark the PRIMARY turn (matched case-insensitively, exact).
+  // A conservative structural matcher additionally catches renamed/"disguised"
+  // spawner tools by shape. Defaults to DEFAULT_SPAWNER_TOOL_NAMES.
+  spawnerToolNames?: readonly string[];
+  // System-prompt substrings that POSITIVELY mark a sub-agent request. OFF by
+  // default (empty) — enable only once a live capture confirms a stable
+  // marker. Correctness never depends on this layer.
+  subagentSystemMarkers?: readonly string[];
+};
+
+export const DEFAULT_SPAWNER_TOOL_NAMES: readonly string[] = ["Agent", "Task", "TaskCreate"];
+
+function isSpawnerTool(tool: Record<string, unknown>, names: readonly string[]): boolean {
+  const name = typeof tool?.name === "string" ? tool.name : "";
+  if (!name) {
+    return false; // server tools (type-only, e.g. web_search) never spawn agents
+  }
+  const lower = name.toLowerCase();
+  if (names.some((n) => n.toLowerCase() === lower)) {
+    return true;
+  }
+  // Conservative shape match for renamed spawners on the primary turn. Kept
+  // tight so a sub-agent's ordinary tool can't be mistaken for a spawner
+  // (which would wrongly keep that sub-agent's turn-end live).
+  if (/^(agent|task)$/i.test(name)) {
+    return true;
+  }
+  if (/^(dispatch|launch|spawn|create|run)_?(sub_?)?agent$/i.test(name)) {
+    return true;
+  }
+  if (/^task(create|run|spawn|launch|dispatch)$/i.test(name)) {
+    return true;
+  }
+  return false;
+}
+
+function isWebSearchTool(tool: Record<string, unknown>): boolean {
+  const type = typeof tool?.type === "string" ? tool.type : "";
+  if (type.includes("web_search")) {
+    return true;
+  }
+  const name = typeof tool?.name === "string" ? tool.name : "";
+  return name.toLowerCase() === "web_search";
+}
+
+function systemPromptText(parsed: Record<string, unknown>): string {
+  const sys = parsed.system;
+  if (typeof sys === "string") {
+    return sys;
+  }
+  if (Array.isArray(sys)) {
+    return (sys as Record<string, unknown>[])
+      .map((b) => (typeof b?.text === "string" ? b.text : ""))
+      .join("");
+  }
+  return "";
+}
+
+/**
+ * Classify a /v1/messages request body. `state` is mutated in place (the
+ * per-run spawner-seen flag); same (body, state, opts) -> same result + state
+ * mutation, so it is deterministic and unit-testable.
+ */
+export function classifyRequest(
+  body: string,
+  state: ClassifyState,
+  opts?: ClassifyOptions,
+): InteractiveRequestType {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    // Body isn't JSON (shouldn't happen on /v1/messages). Default to "normal";
+    // the wrapper's response-content fingerprint backstops compaction.
+    return "normal";
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return "normal";
+  }
+
+  const spawnerNames = opts?.spawnerToolNames ?? DEFAULT_SPAWNER_TOOL_NAMES;
+  const toolList: Record<string, unknown>[] = Array.isArray(parsed.tools)
+    ? (parsed.tools as Record<string, unknown>[])
+    : [];
+  const hasTools = toolList.length > 0;
+  const msgs: unknown[] = Array.isArray(parsed.messages) ? parsed.messages : [];
+  const lastMsg = msgs[msgs.length - 1] as Record<string, unknown> | undefined;
+
+  let requestType: InteractiveRequestType = "normal";
+
+  if (lastMsg) {
+    if (lastMsg.role === "tool") {
+      requestType = "tool_followup";
+    } else if (Array.isArray(lastMsg.content)) {
+      const hasToolResult = (lastMsg.content as Record<string, unknown>[]).some(
+        (b) => typeof b?.type === "string" && (b.type as string).endsWith("_result"),
+      );
+      if (hasToolResult) {
+        requestType = "tool_followup";
+      }
+    }
+    if (requestType === "normal" && lastMsg.role === "user") {
+      const lastContent =
+        typeof lastMsg.content === "string"
+          ? lastMsg.content
+          : Array.isArray(lastMsg.content)
+            ? (lastMsg.content as Record<string, unknown>[])
+                .map((b) => (typeof b?.text === "string" ? b.text : ""))
+                .join("")
+            : "";
+      if (
+        lastContent.includes("summary should include the following sections") &&
+        (lastContent.includes("continuation summary") || lastContent.includes("detailed summary"))
+      ) {
+        requestType = "compaction";
+      }
+    }
+  }
+
+  // Tool-less, non-followup, non-compaction request -> claude-code internal
+  // side-call (title-gen, classifier, skill-search).
+  if (requestType === "normal" && !hasTools) {
+    requestType = "auxiliary";
+  }
+
+  // Primary-vs-subagent discrimination, layered (first decisive layer wins),
+  // only for tool-bearing user-facing turns.
+  if (requestType === "normal" || requestType === "tool_followup") {
+    // 5a — positive PRIMARY signal: the turn carries a spawner tool. Record it
+    // and keep the turn-end. A max_tokens retry of the primary still carries
+    // the spawner, so it is never mis-suppressed.
+    if (toolList.some((t) => isSpawnerTool(t, spawnerNames))) {
+      state.primarySpawnerSeen = true;
+      return requestType;
+    }
+    // 5b — positive SUB-AGENT fingerprint (guarded; only if markers supplied).
+    const markers = opts?.subagentSystemMarkers ?? [];
+    if (markers.length > 0) {
+      const sys = systemPromptText(parsed);
+      if (sys && markers.some((m) => sys.includes(m))) {
+        return "subagent";
+      }
+    }
+    // 5c — web-search sub-agent: a tiny dedicated stream (server web_search,
+    // no spawner, narrow toolset). Independent of state, so it is caught even
+    // when the spawner is deny-listed.
+    if (toolList.some((t) => isWebSearchTool(t)) && toolList.length <= 3) {
+      return "subagent";
+    }
+    // 5d — by-absence Task sub-agent: no spawner here, but a spawner HAS been
+    // seen this run, so sub-agents are possible. Gated on primarySpawnerSeen so
+    // a no-spawner run keeps its primary turn-end.
+    if (state.primarySpawnerSeen) {
+      return "subagent";
+    }
+  }
+
+  return requestType;
+}
+
 export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle> {
   const eventHandlers: Array<(evt: Record<string, unknown>) => void> = [];
   // Monotonic per-request identifier. claude-code can hold multiple
@@ -37,13 +225,11 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
   // accumulator. Reset is unnecessary — the counter only needs to be
   // unique within a single wrapper invocation's lifetime.
   let nextReqId = 1;
-  // True once any request this run advertised the `Agent` (Task) tool. The
-  // Agent tool is what spawns Task/research sub-agents, so a tool-bearing
-  // request that LACKS Agent is only a sub-agent once Agent has been seen (i.e.
-  // it's enabled). If Agent never appears (operator deny-listed it), no Task
-  // sub-agent can exist and an Agent-less request is the primary — which must
-  // keep its turn-end rather than be suppressed into a hang.
-  let agentToolSeenThisRun = false;
+  // Per-run classifier state: whether a primary spawner (Task/Agent-style)
+  // tool has been advertised yet this run. Gates the by-absence sub-agent
+  // layer so an Agent-less request stays primary until a spawner is seen.
+  // See classifyRequest above.
+  const classifyState: ClassifyState = { primarySpawnerSeen: false };
 
   function emitEvent(evt: Record<string, unknown>): void {
     for (const h of eventHandlers) {
@@ -83,130 +269,16 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
         headers.delete(hop);
       }
 
-      // Classify the outbound /v1/messages request from its body shape, so
-      // the wrapper can route the resulting SSE stream without inspecting
-      // the request itself. Four categories, applied in order:
-      //
-      //   "tool_followup" — last message has role "tool" OR its content
-      //                     array contains a `tool_result` block. Means
-      //                     we're inside Claude's tool-use loop; the
-      //                     stream will be tool_use deltas or interim
-      //                     reasoning, then the final user-facing turn.
-      //   "compaction"    — last user message contains compact.ts's
-      //                     summarize prompt markers ("summary should
-      //                     include the following sections" plus either
-      //                     "continuation summary" or "detailed summary").
-      //                     The summary content gets re-streamed as
-      //                     thinking_delta downstream.
-      //   "auxiliary"     — request carries NO tools. OpenClaw always
-      //                     injects `mcp__openclaw__*` tools into the
-      //                     claude invocation, so the user's real turn
-      //                     always has tools. Internal claude-code
-      //                     side-requests (title-gen, classifier,
-      //                     skill-search) call /v1/messages without
-      //                     tools — that's the structural signal. Model
-      //                     family is NOT used because Haiku is a
-      //                     legitimate user-facing model on this backend
-      //                     (defaultModelRef includes claude-haiku-4-5).
-      //   "normal"        — everything else: the real user-facing turn
-      //                     that should produce a `result` record.
-      //
-      // Content markers are the only definitive compaction signal. A prior
-      // `max_tokens` stop_reason is tempting as a structural hint, but Claude
-      // Code's max_output_tokens_recovery flow ALSO follows max_tokens with
-      // the same last user message — using stop_reason as a classifier would
-      // misclassify those retries as compaction and drop them.
+      // Classify the outbound /v1/messages request from its body shape so the
+      // wrapper can route the resulting SSE stream (see classifyRequest above
+      // for the layered primary-vs-subagent logic). The only downstream effect
+      // is which streams are tagged "subagent" (turn-end suppressed) vs the
+      // user-facing "normal"/"tool_followup" turn.
       let reqBody: string | undefined;
-      let requestType: "normal" | "compaction" | "tool_followup" | "auxiliary" | "subagent" =
-        "normal";
+      let requestType: InteractiveRequestType = "normal";
       if (req.method === "POST") {
         reqBody = await req.text();
-        try {
-          const parsed = JSON.parse(reqBody);
-          const hasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0;
-          const msgs: unknown[] = Array.isArray(parsed.messages) ? parsed.messages : [];
-          const lastMsg = msgs[msgs.length - 1] as Record<string, unknown> | undefined;
-          if (lastMsg) {
-            if (lastMsg.role === "tool") {
-              requestType = "tool_followup";
-            } else if (Array.isArray(lastMsg.content)) {
-              const hasToolResult = (lastMsg.content as Record<string, unknown>[]).some(
-                (b) => b.type === "tool_result",
-              );
-              if (hasToolResult) {
-                requestType = "tool_followup";
-              }
-            }
-            if (requestType === "normal" && lastMsg.role === "user") {
-              const lastContent =
-                typeof lastMsg.content === "string"
-                  ? lastMsg.content
-                  : Array.isArray(lastMsg.content)
-                    ? (lastMsg.content as Record<string, unknown>[])
-                        .map((b) => (typeof b.text === "string" ? b.text : ""))
-                        .join("")
-                    : "";
-              if (
-                lastContent.includes("summary should include the following sections") &&
-                (lastContent.includes("continuation summary") ||
-                  lastContent.includes("detailed summary"))
-              ) {
-                requestType = "compaction";
-              }
-            }
-          }
-          // Tool-less requests that don't match tool_followup or compaction
-          // are claude-code's internal side-calls (title-gen, classifier,
-          // skill-search). Classify last so a legitimate user turn that
-          // happens to be the FIRST message in a session (lastMsg.role
-          // === "user", content is plain text, no tools array yet) still
-          // gets "normal" iff hasTools — which OpenClaw guarantees by
-          // injecting MCP tools into every interactive claude invocation.
-          if (requestType === "normal" && !hasTools) {
-            requestType = "auxiliary";
-          }
-          // Sub-agent detection. claude-code's primary turn carries the `Agent`
-          // (Task) tool; sub-agents (research/Explore Tasks, web search) are
-          // spawned WITHOUT it (no recursion), so their end_turn must NOT end
-          // the primary turn (the wrapper handles "subagent" like
-          // compaction-plus). The discriminator is the Agent tool — but absence
-          // of Agent only implies a sub-agent once we've actually SEEN Agent
-          // this run, because the Agent tool is also what *spawns* Task
-          // sub-agents: if an operator deny-lists Agent, the primary itself has
-          // no Agent and no Task sub-agent can exist, so it must NOT be
-          // suppressed. A max_tokens retry of the primary still carries `Agent`.
-          if (requestType === "normal" || requestType === "tool_followup") {
-            const toolList = Array.isArray(parsed.tools) ? parsed.tools : [];
-            const hasAgentTool = toolList.some((t) => t?.name === "Agent");
-            if (hasAgentTool) {
-              agentToolSeenThisRun = true;
-            }
-            const usesServerWebSearch = toolList.some(
-              (t) => typeof t?.type === "string" && t.type.includes("web_search"),
-            );
-            // Task/research sub-agents only appear AFTER the Agent-bearing
-            // primary, so a tool-bearing no-Agent request is one only once Agent
-            // has been seen this run. If Agent never appears, this IS the
-            // primary — keep its turn-end, else it rewrites to thinking, emits
-            // no result, and hangs until the watchdog kills it.
-            const isTaskSubagent = !hasAgentTool && agentToolSeenThisRun;
-            // A web_search sub-agent is a tiny dedicated stream (server-side
-            // web_search, no Agent, no broad toolset); it is NOT gated by the
-            // Agent tool, so catch it even when Agent is off. The bounded tool
-            // count keeps a full primary — which always carries many tools —
-            // from being misread when it requests web_search itself.
-            const isWebSearchSubagent =
-              usesServerWebSearch && !hasAgentTool && toolList.length <= 3;
-            if (isTaskSubagent || isWebSearchSubagent) {
-              requestType = "subagent";
-            }
-          }
-        } catch {
-          // Body isn't JSON (shouldn't happen on /v1/messages). Leave the
-          // default "normal" classification — if it turns out to be
-          // compaction-shaped, the wrapper's response-content fingerprint
-          // backup catches it.
-        }
+        requestType = classifyRequest(reqBody, classifyState);
       }
       const reqId = nextReqId++;
 
