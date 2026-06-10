@@ -210,6 +210,13 @@ const MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT =
 /** Max bytes for an agent-produced image we'll display (safety bound). */
 const MSTEAMS_MAX_DISPLAY_IMAGE_BYTES = 4_000_000;
 
+/** Per-image hold time when show_to_caller produces more than one image (slideshow pacing). */
+const DISPLAY_SLIDESHOW_MS = 4_000;
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 /** show_to_caller produces an image (browse + screenshot / generate), which needs more than the
  *  quick-reply budget; the model plays a "working on it" filler while it runs. */
 const MSTEAMS_SHOW_TIMEOUT_MS = 90_000;
@@ -868,15 +875,25 @@ export function createMsteamsRealtimeCall(params: {
 
   /** Show agent-produced images (local files or remote URLs) on the outbound tile (Phase 8). */
   async function forwardDisplayImages(mediaPaths: string[], caption?: string): Promise<number> {
-    let shown = 0;
+    type LoadedImage = NonNullable<Awaited<ReturnType<typeof loadDisplayImage>>>;
+    const images: LoadedImage[] = [];
     for (const pathOrUrl of mediaPaths) {
       const img = await loadDisplayImage(pathOrUrl);
-      if (!img) {
+      if (img) {
+        images.push(img);
+      } else {
         logger?.debug?.(
           `MsteamsRealtime: skipped non-displayable media ${pathOrUrl} for ${callId}`,
         );
-        continue;
       }
+    }
+    const [first, ...rest] = images;
+    if (!first) {
+      return 0;
+    }
+
+    const sequence = rest.length > 0;
+    const sendOne = (img: LoadedImage, isLast: boolean): void => {
       try {
         logger?.debug?.(
           `MsteamsRealtime: display.image (${img.mime}, ${img.bytes.length}B${caption ? ", captioned" : ""}) for ${callId}`,
@@ -885,16 +902,31 @@ export function createMsteamsRealtimeCall(params: {
           type: "display.image",
           dataBase64: img.bytes.toString("base64"),
           mime: img.mime,
+          // Hold each non-final slideshow frame for a fixed beat; the last keeps the worker default.
+          ...(sequence && !isLast ? { durationMs: DISPLAY_SLIDESHOW_MS } : {}),
           ...(caption ? { caption } : {}),
         });
-        shown += 1;
       } catch (err) {
         logger?.debug?.(
           `MsteamsRealtime: display.image send failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    };
+
+    sendOne(first, !sequence);
+    if (sequence) {
+      // Pace the remaining frames on the tile without blocking the spoken reply; stop if the call ends.
+      void (async () => {
+        for (const [idx, img] of rest.entries()) {
+          await delay(DISPLAY_SLIDESHOW_MS);
+          if (closed) {
+            return;
+          }
+          sendOne(img, idx === rest.length - 1);
+        }
+      })();
     }
-    return shown;
+    return images.length;
   }
 
   /**
