@@ -1444,6 +1444,44 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.wasMentioned).toBe(true);
   });
 
+  it("does not treat @everyone as a mention when ignoreMassMentions=true", async () => {
+    const channelId = "channel-everyone-ignored";
+    const guildId = "guild-everyone-ignored";
+    const message = createDiscordMessage({
+      id: "m-everyone-ignored",
+      channelId,
+      content: "@everyone standup time!",
+      mentionedEveryone: true,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Peter",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        botId: "openclaw-bot",
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+              ignoreMassMentions: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("accepts allowlisted guild messages when guild object is missing", async () => {
     const message = createDiscordMessage({
       id: "m-guild-id-only",

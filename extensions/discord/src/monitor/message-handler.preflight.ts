@@ -434,11 +434,6 @@ export async function preflightDiscordMessage(
   const explicitlyMentioned = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
-  const hasAnyMention =
-    !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 ||
-      (message.mentionedRoles?.length ?? 0) > 0 ||
-      (message.mentionedEveryone && (!author.bot || sender.isPluralKit)));
   const hasUserOrRoleMention =
     !isDirectMessage &&
     ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0);
@@ -506,6 +501,11 @@ export async function preflightDiscordMessage(
     channelMatchMeta,
     channelId: messageChannelId,
   });
+  const ignoreMassMentions =
+    channelConfig?.ignoreMassMentions ?? guildInfo?.ignoreMassMentions ?? false;
+  const massMentionCountsAsMention =
+    message.mentionedEveryone && !ignoreMassMentions && (!author.bot || sender.isPluralKit);
+  const hasAnyMention = !isDirectMessage && (hasUserOrRoleMention || massMentionCountsAsMention);
   const channelAccess = resolveDiscordPreflightChannelAccess({
     isGuildMessage,
     isGroupDm,
@@ -584,7 +584,7 @@ export async function preflightDiscordMessage(
     isExplicitlyMentioned: explicitlyMentioned,
     mentionRegexes,
     mentionText,
-    mentionedEveryone: message.mentionedEveryone,
+    mentionedEveryone: massMentionCountsAsMention,
     referencedAuthorId: message.referencedMessage?.author?.id,
     senderIsPluralKit: sender.isPluralKit,
     transcript: preflightTranscript,

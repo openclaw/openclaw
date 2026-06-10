@@ -51,6 +51,10 @@ export type DiscordGuildChannelConfig = {
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /**
+   * If true, @everyone/@here do not satisfy requireMention. Default: false.
+   */
+  ignoreMassMentions?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -84,6 +88,10 @@ export type DiscordGuildEntry = {
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /**
+   * If true, @everyone/@here do not satisfy requireMention. Default: false.
+   */
+  ignoreMassMentions?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
