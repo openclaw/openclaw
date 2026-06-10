@@ -786,6 +786,13 @@ type PreManagedServiceStop = {
   serviceEnv?: NodeJS.ProcessEnv;
 };
 
+class UpdateCommandAbort extends Error {
+  constructor() {
+    super("openclaw-update-abort");
+    this.name = "UpdateCommandAbort";
+  }
+}
+
 type ManagedServiceRootRedirect = {
   root: string;
   previousRoot: string;
@@ -1605,6 +1612,7 @@ async function runGitUpdate(params: {
   opts: UpdateCommandOptions;
   stop: () => void;
   devTargetRef?: string;
+  beforeGitMutation?: () => Promise<void>;
 }): Promise<UpdateRunResult> {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -1643,6 +1651,7 @@ async function runGitUpdate(params: {
     tag: params.tag,
     devTargetRef: params.devTargetRef,
     deferConfiguredPluginInstallRepair: true,
+    beforeGitMutation: params.beforeGitMutation,
   });
   const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
 
@@ -3460,7 +3469,10 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   let preManagedServiceStop: PreManagedServiceStop | undefined;
-  if (updateInstallKind === "package" || updateInstallKind === "git") {
+  const stopManagedServiceBeforeMutableUpdate = async () => {
+    if (updateInstallKind !== "package" && updateInstallKind !== "git") {
+      return;
+    }
     try {
       preManagedServiceStop = await maybeStopManagedServiceBeforeMutableUpdate({
         updateInstallKind,
@@ -3472,14 +3484,14 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       stop();
       defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
       defaultRuntime.exit(1);
-      return;
+      throw new UpdateCommandAbort();
     }
 
     if (preManagedServiceStop?.blockMessage) {
       stop();
       defaultRuntime.error(preManagedServiceStop.blockMessage);
       defaultRuntime.exit(1);
-      return;
+      throw new UpdateCommandAbort();
     }
 
     if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
@@ -3493,7 +3505,18 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         ].join("\n"),
       );
       defaultRuntime.exit(1);
-      return;
+      throw new UpdateCommandAbort();
+    }
+  };
+
+  if (updateInstallKind === "package") {
+    try {
+      await stopManagedServiceBeforeMutableUpdate();
+    } catch (err) {
+      if (err instanceof UpdateCommandAbort) {
+        return;
+      }
+      throw err;
     }
   }
 
@@ -3528,9 +3551,14 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
             opts,
             stop,
             devTargetRef,
+            beforeGitMutation:
+              updateInstallKind === "git" ? stopManagedServiceBeforeMutableUpdate : undefined,
           });
   } catch (err) {
     stop();
+    if (err instanceof UpdateCommandAbort) {
+      return;
+    }
     await maybeRestartServiceAfterFailedMutableUpdate({
       preManagedServiceStop,
       jsonMode: Boolean(opts.json),

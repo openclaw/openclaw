@@ -225,6 +225,7 @@ describe("runGatewayUpdate", () => {
       cwd?: string;
       devTargetRef?: string;
       deferConfiguredPluginInstallRepair?: boolean;
+      beforeGitMutation?: () => Promise<void>;
     },
   ) {
     return runGatewayUpdate({
@@ -237,6 +238,7 @@ describe("runGatewayUpdate", () => {
       ...(options?.deferConfiguredPluginInstallRepair
         ? { deferConfiguredPluginInstallRepair: true }
         : {}),
+      ...(options?.beforeGitMutation ? { beforeGitMutation: options.beforeGitMutation } : {}),
     });
   }
 
@@ -248,6 +250,7 @@ describe("runGatewayUpdate", () => {
       cwd?: string;
       devTargetRef?: string;
       deferConfiguredPluginInstallRepair?: boolean;
+      beforeGitMutation?: () => Promise<void>;
     },
   ) {
     return runWithCommand(runner, options);
@@ -358,14 +361,16 @@ describe("runGatewayUpdate", () => {
 
   it("skips git update when worktree is dirty", async () => {
     await setupGitCheckout();
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses({ status: " M README.md" }),
     });
 
-    const result = await runWithRunner(runner);
+    const result = await runWithRunner(runner, { beforeGitMutation });
 
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("dirty");
+    expect(beforeGitMutation).not.toHaveBeenCalled();
     expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
   });
 
@@ -374,6 +379,7 @@ describe("runGatewayUpdate", () => {
     const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
       throw Object.assign(new Error("ENOENT: uv_cwd"), { code: "ENOENT" });
     });
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
@@ -383,10 +389,11 @@ describe("runGatewayUpdate", () => {
     });
 
     try {
-      const result = await runWithRunner(runner);
+      const result = await runWithRunner(runner, { beforeGitMutation });
 
       expect(result.status).toBe("skipped");
       expect(result.reason).toBe("no-upstream");
+      expect(beforeGitMutation).not.toHaveBeenCalled();
       expect(calls).toContain(`git -C ${tempDir} rev-parse --show-toplevel`);
     } finally {
       cwdSpy.mockRestore();
@@ -420,6 +427,9 @@ describe("runGatewayUpdate", () => {
     const upstreamSha = "upstream123";
     const doctorNodePath = await resolveStableNodePath(process.execPath);
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const beforeGitMutation = vi.fn(async () => {
+      calls.push("beforeGitMutation");
+    });
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
@@ -438,11 +448,22 @@ describe("runGatewayUpdate", () => {
       [doctorCommand]: { stdout: "" },
     });
 
-    const result = await runWithRunner(runner, { channel: "dev" });
+    const result = await runWithRunner(runner, { channel: "dev", beforeGitMutation });
 
     expect(result.status).toBe("ok");
+    expect(beforeGitMutation).toHaveBeenCalledTimes(1);
     expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
     expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    const cleanupIndex = calls.findIndex(
+      (call) =>
+        call.startsWith(`git -C ${tempDir} worktree remove --force `) &&
+        preflightPrefixPattern.test(call),
+    );
+    expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf("beforeGitMutation")).toBeGreaterThan(cleanupIndex);
+    expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
+      calls.indexOf(`git -C ${tempDir} rebase ${upstreamSha}`),
+    );
   });
 
   it("fetches only the requested tag for explicit dev tag target refs", async () => {

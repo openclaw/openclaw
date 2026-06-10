@@ -140,6 +140,7 @@ type UpdateRunnerOptions = {
   channel?: UpdateChannel;
   devTargetRef?: string;
   deferConfiguredPluginInstallRepair?: boolean;
+  beforeGitMutation?: () => Promise<void>;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -802,6 +803,14 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
     const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+    let gitMutationPrepared = false;
+    const prepareGitMutation = async () => {
+      if (gitMutationPrepared) {
+        return;
+      }
+      await opts.beforeGitMutation?.();
+      gitMutationPrepared = true;
+    };
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
       status: "error",
       mode: "git",
@@ -897,17 +906,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     }
 
     if (channel === "dev") {
-      if (needsCheckoutMain) {
-        const failure = await runRequiredGitStep(
-          `git checkout ${DEV_BRANCH}`,
-          ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
-          "checkout-failed",
-        );
-        if (failure) {
-          return failure;
-        }
-      }
-
       const fetchFailure = await runRequiredGitStep(
         "git fetch",
         ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
@@ -975,6 +973,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         preflightBaseSha = targetSha;
         candidatesLocal = [targetSha];
       } else {
+        const upstreamRef = needsCheckoutMain ? `${DEV_BRANCH}@{upstream}` : "@{upstream}";
         const upstreamStep = await runStep(
           step(
             "upstream check",
@@ -985,7 +984,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               "rev-parse",
               "--abbrev-ref",
               "--symbolic-full-name",
-              "@{upstream}",
+              upstreamRef,
             ],
             gitRoot,
           ),
@@ -1005,8 +1004,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
         const upstreamShaStep = await runStep(
           step(
-            "git rev-parse @{upstream}",
-            ["git", "-C", gitRoot, "rev-parse", "@{upstream}"],
+            `git rev-parse ${upstreamRef}`,
+            ["git", "-C", gitRoot, "rev-parse", upstreamRef],
             gitRoot,
           ),
         );
@@ -1243,6 +1242,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
+        await prepareGitMutation();
         const failure = await runRequiredGitStep(
           `git checkout ${selectedSha}`,
           ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
@@ -1252,6 +1252,17 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           return failure;
         }
       } else {
+        await prepareGitMutation();
+        if (needsCheckoutMain) {
+          const failure = await runRequiredGitStep(
+            `git checkout ${DEV_BRANCH}`,
+            ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
+            "checkout-failed",
+          );
+          if (failure) {
+            return failure;
+          }
+        }
         const rebaseStep = await runStep(
           step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
         );
@@ -1304,6 +1315,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
+      await prepareGitMutation();
       const failure = await runRequiredGitStep(
         `git checkout ${tag}`,
         ["git", "-C", gitRoot, "checkout", "--detach", tag],

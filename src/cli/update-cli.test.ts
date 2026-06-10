@@ -631,6 +631,13 @@ describe("update-cli", () => {
       ...overrides,
     }) as UpdateRunResult;
 
+  const mockGitUpdateAfterMutation = (result = makeOkUpdateResult({ mode: "git" })) => {
+    vi.mocked(runGatewayUpdate).mockImplementationOnce(async (opts) => {
+      await opts.beforeGitMutation?.();
+      return result;
+    });
+  };
+
   const runUpdateCliScenario = async (testCase: UpdateCliScenario) => {
     vi.clearAllMocks();
     await testCase.run();
@@ -2845,7 +2852,7 @@ describe("update-cli", () => {
     expect(requiredServiceStopCallOrder).toBeLessThan(requiredNpmInstallCallOrder);
   });
 
-  it("stops a running managed gateway before git checkout rebuild", async () => {
+  it("stops a running managed gateway when git checkout rebuild starts", async () => {
     const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
     serviceReadCommand.mockResolvedValue({
       programArguments: ["node", serviceEntrypoint, "gateway", "run"],
@@ -2860,7 +2867,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
-    vi.mocked(runGatewayUpdate).mockResolvedValueOnce(makeOkUpdateResult({ mode: "git" }));
+    mockGitUpdateAfterMutation();
 
     await updateCommand({ yes: true });
 
@@ -2871,14 +2878,8 @@ describe("update-cli", () => {
       | undefined;
     expect(serviceStopCall?.env?.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
     expect(serviceStopCall?.env?.OPENCLAW_SERVICE_KIND).toBe("gateway");
-    expect(
-      requireValue(serviceStop.mock.invocationCallOrder[0], "service stop call order"),
-    ).toBeLessThan(
-      requireValue(
-        vi.mocked(runGatewayUpdate).mock.invocationCallOrder[0],
-        "git update call order",
-      ),
-    );
+    const updateCall = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+    expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
   });
 
   it("does not stop or restart a managed gateway owned by another git checkout", async () => {
@@ -2904,7 +2905,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
-    vi.mocked(runGatewayUpdate).mockResolvedValueOnce(makeOkUpdateResult({ mode: "git" }));
+    mockGitUpdateAfterMutation();
 
     await updateCommand({ yes: true });
 
@@ -2940,7 +2941,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
-    vi.mocked(runGatewayUpdate).mockResolvedValueOnce(makeOkUpdateResult({ mode: "git" }));
+    mockGitUpdateAfterMutation();
 
     await updateCommand({ yes: true });
 
@@ -4996,6 +4997,7 @@ describe("update-cli", () => {
     expect(logs.join("\n")).toContain(
       "Commit, stash, or discard the local changes, then rerun `openclaw update`.",
     );
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
   });
   it.each([
