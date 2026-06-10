@@ -1000,6 +1000,9 @@ describe("buildAgentSystemPrompt", () => {
       "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
     );
     expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
+    expect(prompt).toContain(
+      "Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output",
+    );
     expect(prompt).toContain("The target defaults to the current source channel");
     expect(prompt).toContain("do not repeat that visible content in your final answer");
     expect(prompt).not.toContain("## Silent Replies");
@@ -1025,6 +1028,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Tool/generated media paths are attachments, not prose; emit each as its own `MEDIA:<path-or-url>` line.",
     );
+  });
+
+  it("keeps Discord group etiquette scoped to message-tool-only delivery", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "discord",
+      },
+    });
+
+    expect(prompt).not.toContain("Discord group/thread etiquette");
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
