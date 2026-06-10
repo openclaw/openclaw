@@ -83,14 +83,20 @@ export const testing = {
 
 async function runMemorySearchToolWithDeadline<T>(params: {
   timeoutMs: number;
-  run: () => Promise<T>;
+  run: (signal: AbortSignal) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "unavailable"; error: string }> {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), params.timeoutMs);
+    timer = setTimeout(() => {
+      controller.abort(
+        new Error(`memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`),
+      );
+      resolve("timeout");
+    }, params.timeoutMs);
     timer.unref?.();
   });
-  const task = params.run();
+  const task = params.run(controller.signal);
   task.catch(() => undefined);
 
   try {
@@ -382,7 +388,7 @@ export function createMemorySearchTool(options: {
 
         const outcome = await runMemorySearchToolWithDeadline({
           timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
-          run: async () => {
+          run: async (signal) => {
             const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
             const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
@@ -457,6 +463,7 @@ export function createMemorySearchTool(options: {
                   onDebug: (debug: MemorySearchRuntimeDebug) => {
                     runtimeDebug.push(debug);
                   },
+                  signal,
                   ...(searchSources ? { sources: searchSources } : {}),
                 };
                 try {

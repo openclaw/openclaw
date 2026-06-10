@@ -104,6 +104,39 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
   );
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw signal.reason instanceof Error ? signal.reason : new Error("memory embedding aborted");
+}
+
+function combineAbortSignals(left: AbortSignal, right?: AbortSignal): AbortSignal {
+  if (!right) {
+    return left;
+  }
+  const abortSignalAny = (AbortSignal as typeof AbortSignal & {
+    any?: (signals: AbortSignal[]) => AbortSignal;
+  }).any;
+  if (typeof abortSignalAny === "function") {
+    return abortSignalAny([left, right]);
+  }
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(signal.reason);
+    }
+  };
+  for (const signal of [left, right]) {
+    if (signal.aborted) {
+      abort(signal);
+    } else {
+      signal.addEventListener("abort", () => abort(signal), { once: true });
+    }
+  }
+  return controller.signal;
+}
+
 export function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
   const limit = Math.max(1, Math.floor(maxRequests));
   const batches: T[][] = [];
@@ -493,7 +526,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected async embedQueryWithRetry(text: string): Promise<number[]> {
+  protected async embedQueryWithRetry(text: string, signal?: AbortSignal): Promise<number[]> {
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
@@ -501,17 +534,23 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     try {
       return await runMemoryEmbeddingRetryLoop({
         run: async () => {
+          throwIfAborted(signal);
           const timeoutMs = this.resolveEmbeddingTimeout("query");
           log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
           return await runEmbeddingOperationWithTimeout({
             timeoutMs,
             message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-            run: async (signal) => await provider.embedQuery(text, { signal }),
+            run: async (timeoutSignal) =>
+              await provider.embedQuery(text, {
+                signal: combineAbortSignals(timeoutSignal, signal),
+              }),
           });
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry: async (delayMs) => {
+          throwIfAborted(signal);
           await this.waitForEmbeddingRetry(delayMs, "retrying query");
+          throwIfAborted(signal);
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
