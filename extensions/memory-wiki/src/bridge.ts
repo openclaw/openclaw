@@ -49,30 +49,6 @@ type SyncMemoryWikiBridgeSourcesParams = {
   appConfig?: OpenClawConfig;
 };
 
-const inFlightBridgeSyncs = new Map<string, Promise<BridgeMemoryWikiResult>>();
-
-function resolveBridgeSyncKey(params: SyncMemoryWikiBridgeSourcesParams): string {
-  const bridge = params.config.bridge;
-  return JSON.stringify({
-    vaultPath: path.resolve(params.config.vault.path),
-    vaultMode: params.config.vaultMode,
-    bridge: {
-      enabled: bridge.enabled,
-      readMemoryArtifacts: bridge.readMemoryArtifacts,
-      indexDreamReports: bridge.indexDreamReports,
-      indexDailyNotes: bridge.indexDailyNotes,
-      indexMemoryRoot: bridge.indexMemoryRoot,
-      followMemoryEvents: bridge.followMemoryEvents,
-    },
-    agents:
-      params.appConfig?.agents?.list?.map((agent) => ({
-        id: agent.id,
-        default: agent.default === true,
-        workspace: agent.workspace,
-      })) ?? null,
-  });
-}
-
 function shouldImportArtifact(
   artifact: MemoryPluginPublicArtifact,
   bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
@@ -244,7 +220,7 @@ async function writeBridgeSourcePage(params: {
   });
 }
 
-async function syncMemoryWikiBridgeSourcesOnce(
+export async function syncMemoryWikiBridgeSources(
   params: SyncMemoryWikiBridgeSourcesParams,
 ): Promise<BridgeMemoryWikiResult> {
   await initializeMemoryWikiVault(params.config);
@@ -344,19 +320,4 @@ async function syncMemoryWikiBridgeSourcesOnce(
     workspaces: workspaceCount,
     pagePaths,
   };
-}
-
-export async function syncMemoryWikiBridgeSources(
-  params: SyncMemoryWikiBridgeSourcesParams,
-): Promise<BridgeMemoryWikiResult> {
-  const syncKey = resolveBridgeSyncKey(params);
-  const inFlight = inFlightBridgeSyncs.get(syncKey);
-  if (inFlight) {
-    return await inFlight;
-  }
-  const sync = syncMemoryWikiBridgeSourcesOnce(params).finally(() => {
-    inFlightBridgeSyncs.delete(syncKey);
-  });
-  inFlightBridgeSyncs.set(syncKey, sync);
-  return await sync;
 }

@@ -265,66 +265,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(page).toContain("- Agents: unknown");
   });
 
-  it("coalesces concurrent bridge source syncs for the same vault", async () => {
-    const workspaceDir = await createBridgeWorkspace("coalesced-workspace");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("coalesced-vault"),
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexMemoryRoot: true,
-        },
-      },
-    });
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
-    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
-    let listArtifactsCount = 0;
-    registerMemoryCapability("memory-core", {
-      publicArtifacts: {
-        async listArtifacts() {
-          listArtifactsCount += 1;
-          return [
-            {
-              kind: "memory-root",
-              workspaceDir,
-              relativePath: "MEMORY.md",
-              absolutePath: memoryPath,
-              agentIds: ["main"],
-              contentType: "markdown",
-            },
-          ];
-        },
-      },
-    });
-    const appConfig: OpenClawConfig = {
-      agents: {
-        list: [{ id: "main", default: true, workspace: workspaceDir }],
-      },
-    };
-
-    const [first, second] = await Promise.all([
-      syncMemoryWikiBridgeSources({ config, appConfig }),
-      syncMemoryWikiBridgeSources({ config, appConfig }),
-    ]);
-
-    expect(listArtifactsCount).toBe(1);
-    expect(second).toEqual(first);
-    expect(first.importedCount).toBe(1);
-    expect(first.pagePaths).toHaveLength(1);
-    const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { type?: unknown });
-    expect(logLines.filter((line) => line.type === "ingest")).toHaveLength(1);
-
-    const third = await syncMemoryWikiBridgeSources({ config, appConfig });
-
-    expect(listArtifactsCount).toBe(2);
-    expect(third.skippedCount).toBe(1);
-  });
-
   it.runIf(process.platform !== "win32")(
     "keeps import counts after recovering a bridge page path mismatch",
     async () => {
