@@ -190,9 +190,11 @@ export const updateHandlers: GatewayRequestHandlers = {
           durationMs: 0,
         };
       } else if (requiresManagedServiceHandoff) {
+        const handoffChannel =
+          installSurface.kind === "git" ? undefined : (configChannel ?? undefined);
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,
-          channel: configChannel ?? undefined,
+          ...(handoffChannel ? { channel: handoffChannel } : {}),
         });
         if (supervisor && hasHandoffContext) {
           try {
@@ -205,7 +207,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
-              channel: configChannel ?? undefined,
+              ...(handoffChannel ? { channel: handoffChannel } : {}),
               restartDelayMs,
               meta: sentinelMeta,
               handoffId,

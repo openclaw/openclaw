@@ -23,6 +23,7 @@ const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
+const normalizeUpdateChannelMock = vi.fn((): "stable" | "beta" | "dev" | null => null);
 const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
   status: "started" as const,
   pid: 12345,
@@ -101,7 +102,7 @@ vi.mock("../../infra/supervisor-markers.js", () => ({
 }));
 
 vi.mock("../../infra/update-channels.js", () => ({
-  normalizeUpdateChannel: () => undefined,
+  normalizeUpdateChannel: normalizeUpdateChannelMock,
 }));
 
 vi.mock("../../infra/update-runner.js", () => ({
@@ -155,6 +156,8 @@ beforeEach(() => {
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
   readPackageVersionMock.mockResolvedValue("1.0.0");
+  normalizeUpdateChannelMock.mockReset();
+  normalizeUpdateChannelMock.mockReturnValue(null);
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
   runGatewayUpdateMock.mockClear();
@@ -531,6 +534,25 @@ describe("update.run restart scheduling", () => {
       command: "openclaw update --yes --timeout 1800",
     });
     expect(readCapturedPayload().status).toBe("skipped");
+  });
+
+  it("does not pass the stored stable channel to supervised git handoff CLI", async () => {
+    normalizeUpdateChannelMock.mockReturnValueOnce("stable");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGitInstallSurface("/tmp/openclaw-git");
+
+    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
+    const [handoffParams] = firstMockCall(
+      startManagedServiceUpdateHandoffMock,
+      "managed handoff",
+    ) as [{ channel?: string }];
+    expect(handoffParams).not.toHaveProperty("channel");
+    expect(payload?.handoff?.command).not.toContain("--channel");
   });
 
   it("keeps unsupervised git/dev updates on the in-process gateway update path", async () => {
