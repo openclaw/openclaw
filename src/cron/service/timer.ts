@@ -1517,12 +1517,21 @@ async function executeMainSessionCronJob(
       return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
     if (heartbeatResult.status === "skipped") {
-      return {
-        status: "skipped",
-        error: heartbeatResult.reason,
-        summary: text,
+      // The main-session system event has already been enqueued above. A skipped
+      // immediate heartbeat (for example because heartbeats are globally disabled)
+      // must not flip the cron run to "skipped": doing so causes one-shot at-jobs
+      // to be disabled instead of deleted by applyJobResult and leaves zombie
+      // disabled rows in cron_jobs (#91775). Fall back to a queued heartbeat so
+      // the wake is still requested via the event lane.
+      state.deps.requestHeartbeat({
+        source: "cron",
+        intent: "immediate",
+        reason,
+        agentId: job.agentId,
         sessionKey: cronRunSessionKey,
-      };
+        heartbeat: { target: "last" },
+      });
+      return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
     return {
       status: "error",

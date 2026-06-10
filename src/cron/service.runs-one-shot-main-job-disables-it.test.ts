@@ -449,6 +449,39 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("wakeMode now records ok and queues fallback heartbeat when immediate heartbeat is disabled (#91775)", async () => {
+    // Regression: when heartbeats are disabled globally or for the agent,
+    // runHeartbeatOnce returns { status: "skipped", reason: "disabled" }. The
+    // main-session systemEvent has already been enqueued at this point, so the
+    // cron run must NOT be reported as skipped — otherwise applyJobResult
+    // disables the one-shot at-job instead of deleting it, leaving a zombie
+    // disabled row in cron_jobs.
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+
+    const { store, cron, requestHeartbeat } = await createWakeModeNowMainHarness({
+      runHeartbeatOnce,
+    });
+
+    const sessionKey = "agent:main:discord:channel:ops";
+    const job = await addWakeModeNowMainSystemEventJob(cron, {
+      name: "wakeMode now disabled-heartbeat fallback",
+      sessionKey,
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id });
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastError).toBeUndefined();
+
+    await cron.list({ includeDisabled: true });
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("runs an isolated job without posting a fallback summary to main", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
     const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
