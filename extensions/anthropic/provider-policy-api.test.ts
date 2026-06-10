@@ -136,6 +136,34 @@ describe("anthropic provider policy public artifact", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
+  it("exposes the always-adaptive Claude Fable 5 thinking profile", () => {
+    const profile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "claude-fable-5",
+    });
+
+    expect(profile).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(
+      resolveThinkingProfile({
+        provider: "claude-cli",
+        modelId: "claude-fable-5",
+      }),
+    ).toBeNull();
+  });
+
   it("keeps adaptive-only Claude profiles aligned with the runtime provider", () => {
     const profile = resolveThinkingProfile({
       provider: "anthropic",

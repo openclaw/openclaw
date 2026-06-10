@@ -22,6 +22,17 @@ describe("anthropic-vertex provider-policy-api", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
+  it("inherits Claude Fable 5's provider-agnostic thinking contract", () => {
+    const profile = resolveThinkingProfile({
+      provider: "anthropic-vertex",
+      modelId: "claude-fable-5",
+    });
+
+    expect(profile?.defaultLevel).toBe("high");
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
+    expect(profile?.levels.map((level) => level.id)).toContain("max");
+  });
+
   it("ignores other providers", () => {
     expect(resolveThinkingProfile({ provider: "anthropic", modelId: "claude-opus-4-8" })).toBe(
       null,

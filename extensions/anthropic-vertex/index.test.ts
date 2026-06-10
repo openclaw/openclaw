@@ -78,11 +78,14 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.baseUrl).toBe("https://europe-west4-aiplatform.googleapis.com");
     expect(result.provider.headers).toEqual({ "x-test-header": "1" });
     expect(result.provider.models.map((model) => model.id)).toEqual([
+      "claude-fable-5",
       "claude-opus-4-8",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
     ]);
     expect(result.provider.models[0]?.thinkingLevelMap).toEqual({
+      off: "low",
+      minimal: "low",
       xhigh: "xhigh",
       max: "max",
     });
@@ -107,6 +110,13 @@ describe("anthropic-vertex provider plugin", () => {
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
     });
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "anthropic-vertex",
+        modelApi: "anthropic-messages",
+        modelId: "claude-fable-5",
+      } as never),
+    ).not.toHaveProperty("dropThinkingBlocks");
   });
 
   it("owns Anthropic-style thinking policy", async () => {
@@ -119,6 +129,48 @@ describe("anthropic-vertex provider plugin", () => {
 
     expect(opus48Profile?.defaultLevel).toBe("off");
     expect(opus48Profile?.levels.map((level) => level.id)).toContain("max");
+
+    const fableProfile = provider.resolveThinkingProfile?.({
+      provider: "anthropic-vertex",
+      modelId: "claude-fable-5",
+    } as never);
+    expect(fableProfile?.defaultLevel).toBe("high");
+    expect(fableProfile?.preserveWhenCatalogReasoningFalse).toBe(true);
+  });
+
+  it("restores Fable metadata for explicit Vertex catalog rows", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic-vertex",
+      modelId: "claude-fable-5",
+      model: {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        api: "anthropic-messages",
+        provider: "anthropic-vertex",
+        baseUrl: "https://aiplatform.googleapis.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+
+    expect(normalized).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: {
+        off: "low",
+        minimal: "low",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    });
   });
 
   it("resolves synthetic auth when ADC is available", async () => {

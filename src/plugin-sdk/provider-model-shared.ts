@@ -102,6 +102,7 @@ import { normalizeOptionalLowercaseString } from "../../packages/normalization-c
 
 const CLAUDE_OPUS_48_MODEL_PREFIXES = ["claude-opus-4-8", "claude-opus-4.8"] as const;
 const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
+const CLAUDE_FABLE_5_MODEL_PREFIXES = ["claude-fable-5"] as const;
 const CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES = [
   "claude-opus-4-6",
   "claude-opus-4.6",
@@ -162,6 +163,13 @@ export function resolveClaudeThinkingProfile(
   /** Claude model id used to choose available thinking levels and defaults. */
   modelId: string,
 ): ProviderThinkingProfile {
+  if (matchesClaudeModelPrefix(modelId, CLAUDE_FABLE_5_MODEL_PREFIXES)) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
+    };
+  }
   if (isClaudeOpus48ModelId(modelId)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],

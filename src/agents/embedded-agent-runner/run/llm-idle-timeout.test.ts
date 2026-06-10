@@ -4,6 +4,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import type { AssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import {
   DEFAULT_LLM_IDLE_TIMEOUT_MS,
   resolveLlmIdleTimeoutMs,
@@ -339,12 +340,12 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ api: "openai", requestTimeoutMs: 1000 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
 
-  it("keeps model request timeouts that are shorter than the idle watchdog", () => {
+  it("preserves explicit model request timeouts", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
     const wrapped = streamWithIdleTimeout(baseFn, 1000);
@@ -355,7 +356,7 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ requestTimeoutMs: 250 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
@@ -506,6 +507,40 @@ describe("streamWithIdleTimeout", () => {
     await collect;
 
     expect(results).toHaveLength(3);
+  });
+
+  it("treats quarantined provider events as stream activity", async () => {
+    vi.useFakeTimers();
+    const delayedStream: AsyncIterable<{ text: string }> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+            return { done: false, value: { text: "done" } };
+          },
+        };
+      },
+    };
+    let requestSignal: AbortSignal | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      requestSignal = options?.signal;
+      return delayedStream;
+    });
+    const wrapped = streamWithIdleTimeout(baseFn, 50);
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AsyncIterable<{ text: string }>;
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next();
+
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
+    await vi.advanceTimersByTimeAsync(120);
+
+    await expect(next).resolves.toEqual({ done: false, value: { text: "done" } });
+    await iterator.return?.();
   });
 
   it("calls timeout hook on idle timeout", async () => {

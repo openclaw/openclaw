@@ -195,6 +195,47 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock).temperature).toBe(0.7);
   });
 
+  it("uses Fable 5's always-adaptive Vertex contract", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "high",
+      maxTokens: 128000,
+    });
+    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+  });
+
+  it("maps explicit Fable 5 off to low effort on Vertex", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "off" });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "low",
+    });
+  });
+
+  it("preserves Fable 5 xhigh effort on Vertex", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "xhigh",
+    });
+  });
+
   it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);

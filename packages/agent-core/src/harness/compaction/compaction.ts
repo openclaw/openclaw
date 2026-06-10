@@ -7,6 +7,7 @@ import type {
   StreamFn,
   Usage,
 } from "../../../../llm-core/src/index.js";
+import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,
@@ -517,8 +518,8 @@ function createSummarizationOptions(
   thinkingLevel: ThinkingLevel | undefined,
 ): SimpleStreamOptions {
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
-  if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
-    options.reasoning = thinkingLevel;
+  if (model.reasoning && thinkingLevel) {
+    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   return options;
 }

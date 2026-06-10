@@ -1,3 +1,4 @@
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 /**
  * Static Anthropic Vertex model catalog builder. It derives provider base URLs
  * from region configuration and publishes Claude model metadata.
@@ -11,6 +12,7 @@ import { resolveAnthropicVertexRegion } from "./region.js";
 /** Default Anthropic Vertex model used for implicit provider catalogs. */
 export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW = 1_000_000;
+const ANTHROPIC_VERTEX_FABLE_MAX_TOKENS = 128_000;
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
 function buildAnthropicVertexModel(params: {
@@ -37,6 +39,15 @@ function buildAnthropicVertexModel(params: {
 function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
   return [
     buildAnthropicVertexModel({
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      maxTokens: ANTHROPIC_VERTEX_FABLE_MAX_TOKENS,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    }),
+    buildAnthropicVertexModel({
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",
       reasoning: true,
@@ -62,6 +73,46 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
       maxTokens: 128000,
     }),
   ];
+}
+
+/** Restore required Fable metadata after explicit catalog models replace the implicit row. */
+export function normalizeAnthropicVertexResolvedModel(
+  modelId: string,
+  model: ProviderRuntimeModel,
+): ProviderRuntimeModel | undefined {
+  if (!normalizeLowercaseStringOrEmpty(modelId).startsWith("claude-fable-5")) {
+    return undefined;
+  }
+  const input = model.input.includes("image") ? model.input : [...model.input, "image"];
+  const thinkingLevelMap = {
+    ...model.thinkingLevelMap,
+    off: "low",
+    minimal: "low",
+    xhigh: "xhigh",
+    max: "max",
+  };
+  if (
+    model.reasoning &&
+    input === model.input &&
+    model.contextWindow === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
+    model.contextTokens === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
+    (model.maxTokens ?? 0) >= ANTHROPIC_VERTEX_FABLE_MAX_TOKENS &&
+    model.thinkingLevelMap?.off === "low" &&
+    model.thinkingLevelMap.minimal === "low" &&
+    model.thinkingLevelMap.xhigh === "xhigh" &&
+    model.thinkingLevelMap.max === "max"
+  ) {
+    return undefined;
+  }
+  return {
+    ...model,
+    reasoning: true,
+    input,
+    contextWindow: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
+    contextTokens: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: Math.max(model.maxTokens ?? 0, ANTHROPIC_VERTEX_FABLE_MAX_TOKENS),
+    thinkingLevelMap,
+  };
 }
 
 /** Build the implicit Anthropic Vertex provider config for the current env. */

@@ -23,7 +23,11 @@ export function applyConfigDefaults(params: Parameters<typeof applyAnthropicConf
 export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
   switch (params.provider.trim().toLowerCase()) {
     case "anthropic":
+      return resolveClaudeThinkingProfile(params.modelId);
     case "claude-cli":
+      if (params.modelId.trim().toLowerCase().startsWith("claude-fable-5")) {
+        return null;
+      }
       return resolveClaudeThinkingProfile(params.modelId);
     default:
       return null;

@@ -562,6 +562,80 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
   });
 
+  it.each(["anthropic", "anthropic-vertex"])(
+    "surfaces structured Anthropic streaming refusals for %s",
+    async (provider) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        createSseResponse([
+          {
+            type: "message_start",
+            message: { id: "msg_refusal", usage: { input_tokens: 3, output_tokens: 0 } },
+          },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "discard this partial output" },
+          },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: {
+              stop_reason: "refusal",
+              stop_details: {
+                type: "refusal",
+                category: "bio",
+                explanation: "This request is not allowed.",
+              },
+            },
+            usage: { input_tokens: 3, output_tokens: 2 },
+          },
+          { type: "message_stop" },
+        ]),
+      );
+
+      const streamFn = createAnthropicMessagesTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          makeAnthropicTransportModel({
+            id: "claude-fable-5",
+            name: "Claude Fable 5",
+            provider,
+          }),
+          { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+          { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+        ),
+      );
+      const eventTypes: string[] = [];
+      for await (const event of stream as AsyncIterable<{ type: string }>) {
+        eventTypes.push(event.type);
+      }
+      const result = await stream.result();
+
+      expect(eventTypes).toEqual(["error"]);
+      expect(result.stopReason).toBe("error");
+      expect(result.content).toEqual([]);
+      expect(result.errorMessage).toBe(
+        "Anthropic refusal (category: bio): This request is not allowed.",
+      );
+      expect(result.usage).toMatchObject({ input: 3, output: 2 });
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          type: "provider_refusal",
+          details: {
+            provider,
+            category: "bio",
+            explanation: "This request is not allowed.",
+          },
+        }),
+      ]);
+    },
+  );
+
   it("preserves unsafe integer Anthropic tool-use input deltas", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
@@ -1385,7 +1459,10 @@ describe("anthropic transport stream", () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     await runTransportStream(
-      makeAnthropicTransportModel(),
+      makeAnthropicTransportModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+      }),
       {
         messages: [
           { role: "user", content: "hello" },
@@ -1393,7 +1470,7 @@ describe("anthropic transport stream", () => {
             role: "assistant",
             provider: "anthropic",
             api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
+            model: "claude-fable-5",
             stopReason: "stop",
             timestamp: 0,
             content: [
@@ -1401,6 +1478,11 @@ describe("anthropic transport stream", () => {
                 type: "thinking",
                 thinking: signedThinking,
                 thinkingSignature: "sig_1",
+              },
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "sig_omitted",
               },
             ],
           },
@@ -1422,6 +1504,11 @@ describe("anthropic transport stream", () => {
         type: "thinking",
         thinking: signedThinking,
         signature: "sig_1",
+      },
+      {
+        type: "thinking",
+        thinking: "",
+        signature: "sig_omitted",
       },
     ]);
   });
@@ -1963,6 +2050,88 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "max" });
+  });
+
+  it("uses always-on adaptive thinking for Claude Fable 5 transport runs", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      reasoning: false,
+      baseUrl: "https://proxy.example.com/anthropic",
+      maxTokens: 128_000,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        temperature: 0.2,
+        toolChoice: { type: "tool", name: "read_file" },
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.output_config).toEqual({ effort: "high" });
+    expect(payload.tool_choice).toEqual({ type: "auto" });
+    expect(payload).not.toHaveProperty("temperature");
+  });
+
+  it("maps Claude Fable 5 transport thinking levels to adaptive effort", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      maxTokens: 128_000,
+    });
+
+    guardedFetchMock.mockImplementation(async () => createSseResponse());
+    for (const testCase of [
+      { reasoning: "off", effort: "low" },
+      { reasoning: "minimal", effort: "low" },
+      { reasoning: "high", effort: "high" },
+    ] as const) {
+      await runTransportStream(
+        model,
+        {
+          messages: [{ role: "user", content: "Think carefully." }],
+        } as AnthropicStreamContext,
+        {
+          apiKey: "sk-ant-api",
+          reasoning: testCase.reasoning,
+        } as unknown as AnthropicStreamOptions,
+      );
+
+      const payload = latestAnthropicRequest().payload;
+      expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+      expect(payload.output_config).toEqual({ effort: testCase.effort });
+    }
+  });
+
+  it("uses the Claude Fable 5 contract on Anthropic Vertex transport runs", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      provider: "anthropic-vertex",
+      maxTokens: 128_000,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think carefully." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "vertex-token",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.output_config).toEqual({ effort: "high" });
   });
 
   it("maps xhigh thinking effort for Claude Opus 4.8 transport runs", async () => {

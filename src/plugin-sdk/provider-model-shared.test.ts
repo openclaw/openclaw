@@ -282,6 +282,15 @@ describe("buildProviderReplayFamilyHooks", () => {
 });
 
 describe("resolveClaudeThinkingProfile", () => {
+  it("exposes Fable 5's always-adaptive profile to Claude providers", () => {
+    const profile = resolveClaudeThinkingProfile("claude-fable-5");
+    expectFields(profile, {
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expectLevelIdsInclude(profile, ["xhigh", "adaptive", "max"]);
+  });
+
   it("leaves Opus 4.8 thinking off by default with xhigh/adaptive/max options", () => {
     const profile = resolveClaudeThinkingProfile("claude-opus-4-8");
     expectFields(profile, {

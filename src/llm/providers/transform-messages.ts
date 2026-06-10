@@ -1,3 +1,4 @@
+import { resolveModelBoundThinkingReplayMode } from "../../shared/model-bound-thinking.js";
 // Provider message transform helpers convert runtime messages to provider payloads.
 import type {
   Api,
@@ -96,13 +97,29 @@ export function transformMessages<TApi extends Api>(
     // Assistant messages need transformation check
     if (msg.role === "assistant") {
       const assistantMsg = msg;
+      const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
+        source: {
+          provider: assistantMsg.provider,
+          api: assistantMsg.api,
+          modelId: assistantMsg.model,
+        },
+        target: {
+          provider: model.provider,
+          api: model.api,
+          modelId: model.id,
+        },
+      });
       const isSameModel =
-        assistantMsg.provider === model.provider &&
-        assistantMsg.api === model.api &&
-        assistantMsg.model === model.id;
+        modelBoundThinkingReplayMode === "preserve" ||
+        (assistantMsg.provider === model.provider &&
+          assistantMsg.api === model.api &&
+          assistantMsg.model === model.id);
 
       const transformedContent = assistantMsg.content.flatMap((block) => {
         if (block.type === "thinking") {
+          if (modelBoundThinkingReplayMode === "drop") {
+            return [];
+          }
           // Redacted thinking is opaque encrypted content, only valid for the same model.
           // Drop it for cross-model to avoid API errors.
           if (block.redacted) {

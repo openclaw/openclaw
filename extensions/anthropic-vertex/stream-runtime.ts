@@ -50,12 +50,17 @@ function isClaudeOpus47OrNewerModel(modelId: string): boolean {
   );
 }
 
+function isClaudeFable5Model(modelId: string): boolean {
+  return modelId.includes("claude-fable-5");
+}
+
 function isClaudeOpus46Model(modelId: string): boolean {
   return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
 }
 
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
+    isClaudeFable5Model(modelId) ||
     isClaudeOpus47OrNewerModel(modelId) ||
     isClaudeOpus46Model(modelId) ||
     modelId.includes("sonnet-4-6") ||
@@ -68,16 +73,19 @@ function mapAnthropicAdaptiveEffort(
   modelId: string,
 ): AnthropicVertexAdaptiveEffort {
   const effortMap: Record<string, AnthropicVertexAdaptiveEffort> = {
+    off: "low",
     minimal: "low",
     low: "low",
     medium: "medium",
     high: "high",
-    xhigh: isClaudeOpus47OrNewerModel(modelId)
+    xhigh: isClaudeFable5Model(modelId)
       ? "xhigh"
-      : isClaudeOpus46Model(modelId)
-        ? "max"
-        : "high",
-    max: isClaudeOpus47OrNewerModel(modelId) ? "max" : "high",
+      : isClaudeOpus47OrNewerModel(modelId)
+        ? "xhigh"
+        : isClaudeOpus46Model(modelId)
+          ? "max"
+          : "high",
+    max: isClaudeFable5Model(modelId) || isClaudeOpus47OrNewerModel(modelId) ? "max" : "high",
   };
   return effortMap[reasoning] ?? "high";
 }
@@ -163,7 +171,9 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const temperature = isClaudeOpus47OrNewerModel(model.id) ? undefined : options?.temperature;
+    const fable5 = isClaudeFable5Model(model.id);
+    const temperature =
+      fable5 || isClaudeOpus47OrNewerModel(model.id) ? undefined : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {
       client,
       ...(temperature !== undefined ? { temperature } : {}),
@@ -196,6 +206,9 @@ export function createAnthropicVertexStreamFn(
             ? budgets[options.reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
       }
+    } else if (fable5) {
+      opts.thinkingEnabled = true;
+      opts.effort = "high";
     } else {
       opts.thinkingEnabled = false;
     }

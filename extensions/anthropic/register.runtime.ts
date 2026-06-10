@@ -28,6 +28,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   cloneFirstTemplateModel,
+  NATIVE_ANTHROPIC_REPLAY_HOOKS,
   type ProviderPlugin,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -47,18 +48,19 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-8";
+const ANTHROPIC_FABLE_5_MODEL_ID = "claude-fable-5";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
 const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_GA_1M_CONTEXT_TOKENS = 1_048_576;
-const ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS = 128_000;
+const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
@@ -78,6 +80,7 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   ANTHROPIC_SONNET_46_DOT_MODEL_ID,
 ] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
+  ANTHROPIC_FABLE_5_MODEL_ID,
   "claude-opus-4-8",
   "claude-opus-4.8",
   "claude-opus-4-7",
@@ -282,13 +285,15 @@ function buildAnthropicForwardCompatModel(
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(ctx.provider);
   if (trimmedModelId !== lower || !matchesAnthropicModernModel(lower)) {
     return undefined;
   }
+  if (isAnthropicFable5Model(lower) && normalizedProvider !== PROVIDER_ID) {
+    return undefined;
+  }
   const provider =
-    normalizeLowercaseStringOrEmpty(ctx.provider) === CLAUDE_CLI_BACKEND_ID
-      ? CLAUDE_CLI_BACKEND_ID
-      : PROVIDER_ID;
+    normalizedProvider === CLAUDE_CLI_BACKEND_ID ? CLAUDE_CLI_BACKEND_ID : PROVIDER_ID;
   return {
     id: trimmedModelId,
     name: trimmedModelId,
@@ -297,10 +302,12 @@ function buildAnthropicForwardCompatModel(
     baseUrl: "https://api.anthropic.com",
     reasoning: true,
     input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: isAnthropicGa1MModel(trimmedModelId) ? ANTHROPIC_GA_1M_CONTEXT_TOKENS : 200_000,
-    maxTokens: isAnthropicOpus48Model(trimmedModelId)
-      ? ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS
+    cost: isAnthropicFable5Model(trimmedModelId)
+      ? { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }
+      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: resolveAnthropicFixedContextWindow(trimmedModelId) ?? 200_000,
+    maxTokens: isAnthropic128kOutputModel(trimmedModelId)
+      ? ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS
       : 64_000,
   };
 }
@@ -350,11 +357,24 @@ function isAnthropicGa1MModel(modelId: string): boolean {
   return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-function isAnthropicOpus48Model(modelId: string): boolean {
+function isAnthropicFable5Model(modelId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(ANTHROPIC_FABLE_5_MODEL_ID);
+}
+
+function resolveAnthropicFixedContextWindow(modelId: string): number | undefined {
+  if (isAnthropicFable5Model(modelId)) {
+    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
+  }
+  return isAnthropicGa1MModel(modelId) ? ANTHROPIC_GA_1M_CONTEXT_TOKENS : undefined;
+}
+
+function isAnthropic128kOutputModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return [ANTHROPIC_OPUS_48_MODEL_ID, ANTHROPIC_OPUS_48_DOT_MODEL_ID].some((prefix) =>
-    normalized.startsWith(prefix),
-  );
+  return [
+    ANTHROPIC_FABLE_5_MODEL_ID,
+    ANTHROPIC_OPUS_48_MODEL_ID,
+    ANTHROPIC_OPUS_48_DOT_MODEL_ID,
+  ].some((prefix) => normalized.startsWith(prefix));
 }
 
 function isAnthropicOpus47OrNewerModel(modelId: string): boolean {
@@ -403,26 +423,28 @@ function hasConfiguredModelContextOverride(
   return false;
 }
 
-function applyAnthropicGa1MContextWindow(params: {
+function applyAnthropicFixedContextWindow(params: {
   config?: ProviderNormalizeResolvedModelContext["config"];
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  if (!isAnthropicGa1MModel(params.modelId)) {
+  const fixedContextWindow = resolveAnthropicFixedContextWindow(params.modelId);
+  if (fixedContextWindow === undefined) {
     return undefined;
   }
   if (hasConfiguredModelContextOverride(params.config, params.provider, params.modelId)) {
     return undefined;
   }
-  const nextContextWindow = Math.max(
-    params.model.contextWindow ?? 0,
-    ANTHROPIC_GA_1M_CONTEXT_TOKENS,
-  );
-  const nextContextTokens =
-    typeof params.model.contextTokens === "number"
-      ? Math.max(params.model.contextTokens, ANTHROPIC_GA_1M_CONTEXT_TOKENS)
-      : ANTHROPIC_GA_1M_CONTEXT_TOKENS;
+  const exactContextWindow = isAnthropicFable5Model(params.modelId);
+  const nextContextWindow = exactContextWindow
+    ? fixedContextWindow
+    : Math.max(params.model.contextWindow ?? 0, fixedContextWindow);
+  const nextContextTokens = exactContextWindow
+    ? fixedContextWindow
+    : typeof params.model.contextTokens === "number"
+      ? Math.max(params.model.contextTokens, fixedContextWindow)
+      : fixedContextWindow;
   if (
     nextContextWindow === params.model.contextWindow &&
     nextContextTokens === params.model.contextTokens
@@ -436,39 +458,43 @@ function applyAnthropicGa1MContextWindow(params: {
   };
 }
 
-function applyAnthropicOpus48MaxTokens(params: {
+function applyAnthropicModernMaxTokens(params: {
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  if (!isAnthropicOpus48Model(params.modelId)) {
+  if (!isAnthropic128kOutputModel(params.modelId)) {
     return undefined;
   }
-  if ((params.model.maxTokens ?? 0) >= ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS) {
+  if ((params.model.maxTokens ?? 0) >= ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS) {
     return undefined;
   }
   return {
     ...params.model,
-    maxTokens: ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS,
+    maxTokens: ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS,
   };
 }
 
-function applyAnthropicOpusThinkingLevelMap(params: {
+function applyAnthropicThinkingLevelMap(params: {
   modelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  if (!isAnthropicOpus47OrNewerModel(params.modelId)) {
+  const fable5 = isAnthropicFable5Model(params.modelId);
+  if (!fable5 && !isAnthropicOpus47OrNewerModel(params.modelId)) {
     return undefined;
   }
+  const current = params.model.thinkingLevelMap;
   if (
-    params.model.thinkingLevelMap?.xhigh === "xhigh" &&
-    params.model.thinkingLevelMap?.max === "max"
+    current?.xhigh === "xhigh" &&
+    current.max === "max" &&
+    (!fable5 || (current.off === "low" && current.minimal === "low"))
   ) {
     return undefined;
   }
   return {
     ...params.model,
     thinkingLevelMap: {
-      ...params.model.thinkingLevelMap,
+      ...current,
+      ...(fable5 ? { off: "low", minimal: "low" } : {}),
       xhigh: "xhigh",
       max: "max",
     },
@@ -495,8 +521,9 @@ function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
     return undefined;
   }
   const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
-  const largeImageOpus = refs.some((ref) =>
+  const largeImageModel = refs.some((ref) =>
     [
+      ANTHROPIC_FABLE_5_MODEL_ID,
       ANTHROPIC_OPUS_48_MODEL_ID,
       ANTHROPIC_OPUS_48_DOT_MODEL_ID,
       ANTHROPIC_OPUS_47_MODEL_ID,
@@ -505,8 +532,8 @@ function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
   );
   return {
     image: {
-      maxSidePx: largeImageOpus ? 2576 : 1568,
-      preferredSidePx: largeImageOpus ? 2576 : 1568,
+      maxSidePx: largeImageModel ? 2576 : 1568,
+      preferredSidePx: largeImageModel ? 2576 : 1568,
       tokenMode: "provider" as const,
     },
   };
@@ -531,7 +558,21 @@ function applyAnthropicImageInputCapability(params: {
 function normalizeAnthropicResolvedModel(
   ctx: ProviderNormalizeResolvedModelContext,
 ): ProviderRuntimeModel | undefined {
-  const imageCapableModel = applyAnthropicImageInputCapability(ctx) ?? ctx.model;
+  if (
+    isAnthropicFable5Model(ctx.modelId) &&
+    normalizeLowercaseStringOrEmpty(ctx.provider) !== PROVIDER_ID
+  ) {
+    return undefined;
+  }
+  const contractModel =
+    isAnthropicFable5Model(ctx.modelId) && !ctx.model.reasoning
+      ? { ...ctx.model, reasoning: true }
+      : ctx.model;
+  const imageCapableModel =
+    applyAnthropicImageInputCapability({
+      modelId: ctx.modelId,
+      model: contractModel,
+    }) ?? contractModel;
   const mediaInput = resolveAnthropicImageMediaInput(ctx.modelId, imageCapableModel.name);
   const mediaInputModel = mediaInput
     ? {
@@ -547,17 +588,17 @@ function normalizeAnthropicResolvedModel(
       }
     : imageCapableModel;
   const outputModel =
-    applyAnthropicOpus48MaxTokens({
+    applyAnthropicModernMaxTokens({
       modelId: ctx.modelId,
       model: mediaInputModel,
     }) ?? mediaInputModel;
   const thinkingLevelModel =
-    applyAnthropicOpusThinkingLevelMap({
+    applyAnthropicThinkingLevelMap({
       modelId: ctx.modelId,
       model: outputModel,
     }) ?? outputModel;
   const contextWindowModel =
-    applyAnthropicGa1MContextWindow({
+    applyAnthropicFixedContextWindow({
       config: ctx.config,
       provider: ctx.provider,
       modelId: ctx.modelId,
@@ -789,28 +830,13 @@ export function buildAnthropicProvider(): ProviderPlugin {
       if (!model) {
         return undefined;
       }
-      const imageCapableModel =
-        applyAnthropicImageInputCapability({
-          modelId: ctx.modelId,
-          model,
-        }) ?? model;
-      const outputModel =
-        applyAnthropicOpus48MaxTokens({
-          modelId: ctx.modelId,
-          model: imageCapableModel,
-        }) ?? imageCapableModel;
-      const thinkingLevelModel =
-        applyAnthropicOpusThinkingLevelMap({
-          modelId: ctx.modelId,
-          model: outputModel,
-        }) ?? outputModel;
       return (
-        applyAnthropicGa1MContextWindow({
+        normalizeAnthropicResolvedModel({
           config: ctx.config,
           provider: ctx.provider,
           modelId: ctx.modelId,
-          model: thinkingLevelModel,
-        }) ?? thinkingLevelModel
+          model,
+        }) ?? model
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
@@ -820,10 +846,16 @@ export function buildAnthropicProvider(): ProviderPlugin {
         : undefined,
     // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
-    buildReplayPolicy: buildAnthropicReplayPolicy,
-    isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
+    ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
+    isModernModelRef: ({ provider, modelId }) =>
+      matchesAnthropicModernModel(modelId) &&
+      (!isAnthropicFable5Model(modelId) ||
+        normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
+    resolveThinkingProfile: ({ provider, modelId }) =>
+      isAnthropicFable5Model(modelId) && normalizeLowercaseStringOrEmpty(provider) !== PROVIDER_ID
+        ? null
+        : resolveClaudeThinkingProfile(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveUsageAuth: resolveAnthropicUsageAuth,
     fetchUsageSnapshot: async (ctx) =>

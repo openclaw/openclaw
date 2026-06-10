@@ -24,7 +24,9 @@ vi.mock("@anthropic-ai/sdk", () => ({
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
-  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+  const body = events
+    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
   return new Response(body, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
@@ -108,7 +110,10 @@ describe("Anthropic provider", () => {
     };
 
     const stream = streamAnthropic(
-      makeAnthropicModel(),
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+      }),
       {
         messages: [
           { role: "user", content: "hello", timestamp: 0 },
@@ -116,7 +121,7 @@ describe("Anthropic provider", () => {
             role: "assistant",
             provider: "anthropic",
             api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
+            model: "claude-fable-5",
             stopReason: "stop",
             timestamp: 0,
             usage: {
@@ -132,6 +137,11 @@ describe("Anthropic provider", () => {
                 type: "thinking",
                 thinking: signedThinking,
                 thinkingSignature: "sig_1",
+              },
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "sig_omitted",
               },
               {
                 type: "thinking",
@@ -163,7 +173,136 @@ describe("Anthropic provider", () => {
         thinking: signedThinking,
         signature: "sig_1",
       },
+      {
+        type: "thinking",
+        thinking: "",
+        signature: "sig_omitted",
+      },
     ]);
+  });
+
+  it.each([
+    ["anthropic", "sk-ant-provider"],
+    ["anthropic-vertex", "vertex-token"],
+  ])("surfaces structured Anthropic streaming refusals for %s", async (provider, apiKey) => {
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseResponse([
+                {
+                  type: "message_start",
+                  message: { id: "msg_refusal", usage: { input_tokens: 3, output_tokens: 0 } },
+                },
+                {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: { type: "text", text: "" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 0,
+                  delta: { type: "text_delta", text: "discard this partial output" },
+                },
+                { type: "content_block_stop", index: 0 },
+                {
+                  type: "message_delta",
+                  delta: {
+                    stop_reason: "refusal",
+                    stop_details: {
+                      type: "refusal",
+                      category: "cyber",
+                      explanation: "This request is not allowed.",
+                    },
+                  },
+                  usage: { input_tokens: 3, output_tokens: 2 },
+                },
+                { type: "message_stop" },
+              ]),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider,
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey, client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    expect(result.content).toEqual([]);
+    expect(result.errorMessage).toBe(
+      "Anthropic refusal (category: cyber): This request is not allowed.",
+    );
+    expect(result.usage).toMatchObject({ input: 3, output: 2 });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_refusal",
+        details: {
+          provider,
+          category: "cyber",
+          explanation: "This request is not allowed.",
+        },
+      }),
+    ]);
+  });
+
+  it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({
+        provider: "anthropic-vertex",
+        id: "claude-opus-4-8",
+        name: "Claude Opus 4.8",
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-fable-5",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "model-bound thought",
+                thinkingSignature: "sig_model_bound",
+              },
+              { type: "text", text: "visible answer" },
+            ],
+          },
+          { role: "user", content: "continue", timestamp: 0 },
+        ],
+      } as Context,
+      {
+        apiKey: "vertex-token",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
+    const assistantMessage = payload.messages.find((message) => message.role === "assistant");
+    expect(assistantMessage?.content).toEqual([{ type: "text", text: "visible answer" }]);
+    expect(JSON.stringify(assistantMessage)).not.toContain("sig_model_bound");
   });
 
   it("clamps max adaptive effort when the Claude model does not advertise it", async () => {
@@ -189,6 +328,127 @@ describe("Anthropic provider", () => {
 
     expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
       effort: "high",
+    });
+  });
+
+  it("uses always-on adaptive thinking for Claude Fable 5", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        reasoning: false,
+        baseUrl: "https://proxy.example.com/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+  });
+
+  it("normalizes forced Fable tool choice to auto", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+      }),
+      {
+        messages: [{ role: "user", content: "Use a tool.", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        thinkingEnabled: true,
+        effort: "high",
+        toolChoice: "any",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive", display: "summarized" },
+      tool_choice: { type: "auto" },
+    });
+  });
+
+  it("preserves Claude Fable 5 high effort when catalog reasoning is false", async () => {
+    const model = makeAnthropicModel({
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      reasoning: false,
+    });
+    for (const testCase of [
+      { reasoning: "off", effort: "low" },
+      { reasoning: "high", effort: "high" },
+    ] as const) {
+      let capturedPayload: unknown;
+      const stream = streamSimpleAnthropic(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        },
+        {
+          apiKey: "sk-ant-provider",
+          reasoning: testCase.reasoning,
+          onPayload: (payload) => {
+            capturedPayload = payload;
+          },
+        } as unknown as Parameters<typeof streamSimpleAnthropic>[2],
+      );
+
+      await stream.result();
+
+      expect(capturedPayload).toMatchObject({
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: testCase.effort },
+      });
+    }
+  });
+
+  it("uses the Claude Fable 5 contract on Anthropic Vertex", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic-vertex",
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "vertex-token",
+        reasoning: "high",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
     });
   });
 

@@ -89,8 +89,8 @@ export function buildStrictAnthropicReplayPolicy(
 
 /**
  * Returns true for Claude models that preserve thinking blocks in context
- * natively (Opus 4.5+, Sonnet 4.5+, Haiku 4.5+). For these models, dropping
- * thinking blocks from prior turns breaks prompt cache prefix matching.
+ * natively (Fable 5, Opus 4.5+, Sonnet 4.5+, Haiku 4.5+). For these models,
+ * dropping thinking blocks from prior turns breaks replay and prompt caching.
  *
  * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
  *
@@ -103,13 +103,19 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   }
 
   // Models that preserve thinking blocks natively (Claude 4.5+):
+  // - claude-fable-5
   // - claude-opus-4-x (opus-4-5, opus-4-6, ...)
   // - claude-sonnet-4-x (sonnet-4-5, sonnet-4-6, ...)
   //   Note: "sonnet-4" is safe — legacy "claude-3-5-sonnet" does not contain "sonnet-4"
   // - claude-haiku-4-x (haiku-4-5, ...)
   // Models that require dropping thinking blocks:
   // - claude-3-7-sonnet, claude-3-5-sonnet, and earlier
-  if (id.includes("opus-4") || id.includes("sonnet-4") || id.includes("haiku-4")) {
+  if (
+    id.includes("fable-5") ||
+    id.includes("opus-4") ||
+    id.includes("sonnet-4") ||
+    id.includes("haiku-4")
+  ) {
     return true;
   }
 

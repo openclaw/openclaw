@@ -124,6 +124,26 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("preserves Fable thinking in its same-model replay policy", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const fableContext = {
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      modelId: "claude-fable-5",
+    };
+
+    expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    });
+  });
+
   it("defaults provider api through plugin config normalization", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -508,6 +528,82 @@ describe("anthropic provider replay hooks", () => {
           modelId: "claude-opus-4-6",
         } as never)
         ?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
+    ).toBe(false);
+  });
+
+  it("resolves Claude Fable 5 with its always-adaptive model contract", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-fable-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-fable-5",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: {
+        off: "low",
+        minimal: "low",
+        xhigh: "xhigh",
+        max: "max",
+      },
+    });
+    expect(requireRecord(resolved, "Fable model").mediaInput).toEqual({
+      image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+    });
+
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "anthropic",
+      modelId: "claude-fable-5",
+    } as never);
+    expect(levelIds(profile)).toStrictEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+    expect(requireRecord(profile, "Fable thinking profile").defaultLevel).toBe("high");
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-fable-5",
+      model: {
+        ...(resolved as ProviderRuntimeModel),
+        reasoning: false,
+      },
+    } as never);
+    expect(normalized?.reasoning).toBe(true);
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "claude-cli",
+        modelId: "claude-fable-5",
+        modelRegistry: createModelRegistry([]),
+      } as ProviderResolveDynamicModelContext),
+    ).toBeUndefined();
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "claude-cli",
+        modelId: "claude-fable-5",
+      } as never),
+    ).toBeNull();
+    expect(
+      provider.isModernModelRef?.({
+        provider: "claude-cli",
+        modelId: "claude-fable-5",
+      }),
     ).toBe(false);
   });
 

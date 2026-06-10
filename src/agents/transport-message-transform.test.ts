@@ -47,6 +47,121 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it.each([
+    {
+      source: { provider: "anthropic", model: "claude-fable-5" },
+      target: { provider: "anthropic-vertex", model: "claude-opus-4-8" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      target: { provider: "anthropic", model: "claude-fable-5" },
+    },
+  ])("drops model-bound thinking for Fable switches", ({ source, target }) => {
+    const result = transformTransportMessages(
+      [
+        {
+          role: "assistant",
+          provider: source.provider,
+          api: "anthropic-messages",
+          model: source.model,
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "model-bound thought",
+              thinkingSignature: "sig_model_bound",
+            },
+            { type: "text", text: "visible answer" },
+          ],
+        },
+      ] as Context["messages"],
+      makeModel("anthropic-messages", target.provider, target.model),
+    );
+
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+    });
+  });
+
+  it.each([
+    {
+      sourceProvider: "anthropic",
+      targetProvider: "anthropic",
+      targetApi: "openclaw-anthropic-messages-transport" as const,
+    },
+    {
+      sourceProvider: "anthropic",
+      targetProvider: "anthropic-vertex",
+      targetApi: "anthropic-messages" as const,
+    },
+  ])(
+    "preserves Fable thinking across compatible Anthropic transports",
+    ({ sourceProvider, targetProvider, targetApi }) => {
+      const result = transformTransportMessages(
+        [
+          {
+            role: "assistant",
+            provider: sourceProvider,
+            api: "anthropic-messages",
+            model: "claude-fable-5",
+            stopReason: "stop",
+            timestamp: Date.now(),
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "sig_omitted",
+              },
+            ],
+          },
+        ] as Context["messages"],
+        makeModel(targetApi, targetProvider, "claude-fable-5"),
+      );
+
+      expect(result[0]).toMatchObject({
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: "sig_omitted",
+          },
+        ],
+      });
+    },
+  );
+
+  it("drops Fable thinking across unrelated API overrides", () => {
+    const result = transformTransportMessages(
+      [
+        {
+          role: "assistant",
+          provider: "anthropic",
+          api: "openai-completions",
+          model: "claude-fable-5",
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "adapter reasoning",
+              thinkingSignature: "reasoning_content",
+            },
+            { type: "text", text: "visible answer" },
+          ],
+        },
+      ] as Context["messages"],
+      makeModel("anthropic-messages", "anthropic", "claude-fable-5"),
+    );
+
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+    });
+  });
+
   it("normalizes malformed assistant content before transport conversion", () => {
     const objectContentMessages = [
       {
