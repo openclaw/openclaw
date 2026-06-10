@@ -438,14 +438,15 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   let parsedUrl: URL;
-  // Preserve standard URL percent-encoding for valid URLs; strip internal
-  // whitespace only as a recovery step for malformed ones (LLMs sometimes
-  // generate URLs with accidental spaces, e.g. "https:// docs.example.com").
+  // Preserve standard URL percent-encoding for valid URLs.  Only recover
+  // from whitespace immediately after the scheme (LLMs sometimes generate
+  // "https:// docs.example.com"); other structural malformations remain
+  // rejected so the fetched target is never silently changed.
   try {
     parsedUrl = new URL(params.url);
   } catch {
     try {
-      parsedUrl = new URL(params.url.replace(/\s+/g, ""));
+      parsedUrl = new URL(params.url.replace(/^(https?:\/\/)\s+/i, "$1"));
     } catch {
       throw new Error("Invalid URL: must be http or https");
     }

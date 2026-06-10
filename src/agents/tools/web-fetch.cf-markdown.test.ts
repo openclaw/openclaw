@@ -248,4 +248,18 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(fetchArg).not.toContain("ab");
     expect(result).toBeDefined();
   });
+
+  it("rejects hostname-internal whitespace that is not scheme-adjacent", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# ok"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+    // Whitespace inside hostname — structurally invalid, not recoverable.
+    // The narrow recovery only strips scheme-adjacent whitespace.
+    await expect(
+      tool?.execute?.("call", { url: "https://exa mple.com/page" }),
+    ).rejects.toThrow("Invalid URL");
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });
