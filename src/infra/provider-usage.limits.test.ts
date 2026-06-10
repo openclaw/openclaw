@@ -33,13 +33,13 @@ describe("getProviderUsageLimits credential awareness", () => {
     expect(loadMock).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves OpenAI limits when the credential type is absent (oauth-eligible)", async () => {
-    loadMock.mockResolvedValue({
-      updatedAt: 0,
-      providers: [{ provider: "openai", displayName: "OpenAI", windows: [] }],
-    });
-    await getProviderUsageLimits("openai");
-    expect(loadMock).toHaveBeenCalledTimes(1);
+  it("returns undefined for an OpenAI turn with an absent credential type and never fetches", async () => {
+    // A missing authMode is not evidence of an oauth turn, so we must NOT resolve
+    // (and cache-borrow) ChatGPT windows for it — same outcome as an explicit
+    // api-key turn. A real oauth/profile turn carries its mechanism explicitly.
+    const out = await getProviderUsageLimits("openai");
+    expect(out).toBeUndefined();
+    expect(loadMock).not.toHaveBeenCalled();
   });
 
   it("resolves OpenAI limits for an oauth turn", async () => {

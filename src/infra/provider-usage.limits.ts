@@ -21,10 +21,19 @@ const limitsCache = new Map<string, LimitsCacheEntry>();
 // Map a per-turn auth signal — which may be the auth *mechanism* (e.g.
 // "auth-profile"), not a credential *type* — to the usage-credential vocabulary
 // resolveUsageProviderId expects. api-key/aws-sdk resolve NO usage provider, so an
-// api-key turn never resolves "openai" and cannot borrow cached oauth windows;
-// oauth/token/auth-profile and a missing signal are usage-eligible, and the actual
-// credential is re-checked at fetch time before any usage request is made.
+// api-key turn never resolves "openai" and cannot borrow cached oauth windows.
+// A genuinely *absent* signal is treated the same way (non-eligible): a missing
+// authMode is not evidence of an oauth/subscription turn, and resolving
+// optimistically would let an untagged OpenAI api-key turn borrow cached
+// oauth/ChatGPT windows (only OpenAI is gated on oauth/token here; other
+// providers ignore the credential type, so they are unaffected). A real
+// oauth/profile turn always carries its mechanism ("oauth"/"auth-profile"/
+// "token"); one arriving blank is an upstream tagging bug to fix at the source,
+// not a reason to show another turn's windows.
 function toUsageCredentialType(raw: string | null | undefined): string {
+  if (raw == null) {
+    return "api-key";
+  }
   if (raw === "api-key" || raw === "aws-sdk") {
     return raw;
   }
