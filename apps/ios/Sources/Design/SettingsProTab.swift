@@ -53,8 +53,7 @@ struct SettingsProTab: View {
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
-    @State var notificationStatusText = "Checking"
-    @State var notificationActionText = "Request Access"
+    @State var notificationStatus: SettingsNotificationStatus = .checking
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
