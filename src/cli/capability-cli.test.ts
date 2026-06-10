@@ -1563,6 +1563,43 @@ describe("capability cli", () => {
     expect(firstImageGenerationCall()?.timeoutMs).toBe(180000);
   });
 
+  it("forwards input files for image generate", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-generate-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("png-input"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--file",
+        inputPath,
+        "--prompt",
+        "make it blue",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(generationCall?.prompt).toBe("make it blue");
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
+  });
+
   it("passes image output format and generic background hints through to generation runtime", async () => {
     mocks.generateImage.mockResolvedValue({
       provider: "openai",
@@ -1790,6 +1827,26 @@ describe("capability cli", () => {
       "--background",
       "--openai-background",
       "--timeout-ms",
+      "--output",
+      "--json",
+    ]);
+  });
+
+  it("reports the expanded image.generate flags in capability inspect", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "inspect", "--name", "image.generate", "--json"],
+    });
+
+    expect(firstJsonOutput()?.id).toBe("image.generate");
+    expect(firstJsonOutput()?.flags).toEqual([
+      "--file",
+      "--prompt",
+      "--model",
+      "--count",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
       "--output",
       "--json",
     ]);
