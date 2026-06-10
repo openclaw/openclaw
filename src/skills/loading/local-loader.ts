@@ -12,6 +12,22 @@ type LoadedLocalSkill = {
   frontmatter: ParsedSkillFrontmatter;
 };
 
+/** Why a SKILL.md directory was skipped during a safe load, for author-facing diagnostics. */
+export type SkillLoadFailure =
+  | { dir: string; filePath: string; reason: "parse-error"; message: string }
+  | {
+      dir: string;
+      filePath: string;
+      reason: "missing-required-field";
+      field: "name" | "description";
+    };
+
+type LoadSingleSkillResult =
+  | { ok: true; loaded: LoadedLocalSkill }
+  | { ok: false; failure: SkillLoadFailure }
+  // The directory has no SKILL.md at all; not a malformed skill, just not a skill dir.
+  | { ok: false; failure: null };
+
 // Read SKILL.md through the root boundary helper so symlinks cannot escape the skill root.
 function readSkillFileSync(params: {
   rootRealPath: string;
@@ -40,51 +56,67 @@ function loadSingleSkillDirectory(params: {
   source: string;
   rootRealPath: string;
   maxBytes?: number;
-}): LoadedLocalSkill | null {
+}): LoadSingleSkillResult {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
+  const filePath = path.resolve(skillFilePath);
+  const dir = path.resolve(params.skillDir);
   const raw = readSkillFileSync({
     rootRealPath: params.rootRealPath,
     filePath: skillFilePath,
     maxBytes: params.maxBytes,
   });
   if (!raw) {
-    return null;
+    return { ok: false, failure: null };
   }
 
   let frontmatter: Record<string, string>;
   try {
     frontmatter = parseFrontmatter(raw);
-  } catch {
-    return null;
+  } catch (err) {
+    return {
+      ok: false,
+      failure: { dir, filePath, reason: "parse-error", message: String(err) },
+    };
   }
 
   const fallbackName = path.basename(params.skillDir).trim();
   const name = frontmatter.name?.trim() || fallbackName;
   const description = frontmatter.description?.trim();
-  if (!name || !description) {
-    return null;
+  if (!name) {
+    return {
+      ok: false,
+      failure: { dir, filePath, reason: "missing-required-field", field: "name" },
+    };
+  }
+  if (!description) {
+    return {
+      ok: false,
+      failure: { dir, filePath, reason: "missing-required-field", field: "description" },
+    };
   }
   const invocation = resolveSkillInvocationPolicy(frontmatter);
-  const filePath = path.resolve(skillFilePath);
-  const baseDir = path.resolve(params.skillDir);
+  const baseDir = dir;
 
   return {
-    skill: {
-      name,
-      description,
-      filePath,
-      baseDir,
-      promptVersion: computeSkillPromptVersion(raw),
-      source: params.source,
-      sourceInfo: createSyntheticSourceInfo(filePath, {
-        source: params.source,
+    ok: true,
+    loaded: {
+      skill: {
+        name,
+        description,
+        filePath,
         baseDir,
-        scope: "project",
-        origin: "top-level",
-      }),
-      disableModelInvocation: invocation.disableModelInvocation,
+        promptVersion: computeSkillPromptVersion(raw),
+        source: params.source,
+        sourceInfo: createSyntheticSourceInfo(filePath, {
+          source: params.source,
+          baseDir,
+          scope: "project",
+          origin: "top-level",
+        }),
+        disableModelInvocation: invocation.disableModelInvocation,
+      },
+      frontmatter,
     },
-    frontmatter,
   };
 }
 
@@ -103,42 +135,63 @@ function listCandidateSkillDirs(dir: string): string[] {
   }
 }
 
-/** Loads skills from a local directory while turning read/parse failures into diagnostics. */
-export function loadSkillsFromDirSafe(params: { dir: string; source: string; maxBytes?: number }): {
+/** Result of a safe local skill load: loaded skills plus author-facing skip diagnostics. */
+export type LoadSkillsFromDirSafeResult = {
   skills: Skill[];
   frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;
-} {
+  // Directories that contained a SKILL.md but failed to load, with a structured reason.
+  skipped: SkillLoadFailure[];
+};
+
+/** Loads skills from a local directory while turning read/parse failures into diagnostics. */
+export function loadSkillsFromDirSafe(params: {
+  dir: string;
+  source: string;
+  maxBytes?: number;
+}): LoadSkillsFromDirSafeResult {
   const rootDir = path.resolve(params.dir);
   let rootRealPath: string;
   try {
     rootRealPath = fs.realpathSync(rootDir);
   } catch {
-    return { skills: [], frontmatterByFilePath: new Map() };
+    return { skills: [], frontmatterByFilePath: new Map(), skipped: [] };
   }
 
-  const rootSkill = loadSingleSkillDirectory({
+  const rootResult = loadSingleSkillDirectory({
     skillDir: rootDir,
     source: params.source,
     rootRealPath,
     maxBytes: params.maxBytes,
   });
-  if (rootSkill) {
+  if (rootResult.ok) {
     return {
-      skills: [rootSkill.skill],
-      frontmatterByFilePath: new Map([[rootSkill.skill.filePath, rootSkill.frontmatter]]),
+      skills: [rootResult.loaded.skill],
+      frontmatterByFilePath: new Map([
+        [rootResult.loaded.skill.filePath, rootResult.loaded.frontmatter],
+      ]),
+      skipped: [],
     };
   }
+  // A malformed root SKILL.md is a skipped skill; a missing one means scan child dirs.
+  if (rootResult.failure) {
+    return { skills: [], frontmatterByFilePath: new Map(), skipped: [rootResult.failure] };
+  }
 
-  const loadedSkills = listCandidateSkillDirs(rootDir)
-    .map((skillDir) =>
-      loadSingleSkillDirectory({
-        skillDir,
-        source: params.source,
-        rootRealPath,
-        maxBytes: params.maxBytes,
-      }),
-    )
-    .filter((skill): skill is LoadedLocalSkill => skill !== null);
+  const loadedSkills: LoadedLocalSkill[] = [];
+  const skipped: SkillLoadFailure[] = [];
+  for (const skillDir of listCandidateSkillDirs(rootDir)) {
+    const result = loadSingleSkillDirectory({
+      skillDir,
+      source: params.source,
+      rootRealPath,
+      maxBytes: params.maxBytes,
+    });
+    if (result.ok) {
+      loadedSkills.push(result.loaded);
+    } else if (result.failure) {
+      skipped.push(result.failure);
+    }
+  }
   const frontmatterByFilePath = new Map<string, ParsedSkillFrontmatter>();
   for (const loaded of loadedSkills) {
     frontmatterByFilePath.set(loaded.skill.filePath, loaded.frontmatter);
@@ -147,6 +200,7 @@ export function loadSkillsFromDirSafe(params: { dir: string; source: string; max
   return {
     skills: loadedSkills.map((loaded) => loaded.skill),
     frontmatterByFilePath,
+    skipped,
   };
 }
 

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import { buildWorkspaceSkillStatus } from "./status.js";
+import { buildWorkspaceSkillStatus, lintSkillRoots } from "./status.js";
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
 
@@ -583,6 +583,32 @@ describe("buildWorkspaceSkillStatus", () => {
       commandVisible: false,
     });
     expect(bundledBlocked.blockedByAllowlist).toBe(true);
+  });
+});
+
+describe("lintSkillRoots", () => {
+  it("reports a skill missing description in the failed-to-load report", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      const skillDir = path.join(root, "broken");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: broken\n---\n\nBody.\n",
+        "utf8",
+      );
+
+      const report = lintSkillRoots([root]);
+
+      expect(report.failures).toHaveLength(1);
+      const failure = report.failures[0]!;
+      expect(failure.reason).toBe("missing-required-field");
+      if (failure.reason === "missing-required-field") {
+        expect(failure.field).toBe("description");
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
