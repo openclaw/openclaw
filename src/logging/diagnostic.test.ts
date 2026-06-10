@@ -168,17 +168,17 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
 
-  it("evicts stale non-idle session states after TTL", () => {
+  it("evicts stale non-idle session states after TTL when no active work is queued", () => {
     const now = Date.now();
-    // Insert a non-idle ("processing") entry with lastActivity well past TTL
-    diagnosticSessionStates.set("stale-processing", {
-      sessionId: "stale-processing",
+    // Ghost entry from failed recovery: non-idle, no active work, past TTL
+    diagnosticSessionStates.set("stale-processing-ghost", {
+      sessionId: "stale-processing-ghost",
       lastActivity: now - 31 * 60 * 1000,
       generation: 0,
       state: "processing",
-      queueDepth: 1,
+      queueDepth: 0,
     });
-    // Insert a fresh idle entry (should survive)
+    // Fresh idle entry (should survive)
     diagnosticSessionStates.set("fresh-idle", {
       sessionId: "fresh-idle",
       lastActivity: now,
@@ -190,9 +190,37 @@ describe("diagnostic session state pruning", () => {
 
     pruneDiagnosticSessionStates(now, true);
 
-    // stale processing entry pruned; fresh idle entry survives
+    // stale processing ghost pruned; fresh idle entry survives
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
-    expect(diagnosticSessionStates.has("stale-processing")).toBe(false);
+    expect(diagnosticSessionStates.has("stale-processing-ghost")).toBe(false);
+    expect(diagnosticSessionStates.has("fresh-idle")).toBe(true);
+  });
+
+  it("preserves non-idle entries with active work even past TTL", () => {
+    const now = Date.now();
+    // Active processing entry: has queued work, should NOT be pruned
+    diagnosticSessionStates.set("active-processing", {
+      sessionId: "active-processing",
+      lastActivity: now - 31 * 60 * 1000,
+      generation: 0,
+      state: "processing",
+      queueDepth: 2,
+    });
+    // Fresh idle entry
+    diagnosticSessionStates.set("fresh-idle", {
+      sessionId: "fresh-idle",
+      lastActivity: now,
+      generation: 0,
+      state: "idle",
+      queueDepth: 0,
+    });
+    expect(getDiagnosticSessionStateCountForTest()).toBe(2);
+
+    pruneDiagnosticSessionStates(now, true);
+
+    // active processing survives (has queued work); fresh idle survives
+    expect(getDiagnosticSessionStateCountForTest()).toBe(2);
+    expect(diagnosticSessionStates.has("active-processing")).toBe(true);
     expect(diagnosticSessionStates.has("fresh-idle")).toBe(true);
   });
 

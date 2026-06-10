@@ -45,7 +45,7 @@ const SESSION_STATE_MAX_ENTRIES = 2000;
 
 let lastSessionPruneAt = 0;
 
-/** Prunes stale idle session states and caps the process-local state map. */
+/** Prunes stale session states with no active work and caps the process-local state map. */
 export function pruneDiagnosticSessionStates(now = Date.now(), force = false): void {
   const shouldPruneForSize = diagnosticSessionStates.size > SESSION_STATE_MAX_ENTRIES;
   if (!force && !shouldPruneForSize && now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS) {
@@ -55,10 +55,7 @@ export function pruneDiagnosticSessionStates(now = Date.now(), force = false): v
 
   for (const [key, state] of diagnosticSessionStates.entries()) {
     const ageMs = now - state.lastActivity;
-    const isIdle = state.state === "idle";
-    if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
-      diagnosticSessionStates.delete(key);
-    } else if (ageMs > SESSION_STATE_TTL_MS) {
+    if (state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
       diagnosticSessionStates.delete(key);
     }
   }
