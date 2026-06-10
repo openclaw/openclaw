@@ -1,5 +1,7 @@
 // Voice Call tests cover webhook plugin behavior.
+import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -174,6 +176,36 @@ async function expectTwilioReplayTwiML(response: Response) {
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toContain("text/xml");
   expect(await response.text()).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+}
+
+async function attemptWebSocketUpgrade(requestUrl: URL): Promise<void> {
+  const req = request(requestUrl, {
+    method: "GET",
+    headers: {
+      Connection: "Upgrade",
+      Upgrade: "websocket",
+    },
+  });
+  const controller = new AbortController();
+  const waitFor = (eventName: string) =>
+    once(req, eventName, { signal: controller.signal })
+      .then(() => undefined)
+      .catch(() => undefined);
+
+  try {
+    req.end();
+    await Promise.race([
+      waitFor("response"),
+      waitFor("error"),
+      waitFor("upgrade"),
+      sleep(1000, undefined, { signal: controller.signal }).then(() => {
+        throw new Error("upgrade request timed out");
+      }),
+    ]);
+  } finally {
+    controller.abort();
+    req.destroy();
+  }
 }
 
 function createTwilioVerificationProvider(
@@ -859,33 +891,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     requestUrl.pathname = "/voice/stream/realtime-evil";
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const req = request(
-          requestUrl,
-          {
-            method: "GET",
-            headers: {
-              Connection: "Upgrade",
-              Upgrade: "websocket",
-            },
-          },
-          () => {
-            resolve();
-          },
-        );
-
-        req.on("error", () => {
-          resolve();
-        });
-        req.on("upgrade", () => {
-          resolve();
-        });
-        req.setTimeout(1000, () => {
-          req.destroy();
-          reject(new Error("upgrade request timed out"));
-        });
-        req.end();
-      });
+      await attemptWebSocketUpgrade(requestUrl);
 
       expect(realtimeHandler.handleWebSocketUpgrade).not.toHaveBeenCalled();
     } finally {
@@ -918,33 +924,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     requestUrl.pathname = "/token";
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const req = request(
-          requestUrl,
-          {
-            method: "GET",
-            headers: {
-              Connection: "Upgrade",
-              Upgrade: "websocket",
-            },
-          },
-          () => {
-            resolve();
-          },
-        );
-
-        req.on("error", () => {
-          resolve();
-        });
-        req.on("upgrade", () => {
-          resolve();
-        });
-        req.setTimeout(1000, () => {
-          req.destroy();
-          reject(new Error("upgrade request timed out"));
-        });
-        req.end();
-      });
+      await attemptWebSocketUpgrade(requestUrl);
 
       expect(realtimeHandler.handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
     } finally {

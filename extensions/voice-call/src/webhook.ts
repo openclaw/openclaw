@@ -922,7 +922,7 @@ export class VoiceCallWebhookServer {
       const normalizedPattern = this.normalizeWebhookPathForMatch(pattern);
       const normalizedPathname = this.normalizeWebhookPathForMatch(pathname);
       if (normalizedPattern === "/") {
-        return normalizedPathname.startsWith("/");
+        return true;
       }
       return (
         normalizedPathname === normalizedPattern ||
