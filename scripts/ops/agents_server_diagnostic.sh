@@ -133,6 +133,18 @@ for cname in $(docker ps -a --format '{{.Names}}' | grep -- '-openclaw-gateway-1
   cst=ok; [ "$status" != running ] && cst=crit
   em "METRIC|$H|agent:${agent}|${status} restarts=${restarts} port=${gwport:-?}|$cst"
 
+  # Restart-count delta vs the previous scan, keyed on container ID so a
+  # recreate (new ID, counter reset to 0) starts a fresh baseline instead of
+  # producing false alarms.
+  cid=$(docker inspect -f '{{.Id}}' "$cname" 2>/dev/null | cut -c1-12)
+  if [ -n "$cid" ]; then
+    prevr=$(grep "^${cid} " /var/tmp/agentglob-restart-baseline.txt 2>/dev/null | awk '{print $2}' | head -1)
+    if [ -n "$prevr" ] && [ "$restarts" -ge $((prevr + 3)) ]; then
+      em "ISSUE|P1|$H|$agent|Restart count climbing|RestartCount ${prevr}→${restarts} since the last scan (same container) — instability even if the error signature is unknown."
+    fi
+    echo "$cid $restarts $cname" >> /var/tmp/agentglob-restart-baseline.next
+  fi
+
   if [ "$status" != running ]; then
     em "ISSUE|P0|$H|$agent|Agent not running|Container status='${status}' (expected running)."
     continue
@@ -157,6 +169,15 @@ for cname in $(docker ps -a --format '{{.Names}}' | grep -- '-openclaw-gateway-1
     && em "ISSUE|P2|$H|$agent|Model-provider discovery timeout|A provider (e.g. venice) discovery is timing out; fallback may be impaired."
   printf '%s' "$logs" | grep -qiE 'No servers configured' \
     && em "ISSUE|P3|$H|$agent|mcp-bridge no servers|mcp-bridge loaded with no servers (log noise; harmless)."
+  printf '%s' "$logs" | grep -q 'terminal channel error' \
+    && em "ISSUE|P1|$H|$agent|Channel paused on terminal error|Gateway circuit paused a channel (invalid credential — e.g. revoked bot token). Fix the credential; it re-probes hourly."
+
+  # Tight-loop detector: log bytes written in the last hour (file size is
+  # capped by rotation, so measure via docker logs --since).
+  lograte=$(docker logs --since 1h "$cname" 2>&1 | wc -c)
+  if [ "${lograte:-0}" -gt $((5 * 1024 * 1024)) ]; then
+    em "ISSUE|P2|$H|$agent|High log write rate|$((lograte / 1024 / 1024))MB of log output in the last hour — likely a tight error loop."
+  fi
 
   # ── per-agent disk: sessions + workspace (outside docker log rotation) ────
   agdir="/root/.openclaw/agents/${agent}"
@@ -172,6 +193,39 @@ for cname in $(docker ps -a --format '{{.Names}}' | grep -- '-openclaw-gateway-1
     [ "$_st" = warn ] && em "ISSUE|${_pri}|$H|${agent}|Large ${_sub} dir|${_sub}/ is ${_mb}MB (warn>=${_thresh}MB); grows unbounded — consider archiving old data."
   done
 done
+
+# Rotate the restart baseline written above (next scan compares against it).
+if [ -f /var/tmp/agentglob-restart-baseline.next ]; then
+  mv /var/tmp/agentglob-restart-baseline.next /var/tmp/agentglob-restart-baseline.txt
+fi
+
+# Fold the hourly gateway-watchdog's findings (last 24h) into this scan —
+# the watchdog never writes bug_list.md itself (single-writer rule).
+if [ -f /root/.openclaw/watchdog-state.json ]; then
+  python3 - <<'PYWD'
+import json, datetime
+try:
+    entries = json.load(open("/root/.openclaw/watchdog-state.json"))
+except Exception:
+    entries = []
+cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
+import os
+H = os.environ.get("HOST_NAME", "?")
+for e in entries:
+    try:
+        ts = datetime.datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
+    except Exception:
+        continue
+    if ts < cutoff:
+        continue
+    agent = e.get("container", "?").replace("-openclaw-gateway-1", "")
+    action, reason = e.get("action"), e.get("reason", "?")
+    if action in ("skipped", "start-failed"):
+        print(f"ISSUE|P1|{H}|{agent}|Watchdog: container down, not revived|action={action} reason={reason} at {e['ts']} — needs human action.")
+    elif action == "revived":
+        print(f"ISSUE|P3|{H}|{agent}|Watchdog revived container|exit={e.get('exitCode')} at {e['ts']} — crashed and was auto-restarted; check why it exited.")
+PYWD
+fi
 
 em "METRIC|$H|reachable|yes|ok"
 REMOTE
