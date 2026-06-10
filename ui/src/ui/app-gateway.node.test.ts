@@ -5,6 +5,7 @@ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -141,6 +142,7 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  sessionsResult: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   chatToolMessages: Record<string, unknown>[];
   activityEntries: ActivityEntry[];
@@ -429,7 +431,7 @@ describe("connectGateway", () => {
         ts: 0,
         path: "",
         count: 1,
-        defaults: {},
+        defaults: { contextTokens: null, model: null, modelProvider: null },
         sessions: [
           {
             key: "main",
