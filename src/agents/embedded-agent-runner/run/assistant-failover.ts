@@ -27,7 +27,7 @@ type AssistantFailoverOutcome =
       action: "retry";
       overloadProfileRotations: number;
       lastRetryFailoverReason: FailoverReason | null;
-      retryKind?: "same_model_idle_timeout";
+      retryKind?: "same_model_idle_timeout" | "same_model_rate_limit";
     }
   | {
       action: "throw";
@@ -83,6 +83,7 @@ export async function handleAssistantFailover(params: {
     failoverModel: string;
     logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
   }) => void;
+  maybeRetrySameModelRateLimit: () => Promise<boolean>;
   maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
   advanceAuthProfile: () => Promise<boolean>;
 }): Promise<AssistantFailoverOutcome> {
@@ -103,6 +104,16 @@ export async function handleAssistantFailover(params: {
       }),
     };
   };
+  const sameModelRateLimitRetry = (): AssistantFailoverOutcome => ({
+    action: "retry",
+    overloadProfileRotations,
+    retryKind: "same_model_rate_limit",
+    lastRetryFailoverReason: mergeRetryFailoverReason({
+      previous: params.previousRetryFailoverReason,
+      failoverReason: params.failoverReason,
+      timedOut: params.timedOut || params.idleTimedOut,
+    }),
+  });
 
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
@@ -154,6 +165,12 @@ export async function handleAssistantFailover(params: {
     }
 
     if (params.failoverReason === "rate_limit") {
+      // Minute-scale RPM windows can clear without spending a profile rotation
+      // or model fallback. Keep the retry bounded; once exhausted, continue
+      // through the existing rate-limit escalation path.
+      if (await params.maybeRetrySameModelRateLimit()) {
+        return sameModelRateLimitRetry();
+      }
       params.maybeEscalateRateLimitProfileFallback({
         failoverProvider: params.activeErrorContext.provider,
         failoverModel: params.activeErrorContext.model,

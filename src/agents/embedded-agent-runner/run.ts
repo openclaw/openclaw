@@ -152,9 +152,11 @@ import {
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
+  MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
+  resolveSameModelRateLimitBackoffMs,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -1212,6 +1214,7 @@ export async function runEmbeddedAgent(
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let sameModelRateLimitRetries = 0;
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
@@ -1371,6 +1374,27 @@ export async function runEmbeddedAgent(
           }
           throw err;
         }
+      };
+      const maybeRetrySameModelRateLimit = async (): Promise<boolean> => {
+        if (sameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+          return false;
+        }
+        const delayMs = resolveSameModelRateLimitBackoffMs(sameModelRateLimitRetries);
+        log.warn(
+          `rate-limit same-model retry ${sameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
+        );
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (err) {
+          if (params.abortSignal?.aborted) {
+            const abortErr = new Error("Operation aborted", { cause: err });
+            abortErr.name = "AbortError";
+            throw abortErr;
+          }
+          throw err;
+        }
+        sameModelRateLimitRetries += 1;
+        return true;
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
@@ -2882,6 +2906,7 @@ export async function runEmbeddedAgent(
             warn: (message) => log.warn(message),
             maybeMarkAuthProfileFailure,
             maybeEscalateRateLimitProfileFallback,
+            maybeRetrySameModelRateLimit,
             maybeBackoffBeforeOverloadFailover,
             advanceAuthProfile: advanceAttemptAuthProfile,
           });

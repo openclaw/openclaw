@@ -44,6 +44,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     warn: vi.fn(),
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),
     maybeEscalateRateLimitProfileFallback: vi.fn(),
+    maybeRetrySameModelRateLimit: vi.fn(async () => false),
     maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
     advanceAuthProfile: vi.fn(async () => false),
   };
@@ -105,6 +106,60 @@ describe("handleAssistantFailover", () => {
       await markSettled;
       await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
       expect(events).toEqual(["advance", "mark-start", "mark-finish"]);
+    });
+
+    it("retries the same model before spending a rate-limit profile rotation", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_rate_limit");
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
+    });
+
+    it("falls back to profile rotation after the same-model rate-limit budget is exhausted", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => false);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
     });
 
     it("does not log profile-specific warnings without a failed profile id", async () => {

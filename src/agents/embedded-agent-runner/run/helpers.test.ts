@@ -7,6 +7,7 @@ import {
   buildErrorAgentMeta,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveSameModelRateLimitBackoffMs,
 } from "./helpers.js";
 
 function makeAssistantMessage(
@@ -82,6 +83,24 @@ describe("resolveFinalAssistantVisibleText", () => {
     ]);
 
     expect(resolveFinalAssistantRawText(lastAssistant)).toBe("<final>keep this</final>");
+  });
+});
+
+describe("resolveSameModelRateLimitBackoffMs", () => {
+  it("waits 20s before the first same-model retry", () => {
+    expect(resolveSameModelRateLimitBackoffMs(0)).toBe(20_000);
+  });
+
+  it("waits 40s before the second same-model retry", () => {
+    expect(resolveSameModelRateLimitBackoffMs(1)).toBe(40_000);
+  });
+
+  it("caps at 60s if the retry count is ever raised further", () => {
+    expect(resolveSameModelRateLimitBackoffMs(10)).toBe(60_000);
+  });
+
+  it("is deterministic so RPM windows clear predictably", () => {
+    expect(resolveSameModelRateLimitBackoffMs(1)).toBe(resolveSameModelRateLimitBackoffMs(1));
   });
 });
 

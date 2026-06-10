@@ -37,6 +37,14 @@ const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
 const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
 const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
+// Same-model in-place rate_limit retry: provider RPM caps reset on a
+// minute scale, so wait out the current provider/model window before spending
+// a profile rotation or model failover.
+export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 2;
+const SAME_MODEL_RATE_LIMIT_INITIAL_BACKOFF_MS = 20_000;
+const SAME_MODEL_RATE_LIMIT_BACKOFF_FACTOR = 2;
+const SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS = 60_000;
+
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
 }
@@ -49,6 +57,18 @@ export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): numb
   return (
     cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
   );
+}
+
+/**
+ * Backoff before the next same-model rate_limit retry, given how many such
+ * retries already happened. No jitter: the wait must be deterministic so RPM
+ * windows clear predictably and tests can assert exact values.
+ */
+export function resolveSameModelRateLimitBackoffMs(retriesSoFar: number): number {
+  const attempt = Math.max(0, retriesSoFar);
+  const delay =
+    SAME_MODEL_RATE_LIMIT_INITIAL_BACKOFF_MS * SAME_MODEL_RATE_LIMIT_BACKOFF_FACTOR ** attempt;
+  return Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, delay);
 }
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
