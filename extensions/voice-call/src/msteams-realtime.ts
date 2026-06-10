@@ -20,6 +20,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -88,6 +89,29 @@ export function pcm16Rms(pcm: Buffer): number {
     sum += sample * sample;
   }
   return Math.sqrt(sum / samples);
+}
+
+/**
+ * Half-duplex echo guard predicate shared by the realtime and streaming paths: while our own audio is
+ * audible on the call (until `playbackActiveUntil` + the playout window), caller input below the
+ * barge-in RMS is treated as our voice echoing back and dropped, so the agent never answers itself —
+ * while a genuinely loud interruption still passes through as a barge-in.
+ */
+export function shouldSuppressEcho(
+  pcm16k: Buffer,
+  playbackActiveUntil: number,
+  opts?: {
+    suppressInputDuringPlayback?: boolean;
+    echoSuppressionWindowMs?: number;
+    echoBargeInRms?: number;
+  },
+): boolean {
+  return (
+    opts?.suppressInputDuringPlayback !== false &&
+    Date.now() <
+      playbackActiveUntil + (opts?.echoSuppressionWindowMs ?? ECHO_SUPPRESSION_WINDOW_MS) &&
+    pcm16Rms(pcm16k) < (opts?.echoBargeInRms ?? ECHO_BARGE_IN_RMS)
+  );
 }
 
 /** A short, single-line tile caption from the agent's image summary (empty → undefined). */
@@ -220,10 +244,9 @@ const MSTEAMS_MAX_DISPLAY_IMAGE_BYTES = 4_000_000;
 
 /** Per-image hold time when show_to_caller produces more than one image (slideshow pacing). */
 const DISPLAY_SLIDESHOW_MS = 4_000;
-const delay = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+/** Non-final slideshow frames are held this much past the pacing delay so send latency can't open a
+ * one-frame gap (avatar flash) between consecutive slides. */
+const DISPLAY_SLIDESHOW_OVERLAP_MS = 500;
 
 /** show_to_caller produces an image (browse + screenshot / generate), which needs more than the
  *  quick-reply budget; the model plays a "working on it" filler while it runs. */
@@ -417,8 +440,13 @@ export function createMsteamsRealtimeCall(params: {
   let turnId = 0;
   let closed = false;
   let deliveryComplete = false;
-  /** Last time we sent assistant audio to the caller (self-echo gate). */
-  let lastOutputAt = 0;
+  /**
+   * Estimated epoch ms when the audio we've sent finishes PLAYING on the call. The realtime model
+   * generates audio faster than realtime and the worker queues it for playout, so send-time is NOT
+   * play-time; summing each chunk's PCM duration tracks the playout clock the worker follows. Keyed
+   * off this (not last-send time) so the echo guard and notify drain cover the WHOLE spoken reply.
+   */
+  let playbackEndAt = 0;
   /**
    * Teams recording status. Gates the consult tool + background task so the agent
    * never processes or persists call audio before Graph `updateRecordingStatus`
@@ -571,8 +599,9 @@ export function createMsteamsRealtimeCall(params: {
         if (closed || pcm24k.length === 0) {
           return;
         }
-        lastOutputAt = Date.now();
         const pcm16k = resamplePcm(pcm24k, REALTIME_SAMPLE_RATE_HZ, MSTEAMS_SAMPLE_RATE_HZ);
+        // 16 kHz × 16-bit mono = 32 bytes/ms; extend the playout estimate by this chunk's duration.
+        playbackEndAt = Math.max(playbackEndAt, Date.now()) + pcm16k.length / 32;
         session.send({
           type: "audio.frame",
           seq: outboundSeq,
@@ -588,6 +617,8 @@ export function createMsteamsRealtimeCall(params: {
         // audio it has already queued for playback so the caller isn't talked over.
         turnId += 1;
         session.send({ type: "assistant.cancel", turnId });
+        // The flush stops playout immediately, so the playout estimate collapses to "now".
+        playbackEndAt = Date.now();
       },
     },
     onTranscript: (role, text, isFinal) => {
@@ -697,11 +728,14 @@ export function createMsteamsRealtimeCall(params: {
       if (closed) {
         return;
       }
-      if (Date.now() - lastOutputAt >= NOTIFY_AUDIO_QUIET_MS) {
+      // Quiet tail measured from the PLAYOUT end (playbackEndAt), not last send — the model streams
+      // audio faster than realtime, so the result may still be playing long after the last chunk.
+      const dueAt = playbackEndAt + NOTIFY_AUDIO_QUIET_MS;
+      if (Date.now() >= dueAt) {
         deps.onDeliveryComplete?.();
         return;
       }
-      const t = setTimeout(check, 250);
+      const t = setTimeout(check, Math.max(50, dueAt - Date.now()));
       t.unref?.();
     };
     const t = setTimeout(check, NOTIFY_AUDIO_QUIET_MS);
@@ -718,13 +752,18 @@ export function createMsteamsRealtimeCall(params: {
       return;
     }
     thinking = on;
-    if (on) {
-      try {
+    try {
+      if (on) {
         session.send({ type: "expression", emotion: "thinking" });
         lastSentExpression = "thinking";
-      } catch {
-        // non-fatal: expression is a cosmetic cue
+      } else if (lastSentExpression === "thinking") {
+        // The model may stay silent after a tool result (no transcript to re-cue an emotion), so
+        // reset to neutral here or the face would stick mid-think forever.
+        session.send({ type: "expression", emotion: "neutral" });
+        lastSentExpression = "neutral";
       }
+    } catch {
+      // non-fatal: expression is a cosmetic cue
     }
   }
 
@@ -977,8 +1016,11 @@ export function createMsteamsRealtimeCall(params: {
           type: "display.image",
           dataBase64: img.bytes.toString("base64"),
           mime: img.mime,
-          // Hold each non-final slideshow frame for a fixed beat; the last keeps the worker default.
-          ...(sequence && !isLast ? { durationMs: DISPLAY_SLIDESHOW_MS } : {}),
+          // Hold each non-final slideshow frame for a fixed beat (plus overlap, so the next frame
+          // lands before this one expires); the last keeps the worker default.
+          ...(sequence && !isLast
+            ? { durationMs: DISPLAY_SLIDESHOW_MS + DISPLAY_SLIDESHOW_OVERLAP_MS }
+            : {}),
           ...(caption ? { caption } : {}),
         });
       } catch (err) {
@@ -993,7 +1035,7 @@ export function createMsteamsRealtimeCall(params: {
       // Pace the remaining frames on the tile without blocking the spoken reply; stop if the call ends.
       void (async () => {
         for (const [idx, img] of rest.entries()) {
-          await delay(DISPLAY_SLIDESHOW_MS);
+          await sleep(DISPLAY_SLIDESHOW_MS);
           if (closed) {
             return;
           }
@@ -1177,15 +1219,10 @@ export function createMsteamsRealtimeCall(params: {
       if (recordingGateBlocks()) {
         return;
       }
-      // Half-duplex echo guard (on by default): while our own audio is playing on the call, the caller
-      // leg can carry it back (acoustic echo on the caller's device); feeding that to the model's
-      // server-VAD makes it answer itself. Drop input during the playout window unless it is loud
-      // enough to be a real barge-in, so the caller can still interrupt.
-      if (
-        deps.suppressInputDuringPlayback !== false &&
-        Date.now() - lastOutputAt < (deps.echoSuppressionWindowMs ?? ECHO_SUPPRESSION_WINDOW_MS) &&
-        pcm16Rms(pcm16k) < (deps.echoBargeInRms ?? ECHO_BARGE_IN_RMS)
-      ) {
+      // Half-duplex echo guard (on by default): while our own audio is playing OUT on the call (the
+      // playout estimate, not last-send — the model streams faster than realtime), the caller leg can
+      // carry it back as acoustic echo; feeding that to the model's server-VAD makes it answer itself.
+      if (shouldSuppressEcho(pcm16k, playbackEndAt, deps)) {
         return;
       }
       const pcm24k = resamplePcm(pcm16k, MSTEAMS_SAMPLE_RATE_HZ, REALTIME_SAMPLE_RATE_HZ);

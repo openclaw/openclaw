@@ -256,6 +256,42 @@ describe("createMsteamsRealtimeCall", () => {
     expect(mock.sendAudio).toHaveBeenCalledTimes(1);
   });
 
+  it("echo guard tracks the playout clock, not last-send time (burst-generated audio)", () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      const call = createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: { provider: mock.provider, providerConfig: {} },
+      });
+      const req = mock.getRequest();
+
+      // The model bursts ~10s of audio in one delta (faster than realtime); the worker queues it and
+      // plays it out over wall-clock time. 24 kHz 16-bit mono → 480000 bytes ≈ 10s.
+      req.onAudio(Buffer.alloc(480_000));
+      mock.sendAudio.mockClear();
+
+      const quiet = Buffer.alloc(640);
+      for (let i = 0; i < 320; i += 1) {
+        quiet.writeInt16LE(i % 2 === 0 ? 500 : -500, i * 2);
+      }
+
+      // 2s later the OLD last-send window (600ms) would have expired — but the bot is still speaking
+      // on the call, so its echo must still be suppressed.
+      vi.advanceTimersByTime(2_000);
+      call.pushAudio(quiet);
+      expect(mock.sendAudio).not.toHaveBeenCalled();
+
+      // Once the playout estimate + window has passed, quiet caller audio flows again.
+      vi.advanceTimersByTime(10_000);
+      call.pushAudio(quiet);
+      expect(mock.sendAudio).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("notify mode: signals onDeliveryComplete once after the model's audio drains", () => {
     vi.useFakeTimers();
     try {
