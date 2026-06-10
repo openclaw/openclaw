@@ -12,6 +12,8 @@ import type {
   ChannelDoctorEmptyAllowlistAccountContext,
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
+import { resolveCommandConfigWithSecrets } from "../../../cli/command-config-resolution.js";
+import { getConfiguredChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 type ChannelDoctorEntry = {
@@ -355,6 +357,37 @@ export async function collectChannelDoctorStaleConfigMutations(
   return mutations;
 }
 
+/**
+ * Resolve channel-scoped SecretRefs via the active gateway runtime (with local
+ * fallback) so doctor adapters receive a config view whose secret values are
+ * materialized. Channel doctor previews dereference credentials such as
+ * `channels.nextcloud-talk.accounts.*.botSecret` to probe their backend; the
+ * shared `SecretRef` helper throws "unresolved SecretRef ... Resolve this
+ * command against an active gateway runtime snapshot before reading it." when
+ * a file/keychain-backed reference is read directly from the on-disk config
+ * (#91939). Falling back to the original config keeps doctor working in
+ * environments where no SecretRefs are configured.
+ */
+async function resolveChannelDoctorConfig(params: {
+  cfg: OpenClawConfig;
+  commandName: string;
+}): Promise<OpenClawConfig> {
+  try {
+    const { resolvedConfig } = await resolveCommandConfigWithSecrets({
+      config: params.cfg,
+      commandName: params.commandName,
+      targetIds: getConfiguredChannelsCommandSecretTargetIds(params.cfg),
+      mode: "read_only_status",
+    });
+    return resolvedConfig;
+  } catch {
+    // Preserve doctor behavior when secret resolution is not available; the
+    // adapter call below may still surface its own descriptive warning rather
+    // than aborting the whole doctor run with a raw SecretRef exception.
+    return params.cfg;
+  }
+}
+
 /** Collect channel-specific doctor preview warnings for configured channels. */
 export async function collectChannelDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
@@ -362,11 +395,20 @@ export async function collectChannelDoctorPreviewWarnings(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
   const warnings: string[] = [];
-  for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), {
+  const resolvedCfg = await resolveChannelDoctorConfig({
     cfg: params.cfg,
+    commandName: "doctor channel preview",
+  });
+  const adapterParams = {
+    cfg: resolvedCfg,
+    doctorFixCommand: params.doctorFixCommand,
+    ...(params.env ? { env: params.env } : {}),
+  };
+  for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(resolvedCfg), {
+    cfg: resolvedCfg,
     env: params.env,
   })) {
-    const lines = await entry.doctor.collectPreviewWarnings?.(params);
+    const lines = await entry.doctor.collectPreviewWarnings?.(adapterParams);
     if (lines?.length) {
       warnings.push(...lines);
     }

@@ -4,6 +4,7 @@ import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorMutableAllowlistWarnings,
+  collectChannelDoctorPreviewWarnings,
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
 } from "./channel-doctor.js";
@@ -13,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   getBundledChannelPlugin: vi.fn(),
   getBundledChannelSetupPlugin: vi.fn(),
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
+  resolveCommandConfigWithSecrets: vi.fn(),
+  getConfiguredChannelsCommandSecretTargetIds: vi.fn(() => new Set<string>(["channels"])),
 }));
 
 const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
@@ -36,6 +39,18 @@ vi.mock("../../../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: (
     ...args: Parameters<typeof mocks.resolveReadOnlyChannelPluginsForConfig>
   ) => mocks.resolveReadOnlyChannelPluginsForConfig(...args),
+}));
+
+vi.mock("../../../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: (
+    ...args: Parameters<typeof mocks.resolveCommandConfigWithSecrets>
+  ) => mocks.resolveCommandConfigWithSecrets(...args),
+}));
+
+vi.mock("../../../cli/command-secret-targets.js", () => ({
+  getConfiguredChannelsCommandSecretTargetIds: (
+    ...args: Parameters<typeof mocks.getConfiguredChannelsCommandSecretTargetIds>
+  ) => mocks.getConfiguredChannelsCommandSecretTargetIds(...args),
 }));
 
 function createMatrixEnabledConfig() {
@@ -386,5 +401,112 @@ describe("channel doctor compatibility mutations", () => {
     });
     expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(3);
     expect(shouldSkipDefaultEmptyGroupAllowlistWarning).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("collectChannelDoctorPreviewWarnings SecretRef resolution (#91939)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves channel SecretRefs via gateway before delegating to channel doctor adapters", async () => {
+    const unresolvedSecretRef = {
+      source: "file" as const,
+      provider: "default",
+      id: "/NEXTCLOUD_TALK_BOT_SECRET",
+    };
+    const cfg = {
+      channels: {
+        "nextcloud-talk": {
+          enabled: true,
+          accounts: {
+            default: {
+              botSecret: unresolvedSecretRef,
+              baseUrl: "https://nc.example.com",
+            },
+          },
+        },
+      },
+    } as never;
+    const resolvedCfg = {
+      channels: {
+        "nextcloud-talk": {
+          enabled: true,
+          accounts: {
+            default: {
+              botSecret: "resolved-secret-value",
+              baseUrl: "https://nc.example.com",
+            },
+          },
+        },
+      },
+    } as never;
+
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
+      resolvedConfig: resolvedCfg,
+      effectiveConfig: resolvedCfg,
+      diagnostics: [],
+    });
+
+    const collectPreviewWarnings = vi.fn(async () => [
+      "- channels.nextcloud-talk.default: bot probe ok",
+    ]);
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "nextcloud-talk",
+          doctor: { collectPreviewWarnings },
+        },
+      ],
+    });
+
+    const warnings = await collectChannelDoctorPreviewWarnings({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledTimes(1);
+    const resolveCall = mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
+      mode?: string;
+      commandName?: string;
+      config?: unknown;
+    };
+    expect(resolveCall.mode).toBe("read_only_status");
+    expect(resolveCall.commandName).toBe("doctor channel preview");
+    expect(resolveCall.config).toBe(cfg);
+
+    // Adapter MUST receive the resolved view, not the raw SecretRef config.
+    expect(collectPreviewWarnings).toHaveBeenCalledTimes(1);
+    const adapterCall = collectPreviewWarnings.mock.calls[0]?.[0] as {
+      cfg?: typeof resolvedCfg;
+    };
+    expect(adapterCall.cfg).toBe(resolvedCfg);
+
+    expect(warnings).toEqual(["- channels.nextcloud-talk.default: bot probe ok"]);
+  });
+
+  it("falls back to the raw config when SecretRef resolution throws so doctor still surfaces other warnings", async () => {
+    const cfg = {
+      channels: {
+        "nextcloud-talk": { enabled: true, accounts: { default: { baseUrl: "https://nc" } } },
+      },
+    } as never;
+    mocks.resolveCommandConfigWithSecrets.mockRejectedValue(
+      new Error("gateway unreachable and local fallback failed"),
+    );
+    const collectPreviewWarnings = vi.fn(async () => ["- something else"]);
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [{ id: "nextcloud-talk", doctor: { collectPreviewWarnings } }],
+    });
+
+    const warnings = await collectChannelDoctorPreviewWarnings({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(collectPreviewWarnings).toHaveBeenCalledTimes(1);
+    const adapterCall = collectPreviewWarnings.mock.calls[0]?.[0] as { cfg?: typeof cfg };
+    expect(adapterCall.cfg).toBe(cfg);
+    expect(warnings).toEqual(["- something else"]);
   });
 });
