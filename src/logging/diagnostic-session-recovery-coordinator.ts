@@ -96,15 +96,18 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   }
   if (!recoveryOutcomeMutatesSessionState(params.outcome)) {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
-    // When recovery does not mutate session state (e.g. status "failed"),
-    // the diagnostic entry stays non-idle forever unless we explicitly
-    // transition it.  Mark it idle and clear queued work so stale-idle
-    // pruning can eventually remove it instead of accumulating a ghost entry.
-    const ghostState = peekDiagnosticSessionState(params.request);
-    if (ghostState && ghostState.state !== "idle") {
-      ghostState.state = "idle";
-      ghostState.queueDepth = 0;
-      ghostState.lastActivity = Date.now();
+    // When recovery fails (status "failed"), the diagnostic entry stays non-idle
+    // forever.  Transition it to idle and clear queued work so stale-idle pruning
+    // can eventually remove it instead of accumulating a ghost entry.
+    // Other non-mutating outcomes (e.g. skipped, already-in-flight) keep their
+    // current state because the session may still be active.
+    if (params.outcome.status === "failed") {
+      const ghostState = peekDiagnosticSessionState(params.request);
+      if (ghostState && ghostState.state !== "idle") {
+        ghostState.state = "idle";
+        ghostState.queueDepth = 0;
+        ghostState.lastActivity = Date.now();
+      }
     }
     return;
   }
