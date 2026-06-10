@@ -1,4 +1,3 @@
-// Defines plugin hook message payload and trace context types.
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { PluginConversationBinding } from "./conversation-binding.types.js";
 
@@ -46,9 +45,11 @@ export type PluginHookMessageContext = {
   messageId?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
   senderGroup?: string;
+  replyToIsQuote?: boolean;
   trace?: DiagnosticTraceContext;
   traceId?: string;
   spanId?: string;
@@ -77,9 +78,11 @@ export type PluginHookInboundClaimEvent = {
   senderName?: string;
   senderUsername?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
   senderGroup?: string;
+  replyToIsQuote?: boolean;
   threadId?: string | number;
   messageId?: string;
   sessionKey?: string;
@@ -102,9 +105,11 @@ export type PluginHookMessageReceivedEvent = {
   messageId?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
   senderGroup?: string;
+  replyToIsQuote?: boolean;
   sessionKey?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;

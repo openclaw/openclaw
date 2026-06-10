@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 
 describe("buildGatewayRuntimeHints", () => {
+  it("prioritizes macOS GUI-session failures over generic missing supervision", () => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        missingSupervision: true,
+        missingGuiSession: true,
+      },
+      { platform: "darwin", env: {} },
+    );
+
+    expect(hints.join("\n")).toContain("logged-in macOS GUI session");
+    expect(hints.join("\n")).not.toContain("LaunchAgent installed but not loaded");
+  });
+
   it("surfaces suspicious systemd cgroup hygiene with inspection commands", () => {
     expect(
       buildGatewayRuntimeHints(

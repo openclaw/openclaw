@@ -161,6 +161,13 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 `captureContent: true` only for broad diagnostics captures where OTLP log
 message bodies are also approved for export.
 
+`toolInputs`/`toolOutputs` content is captured for the built-in agent runtime's
+tool executions (`openclaw.content.tool_input` on completed/error spans,
+`openclaw.content.tool_output` on completed spans). External harness tool calls
+(Codex, Claude CLI) emit `tool.execution.*` spans without content payloads.
+Captured content travels on a trusted, listener-only channel and is never placed
+on the public diagnostic event bus.
+
 ## Sampling and flushing
 
 - **Traces:** `diagnostics.otel.sampleRate` (root-span only, `0.0` drops all,

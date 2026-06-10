@@ -376,6 +376,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private queuedForcedRuns = 0;
   private dirty = false;
   private closed = false;
+  private mode: QmdManagerMode = "full";
   private readonly closeSignal: Promise<void>;
   private resolveCloseSignal!: () => void;
   private db: SqliteDatabase | null = null;
@@ -449,6 +450,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async initialize(mode: QmdManagerMode): Promise<void> {
+    this.mode = mode;
     const startTime = Date.now();
     this.bootstrapCollections();
     if (mode === "status") {
@@ -1729,6 +1731,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async maybeWarmSession(sessionKey?: string): Promise<void> {
+    if (this.mode === "cli") {
+      return;
+    }
     if (!this.syncSettings?.onSessionStart) {
       return;
     }
@@ -1743,6 +1748,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async maybeSyncDirtySearchState(): Promise<void> {
+    if (this.mode === "cli") {
+      return;
+    }
     if (!this.syncSettings?.onSearch || !this.dirty) {
       return;
     }

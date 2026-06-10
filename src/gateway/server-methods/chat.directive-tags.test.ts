@@ -15,10 +15,6 @@ import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-prot
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTest,
-} from "../../config/sessions/test-helpers.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -57,6 +53,7 @@ const mockState = vi.hoisted(() => ({
       replyToId?: string;
       replyToCurrent?: boolean;
       isReasoning?: boolean;
+      isStatusNotice?: boolean;
       isError?: boolean;
     };
   }>,
@@ -1490,6 +1487,38 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
+  it("broadcasts agent-run status notices without source reply mirrors", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-status-notice-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "⚙️ Codex compaction started • Context 2k/200k",
+          isStatusNotice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-status-notice",
+      message: "/compact",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-status-notice",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(extractFirstTextBlock(broadcast)).toBe("⚙️ Codex compaction started • Context 2k/200k");
+    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    expect(assistantEntries).toStrictEqual([]);
+  });
+
   it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-agent-source-reply-media-",
@@ -1502,14 +1531,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
         const rewrittenAt = Date.parse("2026-05-18T11:05:00.000Z");
         const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
-        writeSessionStoreForTest(storePath, {
-          main: {
-            sessionId: mockState.sessionId,
-            sessionFile: mockState.transcriptPath,
-            updatedAt,
-            status: "done",
-          },
-        });
+        fs.writeFileSync(
+          storePath,
+          JSON.stringify({
+            main: {
+              sessionId: mockState.sessionId,
+              sessionFile: mockState.transcriptPath,
+              updatedAt,
+              status: "done",
+            },
+          }),
+          "utf-8",
+        );
         await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorIdempotencyKey,
           text: "Codex source reply with media",
@@ -1569,7 +1602,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
           expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
           expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
-          const store = readSessionStoreForTest(storePath);
+          const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+            string,
+            { updatedAt?: number; status?: string }
+          >;
           expect(store.main?.updatedAt).toBeGreaterThanOrEqual(rewrittenAt);
           expect(store.main?.updatedAt).toBeGreaterThan(updatedAt);
           expect(store.main?.status).toBe("done");
@@ -2175,6 +2211,48 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("broadcasts returned agent errors after status notices", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-status-notice-error-");
+    const errorMessage = "LLM idle timeout (120s): no response from model";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "⚙️ Codex compaction started • Context 2k/200k",
+          isStatusNotice: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: errorMessage,
+          isError: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-status-notice-error",
+      message: "/compact",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-status-notice-error",
+      sessionKey: "main",
+      state: "error",
+      errorMessage,
+    });
+    const finalBroadcasts = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "final");
+    expect(finalBroadcasts).toStrictEqual([]);
+  });
+
   it("broadcasts returned agent-run error payloads after an agent starts", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-returned-error-");
     const errorMessage = "LLM idle timeout (120s): no response from model";
@@ -2451,14 +2529,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T11:05:00.000Z");
     const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
-    writeSessionStoreForTest(storePath, {
-      main: {
-        sessionId: mockState.sessionId,
-        sessionFile: mockState.transcriptPath,
-        updatedAt,
-        status: "done",
-      },
-    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        main: {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          updatedAt,
+          status: "done",
+        },
+      }),
+      "utf-8",
+    );
     const respond = vi.fn();
     const context = createChatContext();
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -2478,7 +2560,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
       const response = lastRespondCall(respond);
       expect(response?.[0]).toBe(true);
-      const store = readSessionStoreForTest(storePath);
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { updatedAt?: number; status?: string }
+      >;
       expect(store.main?.updatedAt).toBe(appendedAt);
       expect(store.main?.status).toBe("done");
     } finally {

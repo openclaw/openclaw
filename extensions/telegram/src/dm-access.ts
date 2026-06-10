@@ -145,6 +145,26 @@ export function emitTelegramMessagePreAuthHooks(params: {
   );
 }
 
+export async function isTelegramDmAccessAllowed(params: {
+  dmPolicy: DmPolicy;
+  msg: Message;
+  chatId: number;
+  effectiveDmAllow: NormalizedAllowFrom;
+  accountId: string;
+}): Promise<boolean> {
+  if (params.dmPolicy === "disabled") {
+    return false;
+  }
+  const sender = resolveTelegramSenderIdentity(params.msg, params.chatId);
+  const access = await decideTelegramDmAccess({
+    accountId: params.accountId,
+    dmPolicy: params.dmPolicy,
+    sender,
+    effectiveDmAllow: params.effectiveDmAllow,
+  });
+  return access.decision === "allow";
+}
+
 export async function enforceTelegramDmAccess(params: {
   isGroup: boolean;
   dmPolicy: DmPolicy;

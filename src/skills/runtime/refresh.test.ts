@@ -5,8 +5,8 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsChangeEvent } from "./refresh.js";
 
-type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
-type WatchCallback = (watchPath: string) => void;
+type WatchEvent = "add" | "addDir" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
+type WatchCallback = (...args: unknown[]) => void;
 
 function createMockWatcher() {
   const handlers = new Map<WatchEvent, WatchCallback[]>();
@@ -16,9 +16,9 @@ function createMockWatcher() {
       return watcher;
     }),
     close: vi.fn(async () => undefined),
-    emit: (event: WatchEvent, watchPath: string) => {
+    emit: (event: WatchEvent, ...args: unknown[]) => {
       for (const callback of handlers.get(event) ?? []) {
-        callback(watchPath);
+        callback(...args);
       }
     },
   };
@@ -71,7 +71,7 @@ describe("ensureSkillsWatcher", () => {
       const opts = calls[0]?.[1] ?? {};
       const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
 
-      expect(opts.ignored).toBe(refreshModule.shouldIgnoreSkillsWatchPath);
+      expect(typeof opts.ignored).toBe("function");
       expect(opts.followSymlinks).toBe(false);
       const posix = (p: string) => p.replaceAll("\\", "/");
       expect(targets).toContain(workspaceSkillsRoot);
@@ -100,13 +100,84 @@ describe("ensureSkillsWatcher", () => {
       expect(ignored("/tmp/workspace/skills/build/output.js")).toBe(true);
       expect(ignored("/tmp/workspace/skills/.cache/data.json")).toBe(true);
 
-      // Should NOT ignore normal skill files
+      // Paths without stats stay visible so chokidar can stat and classify them.
       expect(ignored("/tmp/.hidden/skills/index.md")).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isDirectory: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isSymbolicLink: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill/README.md", {})).toBe(true);
-      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(true);
+      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {}, { usePolling: true })).toBe(
+        false,
+      );
     } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps SKILL.md file watches in chokidar polling mode", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-polling-"));
+    const previousPolling = process.env.CHOKIDAR_USEPOLLING;
+    try {
+      process.env.CHOKIDAR_USEPOLLING = "true";
+      refreshModule.ensureSkillsWatcher({ workspaceDir });
+
+      const calls = watchMock.mock.calls as unknown as Array<
+        [
+          string,
+          {
+            ignored?: (
+              watchPath: string,
+              stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
+            ) => boolean;
+            usePolling?: boolean;
+          },
+        ]
+      >;
+      const opts = calls[0]?.[1] ?? {};
+      expect(opts.usePolling).toBe(true);
+      expect(opts.ignored?.("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+    } finally {
+      if (previousPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = previousPolling;
+      }
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not double-refresh polling SKILL.md changes from raw events", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-polling-raw-"));
+    const previousPolling = process.env.CHOKIDAR_USEPOLLING;
+    const seen: SkillsChangeEvent[] = [];
+    try {
+      process.env.CHOKIDAR_USEPOLLING = "true";
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir,
+        config: { skills: { load: { watchDebounceMs: 10 } } },
+      });
+
+      createdWatchers[0]?.emit(
+        "raw",
+        "change",
+        path.join(workspaceDir, "skills", "demo", "SKILL.md"),
+        {
+          watchedPath: path.join(workspaceDir, "skills", "demo"),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(seen).toEqual([]);
+    } finally {
+      if (previousPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = previousPolling;
+      }
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -140,6 +211,103 @@ describe("ensureSkillsWatcher", () => {
           workspaceDir,
           reason: "watch",
           changedPath,
+        },
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes snapshots from raw directory events for SKILL.md files", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = "/tmp/workspace";
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    createdWatchers[0]?.emit("raw", "rename", "README.md", {
+      watchedPath: "/tmp/workspace/skills/demo",
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(seen).toEqual([]);
+
+    createdWatchers[0]?.emit("raw", "rename", "SKILL.md", {
+      watchedPath: "/tmp/workspace/skills/demo",
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(seen).toEqual([
+      {
+        workspaceDir,
+        reason: "watch",
+        changedPath: "/tmp/workspace/skills/demo/SKILL.md",
+      },
+    ]);
+  });
+
+  it("falls back to a watched-directory refresh when raw events omit a filename", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = "/tmp/workspace";
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    createdWatchers[0]?.emit("raw", "rename", undefined, {
+      watchedPath: "/tmp/workspace/skills",
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(seen).toEqual([
+      {
+        workspaceDir,
+        reason: "watch",
+        changedPath: "/tmp/workspace/skills",
+      },
+    ]);
+  });
+
+  it("waits for raw SKILL.md files to stabilize before refreshing", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-stable-"));
+    const skillDir = path.join(workspaceDir, "skills", "demo");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const seen: SkillsChangeEvent[] = [];
+    try {
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(skillFile, "---\nname: demo\ndescription: Demo\n---\n");
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir,
+        config: { skills: { load: { watchDebounceMs: 10 } } },
+      });
+
+      createdWatchers[0]?.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toEqual([
+        {
+          workspaceDir,
+          reason: "watch",
+          changedPath: skillFile,
         },
       ]);
     } finally {
@@ -529,7 +697,7 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it.each(["add", "change", "unlink", "unlinkDir"] as const)(
+  it.each(["add", "addDir", "change", "unlink", "unlinkDir"] as const)(
     "refreshes skills snapshots on %s",
     async (event) => {
       vi.useFakeTimers();

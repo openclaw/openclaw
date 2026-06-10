@@ -134,6 +134,7 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "skills", kind: "none" },
   { prefix: "secrets", kind: "none" },
   { prefix: "plugins", kind: "hot", actions: ["reload-plugins", "dispose-mcp-runtimes"] },
+  { prefix: "tui", kind: "none" },
   { prefix: "ui", kind: "none" },
   { prefix: "gateway", kind: "restart" },
   { prefix: "discovery", kind: "restart" },

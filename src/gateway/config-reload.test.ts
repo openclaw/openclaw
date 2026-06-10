@@ -424,6 +424,17 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("secrets.providers.default.path");
   });
 
+  it("treats TUI display preferences as no-op for gateway restart planning", () => {
+    const path = "tui.footer.showRemoteHost";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.noopPaths).toContain(path);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("none");
+  });
+
   it("treats diagnostics stuck-session thresholds as no-op for gateway restart planning", () => {
     const plan = buildGatewayReloadPlan([
       "diagnostics.stuckSessionWarnMs",
@@ -507,6 +518,11 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "tui.footer.showRemoteHost",
+      expectRestartGateway: false,
+      expectNoopPath: "tui.footer.showRemoteHost",
     },
     {
       path: "auth.cooldowns.billingBackoffHours",

@@ -306,6 +306,7 @@ export type PluginTrustedToolPolicyRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   policy: PluginTrustedToolPolicyRegistration;
+  origin?: PluginRecord["origin"];
   source: string;
   rootDir?: string;
 };

@@ -16,9 +16,11 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
+  canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexAppServerRuntimeOptions,
@@ -49,7 +51,10 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
-import { CODEX_NATIVE_PERSONALITY_NONE } from "./app-server/thread-lifecycle.js";
+import {
+  CODEX_NATIVE_PERSONALITY_NONE,
+  resolveCodexAppServerRequestModelSelection,
+} from "./app-server/thread-lifecycle.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -116,8 +121,11 @@ async function resolveConversationAppServerRuntime(params: {
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   agentId?: string;
+  agentDir?: string;
   sessionKey?: string;
   workspaceDir: string;
+  modelProvider?: string;
+  model?: string;
 }): Promise<{
   execPolicy?: OpenClawExecPolicyForCodexAppServer;
   runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
@@ -138,9 +146,12 @@ async function resolveConversationAppServerRuntime(params: {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
     execPolicy,
+    modelProvider: params.modelProvider,
+    model: params.model,
+    config: params.config,
+    agentDir: params.agentDir,
     openClawSandboxActive: Boolean(sandboxForPolicy?.enabled),
   });
-  assertNativeConversationApprovalPolicySupported({ execPolicy, runtime });
   return { execPolicy, runtime };
 }
 
@@ -326,24 +337,61 @@ type ConversationAppServerRuntime = Awaited<ReturnType<typeof resolveConversatio
 type CodexThreadBindingRuntime = ConversationAppServerRuntime & {
   agentLookup: ReturnType<typeof buildAgentLookup>;
   client: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>>;
+  model?: string;
   modelProvider?: string;
 };
 
 async function resolveThreadBindingRuntime(
   params: CodexThreadBindingParams,
 ): Promise<CodexThreadBindingRuntime> {
+  const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
+  const modelProvider = resolveThreadRequestModelProvider({
+    authProfileId: params.authProfileId,
+    modelProvider: params.modelProvider,
+    ...agentLookup,
+  });
+  const modelSelection = resolveOptionalThreadRequestModelSelection({
+    model: params.model,
+    modelProvider,
+    authProfileId: params.authProfileId,
+    ...agentLookup,
+  });
+  const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
+    authProfileId: params.authProfileId,
+    modelProvider: params.modelProvider,
+    ...agentLookup,
+  });
   const { execPolicy, runtime } = await resolveConversationAppServerRuntime({
     pluginConfig: params.pluginConfig,
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
+    modelProvider: reviewerModelProvider,
+    model: params.model,
+    agentDir: params.agentDir,
   });
-  const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
-  const modelProvider = resolveThreadRequestModelProvider({
-    authProfileId: params.authProfileId,
-    modelProvider: params.modelProvider,
-    ...agentLookup,
+  const modelScopedRuntime = resolveCodexAppServerForModelProvider({
+    appServer: runtime,
+    provider: reviewerModelProvider,
+    model: params.model,
+    config: params.config,
+    env: process.env,
+    agentDir: params.agentDir,
+  });
+  assertNativeConversationApprovalPolicySupported({
+    execPolicy,
+    approvalPolicy: execPolicy?.touched
+      ? modelScopedRuntime.approvalPolicy
+      : (params.approvalPolicy ?? modelScopedRuntime.approvalPolicy),
+    approvalsReviewer: modelScopedRuntime.approvalsReviewer,
+    modelBackedApprovalsReviewerUnavailable: !canUseCodexModelBackedApprovalsReviewerForModel({
+      modelProvider: reviewerModelProvider,
+      model: params.model,
+      config: params.config,
+      env: process.env,
+      agentDir: params.agentDir,
+    }),
   });
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: runtime.start,
@@ -351,7 +399,14 @@ async function resolveThreadBindingRuntime(
     authProfileId: params.authProfileId,
     ...agentLookup,
   });
-  return { execPolicy, runtime, agentLookup, modelProvider, client };
+  return {
+    execPolicy,
+    runtime: modelScopedRuntime,
+    agentLookup,
+    model: modelSelection?.model,
+    modelProvider: modelSelection?.modelProvider ?? modelProvider,
+    client,
+  };
 }
 
 function buildThreadRequestRuntimeOptions(
@@ -391,10 +446,10 @@ async function writeThreadBindingFromResponse(
       threadId: response.thread.id,
       cwd: response.thread.cwd ?? params.workspaceDir,
       authProfileId: params.authProfileId,
-      model: response.model ?? params.model,
+      model: response.model ?? resolved.model ?? params.model,
       modelProvider: normalizeCodexAppServerBindingModelProvider({
         authProfileId: params.authProfileId,
-        modelProvider: response.modelProvider ?? params.modelProvider,
+        modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,
         ...resolved.agentLookup,
       }),
       approvalPolicy: resolved.execPolicy?.touched
@@ -422,7 +477,7 @@ async function attachExistingThread(
       CODEX_CONTROL_METHODS.resumeThread,
       {
         threadId: params.threadId,
-        ...(params.model ? { model: params.model } : {}),
+        ...(resolved.model ? { model: resolved.model } : {}),
         ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...buildThreadRequestRuntimeOptions(params, resolved),
@@ -443,7 +498,7 @@ async function createThread(params: CodexThreadBindingParams): Promise<void> {
       "thread/start",
       {
         cwd: params.workspaceDir,
-        ...(params.model ? { model: params.model } : {}),
+        ...(resolved.model ? { model: resolved.model } : {}),
         ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...buildThreadRequestRuntimeOptions(params, resolved),
@@ -476,13 +531,57 @@ async function runBoundTurn(params: {
     throw new Error("bound Codex conversation has no thread binding");
   }
   const workspaceDir = binding.cwd || params.data.workspaceDir;
+  const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
+    authProfileId: binding.authProfileId,
+    modelProvider: binding.modelProvider,
+    ...agentLookup,
+  });
   const { execPolicy, runtime } = await resolveConversationAppServerRuntime({
     pluginConfig: params.pluginConfig,
     config: params.config,
     sessionKey: params.sessionKey,
     workspaceDir,
+    modelProvider: reviewerModelProvider,
+    model: binding.model,
+    agentDir: params.data.agentDir,
   });
-  assertNativeConversationApprovalPolicySupported({ execPolicy, runtime });
+  const modelScopedRuntime = resolveCodexAppServerForModelProvider({
+    appServer: runtime,
+    provider: reviewerModelProvider,
+    model: binding.model,
+    config: params.config,
+    env: process.env,
+    agentDir: params.data.agentDir,
+  });
+  const modelBackedApprovalsReviewerUnavailable = !canUseCodexModelBackedApprovalsReviewerForModel({
+    modelProvider: reviewerModelProvider,
+    model: binding.model,
+    config: params.config,
+    env: process.env,
+    agentDir: params.data.agentDir,
+  });
+  const useModelScopedPolicy =
+    execPolicy?.touched === true || modelBackedApprovalsReviewerUnavailable;
+  const approvalPolicy = useModelScopedPolicy
+    ? modelScopedRuntime.approvalPolicy
+    : (binding.approvalPolicy ?? modelScopedRuntime.approvalPolicy);
+  const sandbox = useModelScopedPolicy
+    ? modelScopedRuntime.sandbox
+    : (binding.sandbox ?? modelScopedRuntime.sandbox);
+  assertNativeConversationApprovalPolicySupported({
+    execPolicy,
+    approvalPolicy,
+    approvalsReviewer: modelScopedRuntime.approvalsReviewer,
+    modelBackedApprovalsReviewerUnavailable,
+  });
+  const modelSelection = binding.model
+    ? resolveCodexAppServerRequestModelSelection({
+        model: binding.model,
+        modelProvider: binding.modelProvider,
+        authProfileId: binding.authProfileId,
+        ...agentLookup,
+      })
+    : undefined;
 
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: runtime.start,
@@ -540,15 +639,10 @@ async function runBoundTurn(params: {
           event: params.event,
         }),
         cwd: workspaceDir,
-        approvalPolicy: execPolicy?.touched
-          ? runtime.approvalPolicy
-          : (binding.approvalPolicy ?? runtime.approvalPolicy),
-        approvalsReviewer: runtime.approvalsReviewer,
-        sandboxPolicy: codexSandboxPolicyForTurn(
-          execPolicy?.touched ? runtime.sandbox : (binding.sandbox ?? runtime.sandbox),
-          workspaceDir,
-        ),
-        ...(binding.model ? { model: binding.model } : {}),
+        approvalPolicy,
+        approvalsReviewer: modelScopedRuntime.approvalsReviewer,
+        sandboxPolicy: codexSandboxPolicyForTurn(sandbox, workspaceDir),
+        ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...((binding.serviceTier ?? runtime.serviceTier)
           ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
@@ -583,9 +677,15 @@ async function runBoundTurn(params: {
 
 function assertNativeConversationApprovalPolicySupported(params: {
   execPolicy?: OpenClawExecPolicyForCodexAppServer;
-  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
+  approvalPolicy: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["approvalPolicy"];
+  approvalsReviewer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["approvalsReviewer"];
+  modelBackedApprovalsReviewerUnavailable: boolean;
 }): void {
-  if (params.execPolicy?.touched === true && params.runtime.approvalPolicy !== "never") {
+  if (
+    params.approvalPolicy !== "never" &&
+    (params.execPolicy?.touched === true ||
+      (params.modelBackedApprovalsReviewerUnavailable && params.approvalsReviewer === "user"))
+  ) {
     throw new Error(NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE);
   }
 }
@@ -719,6 +819,38 @@ function resolveThreadRequestModelProvider(params: {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
+}
+
+function resolveOptionalThreadRequestModelSelection(params: {
+  model?: string;
+  modelProvider?: string;
+  authProfileId?: string;
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): { model: string; modelProvider?: string } | undefined {
+  if (!params.model?.trim()) {
+    return undefined;
+  }
+  return resolveCodexAppServerRequestModelSelection({
+    model: params.model,
+    modelProvider: params.modelProvider,
+    authProfileId: params.authProfileId,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+}
+
+function resolveModelBackedReviewerPolicyProvider(params: {
+  authProfileId?: string;
+  modelProvider?: string;
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): string | undefined {
+  const modelProvider = params.modelProvider?.trim();
+  if (modelProvider && modelProvider.toLowerCase() !== "codex") {
+    return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
+  }
+  return isCodexAppServerNativeAuthProfile(params) ? "openai" : undefined;
 }
 
 function buildAgentLookup(params: {
