@@ -35,6 +35,7 @@ import {
 } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { loadChatComposerSnapshot, restoreChatComposerState } from "./chat/composer-persistence.ts";
+import { extractThinking } from "./chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -90,6 +91,7 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
 import type { UiSettings } from "./storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type {
   AgentsListResult,
   PresenceEntry,
@@ -157,6 +159,7 @@ type GatewayHost = {
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
   pendingSessionMessageReloadSessionKey?: string | null;
+  pendingSessionMessageReloadHasThinking?: boolean;
 };
 
 type SessionDefaultsSnapshot = {
@@ -174,6 +177,13 @@ type GatewayHostWithShutdownMessage = GatewayHost & {
 type GatewayHostWithSideResults = GatewayHost & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
+};
+
+type SessionMessageGatewayPayload = {
+  sessionKey?: string;
+  agentId?: string;
+  runId?: unknown;
+  message?: unknown;
 };
 
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
@@ -552,6 +562,17 @@ function sessionMessageMatchesHost(
   );
 }
 
+function sessionMessagePayloadHasThinking(
+  payload: SessionMessageGatewayPayload | undefined,
+): boolean {
+  const message = payload?.message;
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+  return role === "assistant" && typeof extractThinking(message) === "string";
+}
+
 function chatSideResultAgentScopeMatches(host: GatewayHost, sideResult: ChatSideResult): boolean {
   return globalAgentScopeMatches(host, sideResult.sessionKey, sideResult.agentId);
 }
@@ -921,6 +942,7 @@ function handleTerminalChatEvent(
   payload: ChatEventPayload | undefined,
   state: ReturnType<typeof handleChatEvent>,
   activeRunIdBeforeEvent: string | null,
+  opts: { deferredSessionMessageHasThinking?: boolean } = {},
 ): boolean {
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return false;
@@ -953,7 +975,12 @@ function handleTerminalChatEvent(
   // response; an immediate transcript reload replaces the optimistic user bubble
   // with the persisted copy and causes a visible disappear/reappear flicker.
   if (hadToolEvents && state === "final") {
-    if (activeRunIdBeforeEvent && !shouldReloadHistoryForFinalEvent(payload)) {
+    if (
+      activeRunIdBeforeEvent &&
+      !shouldReloadHistoryForFinalEvent(payload, {
+        deferredSessionMessageHasThinking: opts.deferredSessionMessageHasThinking,
+      })
+    ) {
       flushQueue();
       return false;
     }
@@ -1006,19 +1033,31 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     payload,
     activeRunIdBeforeEvent,
   );
-  const historyReloaded = handleTerminalChatEvent(host, payload, state, activeRunIdBeforeEvent);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const payloadSessionKey = payload?.sessionKey?.trim();
+  const deferredSessionMessageHasThinking = Boolean(
+    deferredReloadHost.pendingSessionMessageReloadHasThinking === true &&
+    deferredSessionKey &&
+    payloadSessionKey &&
+    areUiSessionKeysEquivalent(deferredSessionKey, payloadSessionKey) &&
+    sessionMessageMatchesHost(host, payloadSessionKey, payload?.agentId),
+  );
+  const historyReloaded = handleTerminalChatEvent(host, payload, state, activeRunIdBeforeEvent, {
+    deferredSessionMessageHasThinking,
+  });
   const finalEventNeedsHistoryReload =
-    state === "final" && shouldReloadHistoryForFinalEvent(payload);
+    state === "final" &&
+    shouldReloadHistoryForFinalEvent(payload, {
+      deferredSessionMessageHasThinking,
+    });
   const shouldResolveDeferredSessionMessageReload = Boolean(
     deferredSessionKey &&
     payloadSessionKey &&
     areUiSessionKeysEquivalent(deferredSessionKey, payloadSessionKey) &&
     isTerminalChatState(state) &&
     !terminalEventIsForDifferentActiveRun &&
-    areUiSessionKeysEquivalent(payloadSessionKey, host.sessionKey) &&
+    sessionMessageMatchesHost(host, payloadSessionKey, payload?.agentId) &&
     !host.chatRunId,
   );
   const shouldReplayDeferredSessionMessageReload =
@@ -1026,6 +1065,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     (state !== "final" || finalEventNeedsHistoryReload);
   if (shouldResolveDeferredSessionMessageReload) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+    deferredReloadHost.pendingSessionMessageReloadHasThinking = false;
   }
   if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
@@ -1074,6 +1114,7 @@ function flushChatQueueAfterSessionRunReconcile(
     (!eventSessionKey || areUiSessionKeysEquivalent(eventSessionKey, pendingSessionKey))
   ) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+    deferredReloadHost.pendingSessionMessageReloadHasThinking = false;
     const reloadSessionKey = pendingSessionKey;
     void Promise.resolve(loadChatHistory(host as unknown as ChatState)).finally(() => {
       if (areUiSessionKeysEquivalent(host.sessionKey, reloadSessionKey)) {
@@ -1090,7 +1131,7 @@ function flushChatQueueAfterSessionRunReconcile(
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string; agentId?: string; runId?: unknown } | undefined,
+  payload: SessionMessageGatewayPayload | undefined,
 ) {
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
@@ -1103,6 +1144,9 @@ function handleSessionMessageGatewayEvent(
   if (result.applied && result.clearedChatRun) {
     if (sessionMatchesHost) {
       deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+      deferredReloadHost.pendingSessionMessageReloadHasThinking =
+        deferredReloadHost.pendingSessionMessageReloadHasThinking ||
+        sessionMessagePayloadHasThinking(payload);
     }
     if (flushChatQueueAfterSessionRunReconcile(host, result, payload, runIdBeforeApply)) {
       return;
@@ -1118,6 +1162,9 @@ function handleSessionMessageGatewayEvent(
   // first LLM delta arrives.
   if (host.chatRunId) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    deferredReloadHost.pendingSessionMessageReloadHasThinking =
+      deferredReloadHost.pendingSessionMessageReloadHasThinking ||
+      sessionMessagePayloadHasThinking(payload);
     const refreshStartedAt = Date.now();
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
@@ -1136,6 +1183,7 @@ function handleSessionMessageGatewayEvent(
     return;
   }
   deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  deferredReloadHost.pendingSessionMessageReloadHasThinking = false;
   void loadChatHistory(host as unknown as ChatState);
 }
 

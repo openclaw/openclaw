@@ -1,5 +1,5 @@
 // Control UI module implements chat event reload behavior.
-import { extractText } from "./chat/message-extract.ts";
+import { extractText, extractThinking } from "./chat/message-extract.ts";
 import type { ChatEventPayload } from "./controllers/chat.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -21,8 +21,19 @@ function hasRenderableAssistantFinalMessage(message: unknown): boolean {
   return typeof text === "string" && text.trim() !== "" && !SILENT_REPLY_PATTERN.test(text);
 }
 
-export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {
-  return Boolean(
-    payload && payload.state === "final" && !hasRenderableAssistantFinalMessage(payload.message),
-  );
+function hasThinkingBlock(message: unknown): boolean {
+  return Boolean(message && typeof message === "object" && extractThinking(message));
+}
+
+export function shouldReloadHistoryForFinalEvent(
+  payload?: ChatEventPayload,
+  opts: { deferredSessionMessageHasThinking?: boolean } = {},
+): boolean {
+  if (!payload || payload.state !== "final") {
+    return false;
+  }
+  if (opts.deferredSessionMessageHasThinking === true && !hasThinkingBlock(payload.message)) {
+    return true;
+  }
+  return !hasRenderableAssistantFinalMessage(payload.message);
 }

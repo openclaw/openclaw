@@ -35,6 +35,40 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(false);
   });
 
+  it("returns true when a deferred transcript message has thinking missing from the final payload", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent(
+        {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        },
+        { deferredSessionMessageHasThinking: true },
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false when the final payload already carries the deferred thinking block", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent(
+        {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "private reasoning" },
+              { type: "text", text: "done" },
+            ],
+          },
+        },
+        { deferredSessionMessageHasThinking: true },
+      ),
+    ).toBe(false);
+  });
+
   it("returns false when final event includes a legacy assistant text payload without role", () => {
     expect(
       shouldReloadHistoryForFinalEvent({
