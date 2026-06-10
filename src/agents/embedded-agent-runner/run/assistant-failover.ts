@@ -35,6 +35,27 @@ type AssistantFailoverOutcome =
       error: FailoverError;
     };
 
+const LONG_WINDOW_RATE_LIMIT_RE =
+  /\b(?:daily|weekly|monthly|tokens per day|requests per day|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|quota exceeded)\b/i;
+const SHORT_RATE_LIMIT_WINDOW_RE =
+  /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|retry[- ]after)\b/i;
+const SHORT_WINDOW_RATE_LIMIT_RE =
+  /\b(?:429|rate[_ -]?limit(?:ed|[_ -]?exceeded)?|too many (?:concurrent )?requests|requests per minute|rpm|tokens per minute|tpm|throttl(?:e|ed|ing|ingexception)|model_cooldown|retry[- ]after)\b|请求过于频繁|调用频率|频率限制/i;
+
+function isShortWindowRateLimitMessage(message: string | undefined): boolean {
+  const raw = message?.trim();
+  if (!raw) {
+    return false;
+  }
+  if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !SHORT_RATE_LIMIT_WINDOW_RE.test(raw)) {
+    return false;
+  }
+  // Providers such as Gemini use quota wording for per-minute RPM/TPM
+  // throttles. Treat quota as long-window only when no short-window hint is
+  // present; hard daily/usage/subscription limits are filtered above.
+  return SHORT_WINDOW_RATE_LIMIT_RE.test(raw);
+}
+
 /**
  * Applies an assistant-stage failover decision and returns the next run action.
  * It owns auth-profile rotation, overload/rate-limit escalation, same-model
@@ -168,7 +189,10 @@ export async function handleAssistantFailover(params: {
       // Minute-scale RPM windows can clear without spending a profile rotation
       // or model fallback. Keep the retry bounded; once exhausted, continue
       // through the existing rate-limit escalation path.
-      if (await params.maybeRetrySameModelRateLimit()) {
+      if (
+        isShortWindowRateLimitMessage(params.lastAssistant?.errorMessage) &&
+        (await params.maybeRetrySameModelRateLimit())
+      ) {
         return sameModelRateLimitRetry();
       }
       params.maybeEscalateRateLimitProfileFallback({

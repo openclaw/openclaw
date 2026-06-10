@@ -119,6 +119,131 @@ describe("handleAssistantFailover", () => {
           failoverReason: "rate_limit",
           billingFailure: false,
           rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "HTTP 429 Too Many Requests: requests per minute exceeded",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_rate_limit");
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
+    });
+
+    it("does not spend same-model retry budget on quota-style rate limits", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage:
+              "You exceeded your current quota, please check your plan and billing details.",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not treat bare 429 quota_exceeded as a short-window throttle", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "Provider API error (429): Quota exceeded [code=quota_exceeded]",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it("allows RESOURCE_EXHAUSTED messages with short-window 429 hints", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "429 RESOURCE_EXHAUSTED: tokens per minute limit exceeded",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_rate_limit");
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
+    });
+
+    it("allows quota wording when it points at a per-minute throttle", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage:
+              "Quota exceeded for quota metric 'Generate requests per minute' and limit 'Generate requests per minute per project'.",
+          } as Params["lastAssistant"],
           maybeRetrySameModelRateLimit,
           maybeEscalateRateLimitProfileFallback,
           advanceAuthProfile,
@@ -146,6 +271,9 @@ describe("handleAssistantFailover", () => {
           failoverReason: "rate_limit",
           billingFailure: false,
           rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "429 rate_limit_exceeded: too many requests per minute",
+          } as Params["lastAssistant"],
           maybeRetrySameModelRateLimit,
           maybeEscalateRateLimitProfileFallback,
           advanceAuthProfile,
