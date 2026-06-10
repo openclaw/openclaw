@@ -25,10 +25,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
@@ -137,10 +141,329 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func requestBrokerToken(r *http.Request) string {
+	tok := r.URL.Query().Get("token")
+	if tok != "" {
+		return tok
+	}
+	ah := r.Header.Get("Authorization")
+	if strings.HasPrefix(ah, "Bearer ") {
+		return strings.TrimPrefix(ah, "Bearer ")
+	}
+	return ""
+}
+
+func requireBrokerRequest(w http.ResponseWriter, r *http.Request) bool {
+	expected := brokerToken()
+	if expected == "" {
+		jsonError(w, http.StatusInternalServerError, "broker_token_unset",
+			"BROKER_TENANT_TOKEN is not set on this machine")
+		return false
+	}
+	if !constantTimeStringEq(requestBrokerToken(r), expected) {
+		jsonError(w, http.StatusUnauthorized, "invalid_token",
+			"missing or invalid token")
+		return false
+	}
+	return requireTenantID(w)
+}
+
 // healthHandler returns 200 {"status":"ok"}.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+type fsEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	Type  string `json:"type"`
+	Size  *int64 `json:"size,omitempty"`
+	Mtime string `json:"mtime"`
+}
+
+type fsTreeResponse struct {
+	Root    string    `json:"root"`
+	Path    string    `json:"path"`
+	Entries []fsEntry `json:"entries"`
+}
+
+type fsFileResponse struct {
+	Path      string `json:"path"`
+	Type      string `json:"type"`
+	Size      int64  `json:"size"`
+	Content   string `json:"content"`
+	Encoding  string `json:"encoding"`
+	Truncated bool   `json:"truncated"`
+}
+
+const fsReadLimitBytes int64 = 1024 * 1024
+
+func runtimeFSRoot() string {
+	if root := os.Getenv("ROCKIELAB_RUNTIME_FS_ROOT"); root != "" {
+		return root
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	return "/home/runtime"
+}
+
+func cleanRuntimePath(root, requested string) (string, string, error) {
+	if strings.ContainsRune(requested, '\x00') {
+		return "", "", errors.New("invalid_path")
+	}
+	if requested == "" {
+		requested = filepath.Join(root, "work")
+	}
+	var candidate string
+	if filepath.IsAbs(requested) {
+		candidate = requested
+	} else {
+		candidate = filepath.Join(root, requested)
+	}
+	cleanRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	cleanPath, err := filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return "", "", err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		return "", "", err
+	}
+	resolvedPath, err := filepath.EvalSymlinks(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", os.ErrNotExist
+		}
+		return "", "", err
+	}
+	if !pathIsUnderRoot(resolvedRoot, resolvedPath) {
+		return "", "", errors.New("path_outside_runtime_root")
+	}
+	return resolvedRoot, resolvedPath, nil
+}
+
+func pathIsUnderRoot(root, path string) bool {
+	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolvedRoot
+	}
+	if resolvedPath, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolvedPath
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func fdResolvedPath(file *os.File) (string, error) {
+	fd := file.Fd()
+	procPath := fmt.Sprintf("/proc/self/fd/%d", fd)
+	if target, err := filepath.EvalSymlinks(procPath); err == nil {
+		return target, nil
+	}
+	if runtime.GOOS != "linux" {
+		return filepath.EvalSymlinks(file.Name())
+	}
+	return "", errors.New("fd_resolution_unavailable")
+}
+
+func openContained(root, path string) (*os.File, string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, "", err
+	}
+	resolved, err := fdResolvedPath(file)
+	if err != nil {
+		_ = file.Close()
+		return nil, "", err
+	}
+	if !pathIsUnderRoot(root, resolved) {
+		_ = file.Close()
+		return nil, "", errors.New("path_outside_runtime_root")
+	}
+	return file, resolved, nil
+}
+
+func fsKind(info os.FileInfo) string {
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return "symlink"
+	case info.IsDir():
+		return "directory"
+	case info.Mode().IsRegular():
+		return "file"
+	default:
+		return "other"
+	}
+}
+
+func publicRuntimePath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return filepath.ToSlash(root)
+	}
+	return filepath.ToSlash(filepath.Join(root, rel))
+}
+
+func runtimeFSTreeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+			"only GET is allowed on /fs/tree")
+		return
+	}
+	if !requireBrokerRequest(w, r) {
+		return
+	}
+	root, path, err := cleanRuntimePath(runtimeFSRoot(), r.URL.Query().Get("path"))
+	if err != nil {
+		status := http.StatusBadRequest
+		code := "invalid_path"
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+			code = "not_found"
+		} else if err.Error() == "path_outside_runtime_root" {
+			status = http.StatusForbidden
+			code = "path_outside_runtime_root"
+		}
+		jsonError(w, status, code, code)
+		return
+	}
+	dir, resolvedDir, err := openContained(root, path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			jsonError(w, http.StatusNotFound, "not_found", "path not found")
+		} else if err.Error() == "path_outside_runtime_root" {
+			jsonError(w, http.StatusForbidden, "path_outside_runtime_root", "path_outside_runtime_root")
+		} else {
+			jsonError(w, http.StatusForbidden, "read_failed", "directory could not be read")
+		}
+		return
+	}
+	defer dir.Close()
+	info, err := dir.Stat()
+	if err != nil {
+		jsonError(w, http.StatusForbidden, "read_failed", "directory could not be read")
+		return
+	}
+	if !info.IsDir() {
+		jsonError(w, http.StatusBadRequest, "not_directory", "path is not a directory")
+		return
+	}
+	dirEntries, err := dir.ReadDir(-1)
+	if err != nil {
+		jsonError(w, http.StatusForbidden, "read_failed", "directory could not be read")
+		return
+	}
+	entries := make([]fsEntry, 0, len(dirEntries))
+	for _, entry := range dirEntries {
+		entryInfo, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		entryPath := filepath.Join(resolvedDir, entry.Name())
+		var size *int64
+		if entryInfo.Mode().IsRegular() {
+			s := entryInfo.Size()
+			size = &s
+		}
+		entries = append(entries, fsEntry{
+			Name:  entry.Name(),
+			Path:  publicRuntimePath(root, entryPath),
+			Type:  fsKind(entryInfo),
+			Size:  size,
+			Mtime: entryInfo.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Type == "directory" && entries[j].Type != "directory" {
+			return true
+		}
+		if entries[i].Type != "directory" && entries[j].Type == "directory" {
+			return false
+		}
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(fsTreeResponse{
+		Root:    filepath.ToSlash(root),
+		Path:    publicRuntimePath(root, resolvedDir),
+		Entries: entries,
+	})
+}
+
+func runtimeFSFileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+			"only GET is allowed on /fs/file")
+		return
+	}
+	if !requireBrokerRequest(w, r) {
+		return
+	}
+	root, path, err := cleanRuntimePath(runtimeFSRoot(), r.URL.Query().Get("path"))
+	if err != nil {
+		status := http.StatusBadRequest
+		code := "invalid_path"
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+			code = "not_found"
+		} else if err.Error() == "path_outside_runtime_root" {
+			status = http.StatusForbidden
+			code = "path_outside_runtime_root"
+		}
+		jsonError(w, status, code, code)
+		return
+	}
+	file, resolvedFile, err := openContained(root, path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			jsonError(w, http.StatusNotFound, "not_found", "path not found")
+		} else if err.Error() == "path_outside_runtime_root" {
+			jsonError(w, http.StatusForbidden, "path_outside_runtime_root", "path_outside_runtime_root")
+		} else {
+			jsonError(w, http.StatusForbidden, "read_failed", "file could not be read")
+		}
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		jsonError(w, http.StatusForbidden, "read_failed", "file could not be read")
+		return
+	}
+	if info.IsDir() {
+		jsonError(w, http.StatusBadRequest, "not_file", "path is not a file")
+		return
+	}
+	if info.Size() > fsReadLimitBytes {
+		jsonError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file is too large")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(file, fsReadLimitBytes+1))
+	if err != nil {
+		jsonError(w, http.StatusForbidden, "read_failed", "file could not be read")
+		return
+	}
+	if int64(len(data)) > fsReadLimitBytes {
+		jsonError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file is too large")
+		return
+	}
+	if !utf8.Valid(data) {
+		jsonError(w, http.StatusUnsupportedMediaType, "unsupported_file", "file is not valid UTF-8")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(fsFileResponse{
+		Path:      filepath.ToSlash(resolvedFile),
+		Type:      "file",
+		Size:      info.Size(),
+		Content:   string(data),
+		Encoding:  "utf-8",
+		Truncated: false,
+	})
 }
 
 // upgrader is shared across /ws calls.
@@ -868,6 +1191,8 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/ws", wsHandler)
+	mux.HandleFunc("/fs/tree", runtimeFSTreeHandler)
+	mux.HandleFunc("/fs/file", runtimeFSFileHandler)
 	mux.HandleFunc("/spawn", spawnHandler)
 	mux.HandleFunc("/materialize-secret", materializeSecretHandler)
 	mux.HandleFunc("/chat", chatHandler)

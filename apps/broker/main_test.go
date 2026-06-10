@@ -36,6 +36,129 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func authedFSRequest(t *testing.T, method, target string) *http.Request {
+	t.Helper()
+	t.Setenv("BROKER_TENANT_TOKEN", "tok")
+	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-test")
+	req := httptest.NewRequest(method, target, nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	return req
+}
+
+func TestRuntimeFSTreeListsRuntimeRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ROCKIELAB_RUNTIME_FS_ROOT", root)
+	if err := os.Mkdir(filepath.Join(root, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "work", "README.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	target := "/fs/tree?path=" + url.QueryEscape(filepath.Join(root, "work"))
+	runtimeFSTreeHandler(rec, authedFSRequest(t, http.MethodGet, target))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body fsTreeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedWork, err := filepath.EvalSymlinks(filepath.Join(root, "work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body.Root != filepath.ToSlash(resolvedRoot) || body.Path != filepath.ToSlash(resolvedWork) {
+		t.Fatalf("unexpected root/path: %+v", body)
+	}
+	if len(body.Entries) != 1 || body.Entries[0].Name != "README.md" || body.Entries[0].Type != "file" {
+		t.Fatalf("unexpected entries: %+v", body.Entries)
+	}
+}
+
+func TestRuntimeFSFileReadsUTF8(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ROCKIELAB_RUNTIME_FS_ROOT", root)
+	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("runtime note"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	target := "/fs/file?path=" + url.QueryEscape(filepath.Join(root, "note.txt"))
+	runtimeFSFileHandler(rec, authedFSRequest(t, http.MethodGet, target))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body fsFileResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Content != "runtime note" || body.Encoding != "utf-8" || body.Truncated {
+		t.Fatalf("unexpected body: %+v", body)
+	}
+}
+
+func TestRuntimeFSRejectsTraversalAndSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	t.Setenv("ROCKIELAB_RUNTIME_FS_ROOT", root)
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	parentSecret := filepath.Join(filepath.Dir(root), "secret.txt")
+	if err := os.WriteFile(parentSecret, []byte("nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	for _, target := range []string{
+		"/fs/file?path=" + url.QueryEscape(parentSecret),
+		"/fs/file?path=" + url.QueryEscape(filepath.Join(root, "escape")),
+	} {
+		rec := httptest.NewRecorder()
+		runtimeFSFileHandler(rec, authedFSRequest(t, http.MethodGet, target))
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected traversal rejection for %s, got %d body=%s", target, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestRuntimeFSRejectsBinaryAndLargeFiles(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ROCKIELAB_RUNTIME_FS_ROOT", root)
+	if err := os.WriteFile(filepath.Join(root, "bin.dat"), []byte{0xff, 0xfe}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	large, err := os.Create(filepath.Join(root, "large.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := large.Truncate(fsReadLimitBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = large.Close()
+
+	rec := httptest.NewRecorder()
+	target := "/fs/file?path=" + url.QueryEscape(filepath.Join(root, "bin.dat"))
+	runtimeFSFileHandler(rec, authedFSRequest(t, http.MethodGet, target))
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	target = "/fs/file?path=" + url.QueryEscape(filepath.Join(root, "large.txt"))
+	runtimeFSFileHandler(rec, authedFSRequest(t, http.MethodGet, target))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // Auto-execute contract for the spawn-per-prompt /chat path: claude
 // must be spawned with --dangerously-skip-permissions for the same
 // reason as the /chat-pty path. fleet-task #102.
