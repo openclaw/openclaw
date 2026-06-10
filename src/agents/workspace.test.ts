@@ -652,6 +652,159 @@ describe("ensureAgentWorkspace", () => {
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
   });
 
+  // Regression: managed / GitOps / operator-style deployments can preseed a
+  // workspace with custom SOUL.md, IDENTITY.md, USER.md, and a user-provided
+  // BOOTSTRAP.md before OpenClaw ever runs. Profile-file diffs alone must not
+  // count as completion evidence on a fresh lifecycle, and the user-provided
+  // BOOTSTRAP.md must not be deleted before the first onboarding flow runs.
+  // See https://github.com/openclaw/openclaw/issues/91931.
+  describe("preseeded managed workspace keeps bootstrap pending", () => {
+    const preseededProfileFiles = [
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ] as const;
+
+    const profileSeedContent = (name: string) =>
+      `# Custom platform-provided ${name.replace(/\.md$/, "")}\n\nManaged template, not user-completed onboarding.\n`;
+
+    async function seedManagedPreseededWorkspace(dir: string, fileNames: readonly string[]) {
+      await fs.writeFile(
+        path.join(dir, DEFAULT_BOOTSTRAP_FILENAME),
+        "# User onboarding flow\n\n1. Greet user.\n2. Delete this file.\n",
+        "utf-8",
+      );
+      for (const name of fileNames) {
+        await fs.writeFile(path.join(dir, name), profileSeedContent(name), "utf-8");
+      }
+    }
+
+    it.each([
+      ["SOUL.md only", [DEFAULT_SOUL_FILENAME]],
+      ["IDENTITY.md only", [DEFAULT_IDENTITY_FILENAME]],
+      ["USER.md only", [DEFAULT_USER_FILENAME]],
+      ["all profile files", [...preseededProfileFiles]],
+    ])(
+      "keeps BOOTSTRAP.md and setupCompletedAt unset via reconcileWorkspaceBootstrapCompletion (%s)",
+      async (_label, fileNames) => {
+        const tempDir = await makeTempWorkspace("openclaw-workspace-");
+        await seedManagedPreseededWorkspace(tempDir, fileNames);
+
+        const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+
+        expect(result.repaired).toBe(false);
+        expect(result.bootstrapExists).toBe(true);
+        expect(result.state.setupCompletedAt).toBeUndefined();
+        await expect(
+          fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+        ).resolves.toBeUndefined();
+        await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+        await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+      },
+    );
+
+    it("keeps BOOTSTRAP.md when ensureAgentWorkspace runs on a preseeded workspace (matches K8s pod start)", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-");
+      await seedManagedPreseededWorkspace(tempDir, preseededProfileFiles);
+
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+      await expect(
+        fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+      ).resolves.toBeUndefined();
+      const state = await readWorkspaceState(tempDir);
+      expect(state.setupCompletedAt).toBeUndefined();
+      // bootstrapSeededAt is recorded so a future lifecycle can later treat
+      // profile-file customization as legitimate stale-completion evidence.
+      expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+    });
+
+    it("still repairs stale BOOTSTRAP.md once a prior lifecycle has persisted bootstrapSeededAt", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-");
+      await seedManagedPreseededWorkspace(tempDir, preseededProfileFiles);
+
+      // First lifecycle: ensureAgentWorkspace records bootstrapSeededAt but
+      // keeps BOOTSTRAP.md pending because profile diffs alone are not
+      // completion evidence on a fresh lifecycle.
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      const firstState = await readWorkspaceState(tempDir);
+      expect(firstState.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      expect(firstState.setupCompletedAt).toBeUndefined();
+      await expect(
+        fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
+      ).resolves.toBeUndefined();
+
+      // Second lifecycle: a prior bootstrapSeededAt is on disk, so the
+      // reconciler may now treat profile-file diffs as legitimate stale
+      // completion evidence and clean up the orphaned BOOTSTRAP.md.
+      const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+      expect(result.repaired).toBe(true);
+      expect(result.bootstrapExists).toBe(false);
+      await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+      const finalState = await readWorkspaceState(tempDir);
+      expect(finalState.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      expect(finalState.bootstrapSeededAt).toBe(firstState.bootstrapSeededAt);
+    });
+
+    it.each([
+      [
+        "memory/ directory",
+        async (dir: string) => {
+          await fs.mkdir(path.join(dir, "memory"), { recursive: true });
+          await fs.writeFile(
+            path.join(dir, "memory", "2026-05-01.md"),
+            "# Daily log\nNotes from prior run.\n",
+            "utf-8",
+          );
+        },
+      ],
+      [
+        "MEMORY.md",
+        async (dir: string) => {
+          await fs.writeFile(
+            path.join(dir, DEFAULT_MEMORY_FILENAME),
+            "# Long-term memory\nImportant stuff.\n",
+            "utf-8",
+          );
+        },
+      ],
+      [
+        "populated skills/local-skill/SKILL.md",
+        async (dir: string) => {
+          await fs.mkdir(path.join(dir, "skills", "local-skill"), { recursive: true });
+          await fs.writeFile(
+            path.join(dir, "skills", "local-skill", "SKILL.md"),
+            "---\nname: local-skill\n---\n",
+            "utf-8",
+          );
+        },
+      ],
+    ])(
+      "still repairs stale BOOTSTRAP.md when fresh-lifecycle workspace has real user content (%s)",
+      async (_label, seedUserContent) => {
+        // Legacy/local stale-bootstrap recovery must keep working even when
+        // there is no prior `bootstrapSeededAt` on disk: real user-content
+        // evidence (memory/, MEMORY.md, populated SKILL.md under skills/) is
+        // always a legitimate signal that a previous onboarding flow ran but
+        // did not persist completion, so the orphan BOOTSTRAP.md should be
+        // cleared and `setupCompletedAt` recorded.
+        const tempDir = await makeTempWorkspace("openclaw-workspace-");
+        await seedManagedPreseededWorkspace(tempDir, preseededProfileFiles);
+        await seedUserContent(tempDir);
+
+        const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+
+        expect(result.repaired).toBe(true);
+        expect(result.bootstrapExists).toBe(false);
+        await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+        const state = await readWorkspaceState(tempDir);
+        expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      },
+    );
+  });
+
   it("reports bootstrap complete once BOOTSTRAP.md is deleted and completion is recorded", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 

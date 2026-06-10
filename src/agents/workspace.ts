@@ -395,8 +395,40 @@ async function workspaceAttestedGeneratedFilesIntact(
   return true;
 }
 
-async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
-  return await workspaceProfileLooksConfigured(params);
+type WorkspaceBootstrapCompletionEvidence = {
+  /** Any source of stale-completion evidence is present. */
+  any: boolean;
+  /**
+   * At least one of SOUL.md / IDENTITY.md / USER.md differs from the built-in
+   * template. On a managed / GitOps / operator-style deployment (#91931) this
+   * can come from a platform-provided template rather than a completed human
+   * onboarding flow, so the reconciler treats it as completion evidence only
+   * when a prior process lifecycle has already persisted `bootstrapSeededAt`.
+   */
+  profileFilesDiffer: boolean;
+  /**
+   * User content exists in the workspace (`memory/`, `MEMORY.md`, or a
+   * populated SKILL.md under `skills/`). This is always a legitimate signal
+   * the workspace has real user activity, regardless of lifecycle stage.
+   */
+  hasUserContent: boolean;
+};
+
+async function workspaceBootstrapCompletionEvidence(params: {
+  dir: string;
+}): Promise<WorkspaceBootstrapCompletionEvidence> {
+  const profileFileDiffs = await Promise.all(
+    WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
+      fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
+    ),
+  );
+  const profileFilesDiffer = profileFileDiffs.some(Boolean);
+  const hasUserContent = await hasWorkspaceUserContentEvidence(params.dir);
+  return {
+    any: profileFilesDiffer || hasUserContent,
+    profileFilesDiffer,
+    hasUserContent,
+  };
 }
 
 type WorkspaceBootstrapCompletionReconcileResult = {
@@ -411,8 +443,24 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   statePath: string;
   state: WorkspaceSetupState;
   bootstrapExists?: boolean;
+  /**
+   * Whether `bootstrapSeededAt` was already persisted to disk by a prior
+   * process lifecycle (snapshotted before any in-memory mutation by the
+   * current `ensureAgentWorkspace` call). Defaults to whatever is currently
+   * on `params.state.bootstrapSeededAt`.
+   *
+   * For managed / GitOps / operator-style deployments (#91931) a fresh
+   * workspace can be preseeded with custom SOUL.md, IDENTITY.md, USER.md, and
+   * a user-provided BOOTSTRAP.md before OpenClaw ever runs. In that lifecycle
+   * the profile-file diffs come from platform templates, not from a completed
+   * human onboarding flow, so we must not treat them as completion evidence
+   * and must not delete the user-provided BOOTSTRAP.md.
+   */
+  bootstrapSeededInPriorLifecycle?: boolean;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
+  const bootstrapSeededInPriorLifecycle =
+    params.bootstrapSeededInPriorLifecycle ?? Boolean(params.state.bootstrapSeededAt);
   if (
     typeof params.state.setupCompletedAt === "string" &&
     params.state.setupCompletedAt.trim().length > 0
@@ -429,12 +477,28 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     return { repaired: true, bootstrapExists: false, state: completedState };
   }
 
-  if (
-    !bootstrapExists ||
-    !(await workspaceHasBootstrapCompletionEvidence({
-      dir: params.dir,
-    }))
-  ) {
+  if (!bootstrapExists) {
+    return { repaired: false, bootstrapExists, state: params.state };
+  }
+
+  const evidence = await workspaceBootstrapCompletionEvidence({ dir: params.dir });
+  if (!evidence.any) {
+    return { repaired: false, bootstrapExists, state: params.state };
+  }
+
+  // Real user content (`memory/`, `MEMORY.md`, populated `skills/*/SKILL.md`)
+  // is always legitimate stale-completion evidence: a user-content workspace
+  // with a leftover BOOTSTRAP.md and no recorded state means a previous
+  // onboarding finished without persisting completion, so we still repair.
+  //
+  // Profile-file customization (SOUL / IDENTITY / USER differing from the
+  // built-in templates) is more ambiguous: on a managed / GitOps /
+  // operator-style deployment (#91931) those diffs can come from a
+  // platform-provided template applied before OpenClaw ever runs. On a fresh
+  // lifecycle (no prior `bootstrapSeededAt` persisted to disk) we therefore
+  // require user-content evidence too, so the user-provided BOOTSTRAP.md is
+  // kept and the onboarding flow can actually run.
+  if (!evidence.hasUserContent && !bootstrapSeededInPriorLifecycle) {
     return { repaired: false, bootstrapExists, state: params.state };
   }
 
@@ -944,6 +1008,11 @@ export async function ensureAgentWorkspace(params?: {
   const nowIso = () => new Date().toISOString();
 
   let bootstrapExists = await pathExists(bootstrapPath);
+  // Snapshot the persisted bootstrapSeededAt before any in-memory mutation so
+  // the completion reconciler can distinguish a fresh preseeded workspace
+  // (no prior lifecycle) from a workspace that genuinely lived through a
+  // previous run. See #91931.
+  const bootstrapSeededInPriorLifecycle = Boolean(state.bootstrapSeededAt);
   if (!state.bootstrapSeededAt && bootstrapExists) {
     markState({ bootstrapSeededAt: nowIso() });
   }
@@ -955,6 +1024,7 @@ export async function ensureAgentWorkspace(params?: {
       statePath,
       state,
       bootstrapExists,
+      bootstrapSeededInPriorLifecycle,
     });
     if (repair.repaired) {
       state = repair.state;
