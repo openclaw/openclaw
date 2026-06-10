@@ -35,12 +35,19 @@ function resolveImportedSourceSyncKey(params: SyncMemoryWikiImportedSourcesParam
     search: params.config.search,
     context: params.config.context,
     obsidian: params.config.obsidian,
-    agents:
-      params.appConfig?.agents?.list?.map((agent) => ({
-        id: agent.id,
-        default: agent.default === true,
-        workspace: agent.workspace,
-      })) ?? null,
+    agents: params.appConfig?.agents
+      ? {
+          defaults: {
+            workspace: params.appConfig.agents.defaults?.workspace,
+          },
+          list:
+            params.appConfig.agents.list?.map((agent) => ({
+              id: agent.id,
+              default: agent.default === true,
+              workspace: agent.workspace,
+            })) ?? null,
+        }
+      : null,
   });
 }
 
