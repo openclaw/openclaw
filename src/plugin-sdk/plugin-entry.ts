@@ -81,7 +81,6 @@ export type ProviderModernModelPolicyContext =
   import("../plugins/types.js").ProviderModernModelPolicyContext;
 export type ProviderNormalizeConfigContext =
   import("../plugins/types.js").ProviderNormalizeConfigContext;
-export type ProviderToolSchemaCacheKey = import("../plugins/types.js").ProviderToolSchemaCacheKey;
 export type ProviderNormalizeToolSchemasContext =
   import("../plugins/types.js").ProviderNormalizeToolSchemasContext;
 export type ProviderNormalizeTransportContext =
