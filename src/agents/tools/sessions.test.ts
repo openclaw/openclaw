@@ -83,6 +83,48 @@ function requireGatewayRequest(index = 0) {
   return requireRecord(callGatewayMock.mock.calls[index]?.[0], `gateway request ${index}`);
 }
 
+function mockLabelResolveSendGateway(params: {
+  onResolve: (resolveParams: Record<string, unknown>, attempt: number) => { key: string } | "throw";
+}) {
+  let resolveAttempts = 0;
+  callGatewayMock.mockImplementation(
+    async (request: { method?: string; params?: Record<string, unknown> }) => {
+      if (request.method === "sessions.resolve") {
+        resolveAttempts += 1;
+        const result = params.onResolve(request.params ?? {}, resolveAttempts);
+        if (result === "throw") {
+          throw new Error(`No session found with label: ${request.params?.label ?? "unknown"}`);
+        }
+        return result;
+      }
+      if (request.method === "agent") {
+        return { runId: "run-label-send", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-label-send", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: "reply" }], timestamp: 1 },
+          ],
+        };
+      }
+      throw new Error(`unexpected gateway call: ${request.method ?? "unknown"}`);
+    },
+  );
+  return {
+    getResolveAttempts: () => resolveAttempts,
+  };
+}
+
+function enableAllSessionVisibility() {
+  loadConfigMock.mockReturnValue({
+    session: { scope: "per-sender", mainKey: "main" },
+    tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
+  });
+}
+
 beforeAll(async () => {
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
@@ -906,6 +948,50 @@ describe("sessions_send gating", () => {
     expect(details.status).toBe("forbidden");
     expect(details.sessionKey).toBe("session-id-only");
   });
+
+  it.each([
+    {
+      label: "refactor",
+      onResolve: (resolveParams: Record<string, unknown>) => {
+        expect(resolveParams).toEqual({
+          label: "refactor",
+          hubDelegatedOwner: MAIN_AGENT_SESSION_KEY,
+        });
+        return { key: "agent:codex:acp:delegate-child" };
+      },
+      expectedResolveAttempts: 1,
+    },
+    {
+      label: "worker",
+      onResolve: (resolveParams: Record<string, unknown>) => {
+        if (resolveParams.hubDelegatedOwner) {
+          return "throw";
+        }
+        expect(resolveParams).toEqual({
+          label: "worker",
+          spawnedBy: MAIN_AGENT_SESSION_KEY,
+        });
+        return { key: "agent:main:subagent:owned-child" };
+      },
+      expectedResolveAttempts: 2,
+    },
+  ])(
+    "resolves labels via scoped cascade ($label)",
+    async ({ label, onResolve, expectedResolveAttempts }) => {
+      const flow = mockLabelResolveSendGateway({ onResolve });
+      enableAllSessionVisibility();
+      const tool = createMainSessionsSendTool();
+
+      const result = await tool.execute(`call-label-${label}`, {
+        label,
+        message: "ping",
+        timeoutSeconds: 1,
+      });
+
+      expect(requireDetails(result).status).toBe("ok");
+      expect(flow.getResolveAttempts()).toBe(expectedResolveAttempts);
+    },
+  );
 
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createMainSessionsSendTool();
