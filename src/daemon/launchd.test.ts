@@ -428,10 +428,13 @@ describe("launchd runtime state", () => {
     expect(runtime.detail).toBe("Could not find service");
   });
 
-  it("marks installed LaunchAgents unavailable when the GUI domain is missing", async () => {
+  it.each([
+    "Bootstrap failed: 125: Domain does not support specified action",
+    "Could not find domain for user gui: 999999",
+  ])("marks installed LaunchAgents unavailable when launchd reports %s", async (detail) => {
     const env = createDefaultLaunchdEnv();
     state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
-    state.printError = "Bootstrap failed: 125: Domain does not support specified action";
+    state.printError = detail;
     state.printFailuresRemaining = 1;
 
     const runtime = await readLaunchAgentRuntime(env);
@@ -439,7 +442,7 @@ describe("launchd runtime state", () => {
     expect(runtime.status).toBe("unknown");
     expect(runtime.missingSupervision).toBe(true);
     expect(runtime.missingGuiSession).toBe(true);
-    expect(runtime.detail).toContain("Domain does not support specified action");
+    expect(runtime.detail).toBe(detail);
   });
 
   it("marks a missing unit when launchd has no job and no plist exists", async () => {
@@ -793,8 +796,11 @@ describe("launchd bootstrap repair", () => {
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
-  it("classifies headless GUI bootstrap failures separately from generic not-loaded repair", async () => {
-    state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
+  it.each([
+    "Bootstrap failed: 125: Domain does not support specified action",
+    "Could not find domain for user gui: 999999",
+  ])("classifies %s separately from generic not-loaded repair", async (detail) => {
+    state.bootstrapError = detail;
     const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
@@ -802,7 +808,7 @@ describe("launchd bootstrap repair", () => {
     expect(repair).toEqual({
       ok: false,
       status: "gui-session-unavailable",
-      detail: "Bootstrap failed: 125: Domain does not support specified action",
+      detail,
       domain: typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
     });
     expect(launchctlCommandNames()).not.toContain("kickstart");

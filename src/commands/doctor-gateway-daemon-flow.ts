@@ -59,14 +59,14 @@ type LaunchAgentBootstrapDoctorOutcome =
 function noteGatewayRuntime(
   serviceRuntime: GatewayServiceRuntime | undefined,
   env: Record<string, string | undefined>,
-): boolean {
+): void {
   const summary = formatGatewayRuntimeSummary(serviceRuntime);
   const hints = buildGatewayRuntimeHints(serviceRuntime, {
     platform: process.platform,
     env,
   });
   if (!summary && hints.length === 0) {
-    return false;
+    return;
   }
 
   const lines: string[] = [];
@@ -75,7 +75,6 @@ function noteGatewayRuntime(
   }
   lines.push(...hints);
   note(lines.join("\n"), "Gateway");
-  return true;
 }
 
 async function maybeRepairLaunchAgentBootstrap(params: {
@@ -208,6 +207,8 @@ export async function maybeRepairGatewayDaemon(params: {
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
   const service = resolveGatewayService();
+  const isLocalDarwinGateway =
+    process.platform === "darwin" && params.cfg.gateway?.mode !== "remote";
   // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
   let loaded;
   try {
@@ -225,8 +226,7 @@ export async function maybeRepairGatewayDaemon(params: {
         ...command.environment,
       } satisfies NodeJS.ProcessEnv)
     : process.env;
-  const shouldReadRuntime =
-    loaded || (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote");
+  const shouldReadRuntime = loaded || isLocalDarwinGateway;
   if (shouldReadRuntime) {
     serviceRuntime = await service.readRuntime(serviceEnv).catch(() => undefined);
   }
@@ -237,7 +237,7 @@ export async function maybeRepairGatewayDaemon(params: {
     }
   }
 
-  if (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote") {
+  if (isLocalDarwinGateway) {
     const gatewayRepair = serviceRuntime?.missingGuiSession
       ? ({ status: "gui-session-unavailable", detail: serviceRuntime.detail ?? "" } as const)
       : await maybeRepairLaunchAgentBootstrap({
@@ -296,7 +296,7 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (!loaded) {
     if (
-      process.platform === "darwin" &&
+      isLocalDarwinGateway &&
       (serviceRuntime?.missingGuiSession ||
         serviceRuntime?.missingSupervision ||
         serviceRuntime?.cachedLabel)
