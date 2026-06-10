@@ -1,6 +1,10 @@
 // Memory Core plugin module implements temporal decay behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  resolveMemorySearchConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 
 export type TemporalDecayConfig = {
   enabled: boolean;
@@ -11,6 +15,23 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
   enabled: false,
   halfLifeDays: 30,
 };
+
+export function resolveTemporalDecaySearchConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): TemporalDecayConfig {
+  try {
+    return (
+      resolveMemorySearchConfig(cfg, agentId)?.query.hybrid.temporalDecay ??
+      DEFAULT_TEMPORAL_DECAY_CONFIG
+    );
+  } catch {
+    // Invalid memorySearch config (e.g. multimodal validation errors) is
+    // surfaced on the search config path; keep callers decay-neutral instead
+    // of failing manager construction here.
+    return DEFAULT_TEMPORAL_DECAY_CONFIG;
+  }
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
