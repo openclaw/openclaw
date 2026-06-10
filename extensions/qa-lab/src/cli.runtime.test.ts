@@ -82,6 +82,7 @@ import {
   runQaParityReportCommand,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
+import { QA_EVIDENCE_SUMMARY_FILENAME } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
@@ -127,7 +128,7 @@ describe("qa cli runtime", () => {
     suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
     suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
-    telegramSummaryPath = path.join(telegramArtifactsDir, "telegram-qa-summary.json");
+    telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_SUMMARY_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
     await fs.writeFile(
       suiteSummaryPath,
@@ -1658,7 +1659,9 @@ describe("qa cli runtime", () => {
           repoRoot: "/tmp/openclaw-repo",
           runner: "multipass",
         }),
-      ).rejects.toThrow("did not include counts.failed, counts.skipped, or scenarios[].status");
+      ).rejects.toThrow(
+        "did not include counts.failed, counts.skipped, scenarios[].status, or entries[].result.status",
+      );
     } finally {
       await fs.rm(repoRoot, { recursive: true, force: true });
     }

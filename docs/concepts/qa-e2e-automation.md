@@ -374,7 +374,7 @@ The implicit default set always covers canary, mention gating, native command re
 Output artifacts:
 
 - `telegram-qa-report.md`
-- `telegram-qa-summary.json` - includes per-reply RTT (driver send → observed SUT reply) starting with the canary.
+- `qa-evidence-summary.json` - normalized evidence entries for the live transport checks, including profile, coverage, provider, channel, artifact, result, and RTT fields.
 - `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
 Package RTT comparison uses the same Telegram credential contract while keeping
@@ -447,7 +447,7 @@ pnpm openclaw qa discord \
 Output artifacts:
 
 - `discord-qa-report.md`
-- `discord-qa-summary.json`
+- `qa-evidence-summary.json` - normalized evidence entries for the live transport checks.
 - `discord-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1`.
 - `discord-qa-reaction-timelines.json` and `discord-status-reactions-tool-only-timeline.png` when the status-reaction scenario runs.
 
@@ -495,7 +495,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 Output artifacts:
 
 - `slack-qa-report.md`
-- `slack-qa-summary.json`
+- `qa-evidence-summary.json` - normalized evidence entries for the live transport checks.
 - `slack-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
 - `approval-checkpoints/` - only when Mantis sets
   `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
@@ -740,7 +740,7 @@ poll and upload-file coverage run through deterministic gateway `poll` and
 Output artifacts:
 
 - `whatsapp-qa-report.md`
-- `whatsapp-qa-summary.json`
+- `qa-evidence-summary.json` - normalized evidence entries for the live transport checks.
 - `whatsapp-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1`.
 
 ### Convex credential pool

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
+  QA_EVIDENCE_SUMMARY_FILENAME,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   buildLiveTransportEvidenceSummary,
   buildPlaywrightEvidenceSummary,
@@ -148,7 +149,7 @@ describe("evidence summary", () => {
   it("normalizes Telegram live summaries onto the same evidence schema", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
-        "telegram-qa-summary.json",
+        QA_EVIDENCE_SUMMARY_FILENAME,
         "telegram-qa-report.md",
         "telegram-qa-observed-messages.json",
       ],
@@ -158,7 +159,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:05:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioResults: [
+      checks: [
         {
           id: "telegram-canary",
           standardId: "canary",
@@ -219,7 +220,7 @@ describe("evidence summary", () => {
           artifacts: [
             {
               kind: "summary",
-              path: "telegram-qa-summary.json",
+              path: QA_EVIDENCE_SUMMARY_FILENAME,
               source: "telegram-live-transport",
             },
             {
@@ -505,25 +506,25 @@ describe("evidence summary", () => {
 
   it("derives package provenance from package runner env", () => {
     const npmEvidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: ["telegram-qa-summary.json"],
+      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
       env: {
         OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "openclaw@beta",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:15:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioResults: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
       transportId: "telegram",
     });
     const tarballEvidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: ["telegram-qa-summary.json"],
+      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
       env: {
         OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "/tmp/openclaw.tgz",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:16:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioResults: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
       transportId: "telegram",
     });
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QA_EVIDENCE_SUMMARY_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
@@ -436,15 +437,25 @@ describe("Slack live QA runtime helpers", () => {
     expect(result.scenarios[0]?.status).toBe("fail");
     expect(result.scenarios[0]?.details).toContain("Missing OPENCLAW_QA_CONVEX_SITE_URL");
     await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
+    expect(path.basename(result.summaryPath)).toBe(QA_EVIDENCE_SUMMARY_FILENAME);
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      channelId: string;
-      credentials: { kind: string; role?: string; source: string };
+      entries: Array<{
+        result: { failure?: { reason?: string }; status: string };
+        test: { id: string };
+      }>;
+      kind: string;
     };
-    expect(summary.channelId).toBe("<unavailable>");
-    expect(summary.credentials).toEqual({
-      kind: "slack",
-      role: "ci",
-      source: "convex",
+    expect(summary.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
+    expect(summary.entries[0]).toMatchObject({
+      test: {
+        id: "slack-canary",
+      },
+      result: {
+        status: "fail",
+        failure: {
+          reason: expect.stringContaining("Missing OPENCLAW_QA_CONVEX_SITE_URL"),
+        },
+      },
     });
   });
 });

@@ -15,8 +15,8 @@ import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 import {
+  QA_EVIDENCE_SUMMARY_FILENAME,
   buildLiveTransportEvidenceSummary,
-  type QaEvidenceSummaryJson,
 } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -29,7 +29,6 @@ import {
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
-  type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
@@ -167,27 +166,6 @@ type TelegramQaRunResult = {
   summaryPath: string;
   observedMessagesPath: string;
   gatewayDebugDirPath?: string;
-  scenarios: TelegramQaScenarioResult[];
-};
-
-type TelegramQaSummary = {
-  credentials: {
-    credentialId?: string;
-    kind: string;
-    ownerId?: string;
-    role?: QaCredentialRole;
-    source: "convex" | "env";
-  };
-  groupId: string;
-  startedAt: string;
-  finishedAt: string;
-  cleanupIssues: string[];
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-  };
-  evidence?: QaEvidenceSummaryJson;
   scenarios: TelegramQaScenarioResult[];
 };
 
@@ -2018,7 +1996,7 @@ export async function runTelegramQaLive(params: {
     writeTelegramQaProgress(progressEnabled, `cleanup issues: count=${cleanupIssues.length}`);
   }
   const reportPath = path.join(outputDir, "telegram-qa-report.md");
-  const summaryPath = path.join(outputDir, "telegram-qa-summary.json");
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
   const observedMessagesPath = path.join(outputDir, "telegram-qa-observed-messages.json");
   const evidence = buildLiveTransportEvidenceSummary({
     artifactPaths: [
@@ -2030,29 +2008,9 @@ export async function runTelegramQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
-    scenarioResults,
+    checks: scenarioResults,
     transportId: "telegram",
   });
-  const summary: TelegramQaSummary = {
-    credentials: {
-      source: credentialLease.source,
-      kind: credentialLease.kind,
-      role: credentialLease.role,
-      ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
-      credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
-    },
-    groupId: redactPublicMetadata ? "<redacted>" : runtimeEnv.groupId,
-    startedAt,
-    finishedAt,
-    cleanupIssues: publishedCleanupIssues,
-    counts: {
-      total: scenarioResults.length,
-      passed: passedCount,
-      failed: failedCount,
-    },
-    evidence,
-    scenarios: scenarioResults,
-  };
   await fs.writeFile(
     reportPath,
     `${renderTelegramQaMarkdown({
@@ -2067,7 +2025,7 @@ export async function runTelegramQaLive(params: {
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
+  await fs.writeFile(summaryPath, `${JSON.stringify(evidence, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
   });

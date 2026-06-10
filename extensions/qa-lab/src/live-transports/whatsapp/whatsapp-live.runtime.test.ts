@@ -1181,6 +1181,7 @@ describe("WhatsApp QA live runtime", () => {
       {
         id: "whatsapp-mention-gating",
         title: "WhatsApp group mention gating",
+        standardId: "mention-gating",
         status: "fail",
         details: "setup exploded",
       },

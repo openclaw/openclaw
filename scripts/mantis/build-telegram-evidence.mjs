@@ -4,6 +4,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -46,8 +48,50 @@ function formatMessageText(message) {
   return mediaKinds.length > 0 ? `[${mediaKinds.join(", ")}]` : "[no text]";
 }
 
+function normalizeEvidenceScenario(entry) {
+  const status = entry?.result?.status ?? "unknown";
+  return {
+    id: entry?.test?.id,
+    title: entry?.test?.title,
+    status,
+    details: entry?.result?.failure?.reason ?? "",
+    rttMs: entry?.result?.timing?.rttMs,
+  };
+}
+
+function normalizeEvidenceSummary(summary) {
+  if (!Array.isArray(summary.entries)) {
+    return {
+      counts: summary.counts ?? {},
+      credentials: {
+        source: summary.credentials?.source ?? "unknown",
+      },
+      scenarios: Array.isArray(summary.scenarios) ? summary.scenarios : [],
+    };
+  }
+  const entries = summary.entries;
+  const scenarios = entries.map(normalizeEvidenceScenario);
+  const failed = scenarios.filter((scenario) => scenario.status !== "pass").length;
+  const passed = scenarios.length - failed;
+  return {
+    counts: {
+      total: scenarios.length,
+      passed,
+      failed,
+    },
+    credentials: {
+      source:
+        entries[0]?.execution?.provider?.auth ??
+        entries[0]?.execution?.provider?.fixture ??
+        entries[0]?.execution?.packageSource?.kind ??
+        "unknown",
+    },
+    scenarios,
+  };
+}
+
 function renderScenarioList(summary) {
-  const scenarios = Array.isArray(summary.scenarios) ? summary.scenarios : [];
+  const scenarios = normalizeEvidenceSummary(summary).scenarios;
   if (scenarios.length === 0) {
     return "<li>No scenarios recorded.</li>";
   }
@@ -93,7 +137,8 @@ function renderObservedMessages(observedMessages) {
  * Renders a self-contained Telegram evidence HTML report.
  */
 export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
-  const counts = summary.counts ?? {};
+  const evidence = normalizeEvidenceSummary(summary);
+  const counts = evidence.counts;
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
   return `<!doctype html>
 <html lang="en">
@@ -217,7 +262,7 @@ export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
         <span class="pill">total: ${escapeHtml(counts.total ?? 0)}</span>
         <span class="pill">passed: ${escapeHtml(counts.passed ?? 0)}</span>
         <span class="pill">failed: ${escapeHtml(counts.failed ?? 0)}</span>
-        <span class="pill">credentials: ${escapeHtml(summary.credentials?.source ?? "unknown")}</span>
+        <span class="pill">credentials: ${escapeHtml(evidence.credentials.source)}</span>
       </div>
     </header>
     <section>
@@ -243,12 +288,12 @@ export function buildTelegramEvidenceManifest({
   candidateSha,
   scenarioLabel,
   summary,
+  summaryArtifactPath = QA_EVIDENCE_SUMMARY_FILENAME,
 }) {
-  const counts = summary.counts ?? {};
+  const evidence = normalizeEvidenceSummary(summary);
+  const counts = evidence.counts;
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
-  const scenarioNames = Array.isArray(summary.scenarios)
-    ? summary.scenarios.map((scenario) => scenario.id).filter(Boolean)
-    : [];
+  const scenarioNames = evidence.scenarios.map((scenario) => scenario.id).filter(Boolean);
   const scenario = scenarioLabel || scenarioNames.join(",") || "telegram-live";
   const status = pass ? "pass" : "fail";
   const artifacts = [
@@ -293,8 +338,8 @@ export function buildTelegramEvidenceManifest({
     {
       kind: "metadata",
       lane: "run",
-      label: "Telegram QA summary",
-      path: "telegram-qa-summary.json",
+      label: "Telegram QA evidence summary",
+      path: summaryArtifactPath,
       targetPath: "summary.json",
     },
     {
@@ -363,17 +408,20 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
   }
   const outputDir = path.resolve(args.output_dir);
   mkdirSync(outputDir, { recursive: true });
-  const summaryPath = path.join(outputDir, "telegram-qa-summary.json");
+  const evidenceSummaryPath = path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
+  const legacySummaryPath = path.join(outputDir, "telegram-qa-summary.json");
+  const summaryPath = existsSync(evidenceSummaryPath) ? evidenceSummaryPath : legacySummaryPath;
   const observedPath = path.join(outputDir, "telegram-qa-observed-messages.json");
   const reportPath = path.join(outputDir, "telegram-qa-report.md");
   if (!existsSync(summaryPath)) {
-    throw new Error(`Missing Telegram QA summary: ${summaryPath}`);
+    throw new Error(`Missing Telegram QA evidence summary: ${evidenceSummaryPath}`);
   }
   if (!existsSync(observedPath)) {
     throw new Error(`Missing Telegram observed messages: ${observedPath}`);
   }
   const summary = readJson(summaryPath);
-  const pass = summary.counts?.failed === 0 && Number(summary.counts?.total ?? 0) > 0;
+  const counts = normalizeEvidenceSummary(summary).counts;
+  const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
   if (!existsSync(reportPath)) {
     if (pass) {
       throw new Error(`Missing Telegram QA report for passing summary: ${reportPath}`);
@@ -388,6 +436,7 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
     candidateSha: args.candidate_sha,
     scenarioLabel: args.scenario_label,
     summary,
+    summaryArtifactPath: path.basename(summaryPath),
   });
   writeFileSync(
     path.join(outputDir, "mantis-evidence.json"),

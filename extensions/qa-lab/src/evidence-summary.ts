@@ -4,9 +4,10 @@ import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
+export const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
 export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 
-const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked"]);
+const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const qaEvidenceProfileSchema = nonEmptyStringSchema;
 
@@ -180,7 +181,7 @@ export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
 export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
 
-type QaEvidenceScenarioStatusInput = "pass" | "fail" | "blocked";
+type QaEvidenceStatusInput = QaEvidenceStatus | "skip";
 
 type QaEvidenceScenarioSpecInput = {
   id: string;
@@ -204,7 +205,20 @@ type QaEvidenceScenarioResultInput = {
   name?: string;
   standardId?: string;
   title?: string;
-  status: QaEvidenceScenarioStatusInput;
+  status: QaEvidenceStatusInput;
+  details?: string;
+  rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs?: number;
+  };
+};
+
+type QaEvidenceLiveTransportCheckInput = {
+  id?: string;
+  name?: string;
+  standardId?: string;
+  title?: string;
+  status: QaEvidenceStatusInput;
   details?: string;
   rttMs?: number;
   rttMeasurement?: {
@@ -227,7 +241,7 @@ type QaEvidenceTestResultInput = {
   id?: string;
   title?: string;
   sourcePath?: string;
-  status: QaEvidenceScenarioStatusInput;
+  status: QaEvidenceStatusInput;
   durationMs?: number;
   failureMessage?: string;
 };
@@ -442,27 +456,27 @@ function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primary
   };
 }
 
-function failureForScenario(scenario: QaEvidenceScenarioResultInput) {
-  if (scenario.status === "pass") {
+function normalizeQaEvidenceStatus(status: QaEvidenceStatusInput): QaEvidenceStatus {
+  return status === "skip" ? "skipped" : status;
+}
+
+function failureForResult(result: {
+  details?: string;
+  failureMessage?: string;
+  status: QaEvidenceStatusInput;
+}) {
+  const status = normalizeQaEvidenceStatus(result.status);
+  if (status === "pass") {
     return undefined;
   }
   return {
-    reason: scenario.details?.trim() || `${scenario.status} scenario`,
+    reason: result.details?.trim() || result.failureMessage?.trim() || `${status} test`,
   };
 }
 
-function timingForScenario(scenario: QaEvidenceScenarioResultInput) {
-  const rttMs = scenario.rttMeasurement?.finalMatchedReplyRttMs ?? scenario.rttMs;
+function timingForLiveTransportCheck(check: QaEvidenceLiveTransportCheckInput) {
+  const rttMs = check.rttMeasurement?.finalMatchedReplyRttMs ?? check.rttMs;
   return typeof rttMs === "number" && Number.isFinite(rttMs) && rttMs > 0 ? { rttMs } : undefined;
-}
-
-function failureForTestResult(result: QaEvidenceTestResultInput) {
-  if (result.status === "pass") {
-    return undefined;
-  }
-  return {
-    reason: result.failureMessage?.trim() || `${result.status} test`,
-  };
 }
 
 function timingForTestResult(result: QaEvidenceTestResultInput) {
@@ -571,9 +585,11 @@ export function buildQaSuiteEvidenceSummary(
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, "qa-suite"),
       },
       result: {
-        status: result.status,
-        ...(failureForScenario(result) ? { failure: failureForScenario(result) } : {}),
-        ...(timingForScenario(result) ? { timing: timingForScenario(result) } : {}),
+        status: normalizeQaEvidenceStatus(result.status),
+        ...(failureForResult(result) ? { failure: failureForResult(result) } : {}),
+        ...(timingForLiveTransportCheck(result)
+          ? { timing: timingForLiveTransportCheck(result) }
+          : {}),
       },
     };
   });
@@ -645,8 +661,8 @@ function buildTestRunnerEvidenceSummary(
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, runner),
       },
       result: {
-        status: result.status,
-        ...(failureForTestResult(result) ? { failure: failureForTestResult(result) } : {}),
+        status: normalizeQaEvidenceStatus(result.status),
+        ...(failureForResult(result) ? { failure: failureForResult(result) } : {}),
         ...(timingForTestResult(result) ? { timing: timingForTestResult(result) } : {}),
       },
     };
@@ -684,7 +700,7 @@ export function buildPlaywrightEvidenceSummary(
 
 export function buildLiveTransportEvidenceSummary(
   params: QaEvidenceBuildBase & {
-    scenarioResults: readonly QaEvidenceScenarioResultInput[];
+    checks: readonly QaEvidenceLiveTransportCheckInput[];
     transportId: string;
   },
 ): QaEvidenceSummaryJson {
@@ -701,16 +717,16 @@ export function buildLiveTransportEvidenceSummary(
     env: params.env,
     fallback: params.channelDriver ?? "native",
   }) ?? { id: "native" };
-  const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
-    const testId = result.id ?? result.name ?? `live-transport-check-${index + 1}`;
-    const standardCoverageId = result.standardId
-      ? `channels.${params.transportId}.${result.standardId}`
+  const entries = params.checks.map((check, index): QaEvidenceSummaryEntry => {
+    const testId = check.id ?? check.name ?? `live-transport-check-${index + 1}`;
+    const standardCoverageId = check.standardId
+      ? `channels.${params.transportId}.${check.standardId}`
       : undefined;
     return {
       test: buildQaEvidenceTest({
         kind: "live-transport-check",
         id: testId,
-        title: result.title ?? result.name ?? testId,
+        title: check.title ?? check.name ?? testId,
       }),
       mapping: {
         profile: {
@@ -753,9 +769,11 @@ export function buildLiveTransportEvidenceSummary(
         ),
       },
       result: {
-        status: result.status,
-        ...(failureForScenario(result) ? { failure: failureForScenario(result) } : {}),
-        ...(timingForScenario(result) ? { timing: timingForScenario(result) } : {}),
+        status: normalizeQaEvidenceStatus(check.status),
+        ...(failureForResult(check) ? { failure: failureForResult(check) } : {}),
+        ...(timingForLiveTransportCheck(check)
+          ? { timing: timingForLiveTransportCheck(check) }
+          : {}),
       },
     };
   });

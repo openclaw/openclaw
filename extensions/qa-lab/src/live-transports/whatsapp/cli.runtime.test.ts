@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QA_EVIDENCE_SUMMARY_FILENAME } from "../../evidence-summary.js";
 import { runQaWhatsAppCommand } from "./cli.runtime.js";
 
 const runWhatsAppQaLiveMock = vi.hoisted(() => vi.fn());
@@ -38,7 +39,7 @@ afterEach(async () => {
 async function writeSummary(summary: unknown) {
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-cli-"));
   tempDirs.push(outputDir);
-  const summaryPath = path.join(outputDir, "whatsapp-qa-summary.json");
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return { outputDir, summaryPath };
 }

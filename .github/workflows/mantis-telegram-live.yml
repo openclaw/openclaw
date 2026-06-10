@@ -445,8 +445,8 @@ jobs:
           telegram_exit=$?
           set -e
 
-          if [[ ! -f "$root/telegram-qa-summary.json" ]]; then
-            echo "Telegram live QA did not produce a summary." >&2
+          if [[ ! -f "$root/qa-evidence-summary.json" && ! -f "$root/telegram-qa-summary.json" ]]; then
+            echo "Telegram live QA did not produce an evidence summary." >&2
             exit "$telegram_exit"
           fi
           echo "telegram_exit=${telegram_exit}" >> "$GITHUB_OUTPUT"

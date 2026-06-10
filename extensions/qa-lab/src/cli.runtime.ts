@@ -257,7 +257,7 @@ function isQaSuiteInfraRetryableError(error: unknown) {
     message.includes("socket hang up") ||
     message.includes("could not read qa summary json") ||
     message.includes("could not parse qa summary json") ||
-    message.includes("did not include counts.failed, counts.skipped, or scenarios[].status") ||
+    message.includes("did not include counts.failed, counts.skipped, scenarios[].status") ||
     message.includes("did not produce report artifact")
   );
 }

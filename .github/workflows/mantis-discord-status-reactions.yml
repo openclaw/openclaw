@@ -437,8 +437,17 @@ jobs:
             echo "::warning::Could not generate motion-trimmed desktop previews; continuing with screenshots and full MP4 links."
           fi
 
-          baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
-          candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
+          read_discord_status_reaction_status() {
+            local lane="$1"
+            if [[ -f "$root/$lane/qa-evidence-summary.json" ]]; then
+              jq -r '.entries[0].result.status' "$root/$lane/qa-evidence-summary.json"
+              return
+            fi
+            jq -r '.scenarios[0].status' "$root/$lane/discord-qa-summary.json"
+          }
+
+          baseline_status="$(read_discord_status_reaction_status baseline)"
+          candidate_status="$(read_discord_status_reaction_status candidate)"
 
           jq -n \
             --arg baseline_status "$baseline_status" \
