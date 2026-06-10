@@ -340,16 +340,11 @@ export const registerTelegramHandlers = ({
     entities: undefined,
     ...(params.date != null ? { date: params.date } : {}),
   });
+  // grammy's Context.getFile reads update state via `this`; keep the receiver bound.
   const buildSyntheticContext = (
-    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
+    ctx: Pick<TelegramContext, "me" | "getFile">,
     message: Message,
-  ): TelegramContext => {
-    const getFile =
-      typeof ctx.getFile === "function"
-        ? (ctx.getFile as TelegramContext["getFile"]).bind(ctx as object)
-        : async () => ({});
-    return { message, me: ctx.me, getFile };
-  };
+  ): TelegramContext => ({ message, me: ctx.me, getFile: ctx.getFile.bind(ctx) });
 
   const MULTI_SELECT_PREFIX = "OC_MULTI|";
   const MULTI_SELECT_TOGGLE_PREFIX = `${MULTI_SELECT_PREFIX}toggle|`;
@@ -464,7 +459,7 @@ export const registerTelegramHandlers = ({
       }),
     );
   const buildCallbackSyntheticTextContext = (params: {
-    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown };
+    ctx: Pick<TelegramContext, "me" | "getFile">;
     callbackMessage: Message;
     callback: { from?: Message["from"] };
     text: string;
@@ -1266,10 +1261,7 @@ export const registerTelegramHandlers = ({
   type TelegramGroupAllowContext = Awaited<ReturnType<typeof resolveTelegramGroupAllowFromContext>>;
   type TelegramEventAuthorizationMode = "reaction" | "callback-scope" | "callback-allowlist";
   type TelegramEventAuthorizationContext = TelegramGroupAllowContext & { dmPolicy: DmPolicy };
-  const getChat =
-    typeof (bot.api as { getChat?: unknown }).getChat === "function"
-      ? (bot.api as { getChat: TelegramGetChat }).getChat.bind(bot.api)
-      : undefined;
+  const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
 
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
