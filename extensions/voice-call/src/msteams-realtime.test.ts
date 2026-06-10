@@ -17,6 +17,7 @@ import {
   createMsteamsRealtimeCall,
   type MsteamsRealtimeDeps,
   pcm16Rms,
+  toTileCaption,
 } from "./msteams-realtime.js";
 import { VisionBudget } from "./vision-budget.js";
 
@@ -149,6 +150,23 @@ describe("pcm16Rms (echo-guard loudness)", () => {
   it("returns 0 for an empty or odd-length buffer", () => {
     expect(pcm16Rms(Buffer.alloc(0))).toBe(0);
     expect(pcm16Rms(Buffer.from([1]))).toBe(0);
+  });
+});
+
+describe("toTileCaption", () => {
+  it("collapses whitespace and trims", () => {
+    expect(toTileCaption("  Here's   the\nchart  ")).toBe("Here's the chart");
+  });
+
+  it("returns undefined for empty or blank text", () => {
+    expect(toTileCaption(undefined)).toBeUndefined();
+    expect(toTileCaption("   \n  ")).toBeUndefined();
+  });
+
+  it("truncates long text to 140 chars with an ellipsis", () => {
+    const cap = toTileCaption("x".repeat(200));
+    expect(cap).toHaveLength(140);
+    expect(cap?.endsWith("…")).toBe(true);
   });
 });
 

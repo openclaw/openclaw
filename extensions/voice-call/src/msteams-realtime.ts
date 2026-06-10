@@ -83,6 +83,15 @@ export function pcm16Rms(pcm: Buffer): number {
   return Math.sqrt(sum / samples);
 }
 
+/** A short, single-line tile caption from the agent's image summary (empty → undefined). */
+export function toTileCaption(text: string | undefined): string | undefined {
+  const trimmed = text?.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > 140 ? `${trimmed.slice(0, 139)}…` : trimmed;
+}
+
 /**
  * CVI Phase 4 — how often to push the latest inbound frame into the realtime session as ambient
  * visual context. Only fires when the frame changed and the vision budget allows, so a static screen
@@ -858,7 +867,7 @@ export function createMsteamsRealtimeCall(params: {
   }
 
   /** Show agent-produced images (local files or remote URLs) on the outbound tile (Phase 8). */
-  async function forwardDisplayImages(mediaPaths: string[]): Promise<number> {
+  async function forwardDisplayImages(mediaPaths: string[], caption?: string): Promise<number> {
     let shown = 0;
     for (const pathOrUrl of mediaPaths) {
       const img = await loadDisplayImage(pathOrUrl);
@@ -870,12 +879,13 @@ export function createMsteamsRealtimeCall(params: {
       }
       try {
         logger?.debug?.(
-          `MsteamsRealtime: display.image (${img.mime}, ${img.bytes.length}B) for ${callId}`,
+          `MsteamsRealtime: display.image (${img.mime}, ${img.bytes.length}B${caption ? ", captioned" : ""}) for ${callId}`,
         );
         session.send({
           type: "display.image",
           dataBase64: img.bytes.toString("base64"),
           mime: img.mime,
+          ...(caption ? { caption } : {}),
         });
         shown += 1;
       } catch (err) {
@@ -941,7 +951,7 @@ export function createMsteamsRealtimeCall(params: {
         // (general consults leave this false, so an arbitrary local path is never displayed).
         trustLocalMedia: true,
       });
-      const shown = await forwardDisplayImages(result.mediaPaths ?? []);
+      const shown = await forwardDisplayImages(result.mediaPaths ?? [], toTileCaption(result.text));
       rtSession.submitToolResult(event.callId, {
         text:
           shown > 0
