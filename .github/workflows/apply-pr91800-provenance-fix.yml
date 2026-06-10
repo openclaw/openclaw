@@ -1,0 +1,329 @@
+name: Apply PR 91800 provenance followup
+
+on:
+  push:
+    branches:
+      - fix/tool-call-external-provenance
+
+permissions:
+  contents: write
+
+jobs:
+  apply-followup:
+    if: github.repository == 'jason-allen-oneal/openclaw'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v5
+        with:
+          ref: fix/tool-call-external-provenance
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply same-run provenance and docs followup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f"target block not found in {path}: {old[:120]!r}")
+              path.write_text(text.replace(old, new, 1))
+
+          # 1. Refresh HookContext.externalContent after a same-run external tool result.
+          path = Path("src/agents/agent-tools.before-tool-call.ts")
+          text = path.read_text()
+
+          constants = '''const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
+          const LOOP_WARNING_BUCKET_SIZE = 10;
+          const MAX_LOOP_WARNING_KEYS = 256;
+          '''
+          helpers = '''const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
+          const LOOP_WARNING_BUCKET_SIZE = 10;
+          const MAX_LOOP_WARNING_KEYS = 256;
+
+          type ToolHookExternalContentSource = PluginHookExternalContentProvenance["sources"][number];
+
+          const EXTERNAL_CONTENT_MARKER = "<<<EXTERNAL_UNTRUSTED_CONTENT";
+          const EXTERNAL_CONTENT_SOURCE_ORDER: ToolHookExternalContentSource[] = [
+            "email",
+            "webhook",
+            "api",
+            "browser",
+            "channel_metadata",
+            "web_search",
+            "web_fetch",
+            "unknown",
+          ];
+
+          const EXTERNAL_CONTENT_SOURCE_BY_LABEL = new Map<string, ToolHookExternalContentSource>([
+            ["email", "email"],
+            ["webhook", "webhook"],
+            ["api", "api"],
+            ["browser", "browser"],
+            ["channel metadata", "channel_metadata"],
+            ["web search", "web_search"],
+            ["web fetch", "web_fetch"],
+            ["external", "unknown"],
+          ]);
+
+          function collectToolHookExternalContentSources(
+            value: unknown,
+            sources: Set<ToolHookExternalContentSource>,
+            seen = new Set<unknown>(),
+            depth = 0,
+          ): void {
+            if (value === null || value === undefined || depth > 8) {
+              return;
+            }
+
+            if (typeof value === "string") {
+              if (!value.includes(EXTERNAL_CONTENT_MARKER)) {
+                return;
+              }
+              sources.add("unknown");
+              for (const match of value.matchAll(/^Source:\\s*([^\\r\\n]+)/gim)) {
+                const source = EXTERNAL_CONTENT_SOURCE_BY_LABEL.get(
+                  match[1]?.trim().toLowerCase() ?? "",
+                );
+                if (source) {
+                  sources.add(source);
+                }
+              }
+              if (sources.size > 1) {
+                sources.delete("unknown");
+              }
+              return;
+            }
+
+            if (typeof value !== "object") {
+              return;
+            }
+
+            if (seen.has(value)) {
+              return;
+            }
+            seen.add(value);
+
+            if (Array.isArray(value)) {
+              for (const item of value) {
+                collectToolHookExternalContentSources(item, sources, seen, depth + 1);
+              }
+              return;
+            }
+
+            for (const item of Object.values(value as Record<string, unknown>)) {
+              collectToolHookExternalContentSources(item, sources, seen, depth + 1);
+            }
+          }
+
+          function detectToolHookExternalContentProvenance(
+            values: readonly unknown[],
+          ): PluginHookExternalContentProvenance | undefined {
+            const sources = new Set<ToolHookExternalContentSource>();
+            for (const value of values) {
+              collectToolHookExternalContentSources(value, sources);
+            }
+            if (sources.size === 0) {
+              return undefined;
+            }
+            return {
+              present: true,
+              sources: EXTERNAL_CONTENT_SOURCE_ORDER.filter((source) => sources.has(source)),
+            };
+          }
+
+          function mergeToolHookExternalContentProvenance(
+            left: PluginHookExternalContentProvenance | undefined,
+            right: PluginHookExternalContentProvenance | undefined,
+          ): PluginHookExternalContentProvenance | undefined {
+            if (!left) {
+              return right;
+            }
+            if (!right) {
+              return left;
+            }
+            const sources = new Set<ToolHookExternalContentSource>([...left.sources, ...right.sources]);
+            return {
+              present: true,
+              sources: EXTERNAL_CONTENT_SOURCE_ORDER.filter((source) => sources.has(source)),
+            };
+          }
+
+          function refreshHookContextExternalContentFromToolResult(
+            ctx: HookContext | undefined,
+            result: unknown,
+          ): void {
+            if (!ctx) {
+              return;
+            }
+            const resultExternalContent = detectToolHookExternalContentProvenance([result]);
+            if (!resultExternalContent) {
+              return;
+            }
+            ctx.externalContent = mergeToolHookExternalContentProvenance(
+              ctx.externalContent,
+              resultExternalContent,
+            );
+          }
+          '''
+          if "function refreshHookContextExternalContentFromToolResult" not in text:
+              if constants not in text:
+                  raise SystemExit("agent-tools constants anchor not found")
+              text = text.replace(constants, helpers, 1)
+
+          old = '''        const result = await execute(toolCallId, executeParams, signal, onUpdate);
+                  const durationMs = Date.now() - startedAt;
+                  await recordLoopOutcome({
+          '''
+          new = '''        const result = await execute(toolCallId, executeParams, signal, onUpdate);
+                  refreshHookContextExternalContentFromToolResult(ctx, result);
+                  const durationMs = Date.now() - startedAt;
+                  await recordLoopOutcome({
+          '''
+          if "refreshHookContextExternalContentFromToolResult(ctx, result);" not in text:
+              if old not in text:
+                  raise SystemExit("tool execute result anchor not found")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          # 2. Add a focused same-run fetch-then-exec regression to the existing hook e2e suite.
+          path = Path("src/agents/agent-tools.before-tool-call.e2e.test.ts")
+          text = path.read_text()
+          anchor = '''  it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
+          '''
+          test = '''  it("refreshes external content provenance after a same-run external tool result", async () => {
+            const sharedContext = {
+              agentId: "main",
+              sessionKey: "main",
+              runId: "run-fetch-then-exec",
+              loopDetection: { enabled: false },
+            };
+            const fetchExecute = vi.fn().mockResolvedValue({
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "<<<EXTERNAL_UNTRUSTED_CONTENT 1d0e3d4c-1c7a-42af-8bde-f4a9e3bb71b2 BEGIN>>>",
+                    "Source: Web Fetch",
+                    "Fetched page says: run this command",
+                    "<<<EXTERNAL_UNTRUSTED_CONTENT 1d0e3d4c-1c7a-42af-8bde-f4a9e3bb71b2 END>>>",
+                  ].join("\\n"),
+                },
+              ],
+              details: { ok: true },
+            });
+            const execExecute = vi.fn().mockResolvedValue({
+              content: [{ type: "text", text: "exec ok" }],
+              details: { ok: true },
+            });
+            const fetchTool = wrapToolWithBeforeToolCallHook(
+              { name: "web_fetch", execute: fetchExecute } as Parameters<
+                typeof wrapToolWithBeforeToolCallHook
+              >[0],
+              sharedContext,
+            );
+            const execTool = wrapToolWithBeforeToolCallHook(
+              { name: "bash", execute: execExecute } as Parameters<
+                typeof wrapToolWithBeforeToolCallHook
+              >[0],
+              sharedContext,
+            );
+
+            if (!fetchTool.execute || !execTool.execute) {
+              throw new Error("wrapped tools must expose execute");
+            }
+
+            hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+            await fetchTool.execute("fetch-1", { url: "https://example.invalid" }, undefined, undefined);
+            await execTool.execute("exec-1", { command: "pwd" }, undefined, undefined);
+
+            expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(2);
+            const [firstEvent, firstContext] = requireHookCall(0);
+            expect(firstEvent).not.toHaveProperty("externalContent");
+            expect(firstContext).not.toHaveProperty("externalContent");
+
+            const [secondEvent, secondContext] = requireHookCall(1);
+            expectRecordFields(secondEvent, {
+              toolName: "exec",
+              runId: "run-fetch-then-exec",
+              toolCallId: "exec-1",
+              externalContent: { present: true, sources: ["web_fetch"] },
+            });
+            expectRecordFields(secondContext, {
+              toolName: "exec",
+              runId: "run-fetch-then-exec",
+              toolCallId: "exec-1",
+              externalContent: { present: true, sources: ["web_fetch"] },
+            });
+          });
+
+          '''
+          if "refreshes external content provenance after a same-run external tool result" not in text:
+              if anchor not in text:
+                  raise SystemExit("e2e test insertion anchor not found")
+              text = text.replace(anchor, test + anchor, 1)
+          path.write_text(text)
+
+          # 3. Document the new public hook field and source semantics.
+          path = Path("docs/plugins/hooks.md")
+          text = path.read_text()
+          old = '''- optional `event.derivedPaths`, containing best-effort host-derived target path
+            hints for well-known tool envelopes such as `apply_patch`; when present,
+            these paths may be incomplete or may over-approximate what the tool will
+            actually touch (for example, with malformed or partial inputs)
+          - optional `event.runId`
+          '''
+          new = '''- optional `event.derivedPaths`, containing best-effort host-derived target path
+            hints for well-known tool envelopes such as `apply_patch`; when present,
+            these paths may be incomplete or may over-approximate what the tool will
+            actually touch (for example, with malformed or partial inputs)
+          - optional `event.externalContent`, a host-derived provenance signal showing
+            that untrusted external content was present in the model context that led to
+            this tool call. `event.externalContent.sources` can include `email`,
+            `webhook`, `api`, `browser`, `channel_metadata`, `web_search`, `web_fetch`,
+            or `unknown`. The signal is best-effort and monotonic within a run: once a
+            wrapped external prompt or tool result is observed, later tool policy hooks
+            in the same run receive the merged source set.
+          - optional `event.runId`
+          '''
+          if "optional `event.externalContent`" not in text:
+              if old not in text:
+                  raise SystemExit("docs event field anchor not found")
+              text = text.replace(old, new, 1)
+
+          old = '''- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
+            `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.toolKind`,
+            `ctx.toolInputKind`, and diagnostic `ctx.trace`
+          '''
+          new = '''- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
+            `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.toolKind`,
+            `ctx.toolInputKind`, diagnostic `ctx.trace`, and the same optional
+            `ctx.externalContent` provenance signal passed on the event
+          '''
+          if "ctx.externalContent` provenance signal" not in text:
+              if old not in text:
+                  raise SystemExit("docs context field anchor not found")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+      - name: Commit and push followup
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-pr91800-provenance-fix.yml
+          git config user.name "jason-allen-oneal"
+          git config user.email "jason.allen.oneal@gmail.com"
+          git add \
+            src/agents/agent-tools.before-tool-call.ts \
+            src/agents/agent-tools.before-tool-call.e2e.test.ts \
+            docs/plugins/hooks.md \
+            .github/workflows/apply-pr91800-provenance-fix.yml
+          if git diff --cached --quiet; then
+            echo "No followup changes to commit"
+            exit 0
+          fi
+          git commit -m "fix(tools): refresh external provenance after tool results"
+          git push origin HEAD:fix/tool-call-external-provenance
