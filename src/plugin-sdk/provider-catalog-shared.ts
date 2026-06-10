@@ -146,6 +146,7 @@ function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig
     ...(cost.tieredPricing
       ? { tieredPricing: cost.tieredPricing.map(cloneManifestCatalogTieredCost) }
       : {}),
+    ...(cost.tieredPricingBasis ? { tieredPricingBasis: cost.tieredPricingBasis } : {}),
   };
 }
 

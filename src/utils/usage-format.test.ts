@@ -355,6 +355,36 @@ describe("usage-format", () => {
     ).toBe(9);
   });
 
+  it("observes in-place tier basis changes after a cached lookup", () => {
+    const cost = {
+      input: 1,
+      output: 2,
+      cacheRead: 0.5,
+      cacheWrite: 0,
+      tieredPricing: [
+        { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0, range: [0, 32_000] },
+        { input: 3, output: 6, cacheRead: 1.5, cacheWrite: 0, range: [32_000] },
+      ],
+    } satisfies NonNullable<ModelProviderConfig["models"]>[number]["cost"];
+    const config = {
+      models: {
+        providers: {
+          "demo-basis": {
+            baseUrl: "https://example.test",
+            models: [{ id: "model", name: "Model", cost }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const inputBasis = resolveModelCostConfig({ config, provider: "demo-basis", model: "model" });
+    cost.tieredPricingBasis = "prompt";
+    const promptBasis = resolveModelCostConfig({ config, provider: "demo-basis", model: "model" });
+
+    expect(inputBasis?.tieredPricingBasis).toBeUndefined();
+    expect(promptBasis?.tieredPricingBasis).toBe("prompt");
+  });
+
   it("observes structural config pricing changes after a cached lookup", () => {
     const models = [
       {

@@ -442,7 +442,14 @@ function buildModelCostFingerprint(cost: RawModelCostConfig): string {
         return [tier.input, tier.output, tier.cacheRead, tier.cacheWrite, ...range];
       })
     : [];
-  return [cost.input, cost.output, cost.cacheRead, cost.cacheWrite, ...tierFingerprint].join("|");
+  return [
+    cost.input,
+    cost.output,
+    cost.cacheRead,
+    cost.cacheWrite,
+    cost.tieredPricingBasis ?? "input",
+    ...tierFingerprint,
+  ].join("|");
 }
 
 function isProviderCostSourceCurrent(
