@@ -14,8 +14,11 @@ import {
   buildRunId,
   createHarnessEnv,
   extractRtt,
+  QA_EVIDENCE_SUMMARY_FILENAME,
   readTelegramSummary,
+  resolveTelegramSummaryPath,
   safeRunLabel,
+  TELEGRAM_RTT_SUMMARY_FILENAME,
   validateOpenClawPackageSpec,
 } from "../../scripts/lib/rtt-harness.ts";
 import { testing as cliTesting } from "../../scripts/rtt.ts";
@@ -490,6 +493,48 @@ describe("RTT harness", () => {
     });
   });
 
+  it("extracts RTT values from normalized evidence summaries", () => {
+    expect(
+      extractRtt({
+        kind: "openclaw.qa.evidence-summary",
+        entries: [
+          {
+            test: { id: "telegram-canary" },
+            result: { status: "pass", timing: { rttMs: 1234 } },
+          },
+          {
+            test: { id: "telegram-mentioned-message-reply" },
+            result: {
+              status: "pass",
+              timing: { rttMs: 6000, p50Ms: 5000, p95Ms: 7000, maxMs: 7000 },
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      canaryMs: 1234,
+      mentionReplyMs: 5000,
+      p50Ms: 5000,
+      p95Ms: 7000,
+      maxMs: 7000,
+    });
+  });
+
+  it("prefers normalized evidence summaries when resolving Telegram RTT artifacts", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-summary-test-"));
+    tempDirs.push(tempDir);
+    await fs.writeFile(path.join(tempDir, TELEGRAM_RTT_SUMMARY_FILENAME), "{}\n");
+
+    await expect(resolveTelegramSummaryPath(tempDir)).resolves.toBe(
+      path.join(tempDir, TELEGRAM_RTT_SUMMARY_FILENAME),
+    );
+
+    await fs.writeFile(path.join(tempDir, QA_EVIDENCE_SUMMARY_FILENAME), "{}\n");
+    await expect(resolveTelegramSummaryPath(tempDir)).resolves.toBe(
+      path.join(tempDir, QA_EVIDENCE_SUMMARY_FILENAME),
+    );
+  });
+
   it("builds normalized result JSON", async () => {
     const summary = await readTelegramSummary(FIXTURE_PATH);
     const result = buildRttResult({
@@ -603,6 +648,13 @@ describe("RTT harness", () => {
             stats: { failed: 0, passed: 0, total: 0 },
             status: "pass",
           },
+        ],
+      },
+      {
+        kind: "openclaw.qa.evidence-summary",
+        entries: [
+          { test: { id: "telegram-canary" }, result: { status: "pass" } },
+          { test: { id: "telegram-mentioned-message-reply" }, result: { status: "pass" } },
         ],
       },
     ]) {

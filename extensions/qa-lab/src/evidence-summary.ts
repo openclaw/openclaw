@@ -276,19 +276,18 @@ function buildQaEvidenceRefs(params: {
   codeRefs?: readonly string[];
   sourcePath?: string;
 }) {
+  const buildRef = (kind: "docs" | "code", refPath: string) => {
+    const ref = {
+      id: `${kind}:${refPath}`,
+      kind,
+      path: refPath,
+      ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
+    };
+    return ref;
+  };
   const refs = [
-    ...(params.docsRefs ?? []).map((path) => ({
-      id: `docs:${path}`,
-      kind: "docs",
-      path,
-      ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
-    })),
-    ...(params.codeRefs ?? []).map((path) => ({
-      id: `code:${path}`,
-      kind: "code",
-      path,
-      ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
-    })),
+    ...(params.docsRefs ?? []).map((path) => buildRef("docs", path)),
+    ...(params.codeRefs ?? []).map((path) => buildRef("code", path)),
   ];
   return [...new Map(refs.map((ref) => [ref.id, ref])).values()];
 }
@@ -304,23 +303,17 @@ function buildQaEvidenceCoverage(params: {
   const surfaceIds = uniqueSortedStrings(params.surfaceIds ?? []);
   const categoryIds = uniqueSortedStrings(params.categoryIds ?? []);
   const refIds = uniqueSortedStrings(params.refIds ?? []);
+  const buildCoverage = (id: string, role: "primary" | "secondary") => ({
+    id,
+    role,
+    ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
+    surfaceIds,
+    categoryIds: role === "primary" ? categoryIds : [],
+    ...(refIds.length > 0 ? { refIds } : {}),
+  });
   return [
-    ...uniqueSortedStrings(params.primaryIds ?? []).map((id) => ({
-      id,
-      role: "primary",
-      ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
-      surfaceIds,
-      categoryIds,
-      ...(refIds.length > 0 ? { refIds } : {}),
-    })),
-    ...uniqueSortedStrings(params.secondaryIds ?? []).map((id) => ({
-      id,
-      role: "secondary",
-      ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
-      surfaceIds,
-      categoryIds: [],
-      ...(refIds.length > 0 ? { refIds } : {}),
-    })),
+    ...uniqueSortedStrings(params.primaryIds ?? []).map((id) => buildCoverage(id, "primary")),
+    ...uniqueSortedStrings(params.secondaryIds ?? []).map((id) => buildCoverage(id, "secondary")),
   ];
 }
 
@@ -369,7 +362,7 @@ function resolveQaEvidenceProfile(params: {
     ["OPENCLAW_E2E_PROFILE", params.env?.OPENCLAW_E2E_PROFILE],
     ["OPENCLAW_QA_PROFILE", params.env?.OPENCLAW_QA_PROFILE],
   ] as const;
-  for (const [source, value] of envProfiles) {
+  for (const [, value] of envProfiles) {
     const normalized = value?.trim();
     if (!normalized) {
       continue;

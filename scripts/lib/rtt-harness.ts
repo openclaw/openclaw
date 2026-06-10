@@ -70,6 +70,31 @@ type TelegramQaSummary = {
   }>;
 };
 
+type QaEvidenceSummary = {
+  kind?: string;
+  entries?: Array<{
+    test?: {
+      id?: string;
+    };
+    result?: {
+      status?: string;
+      timing?: {
+        rttMs?: number;
+        avgMs?: number;
+        p50Ms?: number;
+        p95Ms?: number;
+        maxMs?: number;
+        samples?: number;
+      };
+    };
+  }>;
+};
+
+type TelegramRttSummary = TelegramQaSummary | QaEvidenceSummary;
+
+export const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
+export const TELEGRAM_RTT_SUMMARY_FILENAME = "telegram-qa-summary.json";
+
 const OPENCLAW_PACKAGE_SPEC_RE =
   /^openclaw@(main|alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
@@ -150,7 +175,38 @@ export function buildRunId(params: { now: Date; spec: string; index?: number }) 
   return `${stamp}-${safeRunLabel(params.spec)}${suffix}`;
 }
 
-export function extractRtt(summary: TelegramQaSummary) {
+function isQaEvidenceSummary(summary: TelegramRttSummary): summary is QaEvidenceSummary {
+  return Array.isArray((summary as QaEvidenceSummary).entries);
+}
+
+function extractNormalizedEvidenceRtt(summary: QaEvidenceSummary) {
+  const entries = summary.entries ?? [];
+  const findEntry = (id: string) => entries.find((entry) => entry.test?.id === id);
+  const canary = findEntry("telegram-canary")?.result?.timing;
+  const mention = findEntry("telegram-mentioned-message-reply")?.result?.timing;
+  const rtt: RttResult["rtt"] = {
+    canaryMs: canary?.rttMs,
+    mentionReplyMs: mention?.p50Ms ?? mention?.rttMs,
+  };
+  if (mention?.avgMs !== undefined) {
+    rtt.avgMs = mention.avgMs;
+  }
+  if (mention?.p50Ms !== undefined) {
+    rtt.p50Ms = mention.p50Ms;
+  }
+  if (mention?.p95Ms !== undefined) {
+    rtt.p95Ms = mention.p95Ms;
+  }
+  if (mention?.maxMs !== undefined) {
+    rtt.maxMs = mention.maxMs;
+  }
+  return rtt;
+}
+
+export function extractRtt(summary: TelegramRttSummary) {
+  if (isQaEvidenceSummary(summary)) {
+    return extractNormalizedEvidenceRtt(summary);
+  }
   const scenarios = summary.scenarios ?? [];
   const mention = scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply");
   const warmSamples = mention?.samples
@@ -287,7 +343,17 @@ export async function resolveMainVersion(harnessRoot: string) {
 }
 
 export async function readTelegramSummary(summaryPath: string) {
-  return JSON.parse(await fs.readFile(summaryPath, "utf8")) as TelegramQaSummary;
+  return JSON.parse(await fs.readFile(summaryPath, "utf8")) as TelegramRttSummary;
+}
+
+export async function resolveTelegramSummaryPath(outputDir: string) {
+  const evidencePath = path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
+  try {
+    await fs.access(evidencePath);
+    return evidencePath;
+  } catch {
+    return path.join(outputDir, TELEGRAM_RTT_SUMMARY_FILENAME);
+  }
 }
 
 export async function writeJson(pathname: string, value: unknown) {
@@ -333,7 +399,30 @@ function hasWarmSampleEvidence(scenario: NonNullable<TelegramQaSummary["scenario
   );
 }
 
-function rttSummaryFailed(summary: TelegramQaSummary, requestedScenarios: string[]) {
+function normalizedEvidenceSummaryFailed(summary: QaEvidenceSummary, requestedScenarios: string[]) {
+  const entries = summary.entries ?? [];
+  const requiredScenarioIds = ["telegram-canary", ...requestedScenarios];
+  for (const scenarioId of requiredScenarioIds) {
+    const entry = entries.find((candidate) => candidate.test?.id === scenarioId);
+    if (!entry || entry.result?.status !== "pass") {
+      return true;
+    }
+    const timing = entry.result.timing;
+    const rttMs =
+      scenarioId === "telegram-mentioned-message-reply"
+        ? (timing?.p50Ms ?? timing?.rttMs)
+        : timing?.rttMs;
+    if (typeof rttMs !== "number" || !Number.isFinite(rttMs)) {
+      return true;
+    }
+  }
+  return entries.some((entry) => entry.result?.status !== "pass");
+}
+
+function rttSummaryFailed(summary: TelegramRttSummary, requestedScenarios: string[]) {
+  if (isQaEvidenceSummary(summary)) {
+    return normalizedEvidenceSummaryFailed(summary, requestedScenarios);
+  }
   if (summary.status !== undefined && summary.status !== "pass") {
     return true;
   }
@@ -359,7 +448,7 @@ export function buildRttResult(params: {
   artifacts: RttResult["artifacts"];
   finishedAt: Date;
   providerMode: RttProviderMode;
-  rawSummary: TelegramQaSummary;
+  rawSummary: TelegramRttSummary;
   runId: string;
   scenarios: string[];
   spec: string;
