@@ -81,12 +81,10 @@ function hasManagedServiceHandoffContext(
     );
   }
   if (supervisor === "systemd") {
-    return Boolean(
-      env.OPENCLAW_SYSTEMD_UNIT?.trim() ||
-      env.INVOCATION_ID?.trim() ||
-      env.SYSTEMD_EXEC_PID?.trim() ||
-      env.JOURNAL_STREAM?.trim(),
-    );
+    // Ambient systemd markers only prove that a service manager started this
+    // process. The detached CLI needs the durable unit name to stop the same
+    // gateway before mutating the install root.
+    return Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
   }
   if (supervisor === "schtasks") {
     return Boolean(
@@ -170,6 +168,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         argv1: process.argv[1],
       });
       supervisor = detectRespawnSupervisor(process.env, process.platform);
+      const hasHandoffContext = supervisor
+        ? hasManagedServiceHandoffContext(process.env, supervisor)
+        : false;
+      const requiresManagedServiceHandoff =
+        installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
       if (!isRestartEnabled(config) && !supervisor) {
         // Package updates need a restart path to finish safely. Dev/git installs
         // can report the disabled restart directly, but global installs must not
@@ -186,17 +189,12 @@ export const updateHandlers: GatewayRequestHandlers = {
           steps: [],
           durationMs: 0,
         };
-      } else if (
-        installSurface.kind === "global" ||
-        (installSurface.kind === "git" &&
-          supervisor &&
-          hasManagedServiceHandoffContext(process.env, supervisor))
-      ) {
+      } else if (requiresManagedServiceHandoff) {
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,
           channel: configChannel ?? undefined,
         });
-        if (supervisor) {
+        if (supervisor && hasHandoffContext) {
           try {
             const startedAt = Date.now();
             const handoffId = randomUUID();

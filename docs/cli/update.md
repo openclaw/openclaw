@@ -187,8 +187,11 @@ Gateway exits:
   `openclaw update --yes --json` outside the live service process.
 - `ok: false`, `result.reason: "managed-service-handoff-unavailable"`, and
   `handoff.status: "unavailable"` mean OpenClaw could not find a supervising
-  service boundary for a safe handoff. The response includes
-  `handoff.command`, the shell command to run from outside the Gateway.
+  service boundary and durable service identity for a safe handoff. For
+  example, systemd handoff requires the OpenClaw unit identity
+  (`OPENCLAW_SYSTEMD_UNIT`), not only ambient systemd process markers. The
+  response includes `handoff.command`, the shell command to run from outside the
+  Gateway.
 - `ok: false`, `result.reason: "managed-service-handoff-failed"` means the
   Gateway tried to create the handoff but could not spawn the detached helper.
 
