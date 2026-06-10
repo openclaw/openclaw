@@ -41,4 +41,5 @@ export {
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
 export { resolveSendPolicy } from "../sessions/send-policy.js";
+export { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 export type { SessionEntry, SessionScope } from "../config/sessions/types.js";
