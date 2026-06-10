@@ -21,7 +21,6 @@ import {
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { clearExistingSqliteSessionStore } from "../config/sessions/store-sqlite.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
@@ -316,9 +315,7 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent();
-  clearExistingSqliteSessionStore(path.join(sessionsDir, "sessions.json"), { compact: true });
-  await moveToTrash(sessionsDir, runtime);
+  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
     for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(

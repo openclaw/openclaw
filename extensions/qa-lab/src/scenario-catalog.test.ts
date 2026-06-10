@@ -412,7 +412,10 @@ describe("qa scenario catalog", () => {
       "kitchen-sink-realtime-voice-provider",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
-      "only bundled plugins can register agent tool result middleware",
+      "agent tool result middleware must be a function",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "trusted tool policy registration requires id, description, and evaluate()",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
       "control UI descriptor registration requires id, surface, label, and valid optional fields",

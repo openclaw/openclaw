@@ -8,7 +8,6 @@ import { updateSessionStoreAfterAgentRun } from "../agents/command/session-store
 import { resolveSession } from "../agents/command/session.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -42,7 +41,8 @@ function writeSessionStoreSeed(
   storePath: string,
   sessions: Record<string, Record<string, unknown>>,
 ) {
-  writeSessionStoreForTest(storePath, sessions);
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify(sessions));
 }
 
 async function withCrossAgentResumeFixture(

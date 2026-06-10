@@ -10,10 +10,6 @@ import {
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../../config/sessions/test-helpers.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -181,7 +177,8 @@ async function writeSessionStoreFast(
   storePath: string,
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
-  await writeSessionStoreForTestAsync(storePath, store);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
 
 async function writeTerminalTranscriptSessionStore(params: {
@@ -854,7 +851,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
 
-    const store = readSessionStoreForTest(storePath) as Record<
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       {
         skillsSnapshot?: unknown;
@@ -1618,7 +1615,10 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
 
-    const persisted = readSessionStoreForTest(storePath);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
     expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
     expect(persisted[sessionKey]?.status).toBe("done");
     expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
@@ -1712,7 +1712,10 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(scenario.expectNewSession);
-    const persisted = readSessionStoreForTest(storePath);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
     const entry = persisted[scenario.sessionKey];
     if (scenario.expectNewSession) {
       expect(result.sessionId).not.toBe(existingSessionId);
@@ -2520,7 +2523,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         result.sessionId,
       ]);
 
-      const stored = readSessionStoreForTest(storePath);
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].usageFamilyKey, testCase.name).toBe("family:user-usage-family");
       expect(stored[sessionKey].usageFamilySessionIds, testCase.name).toEqual([
         "ancestor-session",
@@ -2606,7 +2609,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
 
-      const stored = readSessionStoreForTest(storePath);
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].cliSessionIds).toBeUndefined();
       expect(stored[sessionKey].cliSessionBindings).toBeUndefined();
       expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
@@ -3288,9 +3291,12 @@ describe("persistSessionUsageUpdate", () => {
     sessionKey: string;
     entry: Record<string, unknown>;
   }) {
-    await writeSessionStoreForTestAsync(params.storePath, {
-      [params.sessionKey]: params.entry,
-    });
+    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+    await fs.writeFile(
+      params.storePath,
+      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+      "utf-8",
+    );
   }
 
   it("uses lastCallUsage for totalTokens when provided", async () => {
@@ -3313,7 +3319,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(12_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBe(180_000);
@@ -3353,12 +3359,11 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored1 = readSessionStoreForTest(storePath);
-    const goal1 = stored1[sessionKey].goal;
-    expect(goal1?.tokenStart).toBe(100);
-    expect(goal1?.tokenStartFresh).toBe(true);
-    expect(goal1?.tokensUsed).toBe(0);
-    expect(goal1?.status).toBe("active");
+    const stored1 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored1[sessionKey].goal.tokenStart).toBe(100);
+    expect(stored1[sessionKey].goal.tokenStartFresh).toBe(true);
+    expect(stored1[sessionKey].goal.tokensUsed).toBe(0);
+    expect(stored1[sessionKey].goal.status).toBe("active");
 
     await persistSessionUsageUpdate({
       storePath,
@@ -3368,11 +3373,10 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored2 = readSessionStoreForTest(storePath);
-    const goal2 = stored2[sessionKey].goal;
-    expect(goal2?.tokenStart).toBe(100);
-    expect(goal2?.tokensUsed).toBe(25);
-    expect(goal2?.status).toBe("budget_limited");
+    const stored2 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored2[sessionKey].goal.tokenStart).toBe(100);
+    expect(stored2[sessionKey].goal.tokensUsed).toBe(25);
+    expect(stored2[sessionKey].goal.status).toBe("budget_limited");
   });
 
   it("uses lastCallUsage cache counters when available", async () => {
@@ -3402,7 +3406,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].inputTokens).toBe(100_000);
     expect(stored[sessionKey].outputTokens).toBe(8_000);
     expect(stored[sessionKey].cacheRead).toBe(18_000);
@@ -3425,7 +3429,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBeUndefined();
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
@@ -3452,7 +3456,7 @@ describe("persistSessionUsageUpdate", () => {
       preserveFreshTotalTokensOnStaleUsage: true,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(42_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -3478,7 +3482,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(42_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
@@ -3500,7 +3504,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(42_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -3529,7 +3533,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(32_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
@@ -3577,7 +3581,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-session");
     expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
@@ -3616,7 +3620,7 @@ describe("persistSessionUsageUpdate", () => {
       compactionTokensAfter: 0,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(1_794_391);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBe(20);
@@ -3649,7 +3653,7 @@ describe("persistSessionUsageUpdate", () => {
       compactionTokensAfter: 80_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(95_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBe(100_000);
@@ -3702,7 +3706,7 @@ describe("persistSessionUsageUpdate", () => {
       compactionTokensAfter: 80_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(80_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBeUndefined();
@@ -3733,7 +3737,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(39_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBe(1_234);
@@ -3757,7 +3761,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(250_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -3808,7 +3812,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored1 = readSessionStoreForTest(storePath);
+    const stored1 = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored1[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
 
     // Second persist with SAME cumulative usage (e.g., heartbeat or redundant persist)
@@ -3825,7 +3829,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored2 = readSessionStoreForTest(storePath);
+    const stored2 = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // Cost should still be $0.007725, NOT $0.01545
     expect(stored2[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
   });
@@ -3855,7 +3859,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 128_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].modelProvider).toBe("openai");
     expect(stored[sessionKey].model).toBe("gpt-5.4");
     expect(stored[sessionKey].inputTokens).toBe(1_200);
@@ -3919,7 +3923,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 900_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].modelProvider).toBe("openai");
     expect(stored[sessionKey].model).toBe("gpt-5.5");
     expect(stored[sessionKey].contextTokens).toBe(200_000);
@@ -3980,7 +3984,7 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].estimatedCostUsd).toBe(0);
   });
 });
@@ -4100,7 +4104,10 @@ describe("initSessionState dmScope delivery migration", () => {
     });
 
     expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
-    const persisted = readSessionStoreForTest(storePath);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
     expect(persisted["agent:main:main"]?.sessionId).toBe("legacy-main");
     expect(persisted["agent:main:main"]?.route).toBeUndefined();
     expect(persisted["agent:main:main"]?.deliveryContext).toBeUndefined();
@@ -4143,7 +4150,10 @@ describe("initSessionState dmScope delivery migration", () => {
       commandAuthorized: true,
     });
 
-    const persisted = readSessionStoreForTest(storePath);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
     expect(persisted["agent:main:main"]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "1111",
@@ -4218,7 +4228,10 @@ describe("initSessionState internal channel routing preservation", () => {
       accountId: "default",
     });
 
-    const persisted = readSessionStoreForTest(storePath);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
     expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
     expect(persisted[sessionKey]?.deliveryContext).toEqual({
       channel: "mattermost",
