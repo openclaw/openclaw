@@ -1068,6 +1068,88 @@ describe("before_tool_call requireApproval handling", () => {
     expect(Object.isFrozen(toolContext.trace)).toBe(true);
   });
 
+  it("passes external content provenance to before_tool_call hooks", async () => {
+    const externalContent = { present: true as const, sources: ["web_fetch"] as const };
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "pwd" },
+      toolCallId: "tool-external",
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        runId: "run-external",
+        externalContent,
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    const [event, toolContext] = requireHookCall(0);
+    expectRecordFields(event, {
+      toolName: "exec",
+      runId: "run-external",
+      toolCallId: "tool-external",
+      externalContent,
+    });
+    expectRecordFields(toolContext, {
+      toolName: "exec",
+      runId: "run-external",
+      toolCallId: "tool-external",
+      externalContent,
+    });
+  });
+
+  it("passes external content provenance to trusted tool policies", async () => {
+    const externalContent = { present: true as const, sources: ["browser", "web_fetch"] as const };
+    const evaluate = vi.fn().mockResolvedValue(undefined);
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies.push({
+      pluginId: "policy-plugin",
+      pluginName: "Policy Plugin",
+      source: "test",
+      policy: {
+        id: "external-content-provenance-policy",
+        evaluate,
+      },
+    });
+
+    setActivePluginRegistry(registry);
+    hookRunner.hasHooks.mockReturnValue(false);
+
+    try {
+      const result = await runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "pwd" },
+        toolCallId: "trusted-external",
+        ctx: {
+          agentId: "main",
+          sessionKey: "main",
+          runId: "run-trusted-external",
+          externalContent,
+        },
+      });
+
+      expect(result.blocked).toBe(false);
+      expect(evaluate).toHaveBeenCalledTimes(1);
+      const [event, toolContext] = evaluate.mock.calls[0] ?? [];
+      expectRecordFields(event, {
+        toolName: "exec",
+        runId: "run-trusted-external",
+        toolCallId: "trusted-external",
+        externalContent,
+      });
+      expectRecordFields(toolContext, {
+        toolName: "exec",
+        runId: "run-trusted-external",
+        toolCallId: "trusted-external",
+        externalContent,
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+  });
+
   it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
     const cwd = path.join("/tmp", "openclaw-hooks");
     const patch = [

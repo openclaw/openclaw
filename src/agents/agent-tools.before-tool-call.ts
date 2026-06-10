@@ -47,6 +47,7 @@ import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
   type PluginHookBeforeToolCallResult,
+  type PluginHookExternalContentProvenance,
   type PluginHookToolInputKind,
   type PluginHookToolKind,
 } from "../plugins/types.js";
@@ -107,6 +108,7 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  externalContent?: PluginHookExternalContentProvenance;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   skillsSnapshot?: SkillSnapshot;
@@ -935,6 +937,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
+      ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
     });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
@@ -945,6 +948,7 @@ export async function runBeforeToolCallHook(args: {
             ...toolIdentity,
             ...(args.ctx?.runId && { runId: args.ctx.runId }),
             ...(args.toolCallId && { toolCallId: args.toolCallId }),
+            ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
             ...(derivedToolParams.derivedPaths
               ? { derivedPaths: derivedToolParams.derivedPaths }
               : {}),
@@ -1051,6 +1055,7 @@ export async function runBeforeToolCallHook(args: {
         ...policyAdjustedToolIdentity,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
         ...(policyAdjustedDerivedToolParams.derivedPaths
           ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
           : {}),
