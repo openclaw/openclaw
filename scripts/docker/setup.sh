@@ -580,6 +580,10 @@ run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
+echo "==> Repairing existing config/state"
+run_prestart_cli doctor --fix
+
+echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then
   echo "==> Skipping onboarding (OPENCLAW_SKIP_ONBOARDING is set)"
 else
