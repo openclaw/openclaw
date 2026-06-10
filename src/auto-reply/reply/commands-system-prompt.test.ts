@@ -331,7 +331,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     }
   });
 
-  it("omits sandbox skills when a custom backend has no declared workdir", async () => {
+  it("preserves host skill snapshots for custom backends without a declared workdir", async () => {
     const params = makeParams();
     vi.mocked(resolveSandboxRuntimeStatus).mockReturnValue({
       sandboxed: true,
@@ -346,7 +346,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     const result = await resolveCommandsSystemPromptBundle(params);
 
     expect(result.skillsPrompt).toBe("");
-    expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).not.toHaveBeenCalled();
+    expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).toHaveBeenCalledOnce();
   });
 
   it("uses config-backed prompt settings for the target agent", async () => {

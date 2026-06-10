@@ -88,54 +88,53 @@ async function resolveCommandSkillsPrompt(params: {
       if (!sandboxWorkspace) {
         return "";
       }
-      if (!sandboxWorkspace.containerWorkdir) {
-        // Prompt inspection cannot safely advertise host skill paths when a
-        // custom backend has not declared its runtime workdir.
-        return "";
+      if (sandboxWorkspace.containerWorkdir) {
+        const {
+          skillsEligibility,
+          skillsPromptWorkspaceDir,
+          skillsSnapshot: skillsSnapshotForRun,
+          skillsWorkspaceDir,
+          workspaceOnly,
+        } = resolveSandboxSkillRuntimeInputs({
+          sandbox: {
+            enabled: true,
+            containerWorkdir: sandboxWorkspace.containerWorkdir,
+            ...(sandboxWorkspace.skillsEligibility
+              ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
+              : {}),
+            ...(sandboxWorkspace.skillsWorkspaceDir
+              ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
+              : {}),
+            ...(sandboxWorkspace.workspaceAccess
+              ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
+              : {}),
+          },
+          effectiveWorkspace: sandboxWorkspace.workspaceDir,
+        });
+        const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+          workspaceDir: skillsWorkspaceDir,
+          config: params.config,
+          agentId: params.agentId,
+          eligibility: skillsEligibility,
+          skillsSnapshot: skillsSnapshotForRun,
+          workspaceOnly,
+        });
+        const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+          entries: shouldLoadSkillEntries ? skillEntries : undefined,
+          skillsWorkspaceDir,
+          skillsPromptWorkspaceDir,
+        });
+        return resolveSkillsPromptForRun({
+          skillsSnapshot: skillsSnapshotForRun,
+          entries: promptSkillEntries,
+          config: params.config,
+          workspaceDir: skillsPromptWorkspaceDir,
+          agentId: params.agentId,
+          eligibility: skillsEligibility,
+        });
       }
-      const {
-        skillsEligibility,
-        skillsPromptWorkspaceDir,
-        skillsSnapshot: skillsSnapshotForRun,
-        skillsWorkspaceDir,
-        workspaceOnly,
-      } = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: sandboxWorkspace.containerWorkdir,
-          ...(sandboxWorkspace.skillsEligibility
-            ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
-            : {}),
-          ...(sandboxWorkspace.skillsWorkspaceDir
-            ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
-            : {}),
-          ...(sandboxWorkspace.workspaceAccess
-            ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
-            : {}),
-        },
-        effectiveWorkspace: sandboxWorkspace.workspaceDir,
-      });
-      const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-        workspaceDir: skillsWorkspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-        eligibility: skillsEligibility,
-        skillsSnapshot: skillsSnapshotForRun,
-        workspaceOnly,
-      });
-      const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-        entries: shouldLoadSkillEntries ? skillEntries : undefined,
-        skillsWorkspaceDir,
-        skillsPromptWorkspaceDir,
-      });
-      return resolveSkillsPromptForRun({
-        skillsSnapshot: skillsSnapshotForRun,
-        entries: promptSkillEntries,
-        config: params.config,
-        workspaceDir: skillsPromptWorkspaceDir,
-        agentId: params.agentId,
-        eligibility: skillsEligibility,
-      });
+      // Existing third-party backends may not expose the optional workdir
+      // resolver yet. Preserve their previous host-snapshot inspection path.
     } catch {
       return "";
     }
