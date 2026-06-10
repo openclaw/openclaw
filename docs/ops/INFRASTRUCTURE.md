@@ -80,7 +80,7 @@ host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with s
 
 ### EU (`89.167.70.46`) — 12 agents, all on `gateway:v2026.05.24.1`
 
-`braveisrael, kycbot, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell` (mikyhelper deleted — invalid bot token)
+`braveisrael, cashtronics, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell` (mikyhelper + kycbot deleted; a `main` agent dir exists with no running container)
 
 ### US (`5.161.84.219`) — 12 agents (image versions vary — see §10)
 

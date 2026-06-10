@@ -25,6 +25,13 @@ services:
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    # Per-container caps (channel-error-hardening B3): a looping/leaking agent
+    # must not drag the whole host into swap. Steady-state RSS measured
+    # 2026-06-10 across 24 prod gateways: 248–440 MiB (boot spike ~620 MiB),
+    # so 1g is ~2.3× steady headroom. cpus=1.0 leaves a full core free on the
+    # 2-vCPU US host even if one agent pegs its allowance.
+    mem_limit: 1g
+    cpus: 1.0
     command:
       [
         "node",
