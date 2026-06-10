@@ -869,7 +869,7 @@ describe("memory index", () => {
       minScore: 0,
       hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
     });
-    let staleBackupPath = "";
+    const staleBackupPath = `${dbPath}.backup-stale-handle`;
     const residentManager = await getFreshManager(cfg);
     try {
       await residentManager.sync({ reason: "test", force: true });
@@ -883,7 +883,6 @@ describe("memory index", () => {
         reason: "index metadata is missing",
       });
 
-      staleBackupPath = `${dbPath}.backup-stale-handle`;
       await moveSqliteFilesForTest(dbPath, staleBackupPath);
       const liveManager = await getFreshManager(cfg, "cli");
       try {
