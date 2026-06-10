@@ -232,6 +232,28 @@ describe("createMsteamsRealtimeCall", () => {
     );
   });
 
+  it("close(reason) closes the Teams session (manager hangup); close() does not (caller hangup)", () => {
+    // Manager-driven hangup passes a reason -> the worker session is closed so the call actually ends.
+    const ctxA = createMockSession();
+    const mockA = createMockProvider();
+    const callA = createMsteamsRealtimeCall({
+      session: ctxA.session,
+      deps: { provider: mockA.provider, providerConfig: {} },
+    });
+    callA.close("completed");
+    expect(ctxA.closedReason).toBe("completed");
+
+    // Caller-driven session.end passes no reason -> the session is already closing, do not re-close it.
+    const ctxB = createMockSession();
+    const mockB = createMockProvider();
+    const callB = createMsteamsRealtimeCall({
+      session: ctxB.session,
+      deps: { provider: mockB.provider, providerConfig: {} },
+    });
+    callB.close();
+    expect(ctxB.closedReason).toBeNull();
+  });
+
   it("hides look_at_screen and show_to_caller under the 'none' tool policy", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();

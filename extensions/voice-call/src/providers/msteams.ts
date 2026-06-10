@@ -567,8 +567,12 @@ export class MsteamsProvider implements VoiceCallProvider {
     this.realtimeCalls.set(providerCallId, realtimeCall);
     this.outboundRealtimeInternalIds.set(providerCallId, pending.internalCallId);
 
-    // The realtime model speaks the message itself; clear the queued initial
-    // message so the manager's answered hook does not also try to speak it.
+    // The realtime model speaks the message itself (via the greeting), so clear the queued initial
+    // message so the manager's answered hook does not also TTS-speak it. This deliberately REPLACES
+    // the streaming notify-mode auto-hangup (speakInitialMessage -> notifyHangupDelaySec -> endCall)
+    // with a conversational delivery (state the result, then offer follow-up). The call then ends via
+    // the normal lifecycle — caller hangup (session.end) or the manager's idle timeout — both of which
+    // now tear down the realtime bridge AND hang up the Teams call through teardownCall().
     const record = this.manager?.getCall(pending.internalCallId);
     if (record?.metadata) {
       delete record.metadata.initialMessage;
@@ -919,6 +923,15 @@ export class MsteamsProvider implements VoiceCallProvider {
     providerCallId: string,
     options: { closeSession: boolean; reason?: string },
   ): MsteamsCallState | undefined {
+    // Realtime calls have no streaming `this.calls` state, so close + remove the realtime bridge here:
+    // a manager-driven hangup (idle timeout, notify auto-hangup, explicit endCall) must tear down the
+    // realtime session and hang up the Teams call too — not only inbound/streaming sessions.
+    const realtimeCall = this.realtimeCalls.get(providerCallId);
+    if (realtimeCall) {
+      this.realtimeCalls.delete(providerCallId);
+      this.outboundRealtimeInternalIds.delete(providerCallId);
+      realtimeCall.close(options.closeSession ? (options.reason ?? "completed") : undefined);
+    }
     const state = this.calls.get(providerCallId);
     if (!state) {
       return undefined;
