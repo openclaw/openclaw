@@ -1,0 +1,23 @@
+/* Localized Info.plist strings — Simplified Chinese (zh-Hans) */
+
+"NSUserNotificationUsageDescription" = "OpenClaw 需要通知权限以展示智能体操作提醒。";
+
+"NSScreenCaptureDescription" = "当智能体需要截取屏幕画面作为上下文参考时，OpenClaw 会进行屏幕捕捉。";
+
+"NSCameraUsageDescription" = "当智能体请求时，OpenClaw 可拍摄照片或短视频片段。";
+
+"NSLocationUsageDescription" = "当智能体请求时，OpenClaw 可共享您的位置信息。";
+
+"NSLocationWhenInUseUsageDescription" = "当智能体请求时，OpenClaw 可共享您的位置信息。";
+
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "当智能体请求时，OpenClaw 可共享您的位置信息。";
+
+"NSLocalNetworkUsageDescription" = "OpenClaw 使用本地网络通过局域网、Tailnet 或 SSH 连接到您的远程 OpenClaw 网关。";
+
+"NSMicrophoneUsageDescription" = "OpenClaw 需要麦克风权限以进行语音唤醒测试和智能体音频录制。";
+
+"NSSpeechRecognitionUsageDescription" = "OpenClaw 使用语音识别来检测您的语音唤醒触发词。";
+
+"NSAppleEventsUsageDescription" = "OpenClaw 需要自动化（AppleScript）权限以替智能体操作终端等应用。";
+
+"NSRemindersUsageDescription" = "当智能体通过 apple-reminders 技能请求时，OpenClaw 可访问提醒事项。";
