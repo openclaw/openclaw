@@ -102,6 +102,7 @@ function resetMocks() {
   mocks.waitForEmbeddedAgentRunEnd.mockReset();
   mocks.getDiagnosticSessionActivitySnapshot.mockReset();
   mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({});
+  mocks.resetCommandLane.mockReturnValue(0);
   mocks.diag.debug.mockReset();
   mocks.diag.warn.mockReset();
 }
@@ -167,6 +168,7 @@ describe("stuck session recovery", () => {
     });
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
 
     const outcome = await recoverStuckDiagnosticSession({
       sessionId: "session-1",
@@ -176,7 +178,9 @@ describe("stuck session recovery", () => {
     });
 
     expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-1");
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
     expect(outcome.status).toBe("aborted");
+    expect(outcome).toMatchObject({ released: 1 });
     expect(warnLogMessages().some((m) => m.includes("reclaiming stale active run"))).toBe(true);
   });
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
@@ -197,10 +201,11 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
-  it("returns an abort outcome for a stale tool call on an active embedded run", async () => {
+  it("releases the session lane after a clean active-run abort when diagnostic queue depth remains", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-tool");
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
 
     const outcome = await recoverStuckDiagnosticSession({
       sessionId: "session-tool",
@@ -220,11 +225,13 @@ describe("stuck session recovery", () => {
       aborted: true,
       drained: true,
       forceCleared: false,
-      released: 0,
+      released: 1,
     });
     expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-tool");
     expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("session-tool", 15_000);
-    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith(
+      "session:agent:main:telegram:group:-1003821464158:topic:4836",
+    );
   });
 
   it("logs stopped cron context when aborting an active embedded run", async () => {
@@ -367,6 +374,7 @@ describe("stuck session recovery", () => {
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
 
     await recoverStuckDiagnosticSession({
       sessionId: "queued-reply-session",
@@ -379,10 +387,10 @@ describe("stuck session recovery", () => {
     expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("queued-reply-session");
     expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("queued-reply-session", 15_000);
     expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
     expect(warnLogMessages()).toEqual([
-      "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
-      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0",
+      "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=1",
+      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=1",
     ]);
   });
 
