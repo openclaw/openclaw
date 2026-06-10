@@ -7783,8 +7783,8 @@ describe("openai transport stream", () => {
         maxTokens: 256000,
         compat: {
           unsupportedToolSchemaKeywords: ["not"],
-        },
-      } satisfies Parameters<typeof buildOpenAICompletionsParams>[0],
+        } as never,
+      } satisfies Model<"openai-completions">,
       {
         systemPrompt: "system",
         messages: [],
