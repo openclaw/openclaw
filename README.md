@@ -11,7 +11,8 @@
 >   `MODE=subscription|byok|open-weights`, `BINARY=claude|codex`) and
 >   `assemble-skills.sh` (canonical-source: `../platform-skills/skills/`).
 > - **`apps/broker/`** — Go binary; PTY-WS bridge; `GET /ws`, `POST /spawn`,
->   `POST /chat?binary=...` (Phase 5 h.5).
+>   `POST /chat?binary=...` (Phase 5 h.5), and read-only runtime filesystem
+>   endpoints `GET /fs/tree` / `GET /fs/file`.
 > - **`AGENTS.md` / `CLAUDE.md` (symlink)** — process doc; the Rockie
 >   appendix is at the bottom under `## Multitenant runtime (Rockie additions)`.
 >

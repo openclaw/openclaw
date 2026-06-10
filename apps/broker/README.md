@@ -31,12 +31,65 @@ proxy can pipe an xterm.js session through to the user's browser.
   { "exit_code": 0, "stdout": "...", "stderr": "...", "timed_out": false }
   ```
 
+- `GET /fs/tree?path=<path>`
+  Read-only directory listing for the tenant runtime filesystem. Auth:
+  same broker token, supplied either as `?token=` or as
+  `Authorization: Bearer <token>`. `path` may be absolute under the
+  runtime root or relative to it; an omitted `path` defaults to
+  `<runtime-root>/work`. The runtime root is `ROCKIELAB_RUNTIME_FS_ROOT`,
+  then `HOME`, then `/home/runtime`. The broker resolves symlinks and
+  rejects traversal or symlink escapes outside that root. Returns:
+  ```json
+  {
+    "root": "/home/runtime",
+    "path": "/home/runtime/work",
+    "entries": [
+      {
+        "name": "README.md",
+        "path": "/home/runtime/work/README.md",
+        "type": "file",
+        "size": 1234,
+        "mtime": "2026-06-10T12:00:00Z"
+      }
+    ]
+  }
+  ```
+  Entry `type` is `directory`, `file`, `symlink`, or `other`. `size` is
+  included only for regular files. Directories are sorted first, then
+  names are sorted case-insensitively.
+
+- `GET /fs/file?path=<path>`
+  Read-only UTF-8 file read for the tenant runtime filesystem. Auth and
+  `path` containment rules match `/fs/tree`: paths may be absolute under
+  the runtime root or relative to it, and traversal/symlink escapes are
+  rejected. Callers should provide a file path; omitting `path` resolves
+  to `<runtime-root>/work`, which normally returns `not_file` because it
+  is a directory. The broker only returns valid UTF-8 files up to 1 MiB;
+  larger files return `file_too_large`, and non-UTF-8 files return
+  `unsupported_file`.
+  Returns:
+  ```json
+  {
+    "path": "/home/runtime/work/README.md",
+    "type": "file",
+    "size": 1234,
+    "content": "...",
+    "encoding": "utf-8",
+    "truncated": false
+  }
+  ```
+
 ## Auth
 
 The broker reads its expected token from the env var
 `BROKER_TENANT_TOKEN`, injected at machine boot via a Fly secret. All
-token comparisons use `crypto/subtle.ConstantTimeCompare`. Tokens are
-NEVER logged — the broker logs `<redacted len=N>` instead.
+token comparisons use `crypto/subtle.ConstantTimeCompare`. Non-WebSocket
+HTTP endpoints accept `Authorization: Bearer <token>` and `?token=`;
+prefer Bearer auth for HTTP clients because query-string tokens can
+appear in intermediary logs, browser history, or telemetry. `/ws` uses
+the query-string token because browser WebSocket clients cannot set
+custom authorization headers. Broker application logs redact explicit
+token fields.
 
 ## Framing scheme
 
