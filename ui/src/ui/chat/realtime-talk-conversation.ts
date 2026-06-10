@@ -15,8 +15,6 @@ export type RealtimeTalkConversationState = {
   userEntryAwaitingFinal: boolean;
   userEntryAwaitingFinalStartedAtMs: number | null;
   assistantEntryId: string | null;
-  assistantEntryAwaitingFinalId: string | null;
-  assistantEntryAwaitingFinalStartedAtMs: number | null;
 };
 
 export type RealtimeTalkTranscriptUpdate = {
@@ -28,10 +26,6 @@ export type RealtimeTalkTranscriptUpdate = {
 
 const MAX_CONVERSATION_ENTRIES = 60;
 const USER_FINAL_REWRITE_GRACE_MS = 1_500;
-// A final assistant transcript can land after a user transcript already closed
-// the streamed assistant bubble. Within this window we rewrite that bubble
-// instead of inserting a duplicate; past it the final is treated as a new turn.
-const ASSISTANT_FINAL_REWRITE_GRACE_MS = 2_000;
 
 export function createRealtimeTalkConversationState(): RealtimeTalkConversationState {
   return {
@@ -41,8 +35,6 @@ export function createRealtimeTalkConversationState(): RealtimeTalkConversationS
     userEntryAwaitingFinal: false,
     userEntryAwaitingFinalStartedAtMs: null,
     assistantEntryId: null,
-    assistantEntryAwaitingFinalId: null,
-    assistantEntryAwaitingFinalStartedAtMs: null,
   };
 }
 
@@ -57,13 +49,10 @@ export function updateRealtimeTalkConversation(
   const nowMs = update.nowMs ?? Date.now();
   if (update.role === "assistant") {
     const preparedState = finishRealtimeConversationEntry(state, "user", nowMs);
-    const assistantEntryId =
-      preparedState.assistantEntryId ??
-      resolveLateFinalAssistantEntryId(preparedState, text, update.final, nowMs);
     return upsertRealtimeConversationEntry(
       preparedState,
       update.role,
-      assistantEntryId,
+      preparedState.assistantEntryId,
       text,
       update.final,
       nowMs,
@@ -150,12 +139,7 @@ function rememberRealtimeConversationEntry(
       userEntryAwaitingFinalStartedAtMs: null,
     };
   }
-  return {
-    ...state,
-    assistantEntryId: isFinal ? null : entryId,
-    assistantEntryAwaitingFinalId: null,
-    assistantEntryAwaitingFinalStartedAtMs: null,
-  };
+  return { ...state, assistantEntryId: isFinal ? null : entryId };
 }
 
 export function finishRealtimeConversationEntry(
@@ -178,50 +162,7 @@ export function finishRealtimeConversationEntry(
       userEntryAwaitingFinalStartedAtMs: nowMs,
     };
   }
-  return {
-    ...state,
-    entries,
-    assistantEntryId: null,
-    assistantEntryAwaitingFinalId: entryId,
-    assistantEntryAwaitingFinalStartedAtMs: nowMs,
-  };
-}
-
-// Reattach a late final assistant transcript to the bubble its deltas already
-// filled, when a user transcript closed it moments earlier. Outside the grace
-// window, or when the text is not the same utterance, return null so the caller
-// starts a fresh bubble and never folds the next assistant turn into this one.
-function resolveLateFinalAssistantEntryId(
-  state: RealtimeTalkConversationState,
-  incoming: string,
-  isFinal: boolean,
-  nowMs: number,
-): string | null {
-  if (!isFinal || state.assistantEntryAwaitingFinalId === null) {
-    return null;
-  }
-  const elapsed =
-    state.assistantEntryAwaitingFinalStartedAtMs === null
-      ? Number.POSITIVE_INFINITY
-      : nowMs - state.assistantEntryAwaitingFinalStartedAtMs;
-  if (elapsed > ASSISTANT_FINAL_REWRITE_GRACE_MS) {
-    return null;
-  }
-  const entry = state.entries.find(
-    (candidate) => candidate.id === state.assistantEntryAwaitingFinalId,
-  );
-  if (!entry || entry.role !== "assistant") {
-    return null;
-  }
-  const existing = entry.text;
-  if (
-    incoming === existing ||
-    incoming.startsWith(existing) ||
-    looksLikeTranscriptReplacement(existing, incoming)
-  ) {
-    return entry.id;
-  }
-  return null;
+  return { ...state, entries, assistantEntryId: null };
 }
 
 function shouldStartNewRealtimeUserEntry(
