@@ -921,6 +921,9 @@ export class VoiceCallWebhookServer {
       }
       const normalizedPattern = this.normalizeWebhookPathForMatch(pattern);
       const normalizedPathname = this.normalizeWebhookPathForMatch(pathname);
+      if (normalizedPattern === "/") {
+        return normalizedPathname.startsWith("/");
+      }
       return (
         normalizedPathname === normalizedPattern ||
         normalizedPathname.startsWith(`${normalizedPattern}/`)

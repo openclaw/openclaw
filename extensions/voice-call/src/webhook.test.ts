@@ -839,7 +839,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const { manager } = createManager(calls);
     const realtimeHandler = {
       getStreamPathPattern: vi.fn(() => "/voice/stream/realtime"),
-      handleWebSocketUpgrade: vi.fn((request, socket) => {
+      handleWebSocketUpgrade: vi.fn((_request, socket) => {
         socket.destroy();
       }),
     } as unknown as RealtimeCallHandler;
@@ -888,6 +888,65 @@ describe("VoiceCallWebhookServer replay handling", () => {
       });
 
       expect(realtimeHandler.handleWebSocketUpgrade).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("preserves root realtime websocket child paths", async () => {
+    const calls = [createCall(Date.now())];
+    const { manager } = createManager(calls);
+    const realtimeHandler = {
+      getStreamPathPattern: vi.fn(() => "/"),
+      handleWebSocketUpgrade: vi.fn((_request, socket) => {
+        socket.destroy();
+      }),
+    } as unknown as RealtimeCallHandler;
+
+    const server = new VoiceCallWebhookServer(
+      createConfig({
+        serve: { path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/" },
+      }),
+      manager,
+      provider,
+    );
+    server.setRealtimeHandler(realtimeHandler);
+
+    const baseUrl = await server.start();
+    const requestUrl = requireBoundRequestUrl(server, baseUrl);
+    requestUrl.pathname = "/token";
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const req = request(
+          requestUrl,
+          {
+            method: "GET",
+            headers: {
+              Connection: "Upgrade",
+              Upgrade: "websocket",
+            },
+          },
+          () => {
+            resolve();
+          },
+        );
+
+        req.on("error", () => {
+          resolve();
+        });
+        req.on("upgrade", () => {
+          resolve();
+        });
+        req.setTimeout(1000, () => {
+          req.destroy();
+          reject(new Error("upgrade request timed out"));
+        });
+        req.end();
+      });
+
+      expect(realtimeHandler.handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
     } finally {
       await server.stop();
     }
