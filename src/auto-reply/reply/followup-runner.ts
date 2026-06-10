@@ -151,6 +151,8 @@ async function forwardFollowupProgressEvent(params: {
     const name = readStringValue(evt.data.name);
     if (phase === "start" || phase === "update") {
       await opts?.onToolStart?.({
+        itemId: readStringValue(evt.data.itemId),
+        toolCallId: readStringValue(evt.data.toolCallId),
         name,
         phase,
         args:

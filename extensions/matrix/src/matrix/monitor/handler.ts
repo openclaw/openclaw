@@ -127,7 +127,6 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
-const COMMAND_PROGRESS_TOOL_NAMES = new Set(["exec", "bash", "shell"]);
 let matrixSendModulePromise: Promise<typeof import("../send.js")> | undefined;
 let acpBindingRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/acp-binding-runtime")>
@@ -137,29 +136,6 @@ let sessionBindingRuntimePromise:
   | undefined;
 let matrixReactionEventsPromise: Promise<typeof import("./reaction-events.js")> | undefined;
 let matrixDraftStreamPromise: Promise<typeof import("../draft-stream.js")> | undefined;
-
-function isMatrixCommandProgressToolName(name: string | undefined): boolean {
-  const normalized = name?.trim().toLowerCase();
-  return Boolean(normalized && COMMAND_PROGRESS_TOOL_NAMES.has(normalized));
-}
-
-function resolveMatrixCommandProgressItemId(payload: {
-  itemId?: string;
-  toolCallId?: string;
-  name?: string;
-}): string | undefined {
-  const itemId = payload.itemId?.trim();
-  if (itemId && /^command(?::|-)/i.test(itemId)) {
-    return itemId;
-  }
-  if (payload.toolCallId && isMatrixCommandProgressToolName(payload.name)) {
-    return `command:${payload.toolCallId}`;
-  }
-  if (itemId) {
-    return itemId;
-  }
-  return undefined;
-}
 
 function loadMatrixSendModule(): Promise<typeof import("../send.js")> {
   matrixSendModulePromise ??= import("../send.js");
@@ -1960,7 +1936,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 progressConfigEntry,
                 {
                   event: "tool",
-                  itemId: resolveMatrixCommandProgressItemId(payload),
+                  itemId: payload.itemId,
                   toolCallId: payload.toolCallId,
                   name: toolName,
                   phase: payload.phase,
@@ -1972,17 +1948,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             );
           },
           onItemEvent: async (payload) => {
-            const toolName =
-              payload.name ??
-              (payload.kind?.trim().toLowerCase() === "command" ? "exec" : undefined);
             await pushPreviewToolProgress(
               buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "item",
-                itemId: resolveMatrixCommandProgressItemId({
-                  itemId: payload.itemId,
-                  toolCallId: payload.toolCallId,
-                  name: toolName,
-                }),
+                itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 itemKind: payload.kind,
                 title: payload.title,
                 name: payload.name,
@@ -2030,7 +2000,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             await pushPreviewToolProgress(
               buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "command-output",
-                itemId: resolveMatrixCommandProgressItemId(payload),
+                itemId: payload.itemId,
                 toolCallId: payload.toolCallId,
                 phase: payload.phase,
                 title: payload.title,
