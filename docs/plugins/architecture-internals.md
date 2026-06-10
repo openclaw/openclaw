@@ -271,7 +271,6 @@ listed here.
 | 12  | `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
 | 13  | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
 | 15  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
-| 16  | `resolveToolSchemaCacheKey`       | Opt into caching `normalizeToolSchemas` results with a provider-owned key                                      | Provider can name every context field its schema normalization depends on                                                                     |
 | 17  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
 | 18  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
 | 19  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
@@ -320,12 +319,11 @@ fall back to generic credential resolution for usage/status surfaces. Return
 must suppress generic API-key/OAuth fallback, and return `null` or `undefined`
 when the provider did not handle usage auth.
 
-`normalizeToolSchemas` results are cached only when the provider plugin also
-implements `resolveToolSchemaCacheKey`. The key must be stable,
-JSON-compatible, and include every context field the normalizer reads. Return
-`null`, `undefined`, or `false` to bypass caching for a call.
-Operators can disable this cache with `OPENCLAW_TOOL_SCHEMA_CACHE=0` while
-investigating provider-specific schema behavior.
+OpenClaw caches repeated `normalizeToolSchemas` results only for the bundled
+tool compatibility helpers returned by `buildProviderToolCompatFamilyHooks`.
+Custom provider normalizers bypass this internal cache. Operators can disable
+the cache with `OPENCLAW_TOOL_SCHEMA_CACHE=0` while investigating
+provider-specific schema behavior.
 
 ### Provider example
 

@@ -871,15 +871,6 @@ export type ProviderNormalizeToolSchemasContext = ProviderReplayPolicyContext & 
   tools: AnyAgentTool[];
 };
 
-export type ProviderToolSchemaCacheKey =
-  | string
-  | number
-  | boolean
-  | null
-  | undefined
-  | readonly ProviderToolSchemaCacheKey[]
-  | { readonly [key: string]: ProviderToolSchemaCacheKey };
-
 export type ProviderToolSchemaDiagnostic = {
   toolName: string;
   toolIndex?: number;
@@ -1437,17 +1428,6 @@ export type ProviderPlugin = {
   normalizeToolSchemas?: (
     ctx: ProviderNormalizeToolSchemasContext,
   ) => AnyAgentTool[] | null | undefined;
-  /**
-   * Provider-owned cache key for `normalizeToolSchemas`.
-   *
-   * OpenClaw caches normalized schema parameters only when the provider hook
-   * opts in here. Return a stable JSON-compatible key that captures every
-   * context field your normalization reads; return null/undefined/false to
-   * bypass caching for the current call.
-   */
-  resolveToolSchemaCacheKey?: (
-    ctx: ProviderNormalizeToolSchemasContext,
-  ) => ProviderToolSchemaCacheKey;
   /**
    * Provider-owned tool-schema diagnostics after normalization.
    *

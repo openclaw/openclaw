@@ -628,7 +628,6 @@ API key auth, and dynamic model resolution.
       | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
       | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
       | 14 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
-      | 15 | `resolveToolSchemaCacheKey` | Provider-owned cache key for `normalizeToolSchemas` results |
       | 16 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
       | 17 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
       | 18 | `prepareExtraParams` | Default request params |
@@ -662,7 +661,7 @@ API key auth, and dynamic model resolution.
 
       - `normalizeConfig` checks the matched provider first, then other hook-capable provider plugins until one actually changes the config. If no provider hook rewrites a supported Google-family config entry, the bundled Google config normalizer still applies.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
-      - `normalizeToolSchemas` results are cached only when the same provider plugin also implements `resolveToolSchemaCacheKey`. Return a stable JSON-compatible key that covers every context field the schema normalizer reads, or return `null`, `undefined`, or `false` to bypass caching.
+      - OpenClaw caches repeated `normalizeToolSchemas` results only for bundled tool compatibility helpers returned by `buildProviderToolCompatFamilyHooks`; custom provider normalizers bypass this internal cache.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over `before_prompt_build` when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
