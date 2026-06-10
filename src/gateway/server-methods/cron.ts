@@ -33,6 +33,7 @@ import {
 } from "../../infra/outbound/channel-target-prefix.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -275,6 +276,25 @@ export const cronHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "wake sessionKey cannot target a subagent session"),
+      );
+      return;
+    }
+    // Mirror the cron tool's contradictory-pair guard for direct RPC callers
+    // and generated clients: the cron target resolver treats agentId as
+    // authoritative, so an agentId that disagrees with the agent owning an
+    // agent-prefixed sessionKey would silently wake a lane the caller never
+    // named. Reject instead of guessing a canonical owner.
+    const sessionKeyAgentId = sessionKey
+      ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
+      : undefined;
+    if (agentId && sessionKeyAgentId && agentId.toLowerCase() !== sessionKeyAgentId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "wake agentId contradicts the agent that owns sessionKey; pass a single canonical wake target",
+        ),
       );
       return;
     }
