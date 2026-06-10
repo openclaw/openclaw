@@ -756,7 +756,7 @@ function convertMessages(
                 toolUse: { toolUseId: c.id, name: c.name, input: c.arguments as DocumentType },
               });
               break;
-            case "thinking":
+            case "thinking": {
               const thinkingSignature = c.thinkingSignature;
               const normalizedThinkingSignature = thinkingSignature?.trim();
               const supportsSignature = supportsThinkingSignature(model);
@@ -793,6 +793,7 @@ function convertMessages(
                 contentBlocks.push({ text: sanitizeSurrogates(c.thinking) });
               }
               break;
+            }
             default:
               continue;
           }
