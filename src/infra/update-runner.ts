@@ -1101,24 +1101,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const manager = await resolveUpdateBuildManager(
-        (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
-        gitRoot,
-        timeoutMs,
-        defaultCommandEnv,
-        "require-preferred",
-      );
-      if (manager.kind === "missing-required") {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: mapManagerResolutionFailure(manager.reason),
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
-      }
       const preflightRoot = await createPreflightRoot();
       const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
       const worktreeStep = await runStep(
@@ -1158,76 +1140,100 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
-            manager.manager,
+          const manager = await resolveUpdateBuildManager(
+            (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
+            worktreeDir,
+            timeoutMs,
+            defaultCommandEnv,
+            "require-preferred",
           );
-          const preflightIgnoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-          const depsStepArgv =
-            preflightIgnoreScripts && preflightIgnoreScriptsArgv
-              ? preflightIgnoreScriptsArgv
-              : managerInstallArgs(manager.manager, {
-                  compatFallback: manager.fallback && manager.manager === "npm",
-                });
-          const depsStepName = preflightIgnoreScripts
-            ? `preflight deps install (ignore scripts) (${shortSha})`
-            : `preflight deps install (${shortSha})`;
-          const installEnv = resolveInstallEnv(manager.manager, manager.env);
-          const depsStep = await runStep(step(depsStepName, depsStepArgv, worktreeDir, installEnv));
-          steps.push(depsStep);
-          let finalDepsStep = depsStep;
-          if (
-            depsStep.exitCode !== 0 &&
-            !preflightIgnoreScripts &&
-            shouldRetryWindowsInstallIgnoringScripts(manager.manager)
-          ) {
-            const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
-            if (retryArgv) {
-              const retryStep = await runStep(
-                step(
-                  `preflight deps install (ignore scripts) (${shortSha})`,
-                  retryArgv,
-                  worktreeDir,
-                  installEnv,
-                ),
-              );
-              steps.push(retryStep);
-              finalDepsStep = retryStep;
-            }
+          if (manager.kind === "missing-required") {
+            return {
+              status: "error",
+              mode: "git",
+              root: gitRoot,
+              reason: mapManagerResolutionFailure(manager.reason),
+              before: { sha: beforeSha, version: beforeVersion },
+              steps,
+              durationMs: Date.now() - startedAt,
+            };
           }
-          if (finalDepsStep.exitCode !== 0) {
-            continue;
-          }
-
-          const buildStep = await runStep(
-            step(
-              `preflight build (${shortSha})`,
-              managerScriptArgs(manager.manager, "build"),
-              worktreeDir,
-              resolveBuildEnv(manager.env),
-            ),
-          );
-          steps.push(buildStep);
-          if (buildStep.exitCode !== 0) {
-            continue;
-          }
-
-          if (shouldRunDevPreflightLint()) {
-            const lintStep = await runStep(
-              step(
-                `preflight lint (${shortSha})`,
-                managerScriptArgs(manager.manager, "lint"),
-                worktreeDir,
-                resolveDevPreflightLintEnv(manager.env),
-              ),
+          try {
+            const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
+              manager.manager,
             );
-            steps.push(lintStep);
-            if (lintStep.exitCode !== 0) {
+            const preflightIgnoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+            const depsStepArgv =
+              preflightIgnoreScripts && preflightIgnoreScriptsArgv
+                ? preflightIgnoreScriptsArgv
+                : managerInstallArgs(manager.manager, {
+                    compatFallback: manager.fallback && manager.manager === "npm",
+                  });
+            const depsStepName = preflightIgnoreScripts
+              ? `preflight deps install (ignore scripts) (${shortSha})`
+              : `preflight deps install (${shortSha})`;
+            const installEnv = resolveInstallEnv(manager.manager, manager.env);
+            const depsStep = await runStep(
+              step(depsStepName, depsStepArgv, worktreeDir, installEnv),
+            );
+            steps.push(depsStep);
+            let finalDepsStep = depsStep;
+            if (
+              depsStep.exitCode !== 0 &&
+              !preflightIgnoreScripts &&
+              shouldRetryWindowsInstallIgnoringScripts(manager.manager)
+            ) {
+              const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+              if (retryArgv) {
+                const retryStep = await runStep(
+                  step(
+                    `preflight deps install (ignore scripts) (${shortSha})`,
+                    retryArgv,
+                    worktreeDir,
+                    installEnv,
+                  ),
+                );
+                steps.push(retryStep);
+                finalDepsStep = retryStep;
+              }
+            }
+            if (finalDepsStep.exitCode !== 0) {
               continue;
             }
-          }
 
-          selectedSha = sha;
-          break;
+            const buildStep = await runStep(
+              step(
+                `preflight build (${shortSha})`,
+                managerScriptArgs(manager.manager, "build"),
+                worktreeDir,
+                resolveBuildEnv(manager.env),
+              ),
+            );
+            steps.push(buildStep);
+            if (buildStep.exitCode !== 0) {
+              continue;
+            }
+
+            if (shouldRunDevPreflightLint()) {
+              const lintStep = await runStep(
+                step(
+                  `preflight lint (${shortSha})`,
+                  managerScriptArgs(manager.manager, "lint"),
+                  worktreeDir,
+                  resolveDevPreflightLintEnv(manager.env),
+                ),
+              );
+              steps.push(lintStep);
+              if (lintStep.exitCode !== 0) {
+                continue;
+              }
+            }
+
+            selectedSha = sha;
+            break;
+          } finally {
+            await manager.cleanup?.();
+          }
         }
       } finally {
         const removeStep = await runStep({
@@ -1258,7 +1264,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           timeoutMs,
         }).catch(() => null);
         await removePathRecursive(preflightRoot);
-        await manager.cleanup?.();
       }
 
       if (!selectedSha) {

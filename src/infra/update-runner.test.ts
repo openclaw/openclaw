@@ -148,6 +148,27 @@ describe("runGatewayUpdate", () => {
     return await setupUiIndex();
   }
 
+  async function writePreflightPackageManagerFixture(root: string, packageManager = "pnpm@8.0.0") {
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager }),
+      "utf-8",
+    );
+  }
+
+  async function writePreflightPackageManagerFixtureFromWorktreeAdd(
+    key: string,
+    packageManager = "pnpm@8.0.0",
+  ) {
+    const match = /\sworktree add --detach (?<root>\S+) /u.exec(key);
+    const root = match?.groups?.root;
+    if (!root) {
+      throw new Error(`expected preflight worktree path in command: ${key}`);
+    }
+    await writePreflightPackageManagerFixture(root, packageManager);
+  }
+
   function buildStableTagResponses(
     stableTag: string,
     options?: { additionalTags?: string[] },
@@ -729,6 +750,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
@@ -775,6 +797,95 @@ describe("runGatewayUpdate", () => {
         pnpm_config_resolution_mode: "highest",
       });
     }
+  });
+
+  it("resolves the dev preflight package manager from the checked-out candidate worktree", async () => {
+    await setupGitCheckout({ packageManager: "npm@10.0.0" });
+    await setupUiIndex();
+    const upstreamSha = "upstream123";
+    const preflightInstallCommands: string[] = [];
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+
+    const runCommand = async (
+      argv: string[],
+      options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => {
+      const key = argv.join(" ");
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return { stdout: "main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
+        return { stdout: "origin/main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
+        return { stdout: upstreamSha, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
+        return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
+      }
+      if (key === "pnpm --version" || key === "npm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${upstreamSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key, "pnpm@8.0.0");
+        return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
+        key.endsWith(upstreamSha)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install" || key === "npm install") {
+        if (options?.cwd && preflightPrefixPattern.test(options.cwd)) {
+          preflightInstallCommands.push(key);
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm build" || key === "npm run build" || key === "npm run ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rebase ${upstreamSha}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === doctorCommand) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev" });
+
+    expect(result.status).toBe("ok");
+    expect(preflightInstallCommands).toEqual(["pnpm install"]);
   });
 
   it("returns error and stops early when build fails", async () => {
@@ -988,6 +1099,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1089,6 +1201,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1186,6 +1299,7 @@ describe("runGatewayUpdate", () => {
           key.endsWith(` ${upstreamSha}`) &&
           preflightPrefixPattern.test(key)
         ) {
+          await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
           return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
         }
         if (
@@ -1300,6 +1414,7 @@ describe("runGatewayUpdate", () => {
           key.endsWith(` ${upstreamSha}`) &&
           preflightPrefixPattern.test(key)
         ) {
+          await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
           return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
         }
         if (
@@ -1398,6 +1513,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1491,6 +1607,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1577,6 +1694,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1657,6 +1775,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1740,6 +1859,7 @@ describe("runGatewayUpdate", () => {
         key.endsWith(` ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
         return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
       }
       if (
@@ -1814,6 +1934,31 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
         return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
       }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${upstreamSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
+        return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
+        key.endsWith(upstreamSha)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
       if (key === "pnpm --version") {
         throw new Error("spawn pnpm ENOENT");
       }
@@ -1835,8 +1980,8 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("pnpm-npm-bootstrap-failed");
     expect(calls).not.toContain("npm run build");
     expect(calls).not.toContain("npm run lint");
-    const preflightCalls = calls.filter((call) => preflightPrefixPattern.test(call));
-    expect(preflightCalls).toStrictEqual([]);
+    expect(calls).not.toContain("npm install");
+    expect(calls).not.toContain("pnpm install");
   });
 
   it("skips update when no git root", async () => {
