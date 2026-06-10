@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
   readSessionStoreForTest,

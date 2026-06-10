@@ -31,13 +31,13 @@ directly to existing OpenClaw channel conversations, use
 
 ## Which page do I want?
 
-| You want to…                                                                                    | Use this                              | Notes                                                                                                                                                                                         |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bind or control Codex in the current conversation                                               | `/codex bind`, `/codex threads`       | Native Codex app-server path when the `codex` plugin is enabled; includes bound chat replies, image forwarding, model/fast/permissions, stop, and steer controls. ACP is an explicit fallback |
-| Run Claude Code, Gemini CLI, explicit Codex ACP, or another external harness _through_ OpenClaw | This page                             | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, hub-delegated persistent workers, background tasks, runtime controls                                                 |
-| Keep a named ACP worker alive from WebChat or another hub and follow up by label                | This page — Hub-delegated workers     | `sessions_spawn({ delegate: true, label })`, `sessions_send(label=...)`, `sessions_list({ delegated: true })`, `/acp delegate ...`                                                            |
-| Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client                   | [`openclaw acp`](/cli/acp)            | Bridge mode. IDE/client talks ACP to OpenClaw over stdio/WebSocket                                                                                                                            |
-| Reuse a local AI CLI as a text-only fallback model                                              | [CLI Backends](/gateway/cli-backends) | Not ACP. No OpenClaw tools, no ACP controls, no harness runtime                                                                                                                               |
+| You want to…                                                                                    | Use this                                                             | Notes                                                                                                                                                                                         |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bind or control Codex in the current conversation                                               | `/codex bind`, `/codex threads`                                      | Native Codex app-server path when the `codex` plugin is enabled; includes bound chat replies, image forwarding, model/fast/permissions, stop, and steer controls. ACP is an explicit fallback |
+| Run Claude Code, Gemini CLI, explicit Codex ACP, or another external harness _through_ OpenClaw | This page                                                            | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, hub-delegated workers, background tasks, runtime controls                                                            |
+| Keep a named ACP worker on WebChat or another hub without a thread                              | This page — [Hub-delegated workers](#hub-delegated-workers-operator) | `delegate: true`, `sessions_send(label=...)`, `/acp delegate ...`                                                                                                                             |
+| Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client                   | [`openclaw acp`](/cli/acp)                                           | Bridge mode. IDE/client talks ACP to OpenClaw over stdio/WebSocket                                                                                                                            |
+| Reuse a local AI CLI as a text-only fallback model                                              | [CLI Backends](/gateway/cli-backends)                                | Not ACP. No OpenClaw tools, no ACP controls, no harness runtime                                                                                                                               |
 
 ## Does this work out of the box?
 
@@ -539,18 +539,13 @@ Two ways to start an ACP session:
   defaults, while real access errors are returned.
 </ParamField>
 <ParamField path="label" type="string">
-  Operator-facing label used in session/banner text. Optional for
-  `delegate: true`; when omitted, OpenClaw auto-generates a UTC timestamp
-  label such as `delegate-20260605-143022` so follow-ups can use
-  `sessions_send(label=...)`.
+  Operator-facing label used in session/banner text. For `delegate: true`,
+  omit to auto-generate a UTC timestamp label for `sessions_send`.
 </ParamField>
 <ParamField path="delegate" type="boolean" default="false">
-  ACP-only hub-delegated persistent worker. Keeps the harness session
-  alive after the first task without binding a channel thread. The hub
-  agent follows up with `sessions_send(label=...)` and operators close
-  workers with `/acp delegate close <label>`. `label` is optional; omit
-  it to auto-generate a UTC timestamp label. Cannot be combined with
-  `thread: true` or `mode: "run"`.
+  Hub-delegated persistent ACP worker without channel thread binding.
+  Follow up with `sessions_send(label=...)`; close with `/acp delegate close
+  <label>`. Incompatible with `thread: true` and `mode: "run"`.
 </ParamField>
 <ParamField path="resumeSessionId" type="string">
   Resume an existing ACP session instead of creating a new one. The
@@ -595,96 +590,26 @@ overrides.
   for the selected model.
 </ParamField>
 
-## Hub-delegated persistent workers
+## Hub-delegated workers (operator)
 
-Use hub-delegated workers when a **hub session** (for example WebChat,
-WeChat, or another main chat surface) should keep a named external
-harness alive without creating a Discord/Telegram thread binding.
+Use when a **hub session** (WebChat, WeChat, or another main chat surface)
+needs a persistent external harness **without** a Discord/Telegram thread.
 
-Typical flow:
-
-1. The hub agent spawns a persistent ACP worker with a stable label.
-2. The worker runs the first task and stays active.
-3. Later turns use `sessions_send` against that label.
-4. The operator closes the worker with `/acp delegate close <label>` when
-   done.
-
-```json
-{
-  "runtime": "acp",
-  "delegate": true,
-  "label": "repo-fix",
-  "agentId": "codex",
-  "task": "Fix the failing tests in src/foo and summarize what changed."
-}
-```
-
-Follow-up from the same hub session:
-
-```json
-{
-  "label": "repo-fix",
-  "message": "Also add a regression test for the edge case we discussed."
-}
-```
-
-List owned workers:
-
-```json
-{
-  "delegated": true
-}
-```
-
-### When to use delegate vs thread bind
-
-| Shape                             | Use when                                                               | Follow-up path                                                  | Close path                        |
-| --------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------- |
-| `delegate: true`                  | Hub chat should relay to a named harness worker; no child thread/topic | `sessions_send(label=...)` from the owning hub session          | `/acp delegate close <label>`     |
-| `thread: true`, `mode: "session"` | The work should stay visible in a bound channel thread/topic           | Messages in that thread/topic                                   | `/acp close` on the bound session |
-| `mode: "run"`                     | One-shot background work with task completion back to the parent       | Parent task announce; optional `sessions_send` without A2A echo | Automatic after completion        |
+| Step      | Operator / agent action                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| Spawn     | `sessions_spawn({ runtime: "acp", delegate: true, agentId: "codex", label?: "repo-fix", task: "..." })` |
+| Follow up | `sessions_send({ label: "repo-fix", message: "..." })` from the owning hub session                      |
+| List      | `sessions_list({ delegated: true })` or `/acp delegate list`                                            |
+| Close     | `/acp delegate close repo-fix` (`/acp delegate status <label>` for expiry)                              |
 
 Rules:
 
-- `label` is optional for `delegate: true`. When omitted, OpenClaw assigns
-  a UTC timestamp label such as `delegate-20260605-143022` and returns it
-  in the spawn result.
-- Explicit labels must be unique among your active hub-delegated workers;
-  reuse fails until you close the old worker.
-- `delegate: true` cannot be combined with `thread: true` or
-  `mode: "run"`.
-- Hub-delegated workers stay parent-owned background sessions. OpenClaw
-  skips the agent-to-agent (A2A) follow-up loop for parent
-  `sessions_send` calls into those workers because the parent already
-  owns the result channel.
-- Initial spawn progress can still stream to the hub with
-  `streamTo: "parent"`, but hub-delegated workers do not publish
-  routine child output back to the visible channel unless the hub agent
-  relays it.
+- `delegate: true` implies persistent `mode: "session"`; do not pass `thread: true` or `mode: "run"`.
+- `label` is optional; OpenClaw auto-generates `delegate-YYYYMMDD-HHMMSS` (UTC) when omitted.
+- Active labels are unique per owner. Parent `sessions_send` skips A2A echo for hub-delegated workers.
+- Auto-close defaults: `acp.delegate.idleHours=72`, `acp.delegate.maxAgeHours=168` (`0` disables). See [ACP config](/gateway/configuration-reference#acp).
 
-### Operator commands
-
-| Command                        | What it does                                            | Example                         |
-| ------------------------------ | ------------------------------------------------------- | ------------------------------- |
-| `/acp delegate list`           | List hub-delegated workers owned by the current session | `/acp delegate list`            |
-| `/acp delegate status <label>` | Show state and idle/max-age expiry for one worker       | `/acp delegate status repo-fix` |
-| `/acp delegate close <label>`  | Close one owned worker                                  | `/acp delegate close repo-fix`  |
-
-Hub-delegated workers are closed by operators with `/acp delegate close <label>`
-(or by maintenance idle/max-age sweeps). Hub agents use `sessions_spawn`,
-`sessions_send`, and `sessions_list`; thread-bound ACP sessions continue to
-use `/acp close`.
-
-### Lifecycle defaults
-
-Hub-delegated workers auto-close when idle or when they reach a hard
-max age. Defaults:
-
-- `acp.delegate.idleHours`: `72`
-- `acp.delegate.maxAgeHours`: `168`
-
-Set either value to `0` to disable that limit. See
-[ACP config](/gateway/configuration-reference#acp).
+Thread-bound persistent ACP still uses `thread: true` and `/acp close`.
 
 ## Spawn bind and thread modes
 
