@@ -46,6 +46,12 @@ type StreamingStartOptions = {
   header?: StreamingCardHeader;
 };
 
+type StreamingContentUpdateMode = "full" | "append";
+
+type StreamingSessionOptions = {
+  contentUpdateMode?: StreamingContentUpdateMode;
+};
+
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
@@ -155,6 +161,24 @@ function shouldPushStreamingUpdate(previousText: string, nextText: string): bool
   return nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS;
 }
 
+function resolveStreamingCardAppendContent(previousText: string, nextText: string): string {
+  if (!nextText || nextText === previousText) {
+    return "";
+  }
+  if (!previousText) {
+    return nextText;
+  }
+  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
+}
+
+function resolveStreamingCardUpdateContent(
+  mode: StreamingContentUpdateMode,
+  previousText: string,
+  nextText: string,
+): string {
+  return mode === "append" ? resolveStreamingCardAppendContent(previousText, nextText) : nextText;
+}
+
 export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -213,11 +237,18 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
+  private contentUpdateMode: StreamingContentUpdateMode;
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
+  constructor(
+    client: Client,
+    creds: Credentials,
+    log?: (msg: string) => void,
+    options?: StreamingSessionOptions,
+  ) {
     this.client = client;
     this.creds = creds;
     this.log = log;
+    this.contentUpdateMode = options?.contentUpdateMode ?? "full";
   }
 
   async start(
@@ -480,12 +511,17 @@ export class FeishuStreamingSession {
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
-      if (mergedText === this.state.sentText) {
+      const updateContent = resolveStreamingCardUpdateContent(
+        this.contentUpdateMode,
+        this.state.sentText,
+        mergedText,
+      );
+      if (!updateContent) {
         return;
       }
       this.pendingText = null;
       this.state.currentText = mergedText;
-      const sent = await this.updateCardContent(mergedText, (e) =>
+      const sent = await this.updateCardContent(updateContent, (e) =>
         this.log?.(`Update failed: ${String(e)}`),
       );
       if (sent && this.state) {
@@ -542,7 +578,10 @@ export class FeishuStreamingSession {
     // An explicit empty final text clears a transient preview before closeout.
     if ((text || finalText !== undefined) && text !== this.state.sentText) {
       const sent = text.startsWith(this.state.sentText)
-        ? await this.updateCardContent(text, (e) => this.log?.(`Final update failed: ${String(e)}`))
+        ? await this.updateCardContent(
+            resolveStreamingCardUpdateContent(this.contentUpdateMode, this.state.sentText, text),
+            (e) => this.log?.(`Final update failed: ${String(e)}`),
+          )
         : await this.replaceCardContent(text, (e) =>
             this.log?.(`Final replace failed: ${String(e)}`),
           );

@@ -278,13 +278,14 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
   channels: {
     feishu: {
       streaming: true, // enable streaming card output (default: true)
+      streamingContentMode: "full", // "full" (default) or "append"
       blockStreaming: true, // opt into completed-block streaming
     },
   },
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
+Set `streaming: false` to send the complete reply in one message. `streamingContentMode: "full"` follows Feishu CardKit's documented full-content update behavior. Use `streamingContentMode: "append"` only for deployments where repeated full-content card updates cause unacceptable Feishu-side latency and the target Feishu/Lark tenant correctly appends content updates. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
 
 ### Quota optimization
 
@@ -581,6 +582,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.textChunkLimit`                         | Message chunk size                                                               | `2000`                               |
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                 | `30`                                 |
 | `channels.feishu.streaming`                              | Streaming card output                                                            | `true`                               |
+| `channels.feishu.streamingContentMode`                   | Streaming card content update payload mode (`full` or `append`)                  | `full`                               |
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
