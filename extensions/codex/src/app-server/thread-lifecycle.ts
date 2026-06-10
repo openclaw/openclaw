@@ -59,6 +59,7 @@ import {
 export type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed";
   rotatedContextEngineBinding?: boolean;
+  activeTurnIds?: string[];
 };
 
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
@@ -608,6 +609,7 @@ export async function startOrResumeThread(params: {
           threadId: response.thread.id,
           action: "resumed",
         });
+        const activeTurnIds = readActiveCodexTurnIds(response.thread);
         return {
           ...binding,
           threadId: response.thread.id,
@@ -626,7 +628,10 @@ export async function startOrResumeThread(params: {
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
           contextEngine: contextEngineBinding,
           environmentSelectionFingerprint,
-          lifecycle: { action: "resumed" },
+          lifecycle: {
+            action: "resumed",
+            ...(activeTurnIds.length ? { activeTurnIds } : {}),
+          },
         };
       } catch (error) {
         if (isCodexAppServerConnectionClosedError(error)) {
@@ -1230,6 +1235,14 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
     stable[key] = stabilizeJsonValue(child);
   }
   return stable;
+}
+
+function readActiveCodexTurnIds(thread: unknown): string[] {
+  const turns = (thread as { turns?: Array<{ id?: unknown; status?: unknown }> }).turns;
+  return (turns ?? [])
+    .filter((turn) => turn.status === "inProgress")
+    .map((turn) => (typeof turn.id === "string" ? turn.id : ""))
+    .filter((turnId) => turnId.trim().length > 0);
 }
 
 const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = JSON.stringify([]);

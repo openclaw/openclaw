@@ -116,7 +116,11 @@ import {
   defaultLeasedCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
-import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerApprovalRequest,
+  type CodexAppServerClient,
+} from "./client.js";
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   isCodexSandboxExecServerEnabled,
@@ -194,15 +198,16 @@ import {
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
 } from "./protocol-validators.js";
-import type {
-  CodexSandboxPolicy,
-  CodexTurnEnvironmentParams,
-  CodexServerNotification,
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-  CodexTurnStartResponse,
-  JsonObject,
-  JsonValue,
+import {
+  isJsonObject,
+  type CodexSandboxPolicy,
+  type CodexTurnEnvironmentParams,
+  type CodexServerNotification,
+  type CodexDynamicToolCallParams,
+  type CodexDynamicToolCallResponse,
+  type CodexTurnStartResponse,
+  type JsonObject,
+  type JsonValue,
 } from "./protocol.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
@@ -249,6 +254,7 @@ import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
+const CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
 const ensuredCodexWorkspaceDirs = new Set<string>();
 
 function estimateCodexAppServerProjectedTurnTokens(params: {
@@ -1490,6 +1496,48 @@ export async function runCodexAppServerAttempt(
       }
     }
   };
+  let activeNativeTurnCompletionWaiter:
+    | { matches: (notification: CodexServerNotification) => boolean; resolve: () => void }
+    | undefined;
+  const waitForActiveNativeTurnCompletion = async (
+    turnIds?: readonly string[],
+  ): Promise<boolean> => {
+    const turnIdSet = turnIds?.length ? new Set(turnIds) : undefined;
+    const matchesCompletion = (notification: CodexServerNotification) =>
+      isCodexThreadTurnCompletedNotification(notification, thread.threadId, turnIdSet);
+    if (pendingNotifications.some((notification) => matchesCompletion(notification))) {
+      return true;
+    }
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
+      const finish = (completedNativeTurn: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        runAbortController.signal.removeEventListener("abort", abortListener);
+        if (activeNativeTurnCompletionWaiter?.resolve === finishComplete) {
+          activeNativeTurnCompletionWaiter = undefined;
+        }
+        resolve(completedNativeTurn);
+      };
+      const finishComplete = () => finish(true);
+      const abortListener = () => finish(false);
+      timeoutRef.current = setTimeout(
+        () => finish(false),
+        Math.min(appServer.requestTimeoutMs, CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS),
+      );
+      activeNativeTurnCompletionWaiter = {
+        matches: matchesCompletion,
+        resolve: finishComplete,
+      };
+      runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+    });
+  };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
     const projector = projectorRef.current;
     const turnId = turnIdRef.current;
@@ -1510,6 +1558,11 @@ export async function runCodexAppServerAttempt(
           "codex app-server turn/completed ignored for other subscribed thread",
           correlation,
         );
+      }
+    }
+    if (notification.method === "turn/completed" && correlation.matchesActiveThread) {
+      if (activeNativeTurnCompletionWaiter?.matches(notification)) {
+        activeNativeTurnCompletionWaiter.resolve();
       }
     }
     if (isCodexNotificationOutsideActiveRun(correlation)) {
@@ -1918,6 +1971,32 @@ export async function runCodexAppServerAttempt(
     throwIfTurnStartAcceptedAfterAbort();
     return startedTurn;
   };
+  const activeNativeTurnIds =
+    thread.lifecycle.action === "resumed" ? (thread.lifecycle.activeTurnIds ?? []) : [];
+  if (activeNativeTurnIds.length > 0) {
+    // A resumed Codex thread can already be running a native compact/review turn.
+    // Starting an OpenClaw turn before that native turn completes can wedge the
+    // accepted turn behind a completion event we intentionally ignore.
+    embeddedAgentLog.info(
+      "codex app-server resumed thread has active native turn; waiting before turn/start",
+      { threadId: thread.threadId, activeTurnIds: activeNativeTurnIds },
+    );
+    emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: {
+        phase: "turn_start_waiting_for_native_turn",
+        threadId: thread.threadId,
+        activeTurnIds: activeNativeTurnIds,
+      },
+    });
+    const nativeTurnCompleted = await waitForActiveNativeTurnCompletion(activeNativeTurnIds);
+    if (!nativeTurnCompleted && !runAbortController.signal.aborted) {
+      embeddedAgentLog.warn(
+        "codex app-server active native turn did not complete before turn/start wait timed out",
+        { threadId: thread.threadId, activeTurnIds: activeNativeTurnIds },
+      );
+    }
+  }
   try {
     codexModelCallDiagnostics.emitStarted();
     runAgentHarnessLlmInputHook({
@@ -1932,7 +2011,29 @@ export async function runCodexAppServerAttempt(
     turn = await startCodexTurn();
   } catch (error) {
     let turnStartError = error;
+    if (isCodexActiveCompactTurnError(turnStartError)) {
+      // Codex native compaction returns before its compact turn finishes. If
+      // the next OpenClaw turn collides with that compact turn, wait for the
+      // terminal notification and retry once instead of surfacing drift.
+      embeddedAgentLog.info(
+        "codex app-server turn/start blocked by active compact turn; waiting to retry",
+        { threadId: thread.threadId },
+      );
+      const compactTurnCompleted = await waitForActiveNativeTurnCompletion();
+      if (compactTurnCompleted && !runAbortController.signal.aborted) {
+        emitCodexAppServerEvent(params, {
+          stream: "codex_app_server.lifecycle",
+          data: { phase: "turn_start_retry_after_compact", threadId: thread.threadId },
+        });
+        try {
+          turn = await startCodexTurn();
+        } catch (retryError) {
+          turnStartError = retryError;
+        }
+      }
+    }
     if (
+      turn === undefined &&
       shouldUseFreshCodexThreadAfterContextEngineOverflow({
         error: turnStartError,
         contextEngineActive: Boolean(activeContextEngine),
@@ -2693,6 +2794,34 @@ function isCodexContextWindowError(error: unknown): boolean {
     /maximum context/iu.test(message) ||
     /too many tokens/iu.test(message)
   );
+}
+
+function isCodexActiveCompactTurnError(error: unknown): boolean {
+  if (!(error instanceof CodexAppServerRpcError)) {
+    return false;
+  }
+  const data = isJsonObject(error.data) ? error.data : undefined;
+  const codexErrorInfo = isJsonObject(data?.codexErrorInfo) ? data.codexErrorInfo : undefined;
+  const activeTurn = isJsonObject(codexErrorInfo?.activeTurnNotSteerable)
+    ? codexErrorInfo.activeTurnNotSteerable
+    : undefined;
+  return activeTurn?.turnKind === "compact";
+}
+
+function isCodexThreadTurnCompletedNotification(
+  notification: CodexServerNotification,
+  threadId: string,
+  turnIds?: ReadonlySet<string>,
+): boolean {
+  if (notification.method !== "turn/completed") {
+    return false;
+  }
+  const correlation = describeCodexNotificationCorrelation(notification, { threadId });
+  if (!correlation.matchesActiveThread) {
+    return false;
+  }
+  const turnId = correlation.turnId ?? correlation.nestedTurnId;
+  return !turnIds || (turnId !== undefined && turnIds.has(turnId));
 }
 
 function joinPresentSections(...sections: Array<string | undefined>): string {
