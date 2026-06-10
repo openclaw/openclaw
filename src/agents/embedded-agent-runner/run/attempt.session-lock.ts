@@ -285,7 +285,7 @@ async function sessionFenceRewriteIsBenign(params: {
   }
   const previousLines = splitSessionFileLines(params.previous.text);
   const currentLines = splitSessionFileLines(currentText);
-  if (currentLines.length <= previousLines.length) {
+  if (currentLines.length < previousLines.length) {
     return false;
   }
   let expectedParentId: string | null = null;
