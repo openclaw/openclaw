@@ -95,6 +95,10 @@ export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): b
   );
 }
 
+export type ExternalContentProvenanceState = {
+  externalContent?: PluginHookExternalContentProvenance;
+};
+
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
@@ -109,6 +113,7 @@ export type HookContext = {
   trace?: DiagnosticTraceContext;
   channelId?: string;
   externalContent?: PluginHookExternalContentProvenance;
+  externalContentState?: ExternalContentProvenanceState;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   skillsSnapshot?: SkillSnapshot;
@@ -253,9 +258,7 @@ function collectToolHookExternalContentSources(
     }
     sources.add("unknown");
     for (const match of value.matchAll(/^Source:\s*([^\r\n]+)/gim)) {
-      const source = EXTERNAL_CONTENT_SOURCE_BY_LABEL.get(
-        match[1]?.trim().toLowerCase() ?? "",
-      );
+      const source = EXTERNAL_CONTENT_SOURCE_BY_LABEL.get(match[1]?.trim().toLowerCase() ?? "");
       if (source) {
         sources.add(source);
       }
@@ -320,6 +323,12 @@ function mergeToolHookExternalContentProvenance(
   };
 }
 
+function resolveHookContextExternalContent(
+  ctx: HookContext | undefined,
+): PluginHookExternalContentProvenance | undefined {
+  return ctx?.externalContentState?.externalContent ?? ctx?.externalContent;
+}
+
 function refreshHookContextExternalContentFromToolResult(
   ctx: HookContext | undefined,
   result: unknown,
@@ -331,10 +340,14 @@ function refreshHookContextExternalContentFromToolResult(
   if (!resultExternalContent) {
     return;
   }
-  ctx.externalContent = mergeToolHookExternalContentProvenance(
-    ctx.externalContent,
+  const mergedExternalContent = mergeToolHookExternalContentProvenance(
+    resolveHookContextExternalContent(ctx),
     resultExternalContent,
   );
+  if (ctx.externalContentState) {
+    ctx.externalContentState.externalContent = mergedExternalContent;
+  }
+  ctx.externalContent = mergedExternalContent;
 }
 
 /**
@@ -1052,6 +1065,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolKind && { toolKind: args.toolKind }),
       ...(args.toolInputKind && { toolInputKind: args.toolInputKind }),
     };
+    const hookExternalContent = resolveHookContextExternalContent(args.ctx);
     const buildToolContext = (identity: typeof toolIdentity) => ({
       toolName,
       ...identity,
@@ -1062,7 +1076,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
-      ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
+      ...(hookExternalContent && { externalContent: hookExternalContent }),
     });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
@@ -1073,7 +1087,7 @@ export async function runBeforeToolCallHook(args: {
             ...toolIdentity,
             ...(args.ctx?.runId && { runId: args.ctx.runId }),
             ...(args.toolCallId && { toolCallId: args.toolCallId }),
-            ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
+            ...(hookExternalContent && { externalContent: hookExternalContent }),
             ...(derivedToolParams.derivedPaths
               ? { derivedPaths: derivedToolParams.derivedPaths }
               : {}),
@@ -1180,7 +1194,7 @@ export async function runBeforeToolCallHook(args: {
         ...policyAdjustedToolIdentity,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
-        ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
+        ...(hookExternalContent && { externalContent: hookExternalContent }),
         ...(policyAdjustedDerivedToolParams.derivedPaths
           ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
           : {}),
