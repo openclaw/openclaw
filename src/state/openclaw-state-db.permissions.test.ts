@@ -12,13 +12,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const chmodFailHook = vi.hoisted(() => ({
   error: undefined as Error | undefined,
   calls: 0,
+  failProbe: true,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const chmodSync: typeof actual.chmodSync = ((target: unknown, mode: unknown) => {
     chmodFailHook.calls += 1;
-    if (chmodFailHook.error) {
+    const isProbe = String(target).includes(".openclaw-chmod-probe-");
+    if (chmodFailHook.error && (chmodFailHook.failProbe || !isProbe)) {
       throw chmodFailHook.error;
     }
     return (actual.chmodSync as (...args: unknown[]) => unknown)(target, mode);
@@ -50,6 +52,7 @@ describe("state database permission hardening without chmod support", () => {
   afterEach(() => {
     chmodFailHook.error = undefined;
     chmodFailHook.calls = 0;
+    chmodFailHook.failProbe = true;
     closeOpenClawStateDatabaseForTest();
     if (stateDir) {
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -68,15 +71,36 @@ describe("state database permission hardening without chmod support", () => {
     expect(chmodFailHook.calls).toBeGreaterThan(0);
   });
 
-  it("opens the state database when chmodSync throws EPERM", () => {
-    // NFS with root_squash and Azure Files surface chmod failures as EPERM.
+  it("rethrows EPERM when existing permissions are too broad", () => {
     stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    fs.chmodSync(stateDir, 0o755);
+    chmodFailHook.error = chmodError("EPERM");
+    chmodFailHook.failProbe = false;
+
+    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
+      /EPERM/,
+    );
+  });
+
+  it("opens when EPERM leaves existing permissions restrictive", () => {
+    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    closeOpenClawStateDatabaseForTest();
     chmodFailHook.error = chmodError("EPERM");
 
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
 
     expect(database.db.isOpen).toBe(true);
-    expect(chmodFailHook.calls).toBeGreaterThan(0);
+  });
+
+  it("opens when the filesystem probe also rejects chmod with EPERM", () => {
+    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    fs.chmodSync(stateDir, 0o755);
+    chmodFailHook.error = chmodError("EPERM");
+
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+
+    expect(database.db.isOpen).toBe(true);
   });
 
   it("rethrows unexpected chmod errors at open", () => {

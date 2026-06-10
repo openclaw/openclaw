@@ -1,6 +1,6 @@
 // OpenClaw state database manages shared persisted state and migrations.
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -116,12 +116,51 @@ const stateDbLog = createSubsystemLogger("state/db");
 /** Targets already warned about, so chmod-less filesystems warn once per path. */
 const chmodWarnedTargets = new Set<string>();
 
-// Errno codes raised when the filesystem cannot enforce POSIX modes: ENOTSUP/
-// EOPNOTSUPP (Docker volume drivers, FUSE), EINVAL (some SMB mounts), EPERM
-// (Azure Files, NFS with root_squash). EPERM also covers local not-the-owner
-// failures; the warn log keeps that case observable. Anything else (EACCES,
-// EIO, ...) is a real fault and stays fatal.
-const CHMOD_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "EINVAL", "EPERM"]);
+// Unambiguous errno codes raised when the filesystem cannot enforce POSIX modes.
+const CHMOD_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "EINVAL"]);
+
+function hasRestrictivePermissions(target: string): boolean {
+  try {
+    return (statSync(target).mode & 0o077) === 0;
+  } catch {
+    return false;
+  }
+}
+
+function filesystemRejectsChmod(target: string): boolean {
+  let probePath: string;
+  try {
+    const probeDir = statSync(target).isDirectory() ? target : path.dirname(target);
+    probePath = path.join(probeDir, `.openclaw-chmod-probe-${randomUUID()}`);
+    writeFileSync(probePath, "", { flag: "wx", mode: OPENCLAW_STATE_FILE_MODE });
+  } catch {
+    return false;
+  }
+  try {
+    chmodSync(probePath, OPENCLAW_STATE_FILE_MODE);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  } finally {
+    try {
+      unlinkSync(probePath);
+    } catch {
+      // The probe is best-effort cleanup after a failed capability check.
+    }
+  }
+}
+
+function canIgnoreChmodError(target: string, code: string | undefined): boolean {
+  if (code && CHMOD_UNSUPPORTED_CODES.has(code)) {
+    return true;
+  }
+  if (code !== "EPERM") {
+    return false;
+  }
+  // EPERM is ambiguous: keep restrictive targets usable, otherwise prove the
+  // containing filesystem also rejects chmod before weakening fail-closed behavior.
+  return hasRestrictivePermissions(target) || filesystemRejectsChmod(target);
+}
 
 // Permission hardening is best-effort only on filesystems that cannot apply
 // it: the database stays usable without the chmod, and crashing at open would
@@ -132,7 +171,7 @@ function bestEffortChmodSync(target: string, mode: number): void {
     chmodSync(target, mode);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (!code || !CHMOD_UNSUPPORTED_CODES.has(code)) {
+    if (!canIgnoreChmodError(target, code)) {
       throw err;
     }
     if (chmodWarnedTargets.has(target)) {
