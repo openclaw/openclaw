@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -13,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/host/backend-config.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -27,7 +25,6 @@ import {
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
-import { hasQmdStartupWork } from "./server-startup-memory.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -158,23 +155,22 @@ function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemorySt
   if (cfg.memory?.backend !== "qmd") {
     return { mode: "off" };
   }
+  if (cfg.memory.qmd?.update?.onBoot === false) {
+    return { mode: "off" };
+  }
   const startup = cfg.memory.qmd?.update?.startup;
-  if (startup !== "immediate" && startup !== "idle") {
-    return { mode: "off" };
-  }
-  const resolved = resolveMemoryBackendConfig({ cfg, agentId: resolveDefaultAgentId(cfg) });
-  if (resolved.backend !== "qmd" || !resolved.qmd || !hasQmdStartupWork(resolved.qmd)) {
-    return { mode: "off" };
-  }
   if (startup === "immediate") {
     return { mode: "immediate" };
   }
-  const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
-  const delayMs =
-    typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
-      ? Math.floor(rawDelayMs)
-      : QMD_STARTUP_IDLE_DELAY_MS;
-  return { mode: "idle", delayMs };
+  if (startup === "idle") {
+    const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
+    const delayMs =
+      typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
+        ? Math.floor(rawDelayMs)
+        : QMD_STARTUP_IDLE_DELAY_MS;
+    return { mode: "idle", delayMs };
+  }
+  return { mode: "off" };
 }
 
 function scheduleGatewayMemoryBackend(params: {
@@ -651,11 +647,7 @@ async function prewarmConfiguredPrimaryModel(params: {
     return;
   }
   const [
-    {
-      resolveAgentWorkspaceDir,
-      resolveDefaultAgentDir,
-      resolveDefaultAgentId: resolveDefaultAgentIdFromScope,
-    },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { isCliProvider, resolveConfiguredModelRef },
   ] = await Promise.all([
@@ -675,8 +667,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
   const agentDir = resolveDefaultAgentDir(params.cfg);
   const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentIdFromScope(params.cfg));
+    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir, {
       workspaceDir,
