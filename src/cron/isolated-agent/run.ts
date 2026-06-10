@@ -949,6 +949,7 @@ async function finalizeCronRun(params: {
     runMeta: finalRunResult.meta?.agentMeta,
   });
   const usage = finalRunResult.meta?.agentMeta?.usage;
+  const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;
   const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
   const modelUsed =
     finalRunResult.meta?.agentMeta?.model ??
@@ -986,7 +987,7 @@ async function finalizeCronRun(params: {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const totalTokens = deriveSessionTotalTokens({
-      usage,
+      usage: lastCallUsage ?? usage,
       contextTokens,
       promptTokens,
     });
