@@ -444,12 +444,13 @@ describe("argv helpers", () => {
     expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
   });
 
-  it("uses FLAG_TERMINATOR constant (not a hardcoded string) to stop command-path parsing", () => {
+  it("uses FLAG_TERMINATOR constant to stop command-path parsing", () => {
     // #83902: getCommandPathInternal was the only function in argv.ts that
     // used a hardcoded "--" instead of the FLAG_TERMINATOR constant.  If
     // FLAG_TERMINATOR is changed, command-path resolution would silently
-    // diverge from every other argv helper.  This test uses the imported
-    // constant directly so it breaks if the code regresses to a literal.
+    // diverge from every other argv helper.  This test exercises the
+    // integration with the imported constant; the companion contract test
+    // below asserts the canonical value is "--".
     const argv = ["node", "openclaw", "channels", FLAG_TERMINATOR, "add"];
     expect(getCommandPath(argv, 2)).toEqual(["channels"]);
   });
