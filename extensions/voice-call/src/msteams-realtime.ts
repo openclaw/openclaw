@@ -93,9 +93,10 @@ export function toTileCaption(text: string | undefined): string | undefined {
 }
 
 /**
- * CVI Phase 4 — how often to push the latest inbound frame into the realtime session as ambient
- * visual context. Only fires when the frame changed and the vision budget allows, so a static screen
- * costs nothing; on a changing screen the budget (`maxVisionPerMinute`) is the real cap.
+ * CVI Phase 4 — backstop interval for the ambient vision poll. The primary trigger is now
+ * {@link MsteamsRealtimeCall.notifyInboundFrame}, pushed on scene change as frames arrive; this timer
+ * just catches anything missed. Only fires when the frame changed and the vision budget allows, so a
+ * static screen costs nothing; the budget (`maxVisionPerMinute`) is the real cap on a changing screen.
  */
 const REALTIME_VISION_PUSH_INTERVAL_MS = 6000;
 
@@ -368,6 +369,12 @@ export interface MsteamsRealtimeDeps {
 export interface MsteamsRealtimeCall {
   /** Forward one inbound PCM 16 kHz frame from the caller into the model. */
   pushAudio(pcm16k: Buffer): void;
+  /**
+   * Signal that a new inbound video frame is available (scene change). Pushes it to the model right
+   * away if it changed and the vision budget allows — so the model sees changes promptly instead of
+   * waiting for the ambient backstop poll.
+   */
+  notifyInboundFrame(): void;
   /** Update Teams recording status (gates the consult tool + background task). */
   setRecordingActive(active: boolean): void;
   /**
@@ -1123,6 +1130,9 @@ export function createMsteamsRealtimeCall(params: {
       }
       const pcm24k = resamplePcm(pcm16k, MSTEAMS_SAMPLE_RATE_HZ, REALTIME_SAMPLE_RATE_HZ);
       realtime.sendAudio(pcm24k);
+    },
+    notifyInboundFrame: () => {
+      pushLatestFrameToModel();
     },
     setRecordingActive: (active: boolean) => {
       recordingActive = active;

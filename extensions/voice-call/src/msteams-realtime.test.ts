@@ -277,6 +277,39 @@ describe("createMsteamsRealtimeCall", () => {
     expect(onDeliveryComplete).toHaveBeenCalledTimes(1);
   });
 
+  it("notifyInboundFrame pushes a changed frame to the model and dedupes an unchanged one", () => {
+    const ctx = createMockSession(); // recording active
+    const mock = createMockProvider();
+    let frameData = "AAA";
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        getLatestFrame: () => ({
+          source: "screenshare",
+          dataBase64: frameData,
+          mime: "image/jpeg",
+          width: 100,
+          height: 100,
+          ts: 0,
+        }),
+      },
+    });
+
+    call.notifyInboundFrame();
+    expect(mock.sendImage).toHaveBeenCalledTimes(1);
+
+    // Same frame → deduped (no second push).
+    call.notifyInboundFrame();
+    expect(mock.sendImage).toHaveBeenCalledTimes(1);
+
+    // Scene change → pushed again.
+    frameData = "BBB";
+    call.notifyInboundFrame();
+    expect(mock.sendImage).toHaveBeenCalledTimes(2);
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();

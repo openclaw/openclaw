@@ -692,6 +692,10 @@ export class MsteamsProvider implements VoiceCallProvider {
       return;
     }
     this.vision.store(info);
+    // Scene-change-driven vision: forward the freshly-stored frame to the realtime model right away
+    // (event-driven) instead of waiting for its ambient backstop poll. Change + budget gating happen
+    // inside the realtime call, so a duplicate/over-budget frame is a no-op.
+    this.realtimeCalls.get(info.callId)?.notifyInboundFrame();
     this.logger?.debug?.(
       `MsteamsProvider: video.frame ${info.callId} ${info.source} ${info.width}x${info.height}` +
         (info.participantName ? ` from ${info.participantName}` : ""),
