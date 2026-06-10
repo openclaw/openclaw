@@ -374,6 +374,14 @@
                   "description": "ISO-8601 time (kind=at)",
                   "type": "string"
                 },
+                "command": {
+                  "description": "Shell command to watch (kind=\"on-exit\"): the job fires once when this command exits. Runs under the gateway (survives turn end). Use for \"ping me when this process/script finishes\".",
+                  "type": "string"
+                },
+                "cwd": {
+                  "description": "Working dir for the watched command (kind=\"on-exit\")",
+                  "type": "string"
+                },
                 "everyMs": {
                   "description": "Interval ms (kind=every)",
                   "minimum": 1,
@@ -385,7 +393,7 @@
                 },
                 "kind": {
                   "description": "Schedule kind",
-                  "enum": ["at", "every", "cron"],
+                  "enum": ["at", "every", "cron", "on-exit"],
                   "type": "string"
                 },
                 "staggerMs": {
@@ -693,6 +701,14 @@
                   "description": "ISO-8601 time (kind=at)",
                   "type": "string"
                 },
+                "command": {
+                  "description": "Shell command to watch (kind=\"on-exit\"): the job fires once when this command exits. Runs under the gateway (survives turn end). Use for \"ping me when this process/script finishes\".",
+                  "type": "string"
+                },
+                "cwd": {
+                  "description": "Working dir for the watched command (kind=\"on-exit\")",
+                  "type": "string"
+                },
                 "everyMs": {
                   "description": "Interval ms (kind=every)",
                   "minimum": 1,
@@ -704,7 +720,7 @@
                 },
                 "kind": {
                   "description": "Schedule kind",
-                  "enum": ["at", "every", "cron"],
+                  "enum": ["at", "every", "cron", "on-exit"],
                   "type": "string"
                 },
                 "staggerMs": {
