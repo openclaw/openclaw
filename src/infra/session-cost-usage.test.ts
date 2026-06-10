@@ -328,6 +328,81 @@ describe("session cost usage", () => {
     });
   });
 
+  it("fills every calendar day in a bounded range that spans a spring-forward DST transition", async () => {
+    // Regression for the bug ClawSweeper flagged on PR #81467: a fixed-24h
+    // millisecond step in `fillMissingDays` can skip an interior calendar
+    // day across local-clock spring-forward (e.g. March 8, 2026 in
+    // US/Mountain: 02:00 MST -> 03:00 MDT, so the day is only 23h long).
+    // With startMs landing late in the local evening of March 7, a 24h ms
+    // step lands past midnight of March 9 in the post-DST clock and the
+    // March 8 key is never inserted. Iterating by calendar-day keys avoids
+    // this.
+    //
+    // We can't reliably switch process.env.TZ at runtime in vitest workers
+    // (V8 caches the system timezone for `Intl.DateTimeFormat().resolvedOptions()`
+    // at process startup, so a late `process.env.TZ` assignment is a no-op
+    // for the production code path). Instead, we stub `Intl.DateTimeFormat`
+    // so the production code's resolvedOptions().timeZone reports
+    // `America/Denver` for the duration of the test. Date math is
+    // unaffected: ms timestamps are absolute, only the day-key labels
+    // change, which is exactly what `formatDayKey` consumes.
+    const root = await makeSessionCostRoot("cost-dst-spring-forward");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    // No session files at all -> entirely empty range, so daily entries
+    // must come exclusively from the zero-fill helper.
+
+    const realIntlDateTimeFormat = Intl.DateTimeFormat;
+    type FormatArgs = ConstructorParameters<typeof Intl.DateTimeFormat>;
+    const StubbedIntlDateTimeFormat = function (
+      this: Intl.DateTimeFormat,
+      locales?: FormatArgs[0],
+      options?: FormatArgs[1],
+    ) {
+      const opts = options ? { ...options } : {};
+      if (!opts.timeZone) {
+        opts.timeZone = "America/Denver";
+      }
+      return new realIntlDateTimeFormat(locales, opts);
+    } as unknown as typeof Intl.DateTimeFormat;
+    StubbedIntlDateTimeFormat.supportedLocalesOf =
+      realIntlDateTimeFormat.supportedLocalesOf.bind(realIntlDateTimeFormat);
+    vi.stubGlobal("Intl", { ...Intl, DateTimeFormat: StubbedIntlDateTimeFormat });
+
+    try {
+      await withStateDir(root, async () => {
+        // Sanity-check the stub before exercising the production path.
+        expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe("America/Denver");
+
+        // startMs = 2026-03-07T23:30 local (MST, UTC-7) = 06:30 UTC on Mar 8.
+        // endMs   = 2026-03-13T23:30 local (MDT, UTC-6) = 05:30 UTC on Mar 14.
+        // Window straddles the DST forward jump on the morning of Mar 8.
+        const startMs = Date.UTC(2026, 2, 8, 6, 30, 0); // Mar 8 06:30 UTC -> Mar 7 23:30 MST
+        const endMs = Date.UTC(2026, 2, 14, 5, 30, 0); // Mar 14 05:30 UTC -> Mar 13 23:30 MDT
+
+        const summary = await loadCostUsageSummary({ startMs, endMs });
+
+        const dates = summary.daily.map((d) => d.date);
+        // Seven calendar days inclusive: Mar 7, 8, 9, 10, 11, 12, 13.
+        // The old fixed-24h-ms step would skip 2026-03-08 entirely.
+        expect(dates).toEqual([
+          "2026-03-07",
+          "2026-03-08",
+          "2026-03-09",
+          "2026-03-10",
+          "2026-03-11",
+          "2026-03-12",
+          "2026-03-13",
+        ]);
+        // Every day is zero-filled (no activity in this fixture).
+        expect(summary.daily.every((d) => d.totalTokens === 0 && d.totalCost === 0)).toBe(true);
+        expect(summary.totals.totalTokens).toBe(0);
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("serves usage cost from durable aggregate cache without rescanning stale files", async () => {
     const root = await makeSessionCostRoot("cost-cache");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
