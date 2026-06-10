@@ -54,6 +54,9 @@ export function describeSessionsSpawnTool(options?: {
     "Native subagents get task in first visible `[Subagent Task]` message.",
     'Native only: `context="fork"` only when child needs current transcript; else omit or `isolated`.',
     "Use for fresh child-session work.",
+    "Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection.",
+    "Avoid delegating quick lookups, single-file reads, or tasks on your critical path.",
+    "After spawning, do meaningful non-overlapping work; results arrive when complete.",
   ];
   if (options?.acpAvailable === false) {
     return baseDescription.join(" ");
