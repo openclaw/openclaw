@@ -53,7 +53,10 @@ function mapPathFromWorkspaceToContainer(params: {
   if (!relativePath) {
     return params.targetWorkspaceDir.replace(/\\/g, "/");
   }
-  return containerJoin(params.targetWorkspaceDir, ...relativePath.split(path.sep).filter(Boolean));
+  return containerJoin(
+    params.targetWorkspaceDir,
+    ...relativePath.split(path.sep).filter(Boolean),
+  );
 }
 
 export function mapSandboxSkillEntriesForPrompt(params: {

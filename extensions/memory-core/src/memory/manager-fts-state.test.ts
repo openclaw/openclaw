@@ -42,9 +42,7 @@ describe("memory FTS state", () => {
       currentModel: "mock-embed",
     });
 
-    const rows = db
-      .prepare("SELECT path, source, model FROM chunks_fts ORDER BY path, source")
-      .all() as Array<{
+    const rows = db.prepare("SELECT path, source, model FROM chunks_fts ORDER BY path, source").all() as Array<{
       path: string;
       source: string;
       model: string;
