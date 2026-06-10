@@ -51,6 +51,7 @@ let capturedReplyOptions:
       onItemEvent?: (payload: {
         kind?: string;
         itemId?: string;
+        toolCallId?: string;
         progressText?: string;
         summary?: string;
         title?: string;
@@ -58,6 +59,15 @@ let capturedReplyOptions:
         phase?: string;
         status?: string;
         meta?: string;
+      }) => Promise<void> | void;
+      onCommandOutput?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        exitCode?: number | null;
       }) => Promise<void> | void;
       onToolStart?: (payload: {
         itemId?: string;
@@ -126,6 +136,7 @@ let mockedReplyOptionEvents: Array<
   | {
       kind: "item";
       itemId?: string;
+      toolCallId?: string;
       itemKind?: string;
       progressText?: string;
       summary?: string;
@@ -155,6 +166,16 @@ let mockedReplyOptionEvents: Array<
       modified?: string[];
       deleted?: string[];
       summary?: string;
+    }
+  | {
+      kind: "command_output";
+      itemId?: string;
+      toolCallId?: string;
+      phase?: string;
+      title?: string;
+      name?: string;
+      status?: string;
+      exitCode?: number | null;
     }
   | { kind: "concurrent_items"; progressTexts: string[] }
   | { kind: "partial"; text: string }
@@ -231,6 +252,29 @@ function planUpdate(title: string) {
 
 function taskUpdate(id: unknown, title: string, status: "in_progress" | "complete" | "error") {
   return { type: "task_update", id, title, status };
+}
+
+function collectNativeTaskUpdates() {
+  const chunks: unknown[] = [];
+  const collectChunks = (call: unknown[]) => {
+    const arg = requireRecord(call[0], "native progress call");
+    if (Array.isArray(arg.chunks)) {
+      chunks.push(...arg.chunks);
+    }
+  };
+  for (const call of startSlackStreamMock.mock.calls) {
+    collectChunks(call);
+  }
+  for (const call of appendSlackStreamMock.mock.calls) {
+    collectChunks(call);
+  }
+  for (const call of stopSlackStreamMock.mock.calls) {
+    collectChunks(call);
+  }
+  return chunks.flatMap((chunk) => {
+    const record = requireRecord(chunk, "native progress chunk");
+    return record.type === "task_update" ? [record] : [];
+  });
 }
 
 function expectDeliverReplyCall(index: number, text: string, fields?: Record<string, unknown>) {
@@ -465,11 +509,10 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
             : params.exitCode != null
               ? `exit ${params.exitCode}`
               : params.status;
+        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
         return {
           kind: "command-output",
-          ...((params.itemId ?? params.toolCallId)
-            ? { id: params.itemId ?? params.toolCallId }
-            : {}),
+          ...(id ? { id } : {}),
           text: status ?? params.title ?? params.name ?? "exec",
           label: params.name ?? "exec",
           ...(status ? { status } : {}),
@@ -537,16 +580,25 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
           "status" &&
         (params.itemKind === "command" || params.name === "exec")
       ) {
+        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
         return {
           kind: "item",
+          ...(id ? { id } : {}),
           text: "🛠️ Exec",
           label: "Exec",
         };
       }
       const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+      const id =
+        params.itemKind === "command" || params.name === "exec"
+          ? params.toolCallId
+            ? `command:${params.toolCallId}`
+            : params.itemId
+          : undefined;
       return text
         ? {
             kind: "item",
+            ...(id ? { id } : {}),
             text,
             label: params.title ?? params.name ?? "Update",
           }
@@ -886,6 +938,7 @@ vi.mock("../reply.runtime.js", () => ({
       onItemEvent?: (payload: {
         kind?: string;
         itemId?: string;
+        toolCallId?: string;
         progressText?: string;
         summary?: string;
         title?: string;
@@ -893,6 +946,15 @@ vi.mock("../reply.runtime.js", () => ({
         phase?: string;
         status?: string;
         meta?: string;
+      }) => Promise<void> | void;
+      onCommandOutput?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        exitCode?: number | null;
       }) => Promise<void> | void;
       onToolStart?: (payload: {
         itemId?: string;
@@ -929,6 +991,7 @@ vi.mock("../reply.runtime.js", () => ({
           await params.replyOptions?.onItemEvent?.({
             kind: entry.itemKind,
             itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
             progressText: entry.progressText,
             summary: entry.summary,
             title: entry.title,
@@ -936,6 +999,16 @@ vi.mock("../reply.runtime.js", () => ({
             phase: entry.phase,
             status: entry.status,
             meta: entry.meta,
+          });
+        } else if (entry.kind === "command_output") {
+          await params.replyOptions?.onCommandOutput?.({
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
+            phase: entry.phase,
+            title: entry.title,
+            name: entry.name,
+            status: entry.status,
+            exitCode: entry.exitCode,
           });
         } else if (entry.kind === "tool_start") {
           await params.replyOptions?.onToolStart?.({
@@ -1994,6 +2067,43 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectNativeProgressAppend(0, [planUpdate("bash"), taskUpdate(taskId, "bash", "complete")]);
     expect(startSlackStreamMock.mock.invocationCallOrder[0]).toBeLessThan(
       appendSlackStreamMock.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("reuses native Slack progress task identity across command item and output events", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        {
+          kind: "item",
+          itemId: "tool:call-1",
+          toolCallId: "call-1",
+          itemKind: "command",
+          name: "bash",
+          phase: "update",
+          status: "running",
+          progressText: "install dependencies",
+        },
+        {
+          kind: "command_output",
+          itemId: "tool:call-1-output",
+          toolCallId: "call-1",
+          name: "bash",
+          phase: "end",
+          exitCode: 0,
+        },
+      ],
+    });
+
+    const taskUpdates = collectNativeTaskUpdates();
+    expect([...new Set(taskUpdates.map((task) => task.id))]).toEqual([
+      expect.stringMatching(/^command_call_1_[a-f0-9]{8}$/),
+    ]);
+    expect(taskUpdates.at(0)?.id).toEqual(expect.stringMatching(/^command_call_1_[a-f0-9]{8}$/));
+    expect(taskUpdates).toContainEqual(
+      taskUpdate(taskUpdates.at(0)?.id, "bash — completed", "complete"),
     );
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);

@@ -1705,6 +1705,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             buildChannelProgressDraftLineForEntry(account.config, {
               event: "item",
               itemId: payload.itemId,
+              toolCallId: payload.toolCallId,
               itemKind: payload.kind,
               title: payload.title,
               name: payload.name,
