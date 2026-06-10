@@ -18,6 +18,10 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "OPENCLAW_DOCS_SYNC_TOKEN is not configured; skipping cross-repo docs translation dispatch."
+            exit 0
+          fi
           gh api repos/openclaw/docs/dispatches \
             --method POST \
             -f event_type="translate-all-release" \
