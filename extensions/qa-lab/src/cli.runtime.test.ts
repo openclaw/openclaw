@@ -386,6 +386,29 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("rejects qa profile runs that do not match taxonomy categories", async () => {
+    await expect(
+      runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        profile: "smoke-ci",
+        surface: "unknown-surface",
+      }),
+    ).rejects.toThrow(
+      "qa run did not find taxonomy categories for --profile smoke-ci --surface unknown-surface.",
+    );
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("rejects qa profile runs whose profile is not declared in taxonomy.yaml", async () => {
+    await expect(
+      runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        profile: "nightly",
+      }),
+    ).rejects.toThrow('--profile must be one of smoke-ci, release, got "nightly".');
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
   it("resolves suite repo-root-relative paths before dispatching", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
