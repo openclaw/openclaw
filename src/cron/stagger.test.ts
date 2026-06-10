@@ -16,6 +16,13 @@ describe("cron stagger helpers", () => {
     expect(isRecurringTopOfHourCronExpr("15 * * * *")).toBe(false);
   });
 
+  it("rejects malformed hour fields that merely contain a wildcard", () => {
+    expect(isRecurringTopOfHourCronExpr("0 5* * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("0 *5 * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("0 1-*/2 * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("0 0 5* * * *")).toBe(false);
+  });
+
   it("normalizes explicit stagger values", () => {
     expect(normalizeCronStaggerMs("30000")).toBe(30_000);
     expect(normalizeCronStaggerMs(42.8)).toBe(42);
