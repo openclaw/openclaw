@@ -95,10 +95,6 @@ export type TransientErrorContextOpts = {
   sessionKey?: string;
 };
 
-function extractRequestId(raw: string): string | undefined {
-  return raw.match(/"request_id"\s*:\s*"([^"]+)"/)?.[1];
-}
-
 function stripTerminalOscSequences(value: string): string {
   let result = "";
   for (let index = 0; index < value.length; index += 1) {
@@ -143,12 +139,7 @@ function sanitizeContextValue(value: string): string {
     .trim();
 }
 
-function redactContextIdentifier(value: string): string | undefined {
-  const sanitizedValue = sanitizeContextValue(value);
-  return sanitizedValue ? redactIdentifier(sanitizedValue, { len: 12 }) : undefined;
-}
-
-export function buildTransientErrorContext(raw: string, opts?: TransientErrorContextOpts): string {
+export function buildTransientErrorContext(_raw: string, opts?: TransientErrorContextOpts): string {
   const parts: string[] = [];
   const provider = opts?.provider ? sanitizeContextValue(opts.provider) : "";
   const model = opts?.model ? sanitizeContextValue(opts.model) : "";
@@ -157,28 +148,15 @@ export function buildTransientErrorContext(raw: string, opts?: TransientErrorCon
     parts.push(providerModel);
   }
   if (opts?.profileId) {
-    const profileId = redactContextIdentifier(opts.profileId);
+    const profileId = sanitizeContextValue(opts.profileId);
     if (profileId) {
-      parts.push(`profile=${profileId}`);
+      parts.push("profile=active");
     }
   }
   if (opts?.trigger) {
     const trigger = sanitizeContextValue(opts.trigger);
     if (trigger) {
       parts.push(`trigger=${trigger}`);
-    }
-  }
-  if (opts?.sessionKey) {
-    const sessionKey = redactContextIdentifier(opts.sessionKey);
-    if (sessionKey) {
-      parts.push(`session=${sessionKey}`);
-    }
-  }
-  const requestId = extractRequestId(raw);
-  if (requestId) {
-    const redactedRequestId = redactContextIdentifier(requestId);
-    if (redactedRequestId) {
-      parts.push(`req=${redactedRequestId}`);
     }
   }
   return parts.length > 0 ? ` [${parts.join(", ")}]` : "";

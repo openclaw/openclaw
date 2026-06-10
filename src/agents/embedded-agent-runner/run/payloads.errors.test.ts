@@ -14,7 +14,7 @@ import {
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_BASE =
     "The AI service is temporarily overloaded. Please try again in a moment.";
-  const OVERLOADED_FALLBACK_TEXT = `${OVERLOADED_FALLBACK_BASE} [test-model, session=sha256:6b256722820e, req=sha256:6f9a7829c4ad]`;
+  const OVERLOADED_FALLBACK_TEXT = `${OVERLOADED_FALLBACK_BASE} [test-model]`;
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -106,10 +106,7 @@ describe("buildEmbeddedRunPayloads", () => {
       sessionKey: "agent:main:telegram:direct:u123",
     });
 
-    expectOverloadedFallback(
-      payloads,
-      `${OVERLOADED_FALLBACK_BASE} [test-model, session=sha256:23ce2bdababa, req=sha256:6f9a7829c4ad]`,
-    );
+    expectOverloadedFallback(payloads, `${OVERLOADED_FALLBACK_BASE} [test-model]`);
     expect(payloads[0]?.isError).toBe(true);
     expectNoPayloadTextContaining(payloads, "Edit");
     expectNoPayloadTextContaining(payloads, "missing");
@@ -352,7 +349,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("includes provider, model, profile, trigger, and session context for transient errors", () => {
+  it("includes provider, model, active profile, and trigger context for transient errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         model: "gpt-5.4",
@@ -367,7 +364,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ API rate limit reached. Please try again later. [openai/gpt-5.4, profile=sha256:926fa0a366f6, trigger=heartbeat, session=sha256:a1d807d08d9f]",
+      text: "⚠️ API rate limit reached. Please try again later. [openai/gpt-5.4, profile=active, trigger=heartbeat]",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "openai:primary");
