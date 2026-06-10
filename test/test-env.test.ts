@@ -251,6 +251,48 @@ describe("installTestEnv", () => {
     expect(process.env.TEST_PROFILE_ONLY).toBeUndefined();
   });
 
+  it("excludes browser cache and recording directories during live test staging", () => {
+    const realHome = createTempHome();
+
+    // Auth file that should be copied
+    writeFile(path.join(realHome, ".gemini", "auth.json"), '{"key":"value"}\n');
+
+    // Cache directories that should be excluded
+    const cacheDirs = [
+      path.join(realHome, ".gemini", "antigravity-browser-profile", "Default", "Cache", "Cache_Data", "data_0"),
+      path.join(realHome, ".gemini", "antigravity-browser-profile", "Default", "GPUCache", "index"),
+      path.join(realHome, ".gemini", "antigravity", "browser_recordings", "session.json"),
+      path.join(realHome, ".gemini", "Service Worker", "CacheStorage", "index"),
+    ];
+    for (const cacheFile of cacheDirs) {
+      writeFile(cacheFile, "cache-data");
+    }
+
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_LIVE_TEST = "1";
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+
+    const testEnv = installTestEnv();
+    cleanupFns.push(testEnv.cleanup);
+
+    // Auth file should be copied
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "auth.json")),
+    ).toBe(true);
+
+    // Cache directories should NOT be copied
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "antigravity-browser-profile")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "antigravity", "browser_recordings")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(testEnv.tempHome, ".gemini", "Service Worker", "CacheStorage")),
+    ).toBe(false);
+  });
+
   it("falls back to parsing ~/.profile when bash is unavailable", async () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");

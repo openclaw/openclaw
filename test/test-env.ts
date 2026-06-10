@@ -249,6 +249,15 @@ function ensureParentDir(targetPath: string): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 }
 
+const COPY_EXCLUDE_SEGMENTS = new Set([
+  "Cache",
+  "Cache_Data",
+  "GPUCache",
+  "browser_recordings",
+  "antigravity-browser-profile",
+  "CacheStorage",
+]);
+
 function copyDirIfExists(sourcePath: string, targetPath: string): void {
   if (!fs.existsSync(sourcePath)) {
     return;
@@ -257,6 +266,10 @@ function copyDirIfExists(sourcePath: string, targetPath: string): void {
   fs.cpSync(sourcePath, targetPath, {
     recursive: true,
     force: true,
+    filter: (src) => {
+      const segments = src.split(path.sep);
+      return !segments.some((seg) => COPY_EXCLUDE_SEGMENTS.has(seg));
+    },
   });
 }
 
