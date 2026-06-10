@@ -145,7 +145,7 @@ Delivered:
 |-------|--------------|-------|
 | C | `getMe` probe blocks persisting terminally-invalid bot tokens (network failure = warn-and-save) | openclaw-dashboard#115 |
 | B2 | `gateway-watchdog.sh` hourly cron on both hosts: revives non-zero exits (max 3/run, 20 s stagger), skips terminal signatures, records to state file | `scripts/ops/gateway-watchdog.sh`, commit `abc1c6c5cd` |
-| B3 | `mem_limit: 1g` + `cpus: 1.0` per gateway in the shared compose | `docker-compose.yml`, commit `abc1c6c5cd` |
+| B3 | **REVERTED same day**: 1g cap OOM-crash-cycled the EU fleet on rollout (V8 FatalProcessOutOfMemory during boot despite 248–440 MiB steady RSS). Retry requires `NODE_OPTIONS=--max-old-space-size` below the cap + testingbot canary | `docker-compose.yml` (revert commit) |
 | A | Terminal-error circuit in the gateway (pause + hourly re-probe + `terminalError` in snapshot) | openclaw#58 |
 | D | Diagnostic: restart-delta keyed on container ID, >5 MB/h log-rate flag, watchdog-state folding, terminal-pause signature | `agents_server_diagnostic.sh` (this commit) |
 
