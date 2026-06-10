@@ -1118,24 +1118,6 @@ export function emitInternalDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false, { internal: true });
 }
 
-/**
- * Emit an internal, untrusted event that additionally carries `privateData` to
- * trusted listeners only. The event payload reaches public subscribers exactly
- * as the matching {@link emitInternalDiagnosticEvent} call would; the
- * `privateData` argument is withheld from them by {@link dispatchDiagnosticEvent}.
- * Used for lifecycle events (`session.state` / `message.queued`) that must keep
- * their public payload unchanged but forward opt-in attribution
- * (`clientContext`) to trusted observers via {@link onTrustedInternalDiagnosticEvent}
- * — the grant-backed channel diagnostics exporters receive through
- * `ctx.internalDiagnostics.onEvent`.
- */
-export function emitInternalDiagnosticEventWithPrivateData(
-  event: DiagnosticEventInput,
-  privateData: DiagnosticEventPrivateData,
-) {
-  emitDiagnosticEventWithTrust(event, false, { internal: true, privateData });
-}
-
 /** Returns the latest diagnostic event sequence number assigned in this process. */
 export function getInternalDiagnosticEventSequence(): number {
   return getDiagnosticEventsState().seq;

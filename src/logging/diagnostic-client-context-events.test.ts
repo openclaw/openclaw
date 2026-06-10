@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { normalizeDiagnosticClientContext } from "../infra/diagnostic-client-context.js";
+import {
+  getDiagnosticRunClientContext,
+  normalizeDiagnosticClientContext,
+  resetDiagnosticRunClientContextForTest,
+  setDiagnosticRunClientContext,
+} from "../infra/diagnostic-client-context.js";
 import {
   onDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -13,12 +18,53 @@ import {
   logMessageQueued,
   logSessionStateChange,
   resetDiagnosticStateForTest,
-  setDiagnosticSessionClientContext,
 } from "./diagnostic.js";
 
 const UPSTREAM = normalizeDiagnosticClientContext({
   schemaVersion: "agentweave.context.v1",
   agentId: "Conductor",
+});
+
+describe("runId-keyed clientContext seed store", () => {
+  beforeEach(() => {
+    resetDiagnosticRunClientContextForTest();
+  });
+
+  afterEach(() => {
+    resetDiagnosticRunClientContextForTest();
+  });
+
+  it("resolves a seeded bag by the same runId", () => {
+    setDiagnosticRunClientContext("run-a", UPSTREAM);
+    expect(getDiagnosticRunClientContext("run-a")).toEqual(UPSTREAM);
+    expect(getDiagnosticRunClientContext("run-b")).toBeUndefined();
+  });
+
+  it("keeps concurrent same-session runs isolated by runId", () => {
+    // Two runs share a session id/key but get distinct runIds. The session id
+    // is reusable; the runId is not — so seeding run B must not clobber run A,
+    // the exact race the session-scoped slot used to lose.
+    const runA = normalizeDiagnosticClientContext({ agentId: "RunA" });
+    const runB = normalizeDiagnosticClientContext({ agentId: "RunB" });
+    setDiagnosticRunClientContext("run-a", runA);
+    setDiagnosticRunClientContext("run-b", runB);
+
+    expect(getDiagnosticRunClientContext("run-a")).toEqual(runA);
+    expect(getDiagnosticRunClientContext("run-b")).toEqual(runB);
+  });
+
+  it("clears a run's bag when reseeded with undefined", () => {
+    setDiagnosticRunClientContext("run-a", UPSTREAM);
+    setDiagnosticRunClientContext("run-a", undefined);
+    expect(getDiagnosticRunClientContext("run-a")).toBeUndefined();
+  });
+
+  it("never seeds when the bag normalizes to undefined (out of bounds)", () => {
+    const oversized = normalizeDiagnosticClientContext({ blob: "x".repeat(9000) });
+    expect(oversized).toBeUndefined();
+    setDiagnosticRunClientContext("run-a", oversized);
+    expect(getDiagnosticRunClientContext("run-a")).toBeUndefined();
+  });
 });
 
 type Capture = {
@@ -34,8 +80,6 @@ function capture(run: () => void): Capture {
   const stopPublic = onDiagnosticEvent((event) => {
     publicEvents.push(event);
   });
-  // The grant-backed trusted channel (exposed to diagnostics exporters via
-  // `ctx.internalDiagnostics.onEvent`) is the only path that receives privateData.
   const stopTrusted = onTrustedInternalDiagnosticEvent(
     (event, _metadata, privateData: DiagnosticEventPrivateData) => {
       trusted.push({ type: event.type, clientContext: privateData.clientContext });
@@ -50,51 +94,28 @@ function capture(run: () => void): Capture {
   return { publicEvents, trusted };
 }
 
-describe("clientContext propagation onto diagnostic events", () => {
+describe("lifecycle events no longer carry clientContext", () => {
   beforeEach(() => {
     setDiagnosticsEnabledForProcess(true);
     resetDiagnosticStateForTest();
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
+    resetDiagnosticRunClientContextForTest();
   });
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticRunClientContextForTest();
     setDiagnosticsEnabledForProcess(false);
   });
 
-  it("delivers seeded clientContext as privateData on session.state, never on the public payload", () => {
+  // Regression: clientContext used to ride session.state / message.queued via a
+  // session-scoped slot. It now rides the model.call event's privateData keyed
+  // by runId, so the lifecycle events must carry no clientContext on either the
+  // public payload or the trusted privateData channel — even with a run seeded.
+  it("emits session.state / message.queued without clientContext, seeded or not", () => {
     const { publicEvents, trusted } = capture(() => {
-      setDiagnosticSessionClientContext(
-        { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" },
-        UPSTREAM,
-      );
-      logSessionStateChange({
-        sessionId: "s1",
-        sessionKey: "agent:main:paperclip-conductor",
-        state: "processing",
-      });
-    });
-
-    // Trusted observer gets the bag.
-    expect(trusted).toEqual([{ type: "session.state", clientContext: UPSTREAM }]);
-    // Public observer still sees the lifecycle event, but with no clientContext.
-    const publicState = publicEvents.find((event) => event.type === "session.state");
-    expect(publicState).toBeDefined();
-    expect((publicState as Record<string, unknown>).clientContext).toBeUndefined();
-    expect(JSON.stringify(publicEvents)).not.toContain("Conductor");
-  });
-
-  it("lets a later message.queued inherit seeded clientContext on the trusted channel", () => {
-    const { trusted } = capture(() => {
-      // The gateway handler seeds context keyed by sessionKey before the run
-      // emits anything. setActiveEmbeddedRun then emits session.state (with
-      // sessionKey), and the queue path emits message.queued by sessionId only
-      // — both inherit the seeded context from the shared session state.
-      setDiagnosticSessionClientContext(
-        { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" },
-        UPSTREAM,
-      );
+      setDiagnosticRunClientContext("run-a", UPSTREAM);
       logSessionStateChange({
         sessionId: "s1",
         sessionKey: "agent:main:paperclip-conductor",
@@ -103,60 +124,13 @@ describe("clientContext propagation onto diagnostic events", () => {
       logMessageQueued({ sessionId: "s1", source: "pi-embedded-runner" });
     });
 
-    expect(trusted).toEqual([
-      { type: "session.state", clientContext: UPSTREAM },
-      { type: "message.queued", clientContext: UPSTREAM },
-    ]);
-  });
-
-  it("clears stale clientContext when a later same-session run supplies none", () => {
-    const ref = { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" };
-    const { trusted } = capture(() => {
-      // First run seeds upstream context.
-      setDiagnosticSessionClientContext(ref, UPSTREAM);
-      // Later run on the same (reused) diagnostic session has no context.
-      setDiagnosticSessionClientContext(ref, undefined);
-      logSessionStateChange({ ...ref, state: "processing" });
-      logMessageQueued({ sessionId: "s1", source: "dispatch" });
-    });
-
-    for (const entry of trusted) {
-      expect(entry.clientContext).toBeUndefined();
-    }
-  });
-
-  it("clears stale clientContext when a later same-session run is out of bounds", () => {
-    const ref = { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" };
-    // An oversized / invalid bag normalizes to undefined (whole-bag drop).
-    const oversized = normalizeDiagnosticClientContext({ blob: "x".repeat(9000) });
-    expect(oversized).toBeUndefined();
-
-    const { trusted } = capture(() => {
-      setDiagnosticSessionClientContext(ref, UPSTREAM);
-      setDiagnosticSessionClientContext(ref, oversized);
-      logSessionStateChange({ ...ref, state: "processing" });
-    });
-
-    const stateEntry = trusted.find((entry) => entry.type === "session.state");
-    expect(stateEntry).toBeDefined();
-    expect(stateEntry?.clientContext).toBeUndefined();
-  });
-
-  it("omits clientContext for sessions without an upstream context", () => {
-    const { publicEvents, trusted } = capture(() => {
-      logSessionStateChange({
-        sessionId: "s2",
-        sessionKey: "agent:main:main",
-        state: "processing",
-      });
-      logMessageQueued({ sessionId: "s2", sessionKey: "agent:main:main", source: "dispatch" });
-    });
-
     for (const entry of trusted) {
       expect(entry.clientContext).toBeUndefined();
     }
     for (const event of publicEvents) {
       expect((event as Record<string, unknown>).clientContext).toBeUndefined();
     }
+    expect(JSON.stringify(publicEvents)).not.toContain("Conductor");
+    expect(JSON.stringify(trusted)).not.toContain("Conductor");
   });
 });

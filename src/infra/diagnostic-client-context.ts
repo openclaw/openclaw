@@ -128,3 +128,48 @@ export function normalizeDiagnosticClientContext(
   }
   return deepFreeze(normalized) as DiagnosticClientContext;
 }
+
+/**
+ * Retained attribution bags, keyed by the run's unique `runId`. A runId — unlike
+ * a session id/key — is never reused, so a run's `model.call` spans resolve their
+ * own seed even while a sibling run for the same session is concurrently active.
+ * Insertion-ordered eviction bounds memory: a long-lived gateway process retains
+ * at most the most-recent {@link MAX_RETAINED_RUN_CLIENT_CONTEXTS} runs without
+ * needing explicit per-run teardown.
+ */
+const MAX_RETAINED_RUN_CLIENT_CONTEXTS = 1024;
+const runClientContexts = new Map<string, DiagnosticClientContext>();
+
+/**
+ * Seed (or clear) the attribution bag for a single run. Passing `undefined`
+ * removes any entry, so a reused runId slot never resolves a stale bag.
+ */
+export function setDiagnosticRunClientContext(
+  runId: string,
+  clientContext: DiagnosticClientContext | undefined,
+): void {
+  if (!clientContext) {
+    runClientContexts.delete(runId);
+    return;
+  }
+  // Refresh insertion order so the most-recently-seeded run survives eviction.
+  runClientContexts.delete(runId);
+  runClientContexts.set(runId, clientContext);
+  while (runClientContexts.size > MAX_RETAINED_RUN_CLIENT_CONTEXTS) {
+    const oldest = runClientContexts.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    runClientContexts.delete(oldest);
+  }
+}
+
+/** Resolve the attribution bag seeded for a run, or `undefined` when none. */
+export function getDiagnosticRunClientContext(runId: string): DiagnosticClientContext | undefined {
+  return runClientContexts.get(runId);
+}
+
+/** Test-only: drop all retained run attribution bags. */
+export function resetDiagnosticRunClientContextForTest(): void {
+  runClientContexts.clear();
+}

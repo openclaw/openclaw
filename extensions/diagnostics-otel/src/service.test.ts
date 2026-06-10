@@ -4528,23 +4528,13 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("stamps openclaw.client.* from seeded session.state clientContext onto model.call span", async () => {
+  test("stamps openclaw.client.* from the model.call event's own clientContext privateData", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);
 
-    // Seed clientContext for sess-1 via a session.state event on the trusted private-data channel.
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "session.state",
-        sessionId: "sess-1",
-        sessionKey: "agent:main:sess-1",
-        state: "processing",
-      },
-      { clientContext: { agentId: "Conductor" } },
-    );
-
-    // Emit a model.call.completed for the same session — no clientContext on this event.
+    // The bag rides the model.call event's own trusted privateData (seeded in core
+    // keyed by runId), so the exporter stamps it directly without a session cache.
     emitTrustedDiagnosticEventWithPrivateData(
       {
         type: "model.call.completed",
@@ -4556,7 +4546,7 @@ describe("diagnostics-otel service", () => {
         model: "claude-opus-4-6",
         durationMs: 120,
       },
-      {},
+      { clientContext: { agentId: "Conductor" } },
     );
     await flushDiagnosticEvents();
 
@@ -4566,8 +4556,56 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("model.call span has no openclaw.client.* when no session.state clientContext was seeded", async () => {
-    // Fresh service instance — no seeded clientContext for sess-2.
+  test("two concurrent runs on the same session each keep their own clientContext", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    // Both runs share one sessionId/sessionKey but carry distinct per-run bags. A
+    // session-keyed cache would have collapsed them; runId-scoped privateData keeps
+    // each model.call span attributed to its own caller.
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        runId: "run-A",
+        callId: "call-A",
+        sessionId: "sess-shared",
+        sessionKey: "agent:main:sess-shared",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        durationMs: 100,
+      },
+      { clientContext: { agentId: "RunA" } },
+    );
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        runId: "run-B",
+        callId: "call-B",
+        sessionId: "sess-shared",
+        sessionKey: "agent:main:sess-shared",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        durationMs: 100,
+      },
+      { clientContext: { agentId: "RunB" } },
+    );
+    await flushDiagnosticEvents();
+
+    const stamped = telemetryState.spans
+      .filter((span) => span.name === "openclaw.model.call")
+      .map(
+        (span) =>
+          (span.setAttributes.mock.calls[0]?.[0] as Record<string, unknown> | undefined)?.[
+            "openclaw.client.agentId"
+          ],
+      );
+    expect(stamped).toEqual(expect.arrayContaining(["RunA", "RunB"]));
+
+    await service.stop?.(ctx);
+  });
+
+  test("model.call span has no openclaw.client.* when the event carries no clientContext", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);

@@ -18,12 +18,13 @@ OpenClaw diagnostics OpenTelemetry exporter for metrics and traces.
 
 A Gateway `agent` request (or SDK `runs.create`) may carry an opaque
 `clientContext` bag — a caller-supplied attribution identity such as an
-orchestrator or parent task. The Gateway seeds it onto the run's diagnostic
-session state and forwards it to **trusted** diagnostic observers over the
-private-data channel; it never appears in any public diagnostic event payload.
+orchestrator or parent task. The Gateway seeds it keyed by the run's unique
+`runId`, and core attaches it to that run's `model.call` diagnostic events on
+the **trusted** private-data channel; it never appears in any public diagnostic
+event payload.
 
-This exporter reads that bag and stamps each key onto the run's `model.call`
-spans as a generic `openclaw.client.<key>` attribute:
+This exporter reads `privateData.clientContext` off each `model.call` event and
+stamps each key onto the span as a generic `openclaw.client.<key>` attribute:
 
 - Scalars (string/number/boolean) are set directly; strings are length-bounded.
 - Nested values are JSON-encoded and bounded.
@@ -33,10 +34,11 @@ Keys are vendor-neutral — neither core nor the exporter interprets them. A
 downstream OTel Collector is expected to rename them (e.g.
 `openclaw.client.agentId` → `prov.agent.id`).
 
-Attribution is scoped to the seeding run: when a session id or key is later
-**reused by an unseeded run**, the cached bag is cleared, so a subsequent
-`model.call` span carries no `openclaw.client.*` attributes rather than the
-previous caller's identity.
+Attribution is scoped by `runId`, not by session: a `runId` is never reused, so
+each run's `model.call` spans carry exactly the bag seeded for that run. A
+sibling run admitted on the same session while the first is still active cannot
+overwrite it, and a run that supplies no `clientContext` produces spans with no
+`openclaw.client.*` attributes rather than another run's identity.
 
 ### What to put in `clientContext`
 

@@ -33,6 +33,7 @@ import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-e
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
   DiagnosticTraceContext,
   OpenClawPluginService,
 } from "../api.js";
@@ -42,11 +43,7 @@ import {
   isValidDiagnosticTraceId,
   redactSensitiveText,
 } from "../api.js";
-import {
-  assignClientContextAttributes,
-  clientContextKeys,
-  createClientContextCache,
-} from "./client-context-attributes.js";
+import { assignClientContextAttributes } from "./client-context-attributes.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
@@ -1265,7 +1262,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         { spanContext: SpanContext; token: symbol; owner?: TrustedSpanAliasOwner }
       >();
       const retainedTrustedSpanContextCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
-      const clientContextCache = createClientContextCache();
       stopActiveTrustedSpans = () => {
         const stopAt = Date.now();
         for (const handle of retainedTrustedSpanContextCleanupTimers) {
@@ -1281,7 +1277,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         activeTrustedSpans.clear();
         activeTrustedSpanAliases.clear();
-        clientContextCache.clear();
       };
 
       const tokensCounter = meter.createCounter("openclaw.tokens", {
@@ -2864,6 +2859,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordModelCallStarted = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
         metadata: DiagnosticEventMetadata,
+        clientContext: DiagnosticEventPrivateData["clientContext"],
       ) => {
         if (!tracesEnabled || !metadata.trusted) {
           return;
@@ -2879,14 +2875,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.transport) {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
-        // Stamp the seeded clientContext (captured from session.state/message.queued)
-        // onto the span at creation. This is best-effort: if model.call.started races
-        // ahead of the seed event it misses here, but recordModelCallCompleted/Error
-        // re-resolve from the same cache, so attribution still lands on the finished span.
-        assignClientContextAttributes(
-          spanAttrs,
-          clientContextCache.resolve(clientContextKeys(evt)),
-        );
+        // The seeded clientContext rides this run's own model.call privateData
+        // (keyed by runId in core), so it is present deterministically here rather
+        // than resolved from a session-keyed cache that a sibling run could clobber.
+        assignClientContextAttributes(spanAttrs, clientContext);
         trackTrustedSpan(
           evt,
           metadata,
@@ -2901,7 +2893,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordModelCallCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" }>,
         metadata: DiagnosticEventMetadata,
-        modelContent?: OtelModelCallContent,
+        modelContent: OtelModelCallContent | undefined,
+        clientContext: DiagnosticEventPrivateData["clientContext"],
       ) => {
         const metricAttrs = modelCallMetricAttrs(evt);
         modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
@@ -2926,10 +2919,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
-        assignClientContextAttributes(
-          spanAttrs,
-          clientContextCache.resolve(clientContextKeys(evt)),
-        );
+        assignClientContextAttributes(spanAttrs, clientContext);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
@@ -2945,7 +2935,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordModelCallError = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.error" }>,
         metadata: DiagnosticEventMetadata,
-        modelContent?: OtelModelCallContent,
+        modelContent: OtelModelCallContent | undefined,
+        clientContext: DiagnosticEventPrivateData["clientContext"],
       ) => {
         const errorType = lowCardinalityAttr(evt.errorCategory, "other");
         const metricAttrs = {
@@ -2982,10 +2973,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
-        assignClientContextAttributes(
-          spanAttrs,
-          clientContextCache.resolve(clientContextKeys(evt)),
-        );
+        assignClientContextAttributes(spanAttrs, clientContext);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
@@ -3352,7 +3340,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordWebhookError(evt);
               return;
             case "message.queued":
-              clientContextCache.remember(clientContextKeys(evt), privateData.clientContext);
               recordMessageQueued(evt);
               return;
             case "message.received":
@@ -3386,7 +3373,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordLaneDequeue(evt);
               return;
             case "session.state":
-              clientContextCache.remember(clientContextKeys(evt), privateData.clientContext);
               recordSessionState(evt);
               return;
             case "session.long_running":
@@ -3437,13 +3423,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordContextAssembled(evt, metadata);
               return;
             case "model.call.started":
-              recordModelCallStarted(evt, metadata);
+              recordModelCallStarted(evt, metadata, privateData.clientContext);
               return;
             case "model.call.completed":
-              recordModelCallCompleted(evt, metadata, privateData.modelContent);
+              recordModelCallCompleted(
+                evt,
+                metadata,
+                privateData.modelContent,
+                privateData.clientContext,
+              );
               return;
             case "model.call.error":
-              recordModelCallError(evt, metadata, privateData.modelContent);
+              recordModelCallError(
+                evt,
+                metadata,
+                privateData.modelContent,
+                privateData.clientContext,
+              );
               return;
             case "tool.execution.started":
               recordToolExecutionStarted(evt, metadata);

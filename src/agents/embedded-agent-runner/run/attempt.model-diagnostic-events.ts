@@ -2,6 +2,7 @@
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
+import { getDiagnosticRunClientContext } from "../../../infra/diagnostic-client-context.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorFailureKind,
@@ -11,6 +12,7 @@ import {
   areDiagnosticsEnabledForProcess,
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
+  type DiagnosticEventPrivateData,
   type DiagnosticModelCallContent,
   type DiagnosticMemoryUsage,
   emitTrustedDiagnosticEventWithPrivateData,
@@ -291,8 +293,25 @@ function baseModelCallEvent(
   };
 }
 
-function modelContentPrivateData(modelContent: DiagnosticModelCallContent | undefined) {
-  return modelContent ? { modelContent } : undefined;
+/**
+ * Build the trusted privateData for a model.call event: the captured model
+ * content plus, when the run was seeded, the caller's opaque clientContext bag.
+ * Resolved by `runId` (not session id/key) so a run always carries its own
+ * attribution even while a sibling run for the same session is concurrently
+ * active. Stays `undefined` when neither is present, preserving the prior shape.
+ */
+function modelCallPrivateData(
+  eventBase: ModelCallEventBase,
+  modelContent: DiagnosticModelCallContent | undefined,
+): DiagnosticEventPrivateData | undefined {
+  const clientContext = getDiagnosticRunClientContext(eventBase.runId);
+  if (!modelContent && !clientContext) {
+    return undefined;
+  }
+  return {
+    ...(modelContent ? { modelContent } : {}),
+    ...(clientContext ? { clientContext } : {}),
+  };
 }
 
 function modelCallCompletedContent(state: ModelCallObservationState) {
@@ -409,7 +428,7 @@ function emitModelCallStarted(
       type: "model.call.started",
       ...eventBase,
     },
-    modelContentPrivateData(modelContent),
+    modelCallPrivateData(eventBase, modelContent),
   );
   dispatchModelCallStartedHook(eventBase);
 }
@@ -428,7 +447,7 @@ function emitModelCallCompleted(
       durationMs,
       ...sizeTimingFields,
     },
-    modelContentPrivateData(modelCallCompletedContent(state)),
+    modelCallPrivateData(eventBase, modelCallCompletedContent(state)),
   );
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
@@ -453,7 +472,7 @@ function emitModelCallError(
       ...sizeTimingFields,
       ...fields,
     },
-    modelContentPrivateData(modelCallCompletedContent(state)),
+    modelCallPrivateData(eventBase, modelCallCompletedContent(state)),
   );
   dispatchModelCallEndedHook(eventBase, {
     durationMs,

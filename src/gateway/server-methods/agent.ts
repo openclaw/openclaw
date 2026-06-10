@@ -71,7 +71,10 @@ import {
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { normalizeDiagnosticClientContext } from "../../infra/diagnostic-client-context.js";
+import {
+  normalizeDiagnosticClientContext,
+  setDiagnosticRunClientContext,
+} from "../../infra/diagnostic-client-context.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -84,7 +87,6 @@ import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
-import { setDiagnosticSessionClientContext } from "../../logging/diagnostic.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
@@ -2525,12 +2527,13 @@ export const agentHandlers: GatewayRequestHandlers = {
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
 
-          // Seed any caller-supplied opaque context onto this run's diagnostic
-          // session state, keyed by the same session the run uses, so every
-          // message.queued / session.state event the run emits carries it for
-          // plugins to interpret. No-op when absent or out of bounds.
-          setDiagnosticSessionClientContext(
-            { sessionKey: resolvedSessionKey, sessionId: resolvedSessionId },
+          // Seed any caller-supplied opaque context for this run, keyed by its
+          // unique runId, so the run's model.call spans can carry it for plugins
+          // to interpret. runId (not the reusable session id/key) keys the seed,
+          // so a concurrently-admitted sibling run for the same session cannot
+          // clobber this run's attribution. No-op when absent or out of bounds.
+          setDiagnosticRunClientContext(
+            runId,
             normalizeDiagnosticClientContext(request.clientContext),
           );
 

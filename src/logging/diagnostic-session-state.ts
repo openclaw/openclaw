@@ -1,13 +1,10 @@
 // Process-local session-state tracker used by diagnostic stuck-session detection.
-import type { DiagnosticClientContext } from "../infra/diagnostic-client-context.js";
-
 export type SessionStateValue = "idle" | "processing" | "waiting";
 
 /** Mutable diagnostic state for one session key or id. */
 export type SessionState = {
   sessionId?: string;
   sessionKey?: string;
-  clientContext?: DiagnosticClientContext;
   sessionFile?: string;
   lastActivity: number;
   generation?: number;
@@ -110,7 +107,6 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
     sessionStatePriority(source.state) > sessionStatePriority(target.state);
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
-  target.clientContext ??= source.clientContext;
   if (source.sessionFile && (sourceIsNewer || !target.sessionFile)) {
     target.sessionFile = source.sessionFile;
   }

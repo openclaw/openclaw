@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assignClientContextAttributes,
-  clientContextKeys,
-  createClientContextCache,
-} from "./client-context-attributes.js";
+import { assignClientContextAttributes } from "./client-context-attributes.js";
 
 describe("assignClientContextAttributes", () => {
   it("no-ops on undefined context", () => {
@@ -52,104 +48,5 @@ describe("assignClientContextAttributes", () => {
     assignClientContextAttributes(attrs, { obj: {}, arr: [] });
     expect(attrs["openclaw.client.obj"]).toBe("{}");
     expect(attrs["openclaw.client.arr"]).toBe("[]");
-  });
-});
-
-describe("clientContextKeys", () => {
-  it("namespaces sessionId as id: and sessionKey as key:, dropping absent fields", () => {
-    expect(clientContextKeys({ sessionId: "sid", sessionKey: "skey" })).toEqual([
-      "id:sid",
-      "key:skey",
-    ]);
-    expect(clientContextKeys({ sessionKey: "skey" })).toEqual(["key:skey"]);
-    expect(clientContextKeys({})).toEqual([]);
-  });
-
-  it("keeps the two identity spaces disjoint when an id equals a key", () => {
-    // A run whose sessionId == another run's sessionKey must not share a cache slot.
-    const asId = clientContextKeys({ sessionId: "shared" });
-    const asKey = clientContextKeys({ sessionKey: "shared" });
-    expect(asId).toEqual(["id:shared"]);
-    expect(asKey).toEqual(["key:shared"]);
-    expect(asId[0]).not.toBe(asKey[0]);
-  });
-});
-
-describe("createClientContextCache", () => {
-  it("resolves a bag stored under sessionId via the sessionKey candidate (cross-field join)", () => {
-    const cache = createClientContextCache();
-    // Seed event populated only sessionId; model-call lookup offers sessionKey too.
-    cache.remember(["sid-1"], { agentId: "Conductor" });
-    expect(cache.resolve(["sid-1"])).toEqual({ agentId: "Conductor" });
-  });
-
-  it("stores under every candidate key so either field joins", () => {
-    const cache = createClientContextCache();
-    cache.remember(["sid-1", "skey-1"], { agentId: "Paperclip" });
-    expect(cache.resolve(["skey-1"])).toEqual({ agentId: "Paperclip" });
-    expect(cache.resolve(["sid-1"])).toEqual({ agentId: "Paperclip" });
-  });
-
-  it("returns undefined on miss, empty keys, or empty bag", () => {
-    const cache = createClientContextCache();
-    expect(cache.resolve(["nope"])).toBeUndefined();
-    expect(cache.resolve([])).toBeUndefined();
-    cache.remember([], { agentId: "x" });
-    cache.remember(["k"], undefined);
-    expect(cache.resolve(["k"])).toBeUndefined();
-  });
-
-  it("evicts oldest entries past the bound", () => {
-    const cache = createClientContextCache(2);
-    cache.remember(["a"], { n: 1 });
-    cache.remember(["b"], { n: 2 });
-    cache.remember(["c"], { n: 3 });
-    expect(cache.resolve(["a"])).toBeUndefined();
-    expect(cache.resolve(["b"])).toEqual({ n: 2 });
-    expect(cache.resolve(["c"])).toEqual({ n: 3 });
-  });
-
-  it("clear() drops everything", () => {
-    const cache = createClientContextCache();
-    cache.remember(["a"], { n: 1 });
-    cache.clear();
-    expect(cache.resolve(["a"])).toBeUndefined();
-  });
-
-  it("does not let one run's sessionId collide with another run's sessionKey", () => {
-    const cache = createClientContextCache();
-    // Run A is keyed by its sessionId; run B by its sessionKey — same raw string.
-    const runAKeys = clientContextKeys({ sessionId: "shared" });
-    const runBKeys = clientContextKeys({ sessionKey: "shared" });
-    cache.remember(runAKeys, { agentId: "RunA" });
-    cache.remember(runBKeys, { agentId: "RunB" });
-    // Each run resolves to its own bag; the shared raw string does not cross over.
-    expect(cache.resolve(runAKeys)).toEqual({ agentId: "RunA" });
-    expect(cache.resolve(runBKeys)).toEqual({ agentId: "RunB" });
-  });
-
-  it("clearing one run's identity space leaves the colliding run intact", () => {
-    const cache = createClientContextCache();
-    const runAKeys = clientContextKeys({ sessionId: "shared" });
-    const runBKeys = clientContextKeys({ sessionKey: "shared" });
-    cache.remember(runAKeys, { agentId: "RunA" });
-    cache.remember(runBKeys, { agentId: "RunB" });
-    // Run B is reused unseeded: its bag is dropped, run A (same raw string) survives.
-    cache.remember(runBKeys, undefined);
-    expect(cache.resolve(runBKeys)).toBeUndefined();
-    expect(cache.resolve(runAKeys)).toEqual({ agentId: "RunA" });
-  });
-
-  it("drops a seeded bag when the same session is reused without context", () => {
-    const cache = createClientContextCache();
-    // Seeded run: lifecycle event carried clientContext for these aliases.
-    cache.remember(["sid-1", "skey-1"], { agentId: "Conductor" });
-    expect(cache.resolve(["skey-1"])).toEqual({ agentId: "Conductor" });
-    // Reused/unseeded run on the same sessionId/sessionKey: lifecycle event now
-    // arrives with no clientContext. The stale bag must be evicted so the next
-    // model.call span is not misattributed to the previous caller.
-    cache.remember(["sid-1", "skey-1"], undefined);
-    expect(cache.resolve(["sid-1"])).toBeUndefined();
-    expect(cache.resolve(["skey-1"])).toBeUndefined();
   });
 });
