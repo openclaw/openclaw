@@ -603,7 +603,8 @@ function isSupersededTargetRefFailure(
 ): boolean {
   const isTargetRefProbe = step.name.startsWith("git rev-parse ");
   const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
-  if (!isTargetRefProbe && !isTargetTagFetch) {
+  const isUpstreamProbe = step.name === "upstream check";
+  if (!isTargetRefProbe && !isTargetTagFetch && !isUpstreamProbe) {
     return false;
   }
   return followingSteps.some(
@@ -973,24 +974,65 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         preflightBaseSha = targetSha;
         candidatesLocal = [targetSha];
       } else {
-        const upstreamRef = needsCheckoutMain ? `${DEV_BRANCH}@{upstream}` : "@{upstream}";
-        const upstreamStep = await runStep(
-          step(
-            "upstream check",
-            [
-              "git",
-              "-C",
+        let remoteBranchRefs: string[] = [];
+        if (needsCheckoutMain) {
+          const remoteStep = await runStep(
+            step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
+          );
+          steps.push(remoteStep);
+          if (remoteStep.exitCode === 0) {
+            remoteBranchRefs = normalizeStringEntries(
+              (remoteStep.stdoutTail ?? "").split("\n"),
+            ).map((remote) => `refs/remotes/${remote}/${DEV_BRANCH}`);
+          }
+        }
+        const upstreamRefs = needsCheckoutMain
+          ? [`${DEV_BRANCH}@{upstream}`, ...remoteBranchRefs]
+          : ["@{upstream}"];
+        let upstreamSha: string | null = null;
+        let sawResolvableUpstreamRef = false;
+        for (const upstreamRef of upstreamRefs) {
+          if (upstreamRef.endsWith("@{upstream}")) {
+            const upstreamStep = await runStep(
+              step(
+                "upstream check",
+                [
+                  "git",
+                  "-C",
+                  gitRoot,
+                  "rev-parse",
+                  "--abbrev-ref",
+                  "--symbolic-full-name",
+                  upstreamRef,
+                ],
+                gitRoot,
+              ),
+            );
+            steps.push(upstreamStep);
+            if (upstreamStep.exitCode !== 0) {
+              continue;
+            }
+            sawResolvableUpstreamRef = true;
+          }
+
+          const upstreamShaStep = await runStep(
+            step(
+              `git rev-parse ${upstreamRef}`,
+              ["git", "-C", gitRoot, "rev-parse", upstreamRef],
               gitRoot,
-              "rev-parse",
-              "--abbrev-ref",
-              "--symbolic-full-name",
-              upstreamRef,
-            ],
-            gitRoot,
-          ),
-        );
-        steps.push(upstreamStep);
-        if (upstreamStep.exitCode !== 0) {
+            ),
+          );
+          steps.push(upstreamShaStep);
+          const candidateSha = upstreamShaStep.stdoutTail?.trim();
+          if (upstreamShaStep.exitCode === 0 && candidateSha) {
+            upstreamSha = candidateSha;
+            break;
+          }
+          if (upstreamShaStep.exitCode === 0) {
+            sawResolvableUpstreamRef = true;
+          }
+        }
+        if (!upstreamSha && !sawResolvableUpstreamRef) {
           return {
             status: "skipped",
             mode: "git",
@@ -1001,17 +1043,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             durationMs: Date.now() - startedAt,
           };
         }
-
-        const upstreamShaStep = await runStep(
-          step(
-            `git rev-parse ${upstreamRef}`,
-            ["git", "-C", gitRoot, "rev-parse", upstreamRef],
-            gitRoot,
-          ),
-        );
-        steps.push(upstreamShaStep);
-        const upstreamSha = upstreamShaStep.stdoutTail?.trim();
-        if (!upstreamShaStep.stdoutTail || !upstreamSha) {
+        if (!upstreamSha) {
           return {
             status: "error",
             mode: "git",

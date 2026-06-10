@@ -466,6 +466,52 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("uses fetched origin main for dev preflight before local main exists", async () => {
+    await setupGitPackageManagerFixture();
+    const upstreamSha = "upstream123";
+    const beforeGitMutation = vi.fn(async () => {
+      calls.push("beforeGitMutation");
+    });
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses({ branch: "feature" }),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`]: {
+        code: 1,
+        stderr: "no upstream configured for branch 'main'",
+      },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} rev-parse refs/remotes/origin/main`]: { stdout: upstreamSha },
+      [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
+        stdout: `${upstreamSha}\n`,
+      },
+      "pnpm --version": { stdout: "10.0.0" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+    });
+
+    const result = await runWithRunner(runner, { channel: "dev", beforeGitMutation });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(
+      `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`,
+    );
+    expect(calls).toContain(`git -C ${tempDir} remote`);
+    expect(calls).toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
+    expect(calls).toContain(`git -C ${tempDir} checkout main`);
+    expect(calls).toContain(`git -C ${tempDir} rebase ${upstreamSha}`);
+    const cleanupIndex = calls.findIndex(
+      (call) =>
+        call.startsWith(`git -C ${tempDir} worktree remove --force `) &&
+        preflightPrefixPattern.test(call),
+    );
+    expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf("beforeGitMutation")).toBeGreaterThan(cleanupIndex);
+    expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
+      calls.indexOf(`git -C ${tempDir} checkout main`),
+    );
+  });
+
   it("fetches only the requested tag for explicit dev tag target refs", async () => {
     await setupGitPackageManagerFixture();
     const targetSha = "2222222222222222222222222222222222222222";
