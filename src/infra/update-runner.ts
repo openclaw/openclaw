@@ -931,6 +931,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
       let preflightBaseSha: string | null;
       let candidatesLocal: string[];
+      let selectedDevUpstream: string | null = null;
       if (devTargetRef) {
         let targetSha: string | null = null;
         for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
@@ -1040,6 +1041,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           const candidateSha = upstreamShaStep.stdoutTail?.trim();
           if (upstreamShaStep.exitCode === 0 && candidateSha) {
             upstreamSha = candidateSha;
+            const remoteBranchMatch = /^refs\/remotes\/(.+)$/u.exec(upstreamRef);
+            selectedDevUpstream = remoteBranchMatch?.[1] ?? null;
             break;
           }
           if (upstreamShaStep.exitCode === 0) {
@@ -1327,6 +1330,24 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             return failure;
           }
           checkedOutSelectedSha = localMainStep.exitCode !== 0;
+          if (checkedOutSelectedSha && selectedDevUpstream) {
+            const upstreamFailure = await runRequiredGitStep(
+              `git branch --set-upstream-to ${selectedDevUpstream} ${DEV_BRANCH}`,
+              [
+                "git",
+                "-C",
+                gitRoot,
+                "branch",
+                "--set-upstream-to",
+                selectedDevUpstream,
+                DEV_BRANCH,
+              ],
+              "checkout-failed",
+            );
+            if (upstreamFailure) {
+              return upstreamFailure;
+            }
+          }
         }
         if (checkedOutSelectedSha) {
           steps.push({

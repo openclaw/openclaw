@@ -567,6 +567,9 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} checkout -B main ${selectedSha}`) {
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (key === `git -C ${tempDir} branch --set-upstream-to origin/main main`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
       return { stdout: "", stderr: "", code: 0 };
     };
 
@@ -580,6 +583,7 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
     expect(calls).toContain(`git -C ${tempDir} show-ref --verify refs/heads/main`);
     expect(calls).toContain(`git -C ${tempDir} checkout -B main ${selectedSha}`);
+    expect(calls).toContain(`git -C ${tempDir} branch --set-upstream-to origin/main main`);
     expect(calls).not.toContain(`git -C ${tempDir} checkout main`);
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${upstreamSha}`);
     const cleanupIndex = calls.findIndex(
