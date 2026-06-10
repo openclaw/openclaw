@@ -412,6 +412,102 @@ describe("createMsteamsRealtimeCall", () => {
     expect(thinking).toBeDefined();
   });
 
+  it("group gate (deterministic): drops model audio in a meeting until the caller addresses the bot", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        groupCallGate: { requireAddress: true, wakePhrases: ["aria"], followUpWindowMs: 12_000 },
+      },
+    });
+    const req = mock.getRequest();
+    call.setHumanCount(3); // meeting
+
+    const audioFrames = (): number =>
+      ctx.sent.filter((m) => (m as { type?: string }).type === "audio.frame").length;
+
+    // Unaddressed caller turn → the model's reply audio is dropped at the egress.
+    req.onTranscript?.("user", "so as I was saying about the budget", true);
+    req.onAudio(Buffer.alloc(960));
+    expect(audioFrames()).toBe(0);
+
+    // Addressed turn opens the gate → audio flows.
+    req.onTranscript?.("user", "hey aria, what do you think?", true);
+    req.onAudio(Buffer.alloc(960));
+    expect(audioFrames()).toBe(1);
+
+    // 1:1 never gates regardless of address state.
+    call.setHumanCount(1);
+    req.onTranscript?.("user", "back to the budget", true);
+    req.onAudio(Buffer.alloc(960));
+    expect(audioFrames()).toBe(2);
+  });
+
+  it("look_at_screen history scope reviews keyframes from earlier in the call", async () => {
+    consultSpy.mockClear();
+    consultSpy.mockResolvedValueOnce({ text: "Slide 3 covered pricing." });
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const history = [
+      {
+        source: "screenshare" as const,
+        dataBase64: "S1",
+        mime: "image/jpeg",
+        width: 1,
+        height: 1,
+        ts: 1,
+      },
+      {
+        source: "screenshare" as const,
+        dataBase64: "S2",
+        mime: "image/jpeg",
+        width: 1,
+        height: 1,
+        ts: 2,
+      },
+      {
+        source: "screenshare" as const,
+        dataBase64: "S3",
+        mime: "image/jpeg",
+        width: 1,
+        height: 1,
+        ts: 3,
+      },
+    ];
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        toolPolicy: "safe-read-only",
+        agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+        voiceConfig: {
+          realtime: {},
+          agentId: "main",
+          responseTimeoutMs: 5000,
+        } as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => history.at(-1),
+        getFrameHistory: () => history,
+      },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "i1",
+      callId: "tc1",
+      name: "look_at_screen",
+      args: { question: "what did the earlier slide say?", scope: "history" },
+    });
+    await vi.waitFor(() => {
+      expect(consultSpy).toHaveBeenCalledTimes(1);
+    });
+    const consultArgs = consultSpy.mock.calls[0]?.[0] as { images?: unknown[] } | undefined;
+    expect(consultArgs?.images).toHaveLength(3);
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();
