@@ -409,7 +409,7 @@ describe("Anthropic provider", () => {
         {
           apiKey: "sk-ant-provider",
           reasoning: testCase.reasoning,
-          onPayload: (payload) => {
+          onPayload: (payload: unknown) => {
             capturedPayload = payload;
           },
         } as unknown as Parameters<typeof streamSimpleAnthropic>[2],
