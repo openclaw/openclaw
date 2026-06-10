@@ -135,6 +135,47 @@ describe("MsteamsMediaStream", () => {
     ws.close();
   });
 
+  it("session.send signals delivery: true while open, false once the socket has closed", async () => {
+    // streamPcmFrames relies on this to abort playback when a caller hangs up mid-frame, instead of
+    // advancing seq/timestamps and reporting audio as delivered on a dead socket.
+    const port = randomPort();
+    let session: MsteamsSession | undefined;
+    server = await startServer({
+      port,
+      onSessionStart: (s) => {
+        session = s;
+      },
+    });
+
+    const callId = "call-send-status";
+    const ws = openAuthed(port, callId);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "thread-1",
+        caller: { aadId: "aad-1", displayName: "Alice", tenantId: "tenant-1" },
+      }),
+    );
+    await waitFor(() => session !== undefined);
+
+    // Open socket → the frame is delivered.
+    expect(
+      session?.send({ type: "audio.frame", seq: 0, timestampMs: 0, payloadBase64: "AA==" }),
+    ).toBe(true);
+
+    // Closed socket → the send is dropped and reported as not delivered.
+    ws.close();
+    await waitFor(() => server?.sessionCount === 0);
+    expect(
+      session?.send({ type: "audio.frame", seq: 1, timestampMs: 20, payloadBase64: "AA==" }),
+    ).toBe(false);
+  });
+
   it("rejects upgrade with a bad HMAC signature", async () => {
     const port = randomPort();
     server = await startServer({ port });
