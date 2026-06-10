@@ -3025,6 +3025,152 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding?.threadId).toBe("thread-existing");
   });
 
+  it("retries turn/start after a native compact turn finishes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    let turnStartCalls = 0;
+    const harnessRef: { current?: ReturnType<typeof createAppServerHarness> } = {};
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "turn/start") {
+        turnStartCalls += 1;
+        if (turnStartCalls === 1) {
+          queueMicrotask(() => {
+            void harnessRef.current?.notify({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-existing",
+                turnId: "compact-turn",
+                turn: { id: "compact-turn", status: "completed" },
+              },
+            });
+          });
+          throw new CodexAppServerRpcError(
+            {
+              message: "cannot steer a compact turn",
+              data: {
+                message: "cannot steer a compact turn",
+                codexErrorInfo: {
+                  activeTurnNotSteerable: { turnKind: "compact" },
+                },
+                additionalDetails: null,
+              },
+            },
+            "turn/start",
+          );
+        }
+        return turnStartResult("turn-1");
+      }
+      return {};
+    });
+    harnessRef.current = harness;
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await vi.waitFor(
+      () =>
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+          2,
+        ),
+      fastWait,
+    );
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+  });
+
+  it("waits for an already-active native turn before starting a resumed thread turn", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/resume") {
+        const response = threadStartResult("thread-existing");
+        return {
+          ...response,
+          thread: {
+            ...response.thread,
+            status: { type: "active", activeFlags: [] },
+            turns: [{ id: "compact-turn", status: "inProgress", items: [] }],
+          },
+        };
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1");
+      }
+      return {};
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("thread/resume");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
+        turn: { id: "compact-turn", status: "completed" },
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+  });
+
+  it("does not retry turn/start for non-compact active turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "turn/start") {
+        throw new CodexAppServerRpcError(
+          {
+            message: "cannot steer a review turn",
+            data: {
+              message: "cannot steer a review turn",
+              codexErrorInfo: {
+                activeTurnNotSteerable: { turnKind: "review" },
+              },
+              additionalDetails: null,
+            },
+          },
+          "turn/start",
+        );
+      }
+      return {};
+    });
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "cannot steer a review turn",
+    );
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+  });
+
   it("does not leak unhandled rejections when shutdown closes before interrupt", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {

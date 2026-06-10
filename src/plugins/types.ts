@@ -707,6 +707,8 @@ export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  agentId?: string;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;

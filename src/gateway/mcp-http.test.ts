@@ -740,6 +740,45 @@ describe("mcp loopback server", () => {
     expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
   });
 
+  it("keeps explicit non-owner and unknown-owner loopback cache entries separate", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: "telegram:chat123",
+      currentInboundAudio: undefined,
+      currentMessageId: "message-1",
+      currentThreadTs: "thread-1",
+      inboundEventKind: "room_event",
+      messageProvider: "telegram",
+      sessionKey: "agent:main:telegram:group:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+    } satisfies Omit<Parameters<McpLoopbackToolCache["resolve"]>[0], "senderIsOwner">;
+    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+      const params = input as { senderIsOwner?: boolean };
+      return {
+        agentId: "main",
+        tools:
+          params.senderIsOwner === false
+            ? [makeMessageTool()]
+            : [makeMessageTool(), makeCronTool()],
+      };
+    });
+
+    const unknownFirst = cache.resolve({ ...baseParams, senderIsOwner: undefined });
+    const nonOwnerSecond = cache.resolve({ ...baseParams, senderIsOwner: false });
+    expect(unknownFirst.toolSchema.map((tool) => tool.name)).toContain("cron");
+    expect(nonOwnerSecond.toolSchema.map((tool) => tool.name)).not.toContain("cron");
+
+    const secondCache = new McpLoopbackToolCache();
+    const nonOwnerFirst = secondCache.resolve({ ...baseParams, senderIsOwner: false });
+    const unknownSecond = secondCache.resolve({ ...baseParams, senderIsOwner: undefined });
+    expect(nonOwnerFirst.toolSchema.map((tool) => tool.name)).not.toContain("cron");
+    expect(unknownSecond.toolSchema.map((tool) => tool.name)).toContain("cron");
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
+  });
+
   it("caps loopback tool cache cardinality by evicting oldest contexts", () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = {
