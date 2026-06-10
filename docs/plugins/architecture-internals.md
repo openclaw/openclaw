@@ -321,9 +321,8 @@ when the provider did not handle usage auth.
 
 OpenClaw caches repeated `normalizeToolSchemas` results only for the bundled
 tool compatibility helpers returned by `buildProviderToolCompatFamilyHooks`.
-Custom provider normalizers bypass this internal cache. Operators can disable
-the cache with `OPENCLAW_TOOL_SCHEMA_CACHE=0` while investigating
-provider-specific schema behavior.
+Custom provider normalizers bypass this internal cache so provider plugins do
+not need to declare or maintain cache-key contracts.
 
 ### Provider example
 
