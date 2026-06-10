@@ -452,6 +452,7 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
               defaultDelayMs: 1_000,
               maxChainLength: 4,
               maxDelegatesPerTurn: 4,
+              maxPendingWork: 32,
               crossSessionTargeting: "enabled",
             },
           },
@@ -541,6 +542,7 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
         maxChainLength: 4,
         costCapTokens: 0,
         maxDelegatesPerTurn: 4,
+        maxPendingWork: 32,
         crossSessionTargeting: "enabled",
       },
     });

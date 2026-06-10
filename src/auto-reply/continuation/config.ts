@@ -18,6 +18,7 @@ const DEFAULT_CONTINUATION_MAX_DELAY_MS = 300_000;
 const DEFAULT_CONTINUATION_MAX_CHAIN_LENGTH = 10;
 const DEFAULT_CONTINUATION_COST_CAP_TOKENS = 500_000;
 const DEFAULT_CONTINUATION_MAX_DELEGATES_PER_TURN = 5;
+const DEFAULT_CONTINUATION_MAX_PENDING_WORK = 32;
 const DEFAULT_EARLY_WARNING_BAND = 0.3125;
 
 function clampPositiveInt(value: unknown, fallback: number): number {
@@ -91,6 +92,10 @@ export function resolveContinuationRuntimeConfig(
     maxDelegatesPerTurn: clampPositiveInt(
       continuation?.maxDelegatesPerTurn,
       DEFAULT_CONTINUATION_MAX_DELEGATES_PER_TURN,
+    ),
+    maxPendingWork: clampPositiveInt(
+      continuation?.maxPendingWork,
+      DEFAULT_CONTINUATION_MAX_PENDING_WORK,
     ),
     contextPressureThreshold: clampOptionalUnitInterval(continuation?.contextPressureThreshold),
     earlyWarningBand: clampEarlyWarningBand(continuation?.earlyWarningBand),

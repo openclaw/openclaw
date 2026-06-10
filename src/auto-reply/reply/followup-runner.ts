@@ -25,6 +25,7 @@ import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -1346,6 +1347,16 @@ export function createFollowupRunner(params: {
           parentRunId: runId,
           log: (message) => defaultRuntime.log(message),
         });
+        // #986 cap-notice symmetry: surface cap-dropped elections on the
+        // followup lane too, matching the main-reply lane (agent-runner).
+        // Multi-election only, to keep single-work behavior intact
+        // (Rune #988 review residual + frond fold-in).
+        if (scheduleResult.cappedCount > 0 && effectiveContinueWorkRequests.length > 1) {
+          enqueueSystemEvent(
+            `[continuation] ${scheduleResult.cappedCount} of ${effectiveContinueWorkRequests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
+            { sessionKey, trusted: true },
+          );
+        }
         if (scheduleResult.scheduledCount > 0) {
           persistContinuationChainState({
             sessionEntry: tailEntry,

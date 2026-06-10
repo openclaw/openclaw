@@ -8,14 +8,15 @@ import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.j
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
-import { checkContinuationBudget } from "./scheduler.js";
-import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
+import { checkContinuationBudget } from "./scheduler.js";import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
 import {
   consumePendingWork,
   enqueuePendingWork,
   listPendingWorkSessionKeysForRecovery,
   markPendingWorkFailed,
+  markPendingWorkSuperseded,
   markPendingWorkTurnGranted,
+  queuedPendingWorkCount,
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   requeuePendingWork,
@@ -31,6 +32,10 @@ const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
 const CONTINUATION_TURN_DRAINING_REASON = "draining";
 const MAIN_COMMAND_LANE = "main";
 const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
+// #986 Guard 2: a matured backlog member is "stale" (superseded-eligible) when it
+// is overdue past this multiple of the configured maxDelayMs. Close bursts stay
+// below the grace and are NOT collapsed; only a genuine stale pile is folded.
+const SUPERSEDED_GRACE_MULTIPLIER = 2;
 
 const workTimers = new Map<string, NodeJS.Timeout>();
 
@@ -214,6 +219,57 @@ function earlierDueAt(left: number | undefined, right: number | undefined): numb
   return right === undefined ? left : Math.min(left, right);
 }
 
+/**
+ * #986 Guard 2 — partition a matured drain batch into works to drive vs works
+ * superseded by a stale backlog.
+ *
+ * `consumePendingWork` only returns matured (`now >= dueAt`) works, so a batch of
+ * >1 is itself the backlog signal: on-time staggered elections fire one-per-poll
+ * and never co-drain. Within such a batch we fold the OLDER members that are
+ * stale (overdue past `graceMs`) into the newest-elected member, which carries
+ * the live intent. Non-stale members (close bursts) always drive; the
+ * newest-elected always drives. Pure for testability.
+ */
+export function partitionSupersededWork(
+  works: readonly PendingContinuationWork[],
+  graceMs: number,
+  now: number,
+): { drive: PendingContinuationWork[]; superseded: PendingContinuationWork[] } {
+  if (works.length <= 1 || graceMs <= 0) {
+    return { drive: [...works], superseded: [] };
+  }
+  // Identify the single newest-elected member. A synchronous batch enqueue can
+  // stamp identical `electedAt` (the store writes are sync), so ties are broken
+  // by `hop` (durable monotonic enqueue order within a chain) — the higher hop
+  // is the newer intent. Without the tie-break, same-ms rows fall to array
+  // order and the OLDEST stale wake could be kept while the newest is folded
+  // (Codex #988 review :252).
+  let newestIdx = 0;
+  for (let i = 1; i < works.length; i++) {
+    const w = works[i];
+    const best = works[newestIdx];
+    if (w.electedAt > best.electedAt || (w.electedAt === best.electedAt && w.hop > best.hop)) {
+      newestIdx = i;
+    }
+  }
+  const drive: PendingContinuationWork[] = [];
+  const superseded: PendingContinuationWork[] = [];
+  for (let i = 0; i < works.length; i++) {
+    const work = works[i];
+    const isNewest = i === newestIdx;
+    const isStale = now - work.dueAt > graceMs;
+    if (isNewest) {
+      // The single newest-elected member always drives (live intent).
+      drive.push(work);
+    } else if (isStale) {
+      superseded.push(work);
+    } else {
+      drive.push(work);
+    }
+  }
+  return { drive, superseded };
+}
+
 export async function dispatchPendingContinuationWork(params: {
   sessionKey: string;
   recoverRunning?: boolean;
@@ -223,6 +279,32 @@ export async function dispatchPendingContinuationWork(params: {
     includeRunning: params.recoverRunning === true,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
   });
+  // #986 Guard 2: fold a stale backlog. Only matured works reach here, so a
+  // batch of >1 means they piled up (the session was busy through the window);
+  // on-time staggered elections drain one-per-poll and never co-arrive.
+  const runtimeConfig = resolveContinuationRuntimeConfig();
+  const supersededGraceMs = runtimeConfig.maxDelayMs * SUPERSEDED_GRACE_MULTIPLIER;
+  const { drive: worksToDrive, superseded } = partitionSupersededWork(
+    works,
+    supersededGraceMs,
+    Date.now(),
+  );
+  if (superseded.length > 0) {
+    for (const stale of superseded) {
+      const overdueMs = Date.now() - stale.dueAt;
+      log.info(
+        `[continuation:work-superseded] flowId=${stale.flowId ?? "none"} session=${stale.sessionKey} hop=${stale.hop} overdueMs=${overdueMs} — folded into newer election`,
+      );
+      markPendingWorkSuperseded(
+        stale,
+        `Superseded by a newer continue_work election after a ${overdueMs}ms stale backlog.`,
+      );
+    }
+    enqueueSystemEvent(
+      `[system:continuation-note] ${superseded.length} stale continue_work wake(s) were folded into the newest election (backlog coalesce).`,
+      { sessionKey: params.sessionKey, trusted: true },
+    );
+  }
   const soonestQueued = peekSoonestUnmaturedWorkDueAt(params.sessionKey);
   const soonestRunningRecovery =
     params.recoverRunning === true
@@ -237,7 +319,7 @@ export async function dispatchPendingContinuationWork(params: {
 
   let dispatched = 0;
   let failed = 0;
-  for (const work of works) {
+  for (const work of worksToDrive) {
     try {
       const fireDeferredMs = Date.now() - work.electedAt;
       const fireChainId = work.chainId ?? work.flowId ?? work.sessionKey;
@@ -315,6 +397,22 @@ export async function scheduleContinuationWork(params: {
   if (budgetCheck) {
     params.log?.(
       `[continuation:work-rejected] ${budgetCheck} for ${params.sessionKey}: ${params.chainState.currentChainCount}/${params.config.maxChainLength}`,
+    );
+    return { scheduled: false, capped: true, chainState: params.chainState };
+  }
+
+  // #986 Guard 1: per-session concurrent pending-work cap. Orthogonal to the
+  // chain-depth cap above — this bounds how many undelivered wakes may coexist
+  // (the multi-continue_work flood foot-gun). Enforced at enqueue so a flood can
+  // never pile up beyond the cap regardless of chain depth. Treated as a cap
+  // (capped: true) so the batch ends early with partial-success preserved.
+  // Counts only QUEUED (future) wakes — not the currently-driving `running`
+  // flow — so a serial chain at maxPendingWork:1 can still schedule its own
+  // successor (the active wake is excluded; see queuedPendingWorkCount).
+  const pending = queuedPendingWorkCount(params.sessionKey);
+  if (pending >= params.config.maxPendingWork) {
+    params.log?.(
+      `[continuation:work-rejected] pending-capped for ${params.sessionKey}: ${pending}/${params.config.maxPendingWork}`,
     );
     return { scheduled: false, capped: true, chainState: params.chainState };
   }

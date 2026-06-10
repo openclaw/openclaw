@@ -97,6 +97,12 @@ export type ContinuationRuntimeConfig = {
   maxChainLength: number;
   costCapTokens: number;
   maxDelegatesPerTurn: number;
+  /**
+   * Max concurrent undelivered continue_work flows per session (#986).
+   * Enforced at enqueue; orthogonal to maxChainLength (lineage depth) — this
+   * bounds store pressure / the multi-continue_work flood foot-gun.
+   */
+  maxPendingWork: number;
   crossSessionTargeting: ContinuationCrossSessionTargetingPolicy;
   contextPressureThreshold?: number;
   earlyWarningBand?: number;
