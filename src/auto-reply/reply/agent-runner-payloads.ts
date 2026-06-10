@@ -109,6 +109,51 @@ function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+/**
+ * A plain assistant-text payload is a text-only final reply with no error, reasoning,
+ * media, structured presentation, or source-reply mirror metadata. When the streaming-off
+ * pipeline has already directly delivered block-reply chunks (see `directlySentBlockKeys`),
+ * the canonical assistant answer concatenates those chunks and would arrive as a duplicate;
+ * suppressing the plain text variant preserves chunk ordering with interleaved tool results.
+ */
+function isPlainAssistantAnswerPayload(payload: ReplyPayload): boolean {
+  if (payload.isError || payload.isReasoning || payload.isFallbackNotice) {
+    return false;
+  }
+  if (payload.presentation || payload.interactive || payload.channelData) {
+    return false;
+  }
+  const metadata = getReplyPayloadMetadata(payload);
+  if (metadata?.sourceReplyTranscriptMirror || metadata?.deliverDespiteSourceReplySuppression) {
+    return false;
+  }
+  if (resolveSendableOutboundReplyParts(payload).hasMedia) {
+    return false;
+  }
+  return Boolean(payload.text);
+}
+
+function hasDirectlySentTextBlock(keys?: Set<string>): boolean {
+  if (!keys?.size) {
+    return false;
+  }
+  for (const key of keys) {
+    try {
+      const parsed: unknown = JSON.parse(key);
+      if (!parsed || typeof parsed !== "object") {
+        return true;
+      }
+      const text = (parsed as { text?: unknown }).text;
+      if (typeof text === "string" && text.trim()) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 function sanitizeFinalReplyText(
   payload: ReplyPayload,
   text: string | undefined,
@@ -385,10 +430,21 @@ export async function buildReplyPayloads(params: {
       : params.directlySentBlockKeys?.size
         ? (() => {
             const unsent: ReplyPayload[] = [];
+            const directlySentTextBlock = hasDirectlySentTextBlock(params.directlySentBlockKeys);
             for (const payload of dedupedPayloads) {
-              if (!params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
-                unsent.push(payload);
+              if (params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
+                continue;
               }
+              // Streaming-off + tool-interleaved runs deliver each block-reply chunk
+              // directly; the final canonical assistant text concatenates those chunks
+              // and so produces a different content key. Drop plain assistant-text
+              // payloads (no media, no errors, no reasoning, no source-reply mirror)
+              // when text blocks were already streamed directly, so users do not see the
+              // same text twice. Errors, warnings, media, and source replies still pass.
+              if (directlySentTextBlock && isPlainAssistantAnswerPayload(payload)) {
+                continue;
+              }
+              unsent.push(payload);
             }
             return unsent;
           })()

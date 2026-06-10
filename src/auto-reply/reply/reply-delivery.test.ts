@@ -167,8 +167,13 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
   });
 
-  it("keeps text-only block replies buffered when block streaming is disabled", async () => {
+  it("sends text-only block replies directly when block streaming is disabled (preserves tool-call interleaving)", async () => {
+    // Regression guard for issue #57225: when an agent emits text segments
+    // between tool calls on a streaming-off channel (Discord default),
+    // each text segment must be delivered directly so it arrives in the
+    // correct order rather than being deferred behind tool-result delivery.
     const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
 
     const handler = createBlockReplyDeliveryHandler({
       onBlockReply,
@@ -179,12 +184,56 @@ describe("createBlockReplyDeliveryHandler", () => {
       } as unknown as TypingSignaler,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
-      directlySentBlockKeys: new Set(),
+      directlySentBlockKeys,
     });
 
     await handler({ text: "text only" });
 
-    expect(onBlockReply).not.toHaveBeenCalled();
+    const expectedPayload = {
+      text: "text only",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    };
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
+  });
+
+  it("delivers interleaved text segments and tracks each as a separately-sent block when streaming is disabled", async () => {
+    // The agent emits: text1 -> (tool call) -> text2 -> (tool call) -> text3.
+    // Each text segment hits the block-reply handler when flushBlockReplyBuffer
+    // runs before tool execution. With block streaming disabled, each segment
+    // must be sent directly with its own tracking key so the runner-payloads
+    // dedup can suppress the canonical assistant text from re-delivering them.
+    const calls: string[] = [];
+    const onBlockReply = vi.fn(async (payload: { text?: string }) => {
+      if (payload.text) {
+        calls.push(payload.text);
+      }
+    });
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({ text: "Looking up..." });
+    await handler({ text: "Found three matches..." });
+    await handler({ text: "Summary: ..." });
+
+    expect(calls).toEqual(["Looking up...", "Found three matches...", "Summary: ..."]);
+    expect(directlySentBlockKeys.size).toBe(3);
   });
 
   it("trims leading whitespace in block-streamed replies", async () => {

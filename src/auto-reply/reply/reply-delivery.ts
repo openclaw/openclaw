@@ -156,18 +156,16 @@ export function createBlockReplyDeliveryHandler(params: {
     }
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
+    // Text-only blocks must also be sent directly when streaming is disabled, otherwise
+    // text segments emitted between tool calls get deferred behind tool-result delivery
+    // and arrive out of order at channels like Discord (issue #57225). The matching
+    // dedup in agent-runner-payloads.ts suppresses the canonical assistant text payload
+    // once any block was directly delivered, so this does not duplicate the final reply.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       params.blockReplyPipeline.enqueue(blockPayload);
-    } else if (params.blockStreamingEnabled) {
-      // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-      // Track sent key to avoid duplicate in final payloads.
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directlySentBlockKeys: params.directlySentBlockKeys,
-        trackingPayload: blockPayload,
-        payload: blockPayload,
-      });
-    } else if (blockHasNonTextContent) {
+    } else {
+      // Send directly: either streaming-enabled flush before tool execution (no pipeline),
+      // or streaming-disabled mode that needs interleaved delivery with tool results.
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
@@ -175,6 +173,5 @@ export function createBlockReplyDeliveryHandler(params: {
         payload: blockPayload,
       });
     }
-    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };
 }

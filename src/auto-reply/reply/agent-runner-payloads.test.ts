@@ -792,6 +792,103 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("suppresses canonical assistant text payload when block chunks were directly delivered (#57225)", async () => {
+    // When block streaming is disabled and multi-segment text was already
+    // streamed directly between tool calls, the canonical assistant final
+    // payload concatenates those segments. Its content key does not match
+    // any individual chunk key, so the exact-match dedup misses it. The
+    // plain-assistant-text suppression handles this case so users do not see
+    // the same text delivered twice (first as chunks, then as the combined
+    // final reply).
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    // Three chunks were already delivered directly via the block-reply path.
+    directlySentBlockKeys.add(createBlockReplyContentKey({ text: "Looking up..." }));
+    directlySentBlockKeys.add(createBlockReplyContentKey({ text: "Found three matches..." }));
+    directlySentBlockKeys.add(createBlockReplyContentKey({ text: "Summary: ..." }));
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      // The canonical answer reaches the dedup as one combined payload.
+      payloads: [{ text: "Looking up...\n\nFound three matches...\n\nSummary: ..." }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps error payloads when block chunks were directly delivered (#57225)", async () => {
+    // The plain-assistant-text suppression must not swallow user-facing errors,
+    // warnings, or fallback notices, even when block chunks were directly sent.
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    directlySentBlockKeys.add(createBlockReplyContentKey({ text: "partial answer" }));
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [
+        { text: "partial answer combined", isError: false },
+        { text: "Tool failed", isError: true },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Tool failed");
+    expect(replyPayloads[0]?.isError).toBe(true);
+  });
+
+  it("keeps media-bearing payloads when block chunks were directly delivered (#57225)", async () => {
+    // Media payloads remain renderable through the final delivery path; only
+    // the plain text duplicate should be suppressed.
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    directlySentBlockKeys.add(createBlockReplyContentKey({ text: "Here's the image" }));
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [
+        { text: "Here's the image", mediaUrl: "/tmp/render.png", mediaUrls: ["/tmp/render.png"] },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.mediaUrl).toBe("/tmp/render.png");
+  });
+
+  it("keeps plain final text when only media blocks were directly delivered (#57225)", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    directlySentBlockKeys.add(
+      createBlockReplyContentKey({
+        mediaUrl: "/tmp/render.png",
+        mediaUrls: ["/tmp/render.png"],
+      }),
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [{ text: "Here is the summary after the image." }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Here is the summary after the image.");
+  });
+
   it("does not suppress same-target replies when accountId differs", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
