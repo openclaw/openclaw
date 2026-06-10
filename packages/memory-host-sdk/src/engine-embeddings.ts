@@ -66,7 +66,7 @@ export {
   estimateUtf8Bytes,
 } from "./host/embedding-input-limits.js";
 export { hasNonTextEmbeddingParts, type EmbeddingInput } from "./host/embedding-inputs.js";
-export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
+export { withRemoteHttpResponse } from "./host/remote-http.js";
 export {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,

@@ -5,7 +5,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
-import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/security-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
@@ -14,6 +14,13 @@ import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
 /** Maximum JSON-line size accepted from the streaming HTTP helper process. */
 export const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
+
+class SandboxHttpRequestBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxHttpRequestBlockedError";
+  }
+}
 
 /** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
@@ -60,15 +67,15 @@ function assertSandboxHttpRequestTargetAllowed(url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new SsrFBlockedError("Invalid URL supplied to sandbox http/request");
+    throw new SandboxHttpRequestBlockedError("Invalid URL supplied to sandbox http/request");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new SsrFBlockedError(
+    throw new SandboxHttpRequestBlockedError(
       `Blocked non-HTTP(S) protocol in sandbox http/request: ${parsed.protocol}`,
     );
   }
   if (isBlockedHostnameOrIp(parsed.hostname)) {
-    throw new SsrFBlockedError(
+    throw new SandboxHttpRequestBlockedError(
       `Blocked hostname or private/internal IP in sandbox http/request: ${parsed.hostname}`,
     );
   }

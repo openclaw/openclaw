@@ -21,6 +21,9 @@
       "openclaw/plugin-sdk/agent-runtime-test-contracts": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/agent-runtime-test-contracts.d.ts"
       ],
+      "openclaw/plugin-sdk/browser-cdp-proxy-bypass": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/browser-cdp-proxy-bypass.d.ts"
+      ],
       "openclaw/plugin-sdk/channel-target-testing": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-target-testing.d.ts"
       ],

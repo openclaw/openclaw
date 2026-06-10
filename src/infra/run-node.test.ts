@@ -2231,7 +2231,6 @@ describe("run-node script", () => {
           ),
           [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
           "dist/plugin-sdk/string-coerce-runtime.js": "export const publicRuntime = true;\n",
-          "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
           [DIST_OPENCLAW_ALIAS_PACKAGE]:
             '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js","./plugin-sdk/string-coerce-runtime":"./plugin-sdk/string-coerce-runtime.js"}}\n',
           [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX]:
@@ -2246,7 +2245,6 @@ describe("run-node script", () => {
           DIST_ENTRY,
           DIST_PLUGIN_SDK_INDEX,
           "dist/plugin-sdk/string-coerce-runtime.js",
-          "dist/plugin-sdk/ssrf-runtime-internal.js",
           DIST_OPENCLAW_ALIAS_PACKAGE,
           DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX,
           DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE,

@@ -107,7 +107,6 @@ describe("stageBundledPluginRuntime", () => {
       "dist/plugin-sdk/index.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js":
         "export { contract } from '../channel-entry-contract-abc.js';\n",
-      "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
       "dist/channel-entry-contract-abc.js": "export const contract = true;\n",
       [bundledDistPluginFile("diffs", "index.js")]: "export default {}\n",
       [bundledDistPluginFile("diffs", "node_modules/@pierre/diffs/index.js")]:
@@ -167,19 +166,6 @@ describe("stageBundledPluginRuntime", () => {
         "utf8",
       ),
     ).toContain("../../../../plugin-sdk/channel-entry-contract.js");
-    expect(
-      fs.existsSync(
-        path.join(
-          repoRoot,
-          "dist",
-          "extensions",
-          "node_modules",
-          "openclaw",
-          "plugin-sdk",
-          "ssrf-runtime-internal.js",
-        ),
-      ),
-    ).toBe(false);
     expect(fs.existsSync(path.join(runtimePluginDir, "node_modules", "openclaw"))).toBe(false);
   });
 
@@ -202,7 +188,6 @@ describe("stageBundledPluginRuntime", () => {
       "dist/plugin-sdk/index.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js": "export const contract = true;\n",
       "dist/plugin-sdk/source-only.js": "export const sourceOnly = true;\n",
-      "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
       [bundledDistPluginFile("ollama", "index.js")]: "export default {}\n",
     });
 
@@ -221,9 +206,6 @@ describe("stageBundledPluginRuntime", () => {
       true,
     );
     expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "source-only.js"))).toBe(false);
-    expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "ssrf-runtime-internal.js"))).toBe(
-      false,
-    );
   });
 
   it("keeps extension-local plugin-sdk wrappers resolving canonical dist chunks", async () => {

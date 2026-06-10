@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/security-runtime";
 import {
   MediaFileType,
   type ChatScope,

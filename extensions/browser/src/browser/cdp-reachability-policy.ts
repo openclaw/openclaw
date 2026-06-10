@@ -4,15 +4,15 @@
  * CDP control-plane probes may target loopback even when page navigation policy
  * is stricter, so this module scopes the exception to browser control only.
  */
-import { isPrivateNetworkAllowedByPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { isPrivateNetworkAllowedByPolicy, type NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
 
 function withCdpHostnameAllowed(
   profile: ResolvedBrowserProfile,
-  ssrfPolicy?: SsrFPolicy,
-): SsrFPolicy | undefined {
+  ssrfPolicy?: NetworkTargetPolicy,
+): NetworkTargetPolicy | undefined {
   if (!ssrfPolicy || !profile.cdpHost) {
     return ssrfPolicy;
   }
@@ -24,8 +24,8 @@ function withCdpHostnameAllowed(
 
 export function resolveCdpReachabilityPolicy(
   profile: ResolvedBrowserProfile,
-  ssrfPolicy?: SsrFPolicy,
-): SsrFPolicy | undefined {
+  ssrfPolicy?: NetworkTargetPolicy,
+): NetworkTargetPolicy | undefined {
   const capabilities = getBrowserProfileCapabilities(profile);
   // The browser SSRF policy protects page/network navigation, not OpenClaw's
   // own local CDP control plane. Explicit local loopback CDP profiles should

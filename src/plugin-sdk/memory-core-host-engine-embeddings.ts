@@ -4,7 +4,6 @@ export {
   buildBatchHeaders,
   buildCaseInsensitiveExtensionGlob,
   buildEmbeddingBatchGroupOptions,
-  buildRemoteBaseUrlPolicy,
   classifyMemoryMultimodalPath,
   createLocalEmbeddingProvider,
   createRemoteEmbeddingProvider,

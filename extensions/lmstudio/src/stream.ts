@@ -4,7 +4,7 @@ import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { networkTargetPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/security-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
@@ -167,9 +167,9 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
     baseUrl: params.baseUrl,
     apiKey: runtimeApiKey ?? configuredApiKey,
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     modelKey: params.modelKey,
     requestedContextLength: params.requestedContextLength,
+    ssrfPolicy: networkTargetPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
   });
 }
 

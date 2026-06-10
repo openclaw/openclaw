@@ -4,11 +4,53 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  hasLegacyFlatAllowPrivateNetworkAlias,
-  migrateLegacyFlatAllowPrivateNetworkAlias,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { isRecord } from "./record-shared.js";
+
+function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
+  const entry = isRecord(value) ? value : null;
+  return Boolean(entry && Object.hasOwn(entry, "allowPrivateNetwork"));
+}
+
+function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  if (!hasLegacyFlatAllowPrivateNetworkAlias(params.entry)) {
+    return { entry: params.entry, changed: false };
+  }
+  const legacyAllowPrivateNetwork = params.entry.allowPrivateNetwork;
+  const currentNetworkRecord = isRecord(params.entry.network) ? params.entry.network : null;
+  const currentNetwork = currentNetworkRecord ? { ...currentNetworkRecord } : {};
+  const currentDangerousAllowPrivateNetwork = currentNetwork.dangerouslyAllowPrivateNetwork;
+
+  let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
+  if (typeof currentDangerousAllowPrivateNetwork === "boolean") {
+    resolvedDangerousAllowPrivateNetwork = currentDangerousAllowPrivateNetwork;
+  } else if (typeof legacyAllowPrivateNetwork === "boolean") {
+    resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
+  } else if (currentDangerousAllowPrivateNetwork === undefined) {
+    resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
+  }
+
+  delete currentNetwork.dangerouslyAllowPrivateNetwork;
+  if (resolvedDangerousAllowPrivateNetwork !== undefined) {
+    currentNetwork.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
+  }
+
+  const nextEntry = { ...params.entry };
+  delete nextEntry.allowPrivateNetwork;
+  if (Object.keys(currentNetwork).length > 0) {
+    nextEntry.network = currentNetwork;
+  } else {
+    delete nextEntry.network;
+  }
+
+  params.changes.push(
+    `Moved ${params.pathPrefix}.allowPrivateNetwork → ${params.pathPrefix}.network.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
+  );
+  return { entry: nextEntry, changed: true };
+}
 
 function hasLegacyMatrixRoomAllowAlias(value: unknown): boolean {
   const room = isRecord(value) ? value : null;

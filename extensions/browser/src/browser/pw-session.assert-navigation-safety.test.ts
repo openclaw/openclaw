@@ -1,7 +1,7 @@
 // Browser tests cover pw session.assert navigation safety plugin behavior.
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { NetworkTargetBlockedError } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
@@ -54,7 +54,7 @@ describe("assertPageNavigationCompletedSafely", () => {
   it("does not close the tab when a read-only caller hits an SSRF-blocked URL (response: null)", async () => {
     // A read-only caller (snapshot/screenshot/interactions) passes response: null
     // and must never lose the user's tab when the policy guard rejects.
-    mockedResultAllowed.mockRejectedValueOnce(new SsrFBlockedError("blocked by policy"));
+    mockedResultAllowed.mockRejectedValueOnce(new NetworkTargetBlockedError("blocked by policy"));
 
     const { page, close } = fakePage();
 
@@ -66,7 +66,7 @@ describe("assertPageNavigationCompletedSafely", () => {
         ssrfPolicy: { allowPrivateNetwork: false },
         targetId: "tab-1",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(NetworkTargetBlockedError);
 
     expect(close).not.toHaveBeenCalled();
   });
@@ -76,7 +76,7 @@ describe("assertPageNavigationCompletedSafely", () => {
     // navigate path), the close decision now belongs to the caller. The
     // helper must only quarantine + rethrow; the caller's try/catch is
     // responsible for closing if it owns the navigation lifecycle.
-    mockedResultAllowed.mockRejectedValueOnce(new SsrFBlockedError("blocked by policy"));
+    mockedResultAllowed.mockRejectedValueOnce(new NetworkTargetBlockedError("blocked by policy"));
 
     const { page, close } = fakePage();
     const response = { request: () => undefined } as unknown as Parameters<
@@ -91,7 +91,7 @@ describe("assertPageNavigationCompletedSafely", () => {
         ssrfPolicy: { allowPrivateNetwork: false },
         targetId: "tab-1",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(NetworkTargetBlockedError);
 
     expect(close).not.toHaveBeenCalled();
   });

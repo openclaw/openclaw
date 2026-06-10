@@ -1,34 +1,20 @@
 // Memory Host SDK module implements remote http behavior.
 import {
-  assertHostnameAllowedWithPolicy,
   createHttp1EnvHttpProxyAgent,
   fetchWithResponseRelease,
-  matchesHostnameAllowlist,
   normalizeHostname,
-  normalizeHostnameAllowlist,
   shouldUseEnvHttpProxyForUrl,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "./openclaw-runtime-network.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
 
 // Remote memory HTTP wrapper that releases response bodies after callers finish reading.
 
-/** Build an SSRF allow policy from a configured remote base URL. */
-export const buildRemoteBaseUrlPolicy: (baseUrl: string) => SsrFPolicy | undefined =
-  ssrfPolicyFromHttpBaseUrlAllowedHostname;
-
-function assertRemoteUrlAllowedByPolicy(url: URL, policy: SsrFPolicy): void {
-  const hostnameAllowlist = normalizeHostnameAllowlist([
-    ...(policy.allowedHostnames ?? []),
-    ...(policy.hostnameAllowlist ?? []),
-  ]);
-  if (hostnameAllowlist.length > 0) {
-    const hostname = normalizeHostname(url.hostname);
-    if (!matchesHostnameAllowlist(hostname, hostnameAllowlist)) {
-      throw new Error(`Blocked hostname (not in allowlist): ${url.hostname}`);
-    }
+function assertRemoteUrlMatchesInitialHost(url: URL, initialHostname: string): void {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Remote memory HTTP only supports http and https URLs");
   }
-  assertHostnameAllowedWithPolicy(url.hostname, policy);
+  if (normalizeHostname(url.hostname) !== initialHostname) {
+    throw new Error(`Blocked hostname (not configured remote host): ${url.hostname}`);
+  }
 }
 
 type CloseableRemoteHttpDispatcher = {
@@ -50,23 +36,16 @@ export async function withRemoteHttpResponse<T>(params: {
   url: string;
   init?: RequestInit;
   signal?: AbortSignal;
-  ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   auditContext?: string;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
-  const policy = params.ssrfPolicy;
-  const validateUrl = policy
-    ? (parsed: URL) => {
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-          throw new Error("Remote memory HTTP only supports http and https URLs");
-        }
-        assertRemoteUrlAllowedByPolicy(parsed, policy);
-      }
-    : undefined;
-  if (validateUrl) {
-    validateUrl(new URL(params.url));
-  }
+  const initialUrl = new URL(params.url);
+  const initialHostname = normalizeHostname(initialUrl.hostname);
+  const validateUrl = (parsed: URL) => {
+    assertRemoteUrlMatchesInitialHost(parsed, initialHostname);
+  };
+  validateUrl(initialUrl);
   const dispatcher =
     !hasRequestDispatcher(params.init) && shouldUseEnvHttpProxyForUrl(params.url)
       ? createHttp1EnvHttpProxyAgent()

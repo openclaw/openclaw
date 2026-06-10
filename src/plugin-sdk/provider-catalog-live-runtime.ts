@@ -7,16 +7,7 @@ import {
   fetchWithRuntimeDispatcherOrMockedGlobal,
   type DispatcherAwareRequestInit,
 } from "../infra/net/runtime-fetch.js";
-import {
-  closeDispatcher,
-  createPinnedLookup,
-  matchesHostnameAllowlist,
-  normalizeHostnameAllowlist,
-  SsrFBlockedError,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-  type LookupFn,
-  type SsrFPolicy,
-} from "../infra/net/ssrf.js";
+import { closeDispatcher, createPinnedLookup, type LookupFn } from "../infra/net/ssrf.js";
 import { createHttp1Agent } from "../infra/net/undici-runtime.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
@@ -31,7 +22,6 @@ export type LiveModelCatalogFetchGuard = (params: {
   init?: RequestInit;
   signal?: AbortSignal;
   timeoutMs?: number;
-  policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   requireHttps?: boolean;
   auditContext?: string;
@@ -53,7 +43,6 @@ export type FetchLiveProviderModelIdsParams = {
   signal?: AbortSignal;
   timeoutMs?: number;
   auditContext?: string;
-  policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   requireHttps?: boolean;
   readRows?: (body: unknown) => readonly unknown[];
@@ -178,27 +167,14 @@ function normalizeLiveCatalogOrigin(value: string): string | undefined {
   }
 }
 
-function assertLiveCatalogPolicyAllowsUrl(providerId: string, url: URL, policy?: SsrFPolicy): void {
-  const hostnameAllowlist = normalizeHostnameAllowlist([
-    ...(policy?.allowedHostnames ?? []),
-    ...(policy?.hostnameAllowlist ?? []),
-  ]);
-  const allowedOrigins = (policy?.allowedOrigins ?? [])
-    .map((origin) => normalizeLiveCatalogOrigin(origin))
-    .filter((origin): origin is string => Boolean(origin));
-  if (hostnameAllowlist.length === 0 && allowedOrigins.length === 0) {
-    return;
-  }
-
-  const normalizedHostname = normalizeHostname(url.hostname);
-  const origin = normalizeLiveCatalogOrigin(url.toString());
-  const hostAllowed =
-    hostnameAllowlist.length > 0 && matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist);
-  const originAllowed = origin ? allowedOrigins.includes(origin) : false;
-  if (!hostAllowed && !originAllowed) {
-    throw new SsrFBlockedError(
-      `${providerId} model discovery URL host is not allowed: ${url.hostname}`,
-    );
+function assertLiveCatalogEndpointAllowsUrl(providerId: string, url: URL, endpoint: string): void {
+  const configuredOrigin = normalizeLiveCatalogOrigin(endpoint);
+  const configuredHostname = configuredOrigin ? new URL(configuredOrigin).hostname : undefined;
+  if (
+    configuredHostname &&
+    normalizeHostname(url.hostname) !== normalizeHostname(configuredHostname)
+  ) {
+    throw new Error(`${providerId} model discovery URL host is not allowed: ${url.hostname}`);
   }
 }
 
@@ -274,7 +250,6 @@ async function fetchLiveCatalogResponse(params: {
   signal?: AbortSignal;
   providerId: string;
   requireHttps?: boolean;
-  policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   timeoutMs?: number;
   auditContext?: string;
@@ -289,7 +264,7 @@ async function fetchLiveCatalogResponse(params: {
   };
   for (let redirectCount = 0; ; redirectCount += 1) {
     const parsedUrl = new URL(currentUrl);
-    assertLiveCatalogPolicyAllowsUrl(params.providerId, parsedUrl, params.policy);
+    assertLiveCatalogEndpointAllowsUrl(params.providerId, parsedUrl, params.endpoint);
     let dispatcher: Dispatcher | undefined;
     let response: Response;
     try {
@@ -330,7 +305,7 @@ async function fetchLiveCatalogResponse(params: {
     if (params.requireHttps && nextUrl.protocol !== "https:") {
       throw new Error(`${params.providerId} model discovery requires an https endpoint`);
     }
-    assertLiveCatalogPolicyAllowsUrl(params.providerId, nextUrl, params.policy);
+    assertLiveCatalogEndpointAllowsUrl(params.providerId, nextUrl, params.endpoint);
     if (nextUrl.origin !== new URL(currentUrl).origin) {
       currentHeaders = new Headers(retainSafeHeadersForCrossOriginRedirect(currentHeaders));
     }
@@ -347,8 +322,6 @@ export async function fetchLiveProviderModelRows(
       throw new Error(`${params.providerId} model discovery requires an https endpoint`);
     }
   }
-  const effectivePolicy =
-    params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint);
   let response: Response | undefined;
   let release: () => Promise<void>;
   if (params.fetchGuard) {
@@ -359,7 +332,6 @@ export async function fetchLiveProviderModelRows(
       },
       signal: params.signal,
       timeoutMs: params.timeoutMs ?? 5_000,
-      policy: effectivePolicy,
       ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
       ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
       auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
@@ -384,7 +356,6 @@ export async function fetchLiveProviderModelRows(
         signal: timeout.signal,
         providerId: params.providerId,
         requireHttps: params.requireHttps,
-        policy: effectivePolicy,
         lookupFn: params.lookupFn,
         timeoutMs: params.timeoutMs ?? 5_000,
         auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,

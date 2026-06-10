@@ -8,7 +8,7 @@ import {
   fetchWithResponseRelease,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Dispatcher } from "undici";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";

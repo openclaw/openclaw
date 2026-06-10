@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { NetworkTargetBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import "../test-support/browser-security.mock.js";
 import {
@@ -288,7 +288,7 @@ describe("cdp", () => {
           cdpUrl: "ws://127.0.0.1:9222",
           url: "http://127.0.0.1:8080",
         }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      ).rejects.toBeInstanceOf(NetworkTargetBlockedError);
       // SSRF check happens before any connection attempt
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
@@ -304,7 +304,7 @@ describe("cdp", () => {
           cdpUrl: "http://127.0.0.1:9222",
           url: "http://127.0.0.1:8080",
         }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      ).rejects.toBeInstanceOf(NetworkTargetBlockedError);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
@@ -679,7 +679,9 @@ describe("browser error mapping", () => {
   it("sanitizes navigation-target SSRF policy errors without leaking raw policy details", () => {
     expect(
       toBrowserErrorResponse(
-        new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+        new NetworkTargetBlockedError(
+          "Blocked hostname or private/internal/special-use IP address",
+        ),
       ),
     ).toEqual({
       status: 400,

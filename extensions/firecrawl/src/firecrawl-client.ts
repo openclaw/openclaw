@@ -13,14 +13,14 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
-import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
-  SsrFBlockedError,
+  NetworkTargetBlockedError,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+} from "openclaw/plugin-sdk/security-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/security-runtime";
+import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -100,15 +100,15 @@ export function assertFirecrawlScrapeTargetAllowed(url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new SsrFBlockedError("Invalid URL supplied to Firecrawl scrape");
+    throw new NetworkTargetBlockedError("Invalid URL supplied to Firecrawl scrape");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new SsrFBlockedError(
+    throw new NetworkTargetBlockedError(
       `Blocked non-HTTP(S) protocol in Firecrawl scrape URL: ${parsed.protocol}`,
     );
   }
   if (isBlockedHostnameOrIp(parsed.hostname)) {
-    throw new SsrFBlockedError(
+    throw new NetworkTargetBlockedError(
       `Blocked hostname or private/internal IP in Firecrawl scrape URL: ${parsed.hostname}`,
     );
   }

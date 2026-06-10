@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchConfiguredLocalOrigin } from "openclaw/plugin-sdk/fetch-runtime";
 // Ollama provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -12,9 +13,6 @@ import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import { fetchConfiguredLocalOriginWithEgressPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -47,7 +45,6 @@ type OllamaEmbeddingOptions = {
 export type OllamaEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
   model: string;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
@@ -90,17 +87,15 @@ async function withRemoteHttpResponse<T>(params: {
   url: string;
   init?: RequestInit;
   signal?: AbortSignal;
-  ssrfPolicy?: SsrFPolicy;
   configuredLocalOriginBaseUrl: string;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
-  const { response, release } = await fetchConfiguredLocalOriginWithEgressPolicy({
+  const { response, release } = await fetchConfiguredLocalOrigin({
     url: params.url,
     init: params.init,
     signal: params.signal,
-    policy: params.ssrfPolicy,
     configuredLocalOriginBaseUrl: params.configuredLocalOriginBaseUrl,
-    auditContext: "ollama-memory-embedding",
+    operation: "ollama-memory-embedding",
   });
   try {
     return await params.onResponse(response);
@@ -314,7 +309,6 @@ function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
   };
 }
@@ -328,7 +322,6 @@ export async function createOllamaEmbeddingProvider(
   const embedMany = async (input: string | string[], signal?: AbortSignal): Promise<number[][]> => {
     const json = await withRemoteHttpResponse({
       url: embedUrl,
-      ssrfPolicy: client.ssrfPolicy,
       configuredLocalOriginBaseUrl: client.baseUrl,
       signal,
       init: {

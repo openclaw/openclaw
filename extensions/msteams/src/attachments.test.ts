@@ -1,4 +1,4 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 // Msteams tests cover attachments plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
@@ -49,7 +49,7 @@ type RemoteMediaFetchParams = {
   url: string;
   maxBytes?: number;
   filePathHint?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
@@ -76,7 +76,7 @@ function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean 
   return hostname === pattern;
 }
 
-function isUrlAllowedBySsrfPolicy(url: string, policy?: SsrFPolicy): boolean {
+function isUrlAllowedBySsrfPolicy(url: string, policy?: NetworkTargetPolicy): boolean {
   if (!policy?.hostnameAllowlist || policy.hostnameAllowlist.length === 0) {
     return true;
   }

@@ -4,6 +4,8 @@
  * Provides HTTP-mappable error classes and stable blocked-policy messages used
  * by route handlers, clients, and Gateway proxy code.
  */
+import { NetworkTargetBlockedError } from "../infra/net/ssrf.js";
+
 /** Stable message for blocked CDP endpoint configuration. */
 export const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
 /** Stable message for blocked page navigation targets. */
@@ -106,8 +108,12 @@ export function toBrowserErrorResponse(err: unknown): {
   if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
     return { status: 409, message: err.message };
   }
-  if (err instanceof Error && err.name === "SsrFBlockedError") {
-    // SsrFBlockedError from this point is from a navigation-target check
+  if (
+    err instanceof NetworkTargetBlockedError ||
+    (err instanceof Error &&
+      (err.name === "NetworkTargetBlockedError" || err.name === "SsrFBlockedError"))
+  ) {
+    // NetworkTargetBlockedError from this point is from a navigation-target check
     // (assertBrowserNavigationAllowed / resolvePinnedHostnameWithPolicy on a
     // requested URL). CDP endpoint blocks are rethrown as
     // BrowserCdpEndpointBlockedError by assertCdpEndpointAllowed and handled

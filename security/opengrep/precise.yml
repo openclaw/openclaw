@@ -645,7 +645,7 @@ rules:
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: discord-allowlist-name-matching-without-dangerous-opt-in
   - id: ghsa-4g5x-2jfc-xm98.raw-fetch-to-disk-bypasses-media-runtime
-    message: Remote media downloads should use the shared bounded media-runtime helpers instead of fetchWithSsrFGuard plus direct response-body-to-disk writes, which bypass core size, cleanup, and inbound-store limits.
+    message: Remote media downloads should use the shared bounded media-runtime helpers instead of ad hoc canonical-fetch response-body-to-disk writes, which bypass core size, cleanup, and inbound-store limits.
     severity: ERROR
     languages:
       - typescript
@@ -656,7 +656,7 @@ rules:
             ...
           }
       - pattern: |
-          const { response, release } = await fetchWithSsrFGuard({ ... });
+          const { response, release } = await fetchWithResponseRelease({ ... });
           ...
           await pipeline(Readable.fromWeb($BODY), $WRITESTREAM);
           ...
@@ -2012,7 +2012,7 @@ rules:
       - typescript
     severity: WARNING
     message: |
-      In src/plugins/marketplace.ts, a raw fetch() is used for a marketplace archive URL without going through fetchWithSsrFGuard. A compromised marketplace server could return a URL pointing to internal network services (RFC1918, cloud metadata). Use fetchWithSsrFGuard({ url: archiveUrl, auditContext: "marketplace-plugin-download" }). See GHSA-9Q7V-8MR7-G23P.
+      In src/plugins/marketplace.ts, a raw fetch() is used for a marketplace archive URL without going through the canonical egress helper. A compromised marketplace server could return a URL pointing to internal network services (RFC1918, cloud metadata). Use fetchUntrustedUrl({ url: archiveUrl, operation: "marketplace-plugin-download" }). See GHSA-9Q7V-8MR7-G23P.
     metadata:
       category: security
       cwe:
@@ -2031,9 +2031,7 @@ rules:
         - src/plugins/plugin-download*.ts
     patterns:
       - pattern: fetch($URL, ...)
-      - pattern-not: fetchWithSsrFGuard(...)
-      - pattern-not-inside: |
-          fetchWithSsrFGuard(...)
+      - pattern-not: fetchUntrustedUrl(...)
   - id: ghsa-9wqx-g2cw-vc7r.matrix-verification-notice-missing-dm-access-gate
     message: sendVerificationNotice is called from a Matrix verification file that does not import resolveMatrixMonitorAccessState — the DM access policy check needed to gate verification notices is missing. Verification notices must be gated on DM access policy or they leak the bot's verification state to non-allowed peers. See GHSA-9WQX-G2CW-VC7R.
     severity: ERROR
@@ -3733,7 +3731,7 @@ rules:
           metavariable: $F
           regex: .*(fetchImage|downloadImage|loadImage|download).*
       - pattern-not-inside: |
-          const { response: $RESP, ...$REST } = await fetchWithSsrFGuard(...)
+          const { response: $RESP, ...$REST } = await fetchWithResponseRelease(...)
     metadata:
       ghsa: GHSA-QXGF-HMCJ-3XW3
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-QXGF-HMCJ-3XW3
@@ -3838,7 +3836,7 @@ rules:
     severity: ERROR
     mode: taint
     message: |
-      Channel/provider extension lets an operator/account-configurable URL flow into a raw HTTP client without going through fetchWithSsrFGuard. The configured value can point to a private-network destination (RFC1918, 169.254.169.254 metadata, loopback). See GHSA-RHFG-J8JQ-7V2H. Replace with fetchWithSsrFGuard(...) and thread the account's allowPrivateNetwork through an SsrFPolicy.
+      Channel/provider extension lets an operator/account-configurable URL flow into a raw HTTP client without going through the canonical egress helper. The configured value can point to a private-network destination (RFC1918, 169.254.169.254 metadata, loopback). See GHSA-RHFG-J8JQ-7V2H. Replace with fetchOperatorConfiguredEndpoint(...) or an owner-specific canonical fetch helper and keep private-network opt-in validation local to the owner.
       TRIAGE NOTE: This rule only fires when baseUrl/endpoint flows from a params/config/opts-shaped object (i.e. operator- or LLM-supplied input). Hardcoded constants (e.g. `this.baseUrl = "https://api.twilio.com/..."`) are NOT flagged because they are not attacker-controllable. If you see a finding where the URL is verifiably a compile-time constant, it is a false positive — please add a nosem comment and confirm the constant cannot be overridden at runtime.
     metadata:
       category: security
@@ -3882,11 +3880,14 @@ rules:
               metavariable: $PARAMS
               regex: ^(params|config|options|opts|input|args|cfg|settings|account|credentials|ext)$|^[a-z][a-zA-Z0-9]*(Params|Config|Options|Opts|Input|Args|Cfg|Settings|Account|Credentials|Ext)$
     pattern-sanitizers:
-      - pattern: fetchWithSsrFGuard(...)
-      - pattern: fetchWithSsrfGuard(...)
-      - pattern: $X.fetchWithSsrFGuard(...)
-      - pattern: ssrFCheck(...)
-      - pattern: validateUrlForSsrF(...)
+      - pattern: fetchWithResponseRelease(...)
+      - pattern: fetchOperatorConfiguredEndpoint(...)
+      - pattern: fetchUntrustedUrl(...)
+      - pattern: fetchConfiguredLocalOrigin(...)
+      - pattern: $X.fetchWithResponseRelease(...)
+      - pattern: $X.fetchOperatorConfiguredEndpoint(...)
+      - pattern: $X.fetchUntrustedUrl(...)
+      - pattern: $X.fetchConfiguredLocalOrigin(...)
     pattern-sinks:
       - pattern-either:
           - pattern: fetch($URL, ...)
@@ -4493,7 +4494,7 @@ rules:
       - typescript
       - javascript
     severity: ERROR
-    message: Cron webhook delivery should use fetchWithSsrFGuard instead of direct fetch to avoid SSRF bypasses.
+    message: Cron webhook delivery should use the canonical egress helper instead of direct fetch.
     patterns:
       - pattern-inside: |
           if ($TARGET && $EVENT.summary) {
@@ -4509,7 +4510,7 @@ rules:
                 ...
               })
       - pattern-not-inside: |
-          fetchWithSsrFGuard({
+          fetchOperatorConfiguredEndpoint({
             ...
           })
       - metavariable-regex:

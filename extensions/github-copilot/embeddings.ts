@@ -1,7 +1,6 @@
 import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Github Copilot plugin module implements embeddings behavior.
 import {
-  buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
@@ -9,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { resolveFirstGithubToken } from "./auth.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 
@@ -28,18 +26,6 @@ const COPILOT_HEADERS_STATIC: Record<string, string> = {
   "Content-Type": "application/json",
   ...buildCopilotIdeHeaders(),
 };
-
-function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
 
 type CopilotModelEntry = {
   id?: unknown;
@@ -78,7 +64,6 @@ async function discoverEmbeddingModels(params: {
   baseUrl: string;
   copilotToken: string;
   headers?: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
 }): Promise<string[]> {
   const url = `${params.baseUrl.replace(/\/$/, "")}/models`;
   const { response, release } = await fetchWithResponseRelease({
@@ -231,7 +216,6 @@ async function createGitHubCopilotEmbeddingProvider(
     return await withRemoteHttpResponse({
       url,
       fetchImpl: client.fetchImpl,
-      ssrfPolicy: buildRemoteBaseUrlPolicy(session.baseUrl),
       signal,
       init: {
         method: "POST",
@@ -303,7 +287,6 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
     });
     const baseUrl =
       options.remote?.baseUrl?.trim() || resolvedBaseUrl || DEFAULT_COPILOT_API_BASE_URL;
-    const ssrfPolicy = buildSsrfPolicy(baseUrl);
 
     // Always discover models even when the user pins one: this validates
     // the Copilot token and confirms the plan supports embeddings before
@@ -312,7 +295,6 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       baseUrl,
       copilotToken,
       headers: options.remote?.headers,
-      ssrfPolicy,
     });
 
     const userModel = options.model?.trim() || undefined;

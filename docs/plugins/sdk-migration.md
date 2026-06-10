@@ -56,17 +56,16 @@ imports, manifest fields, setup APIs, hooks, and runtime registration behavior.
   future compatibility-window note above.
   `openclaw/plugin-sdk/ssrf-runtime`,
   `openclaw/plugin-sdk/ssrf-policy`, and
-  `openclaw/plugin-sdk/ssrf-dispatcher` have been removed from the public
-  plugin SDK. `openclaw/plugin-sdk/security-runtime` also no longer re-exports
-  generic SSRF policy, hostname blocking, or pinned-dispatcher helpers. Plugins
-  that imported `fetchWithSsrFGuard`, generic SSRF policy helpers, or
-  pinned-dispatcher helpers should use ordinary `fetch` or the
-  supported fetch runtime helpers for HTTP requests, rely on `proxy.enabled`
-  plus an operator-managed external proxy for high-assurance destination
-  policy, and keep plugin-specific allowlist validation local when the plugin
-  owns a special protocol or redirect flow. OpenClaw's remaining stock
-  direct-mode guard is internal to OpenClaw-owned untrusted URL surfaces and is
-  not a plugin SDK contract.
+  `openclaw/plugin-sdk/ssrf-dispatcher` have been removed from the public plugin
+  SDK, and the old private `openclaw/plugin-sdk/ssrf-runtime-internal` subpath
+  is no longer available to bundled plugins. Plugins that imported
+  `fetchWithSsrFGuard`, generic SSRF policy helpers, or pinned-dispatcher
+  helpers should use the supported fetch runtime helpers for HTTP requests,
+  rely on `proxy.enabled` plus an operator-managed external proxy for
+  high-assurance destination policy, and keep plugin-specific allowlist
+  validation local when the plugin owns a special protocol or redirect flow.
+  OpenClaw's remaining stock direct-mode guard is internal to OpenClaw-owned
+  untrusted URL surfaces and is not a plugin SDK contract.
 </Warning>
 
 ## Why this changed

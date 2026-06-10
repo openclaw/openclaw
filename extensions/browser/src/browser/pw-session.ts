@@ -23,7 +23,7 @@ import type {
   Route,
 } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
-import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { NetworkTargetBlockedError, type NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
@@ -734,7 +734,7 @@ export function getObservedBrowserStateForPage(page: Page): BrowserObservedState
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<BrowserObservedState> {
   const page = await getPageForTargetId(opts);
   return getObservedBrowserStateForPage(page);
@@ -790,7 +790,7 @@ export async function respondToObservedDialogViaPlaywright(opts: {
   dialogId?: string;
   accept: boolean;
   promptText?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<BrowserObservedDialogRecord> {
   const page = await getPageForTargetId(opts);
   return await respondToObservedDialogOnPage({
@@ -917,7 +917,10 @@ function observeBrowser(browser: Browser) {
   }
 }
 
-async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<ConnectedBrowser> {
+async function connectBrowser(
+  cdpUrl: string,
+  ssrfPolicy?: NetworkTargetPolicy,
+): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -1073,7 +1076,7 @@ async function findPageByTargetIdViaTargetList(
   pages: Page[],
   targetId: string,
   cdpUrl: string,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<Page | null> {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
@@ -1091,7 +1094,7 @@ async function findPageByTargetId(
   browser: Browser,
   targetId: string,
   cdpUrl?: string,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
@@ -1123,7 +1126,7 @@ async function findPageByTargetId(
 async function resolvePageByTargetIdOrThrow(opts: {
   cdpUrl: string;
   targetId: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<Page> {
   if (isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
@@ -1139,7 +1142,7 @@ async function resolvePageByTargetIdOrThrow(opts: {
 async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
   targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<Page> {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
@@ -1186,7 +1189,7 @@ async function getPageForTargetIdOnce(opts: {
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<Page> {
   const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
   try {
@@ -1259,7 +1262,9 @@ function isSubframeDocumentNavigationRequest(page: Page, request: Request): bool
 
 /** Return true when an error is a browser navigation policy denial. */
 export function isPolicyDenyNavigationError(err: unknown): boolean {
-  return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
+  return (
+    err instanceof NetworkTargetBlockedError || err instanceof InvalidBrowserNavigationUrlError
+  );
 }
 
 // Mark a page (and its CDP target id when resolvable) as blocked so subsequent
@@ -1520,7 +1525,7 @@ function cdpSocketNeedsAttach(wsUrl: string): boolean {
 async function tryTerminateExecutionViaCdp(opts: {
   cdpUrl: string;
   targetId: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<void> {
   await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
@@ -1612,7 +1617,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
   reason?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
   const cur = takeCachedPlaywrightBrowserConnection(normalized);
@@ -1657,7 +1662,7 @@ async function withPlaywrightSafeReadReconnect<T>(
 /** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<
   Array<{
     targetId: string;
@@ -1819,7 +1824,7 @@ export async function createPageViaPlaywright(
 export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<void> {
   const page = await resolvePageByTargetIdOrThrow(opts);
   await page.close();
@@ -1833,7 +1838,7 @@ export async function closePageByTargetIdViaPlaywright(opts: {
 export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<void> {
   const page = await resolvePageByTargetIdOrThrow(opts);
   try {

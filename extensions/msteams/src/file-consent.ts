@@ -9,7 +9,7 @@
  */
 
 import { lookup } from "node:dns/promises";
-import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { isPrivateIpAddress } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildUserAgent } from "./user-agent.js";
 

@@ -475,50 +475,12 @@ const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<stri
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
-const SSRF_RUNTIME_INTERNAL_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 type PrivatePluginSdkSubpathOwner = {
   bundledPluginId: string;
   officialInstalledPackageName?: string;
   allowPrivateQaCli: boolean;
   subpaths: readonly string[];
 };
-const SSRF_RUNTIME_INTERNAL_BUNDLED_PLUGIN_OWNER_ENTRIES = [
-  ["brave", "@openclaw/brave-plugin"],
-  ["browser", undefined],
-  ["chutes", "@openclaw/chutes-provider"],
-  ["codex", "@openclaw/codex"],
-  ["firecrawl", "@openclaw/firecrawl-plugin"],
-  ["github-copilot", "@openclaw/github-copilot-provider"],
-  ["google", "@openclaw/google-plugin"],
-  ["google-meet", "@openclaw/google-meet"],
-  ["googlechat", "@openclaw/googlechat"],
-  ["line", "@openclaw/line"],
-  ["lmstudio", "@openclaw/lmstudio-provider"],
-  ["matrix", "@openclaw/matrix"],
-  ["mistral", "@openclaw/mistral-provider"],
-  ["msteams", "@openclaw/msteams"],
-  ["nostr", "@openclaw/nostr"],
-  ["nvidia", "@openclaw/nvidia-provider"],
-  ["ollama", undefined],
-  ["openai", "@openclaw/openai-provider"],
-  ["qqbot", "@openclaw/qqbot"],
-  ["searxng", "@openclaw/searxng-plugin"],
-  ["synology-chat", "@openclaw/synology-chat"],
-  ["telegram", "@openclaw/telegram"],
-  ["tlon", "@openclaw/tlon"],
-  ["voice-call", "@openclaw/voice-call"],
-  ["voyage", "@openclaw/voyage-provider"],
-  ["zalo", "@openclaw/zalo"],
-] as const;
-const SSRF_RUNTIME_INTERNAL_BUNDLED_PLUGIN_OWNERS =
-  SSRF_RUNTIME_INTERNAL_BUNDLED_PLUGIN_OWNER_ENTRIES.map(
-    ([bundledPluginId, officialInstalledPackageName]) => ({
-      bundledPluginId,
-      officialInstalledPackageName,
-      allowPrivateQaCli: false,
-      subpaths: [SSRF_RUNTIME_INTERNAL_PLUGIN_SDK_SUBPATH],
-    }),
-  ) satisfies readonly PrivatePluginSdkSubpathOwner[];
 const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[] = [
   {
     bundledPluginId: "codex",
@@ -529,7 +491,11 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
     ],
   },
-  ...SSRF_RUNTIME_INTERNAL_BUNDLED_PLUGIN_OWNERS,
+  {
+    bundledPluginId: "browser",
+    allowPrivateQaCli: false,
+    subpaths: ["browser-cdp-proxy-bypass"],
+  },
 ];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
@@ -1190,7 +1156,6 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
     ...new Set([
       CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-      SSRF_RUNTIME_INTERNAL_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
         ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
         : []),

@@ -14,7 +14,7 @@ import {
 import {
   getBrowserControlServerTestState,
   getPwMocks,
-  setBrowserControlServerSsrFPolicy,
+  setBrowserControlServerNetworkTargetPolicy,
   setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
@@ -655,7 +655,7 @@ describe("browser control server", () => {
   it.each(guardedCurrentTabRouteCases)(
     "blocks $method $path on disallowed current tab URLs",
     async (routeCase) => {
-      setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+      setBrowserControlServerNetworkTargetPolicy({ allowPrivateNetwork: false });
       setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
       const base = await startServerAndBase();
 
@@ -674,7 +674,7 @@ describe("browser control server", () => {
   it.each(tabManagementActCases)(
     "allows tab-management act:$kind on disallowed current tab URLs",
     async ({ body, mockName }) => {
-      setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+      setBrowserControlServerNetworkTargetPolicy({ allowPrivateNetwork: false });
       setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
       const base = await startServerAndBase();
 

@@ -333,7 +333,7 @@ describe("runtime api guardrails", () => {
 
   it("keeps plugin runtime api barrels from re-exporting SSRF helper surfaces", () => {
     const forbiddenPattern =
-      /\b(?:SsrFPolicy|SsrFBlockedError|LookupFn|fetchWithSsrFGuard|isBlockedHostnameOrIp|ssrfPolicyFrom|resolvePinnedHostname|createPinnedDispatcher|closeDispatcher|assertHttpUrlTargetsPrivateNetwork)\b|openclaw\/plugin-sdk\/ssrf-runtime(?:['"]|$)|openclaw\/plugin-sdk\/ssrf-policy|openclaw\/plugin-sdk\/ssrf-dispatcher/;
+      /\b(?:SsrFPolicy|SsrFBlockedError|LookupFn|fetchWithSsrFGuard|isBlockedHostnameOrIp|ssrfPolicyFrom|resolvePinnedHostname|createPinnedDispatcher|closeDispatcher|assertHttpUrlTargetsPrivateNetwork)\b|openclaw\/plugin-sdk\/ssrf-runtime(?:-internal)?(?:['"]|$)|openclaw\/plugin-sdk\/ssrf-policy|openclaw\/plugin-sdk\/ssrf-dispatcher/;
 
     for (const file of collectRuntimeApiFiles()) {
       const source = readFileSync(resolve(ROOT_DIR, "..", file), "utf8");

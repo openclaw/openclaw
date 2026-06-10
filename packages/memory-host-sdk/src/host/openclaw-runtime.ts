@@ -78,7 +78,6 @@ export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-fi
 export { root } from "../../../../src/infra/fs-safe.js";
 
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
-export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
 export {
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
   DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,

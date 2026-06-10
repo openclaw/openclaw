@@ -1,9 +1,7 @@
 // Memory Host SDK module implements embeddings remote client behavior.
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
-import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
 // Builds authenticated remote embedding HTTP clients from agent memory config.
@@ -33,12 +31,12 @@ function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolea
   }
 }
 
-/** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
+/** Resolve base URL, bearer headers, and header overrides for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
-}): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
+}): Promise<{ baseUrl: string; headers: Record<string, string> }> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
     value: remote?.apiKey,
@@ -67,5 +65,5 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   if (isNativeOpenAIEmbeddingRoute(params.provider, baseUrl)) {
     Object.assign(headers, resolveOpenClawAttributionHeaders());
   }
-  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
+  return { baseUrl, headers };
 }

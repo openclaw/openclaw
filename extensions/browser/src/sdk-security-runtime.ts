@@ -11,9 +11,9 @@ export {
   isPrivateNetworkAllowedByPolicy,
   matchesHostnameAllowlist,
   resolvePinnedHostnameWithPolicy,
-  SsrFBlockedError,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
-export type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+  NetworkTargetBlockedError,
+} from "openclaw/plugin-sdk/security-runtime";
+export type { LookupFn, NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 
 export { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 export {

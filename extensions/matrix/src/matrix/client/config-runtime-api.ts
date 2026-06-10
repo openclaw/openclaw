@@ -6,5 +6,5 @@ export {
 } from "openclaw/plugin-sdk/account-id";
 export {
   isPrivateNetworkOptInEnabled,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
+  networkTargetPolicyFromDangerouslyAllowPrivateNetwork,
+} from "openclaw/plugin-sdk/security-runtime";

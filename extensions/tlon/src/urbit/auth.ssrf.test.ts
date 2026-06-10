@@ -1,6 +1,6 @@
 // Tlon tests cover auth.ssrf plugin behavior.
-import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { NetworkTargetBlockedError } from "openclaw/plugin-sdk/security-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
 
@@ -18,7 +18,7 @@ describe("tlon urbit auth ssrf", () => {
     vi.stubGlobal("fetch", mockFetch);
 
     await expect(authenticate("http://127.0.0.1:8080", "code")).rejects.toBeInstanceOf(
-      SsrFBlockedError,
+      NetworkTargetBlockedError,
     );
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -64,7 +64,7 @@ describe("tlon urbit auth ssrf", () => {
         lookupFn,
         fetchImpl: mockFetch as typeof fetch,
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(NetworkTargetBlockedError);
     expect(mockFetch).toHaveBeenCalledOnce();
   });
 });

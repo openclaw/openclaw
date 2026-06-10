@@ -19,7 +19,6 @@ const VENICE_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 export const VENICE_BASE_URL = VENICE_MANIFEST_PROVIDER.baseUrl;
 const VENICE_DEFAULT_MODEL_ID = "kimi-k2-5";
 export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
-const VENICE_ALLOWED_HOSTNAMES = ["api.venice.ai"];
 
 const VENICE_DEFAULT_COST = {
   input: 0,
@@ -187,7 +186,6 @@ export async function discoverVeniceModels(
           endpoint: `${VENICE_BASE_URL}/models`,
           timeoutMs: VENICE_DISCOVERY_TIMEOUT_MS,
           ttlMs: VENICE_DISCOVERY_CACHE_TTL_MS,
-          policy: { allowedHostnames: VENICE_ALLOWED_HOSTNAMES },
           auditContext: "venice-model-discovery",
         }),
       {

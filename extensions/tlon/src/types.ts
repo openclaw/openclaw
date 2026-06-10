@@ -6,10 +6,7 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  hasLegacyFlatAllowPrivateNetworkAlias,
-  isPrivateNetworkOptInEnabled,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/security-runtime";
 
 type TlonAccountConfig = {
   name?: string;
@@ -31,6 +28,15 @@ type TlonAccountConfig = {
   ownerShip?: string;
   accounts?: Record<string, TlonAccountConfig>;
 };
+
+function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.hasOwn(value, "allowPrivateNetwork"),
+  );
+}
 
 export type TlonResolvedAccount = {
   accountId: string;

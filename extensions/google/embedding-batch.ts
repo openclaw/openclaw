@@ -112,7 +112,6 @@ async function submitGeminiBatch(params: {
   });
   const filePayload = await withRemoteHttpResponse({
     url: uploadUrl,
-    ssrfPolicy: params.gemini.ssrfPolicy,
     init: {
       method: "POST",
       headers: {
@@ -150,7 +149,6 @@ async function submitGeminiBatch(params: {
   });
   return await withRemoteHttpResponse({
     url: batchEndpoint,
-    ssrfPolicy: params.gemini.ssrfPolicy,
     init: {
       method: "POST",
       headers: buildBatchHeaders(params.gemini, { json: true }),
@@ -183,7 +181,6 @@ async function fetchGeminiBatchStatus(params: {
   debugEmbeddingsLog("memory embeddings: gemini batch status", { statusUrl });
   return await withRemoteHttpResponse({
     url: statusUrl,
-    ssrfPolicy: params.gemini.ssrfPolicy,
     init: {
       headers: buildBatchHeaders(params.gemini, { json: true }),
     },
@@ -206,7 +203,6 @@ async function fetchGeminiFileContent(params: {
   debugEmbeddingsLog("memory embeddings: gemini batch download", { downloadUrl });
   return await withRemoteHttpResponse({
     url: downloadUrl,
-    ssrfPolicy: params.gemini.ssrfPolicy,
     init: {
       headers: buildBatchHeaders(params.gemini, { json: true }),
     },

@@ -2,8 +2,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchConfiguredLocalOriginWithEgressPolicyMock } = vi.hoisted(() => ({
-  fetchConfiguredLocalOriginWithEgressPolicyMock: vi.fn(
+const { fetchConfiguredLocalOriginMock } = vi.hoisted(() => ({
+  fetchConfiguredLocalOriginMock: vi.fn(
     async ({ init, url }: { init?: RequestInit; url: string }) => ({
       response: await fetch(url, init),
       release: async () => {},
@@ -12,23 +12,10 @@ const { fetchConfiguredLocalOriginWithEgressPolicyMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchConfiguredLocalOrigin: fetchConfiguredLocalOriginMock,
   fetchWithResponseRelease: vi.fn(),
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
-    const parsed = new URL(baseUrl);
-    return { allowedOrigins: [parsed.origin] };
-  },
 }));
-
-// Import-resolution gating for this private helper is covered in sdk-alias.test.ts.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime-internal")>();
-  return {
-    ...actual,
-    fetchConfiguredLocalOriginWithEgressPolicy: fetchConfiguredLocalOriginWithEgressPolicyMock,
-  };
-});
 
 let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;
 let ollamaMemoryEmbeddingProviderAdapter: typeof import("./memory-embedding-adapter.js").ollamaMemoryEmbeddingProviderAdapter;
@@ -39,7 +26,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fetchConfiguredLocalOriginWithEgressPolicyMock.mockClear();
+  fetchConfiguredLocalOriginMock.mockClear();
 });
 
 afterEach(() => {
@@ -80,10 +67,10 @@ function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch
   return body.input;
 }
 
-function firstGuardedFetchCall(): Record<string, unknown> {
-  const call = fetchConfiguredLocalOriginWithEgressPolicyMock.mock.calls[0]?.[0];
+function firstConfiguredLocalOriginFetchCall(): Record<string, unknown> {
+  const call = fetchConfiguredLocalOriginMock.mock.calls[0]?.[0];
   if (!call || typeof call !== "object") {
-    throw new Error("expected guarded fetch call");
+    throw new Error("expected configured local origin fetch call");
   }
   return call as Record<string, unknown>;
 }
@@ -144,15 +131,13 @@ describe("ollama embedding provider", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(firstGuardedFetchCall()).toMatchObject({
+    expect(firstConfiguredLocalOriginFetchCall()).toMatchObject({
       url: "http://127.0.0.1:11434/api/embed",
-      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
       configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
-      auditContext: "ollama-memory-embedding",
     });
   });
 
-  it("passes cloud Ollama origins through the guarded fetch contract", async () => {
+  it("passes cloud Ollama origins through the configured origin fetch contract", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
 
     const { provider } = await createOllamaEmbeddingProvider({
@@ -166,11 +151,9 @@ describe("ollama embedding provider", () => {
     await provider.embedQuery("hello");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(firstGuardedFetchCall()).toMatchObject({
+    expect(firstConfiguredLocalOriginFetchCall()).toMatchObject({
       url: "https://ollama.com/api/embed",
-      policy: { allowedOrigins: ["https://ollama.com"] },
       configuredLocalOriginBaseUrl: "https://ollama.com",
-      auditContext: "ollama-memory-embedding",
     });
   });
 
@@ -314,11 +297,9 @@ describe("ollama embedding provider", () => {
     await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(inputs).toEqual([["a", "bb", "ccc"]]);
-    expect(firstGuardedFetchCall()).toMatchObject({
+    expect(firstConfiguredLocalOriginFetchCall()).toMatchObject({
       url: "http://127.0.0.1:11434/api/embed",
-      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
       configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
-      auditContext: "ollama-memory-embedding",
     });
   });
 

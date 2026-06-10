@@ -7,10 +7,10 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
 import {
   isBlockedHostnameOrIp,
-  resolveSsrFPolicyForUrl,
-  SsrFBlockedError,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
+  resolveNetworkTargetPolicyForUrl,
+  NetworkTargetBlockedError,
+  type NetworkTargetPolicy,
+} from "openclaw/plugin-sdk/security-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
@@ -49,7 +49,7 @@ async function fetchLmstudioEndpoint(params: {
   init?: RequestInit;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   return await fetchWithResponseRelease({
@@ -63,11 +63,11 @@ async function fetchLmstudioEndpoint(params: {
   });
 }
 
-function assertLmstudioUrlAllowedByPolicy(url: URL, policy: SsrFPolicy | undefined): void {
+function assertLmstudioUrlAllowedByPolicy(url: URL, policy: NetworkTargetPolicy | undefined): void {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("LM Studio model requests only support http and https URLs");
   }
-  const urlPolicy = resolveSsrFPolicyForUrl(url, policy);
+  const urlPolicy = resolveNetworkTargetPolicyForUrl(url, policy);
   const hostnameAllowlist = [
     ...(urlPolicy?.allowedHostnames ?? []),
     ...(urlPolicy?.hostnameAllowlist ?? []),
@@ -76,10 +76,10 @@ function assertLmstudioUrlAllowedByPolicy(url: URL, policy: SsrFPolicy | undefin
     hostnameAllowlist.length > 0 &&
     !hostnameAllowlist.some((entry) => isLmstudioHostnameAllowed(url.hostname, entry))
   ) {
-    throw new SsrFBlockedError("Blocked LM Studio model request target by policy");
+    throw new NetworkTargetBlockedError("Blocked LM Studio model request target by policy");
   }
   if (isBlockedHostnameOrIp(url.hostname, urlPolicy)) {
-    throw new SsrFBlockedError("Blocked LM Studio model request target by policy");
+    throw new NetworkTargetBlockedError("Blocked LM Studio model request target by policy");
   }
 }
 
@@ -105,7 +105,7 @@ export async function fetchLmstudioModels(params: {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   timeoutMs?: number;
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
@@ -213,7 +213,7 @@ export async function ensureLmstudioModelLoaded(params: {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   modelKey: string;
   requestedContextLength?: number;
   timeoutMs?: number;

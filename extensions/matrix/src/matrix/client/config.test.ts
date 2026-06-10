@@ -1,4 +1,4 @@
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { LookupFn } from "openclaw/plugin-sdk/security-runtime";
 // Matrix tests cover config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../../test-runtime.js";

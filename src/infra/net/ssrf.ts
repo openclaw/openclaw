@@ -64,6 +64,11 @@ export type SsrFPolicy = {
   hostnameAllowlist?: string[];
 };
 
+export type PrivateIpBlockOptions = Pick<
+  SsrFPolicy,
+  "allowRfc2544BenchmarkRange" | "allowIpv6UniqueLocalRange"
+>;
+
 function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
   return normalizePolicyHostnames(values).toSorted();
 }
@@ -186,6 +191,17 @@ export function ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl: string): SsrFPol
   return origin ? { allowedOrigins: [origin] } : undefined;
 }
 
+export const networkTargetPolicyFromHttpBaseUrlAllowedHostname =
+  ssrfPolicyFromHttpBaseUrlAllowedHostname;
+export const networkTargetPolicyFromHttpBaseUrlAllowedOrigin =
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin;
+
+export function networkTargetPolicyFromDangerouslyAllowPrivateNetwork(
+  dangerouslyAllowPrivateNetwork: boolean | null | undefined,
+): SsrFPolicy | undefined {
+  return dangerouslyAllowPrivateNetwork === true ? { allowPrivateNetwork: true } : undefined;
+}
+
 export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
   baseUrl: string,
 ): SsrFPolicy | undefined {
@@ -226,6 +242,33 @@ export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }
 
+export function isPrivateNetworkOptInEnabled(input: unknown): boolean {
+  if (input === true) {
+    return true;
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return false;
+  }
+  const record = input as {
+    allowPrivateNetwork?: unknown;
+    dangerouslyAllowPrivateNetwork?: unknown;
+    network?: unknown;
+  };
+  const network =
+    record.network && typeof record.network === "object" && !Array.isArray(record.network)
+      ? (record.network as {
+          allowPrivateNetwork?: unknown;
+          dangerouslyAllowPrivateNetwork?: unknown;
+        })
+      : undefined;
+  return (
+    record.allowPrivateNetwork === true ||
+    record.dangerouslyAllowPrivateNetwork === true ||
+    network?.allowPrivateNetwork === true ||
+    network?.dangerouslyAllowPrivateNetwork === true
+  );
+}
+
 function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): boolean {
   return (
     isPrivateNetworkAllowedByPolicy(policy) ||
@@ -253,6 +296,8 @@ export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPoli
     ),
   };
 }
+
+export const resolveNetworkTargetPolicyForUrl = resolveSsrFPolicyForUrl;
 
 function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {
   return {
@@ -282,6 +327,75 @@ export function matchesHostnameAllowlist(hostname: string, allowlist: string[]):
     return true;
   }
   return allowlist.some((pattern) => isHostnameAllowedByPattern(hostname, pattern));
+}
+
+function normalizeHostnameSuffix(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed === "*" || trimmed === "*.") {
+    return "*";
+  }
+  return trimmed
+    .replace(/^\*\.?/, "")
+    .replace(/^\.+/, "")
+    .replace(/\.+$/, "");
+}
+
+export function normalizeHostnameSuffixAllowlist(
+  input?: readonly string[],
+  defaults?: readonly string[],
+): string[] {
+  const source = input && input.length > 0 ? input : defaults;
+  if (!source || source.length === 0) {
+    return [];
+  }
+  const normalized = Array.from(new Set(source.map(normalizeHostnameSuffix).filter(Boolean)));
+  return normalized.includes("*") ? ["*"] : normalized;
+}
+
+export function buildHostnameAllowlistPolicyFromSuffixAllowlist(
+  allowHosts?: readonly string[],
+): SsrFPolicy | undefined {
+  const normalizedAllowHosts = normalizeHostnameSuffixAllowlist(allowHosts);
+  if (normalizedAllowHosts.length === 0) {
+    return undefined;
+  }
+  const patterns = new Set<string>();
+  for (const normalized of normalizedAllowHosts) {
+    if (normalized === "*") {
+      return undefined;
+    }
+    patterns.add(normalized);
+    patterns.add(`*.${normalized}`);
+  }
+  return patterns.size > 0 ? { hostnameAllowlist: [...patterns] } : undefined;
+}
+
+export function isHttpsUrlAllowedByHostnameSuffixAllowlist(
+  url: string,
+  allowHosts?: readonly string[],
+): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    const normalizedHost = normalizeHostname(parsed.hostname);
+    const normalizedAllowHosts = normalizeHostnameSuffixAllowlist(allowHosts);
+    if (!normalizedHost || normalizedAllowHosts.length === 0) {
+      return false;
+    }
+    return normalizedAllowHosts.some(
+      (allowHost) =>
+        allowHost === "*" ||
+        normalizedHost === allowHost ||
+        normalizedHost.endsWith(`.${allowHost}`),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function looksLikeUnsupportedIpv4Literal(address: string): boolean {
@@ -580,6 +694,40 @@ export async function resolvePinnedHostnameWithPolicy(
 
 export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFPolicy): string {
   return resolveHostnamePolicyChecks(hostname, policy).normalized;
+}
+
+export async function assertHttpUrlTargetsPrivateNetwork(
+  url: string,
+  params: {
+    dangerouslyAllowPrivateNetwork?: boolean | null;
+    allowPrivateNetwork?: boolean | null;
+    lookupFn?: LookupFn;
+    errorMessage?: string;
+  } = {},
+): Promise<void> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "http:") {
+    return;
+  }
+  const errorMessage =
+    params.errorMessage ?? "HTTP URL must target a trusted private/internal host";
+  if (isBlockedHostnameOrIp(parsed.hostname)) {
+    return;
+  }
+  const allowPrivateNetwork =
+    typeof params.dangerouslyAllowPrivateNetwork === "boolean"
+      ? params.dangerouslyAllowPrivateNetwork
+      : params.allowPrivateNetwork;
+  if (allowPrivateNetwork !== true) {
+    throw new Error(errorMessage);
+  }
+  const pinned = await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    lookupFn: params.lookupFn,
+    policy: networkTargetPolicyFromDangerouslyAllowPrivateNetwork(true),
+  });
+  if (!pinned.addresses.every((address) => isPrivateIpAddress(address))) {
+    throw new Error(errorMessage);
+  }
 }
 
 export async function resolvePinnedHostname(

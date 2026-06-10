@@ -161,16 +161,6 @@ describe("config footprint guardrails", () => {
     expect(source).not.toContain("allow?: boolean;");
   });
 
-  it("keeps bundled private-network helpers canonical-first with a narrow compat alias", () => {
-    const source = readSource("src/plugin-sdk/ssrf-runtime-internal.ts");
-
-    expect(source).toContain("export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(");
-    expect(source).toContain("export function ssrfPolicyFromAllowPrivateNetwork(");
-    expect(source).toContain(
-      "return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);",
-    );
-  });
-
   it("keeps bundled channel schemas out of the generic channel config SDK surface", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");

@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import {
   asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
@@ -505,7 +504,6 @@ async function fetchChutesModelRows(accessToken?: string): Promise<readonly unkn
       Accept: "application/json",
       ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
     }),
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
     auditContext: "chutes-model-discovery",
   });
 }

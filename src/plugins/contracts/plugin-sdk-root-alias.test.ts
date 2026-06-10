@@ -541,16 +541,10 @@ describe("plugin-sdk root alias", () => {
   it("ignores unsafe private local-only plugin-sdk subpaths in the CJS root alias", () => {
     const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
     const qaLabPath = path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts");
-    const ssrfRuntimeInternalPath = path.join(
-      packageRoot,
-      "src",
-      "plugin-sdk",
-      "ssrf-runtime-internal.ts",
-    );
     const lazyModule = loadRootAliasWithStubs({
       env: { OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" },
-      privateLocalOnlySubpaths: ["qa-lab", "../escape", "nested/path", "ssrf-runtime-internal"],
-      existingPaths: [qaLabPath, ssrfRuntimeInternalPath],
+      privateLocalOnlySubpaths: ["qa-lab", "../escape", "nested/path"],
+      existingPaths: [qaLabPath],
       monolithicExports: {
         slowHelper: (): string => "loaded",
       },
@@ -562,8 +556,6 @@ describe("plugin-sdk root alias", () => {
     expect(aliasMap["@openclaw/plugin-sdk/qa-lab"]).toBe(qaLabPath);
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/../escape");
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/nested/path");
-    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/ssrf-runtime-internal");
-    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/ssrf-runtime-internal");
   });
 
   it("keeps non-QA private local-only plugin-sdk subpaths out of the CJS root alias", () => {

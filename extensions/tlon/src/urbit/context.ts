@@ -1,5 +1,5 @@
 // Tlon plugin module implements context behavior.
-export { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+export { networkTargetPolicyFromDangerouslyAllowPrivateNetwork } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeUrbitHostname, validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
@@ -45,7 +45,7 @@ export function getUrbitContext(url: string, ship?: string): UrbitContext {
  * Get the default SSRF policy for image uploads.
  * Uses a restrictive policy that blocks private networks by default.
  */
-export function getDefaultSsrFPolicy(): undefined {
+export function getDefaultNetworkTargetPolicy(): undefined {
   // Default: block private networks for image uploads (safer default)
   return undefined;
 }

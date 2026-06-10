@@ -1,6 +1,6 @@
 /**
- * @deprecated Broad public SDK barrel. Prefer focused security/SSRF/secret
- * subpaths and avoid adding new imports here.
+ * @deprecated Broad public SDK barrel. Prefer focused security/secret subpaths
+ * and avoid adding new imports here.
  */
 
 import { root as fsRoot, type OpenResult } from "../infra/fs-safe.js";
@@ -79,6 +79,35 @@ export async function writeFileFromPathWithinRoot(params: {
 export { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 export { normalizeHostname } from "../infra/net/hostname.js";
+export {
+  assertHostnameAllowedWithPolicy,
+  assertHttpUrlTargetsPrivateNetwork,
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  createPinnedLookup,
+  isBlockedHostnameOrIp as isPrivateOrLoopbackHost,
+  isBlockedHostname,
+  isBlockedHostnameOrIp,
+  isHostnameAllowedByPattern,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  isPrivateIpAddress,
+  isPrivateNetworkAllowedByPolicy,
+  isPrivateNetworkOptInEnabled,
+  matchesHostnameAllowlist,
+  SsrFBlockedError as NetworkTargetBlockedError,
+  networkTargetPolicyFromDangerouslyAllowPrivateNetwork,
+  networkTargetPolicyFromHttpBaseUrlAllowedHostname,
+  networkTargetPolicyFromHttpBaseUrlAllowedOrigin,
+  normalizeHostnameAllowlist,
+  normalizeHostnameSuffixAllowlist,
+  resolveNetworkTargetPolicyForUrl,
+  resolvePinnedHostnameWithPolicy,
+  type LookupFn,
+  type SsrFPolicy as NetworkTargetPolicy,
+  type PinnedDispatcherPolicy,
+  type PinnedHostname,
+  type PinnedHostnameOverride,
+  type PrivateIpBlockOptions,
+} from "../infra/net/ssrf.js";
 export { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 export {
   assertAbsolutePathInput,

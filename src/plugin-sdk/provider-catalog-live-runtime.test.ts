@@ -3,7 +3,7 @@ import {
   registerActiveManagedProxyUrl,
   resetActiveManagedProxyStateForTests,
 } from "../infra/net/proxy/active-proxy-state.js";
-import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
+import type { LookupFn } from "../infra/net/ssrf.js";
 import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
 import {
   buildLiveModelProviderConfig,
@@ -93,7 +93,6 @@ describe("provider-catalog-live-runtime", () => {
       auditContext: "provider-model-discovery",
       timeoutMs: 1234,
       signal: controller.signal,
-      policy: { allowedHostnames: ["provider.example.test"] },
     });
     const headers = request?.init?.headers;
     expect(headers).toBeInstanceOf(Headers);
@@ -156,36 +155,6 @@ describe("provider-catalog-live-runtime", () => {
     clearTimeoutSpy.mockRestore();
   });
 
-  it("strips provider credentials on cross-origin live catalog redirects", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(null, {
-          status: 302,
-          headers: { location: "https://catalog-cdn.example.test/v1/models" },
-        }),
-      )
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] })));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      fetchLiveProviderModelRows({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        discoveryApiKey: "provider-secret",
-        requireHttps: true,
-        policy: {
-          allowedHostnames: ["provider.example.test", "catalog-cdn.example.test"],
-        },
-      }),
-    ).resolves.toEqual([]);
-
-    const secondInit = fetchMock.mock.calls[1]?.[1] as RequestInit | undefined;
-    const headers = new Headers(secondInit?.headers);
-    expect(headers.get("accept")).toBe("application/json");
-    expect(headers.has("authorization")).toBe(false);
-  });
-
   it("rejects direct live catalog redirects outside the default endpoint host policy", async () => {
     const fetchMock = vi.fn(
       async () =>
@@ -202,39 +171,9 @@ describe("provider-catalog-live-runtime", () => {
         endpoint: "https://provider.example.test/v1/models",
         requireHttps: true,
       }),
-    ).rejects.toThrow(SsrFBlockedError);
+    ).rejects.toThrow("provider model discovery URL host is not allowed");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves direct live catalog allowlist failures before a response exists", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [] })));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      fetchLiveProviderModelRows({
-        providerId: "provider",
-        endpoint: "https://blocked.example.test/v1/models",
-        policy: { allowedHostnames: ["provider.example.test"] },
-      }),
-    ).rejects.toThrow(SsrFBlockedError);
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects direct live catalogs outside explicit origin allowlists before fetching", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [] })));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      fetchLiveProviderModelRows({
-        providerId: "provider",
-        endpoint: "https://blocked.example.test:8443/v1/models",
-        policy: { allowedOrigins: ["https://provider.example.test:8443"] },
-      }),
-    ).rejects.toThrow(SsrFBlockedError);
-
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("records direct live catalog HTTP exchanges for debug proxy capture", async () => {
@@ -277,7 +216,6 @@ describe("provider-catalog-live-runtime", () => {
       fetchLiveProviderModelRows({
         providerId: "provider",
         endpoint: "https://provider.example.test/v1/models",
-        policy: { allowedHostnames: ["provider.example.test"] },
         lookupFn,
       }),
     ).resolves.toEqual([]);
@@ -301,7 +239,6 @@ describe("provider-catalog-live-runtime", () => {
       fetchLiveProviderModelRows({
         providerId: "provider",
         endpoint: "https://provider.example.test/v1/models",
-        policy: { allowedHostnames: ["provider.example.test"] },
         lookupFn,
       }),
     ).resolves.toEqual([]);
@@ -327,9 +264,8 @@ describe("provider-catalog-live-runtime", () => {
       fetchLiveProviderModelRows({
         providerId: "provider",
         endpoint: "https://provider.example.test/v1/models",
-        policy: { allowedHostnames: ["provider.example.test"] },
       }),
-    ).rejects.toThrow(SsrFBlockedError);
+    ).rejects.toThrow("provider model discovery URL host is not allowed");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

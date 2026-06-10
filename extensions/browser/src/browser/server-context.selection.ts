@@ -2,7 +2,7 @@
  * Browser tab selection operations for default tab choice, focus, and close.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
@@ -17,7 +17,7 @@ import { resolveTargetIdFromTabs } from "./target-id.js";
 type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   getProfileState: () => ProfileRuntimeState;
-  getCdpControlPolicy: () => SsrFPolicy | undefined;
+  getCdpControlPolicy: () => NetworkTargetPolicy | undefined;
   ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;

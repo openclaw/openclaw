@@ -9,7 +9,7 @@ const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+vi.mock("openclaw/plugin-sdk/browser-cdp-proxy-bypass", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 

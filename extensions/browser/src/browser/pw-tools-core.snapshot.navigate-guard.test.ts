@@ -1,6 +1,6 @@
 // Browser tests cover pw tools core.snapshot.navigate guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { NetworkTargetBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
@@ -133,7 +133,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     };
     setPwToolsCoreCurrentPage(page);
     getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+      new NetworkTargetBlockedError("Blocked hostname or private/internal/special-use IP address"),
     );
 
     await expect(
@@ -141,7 +141,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(NetworkTargetBlockedError);
 
     expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(1);
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(

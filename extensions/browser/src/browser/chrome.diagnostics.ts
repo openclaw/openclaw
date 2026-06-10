@@ -5,7 +5,7 @@
  * and formats status output for browser doctor/status flows.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { CHROME_REACHABILITY_TIMEOUT_MS, CHROME_WS_READY_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -312,7 +312,7 @@ export async function diagnoseChromeCdp(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<ChromeCdpDiagnostic> {
   const startedAt = Date.now();
   try {

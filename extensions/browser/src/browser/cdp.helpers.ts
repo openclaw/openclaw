@@ -9,8 +9,8 @@ import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
-  SsrFBlockedError,
-  type SsrFPolicy,
+  NetworkTargetBlockedError,
+  type NetworkTargetPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
 import {
@@ -74,7 +74,7 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
 
 export async function assertCdpEndpointAllowed(
   cdpUrl: string,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<void> {
   if (!ssrfPolicy) {
     return;
@@ -353,7 +353,7 @@ export async function fetchCdpChecked(
     return { response: res, release };
   } catch (error) {
     await release();
-    if (error instanceof SsrFBlockedError) {
+    if (error instanceof NetworkTargetBlockedError) {
       throw new BrowserCdpEndpointBlockedError({ cause: error });
     }
     throw error;

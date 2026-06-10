@@ -1,5 +1,5 @@
 // Telegram helper module supports bot.media utils behavior.
-import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import * as networkTargetPolicy from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import * as harness from "./bot.media.e2e-harness.js";
 
@@ -9,7 +9,7 @@ export const cacheStickerSpy: StickerSpy = vi.fn();
 export const getCachedStickerSpy: StickerSpy = vi.fn();
 export const describeStickerImageSpy: StickerSpy = vi.fn();
 
-const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const resolvePinnedHostnameWithPolicy = networkTargetPolicy.resolvePinnedHostnameWithPolicy;
 const lookupMock = vi.fn();
 let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
 
@@ -149,8 +149,10 @@ beforeEach(() => {
   vi.useRealTimers();
   lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   resolvePinnedHostnameSpy = vi
-    .spyOn(ssrf, "resolvePinnedHostname")
-    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+    .spyOn(networkTargetPolicy, "resolvePinnedHostnameWithPolicy")
+    .mockImplementation((hostname, params) =>
+      resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupMock }),
+    );
 });
 
 afterEach(() => {

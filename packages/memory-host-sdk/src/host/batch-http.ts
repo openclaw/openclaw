@@ -1,7 +1,6 @@
 // Memory Host SDK module implements batch http behavior.
 import { postJson } from "./post-json.js";
 import { retryAsync } from "./retry-utils.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
 
 // JSON POST helper for batch APIs with provider-style transient retry.
 
@@ -9,7 +8,6 @@ import type { SsrFPolicy } from "./ssrf-policy.js";
 export async function postJsonWithRetry<T>(params: {
   url: string;
   headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   retryImpl?: typeof retryAsync;
   body: unknown;
@@ -21,7 +19,6 @@ export async function postJsonWithRetry<T>(params: {
       return await postJson<T>({
         url: params.url,
         headers: params.headers,
-        ssrfPolicy: params.ssrfPolicy,
         fetchImpl: params.fetchImpl,
         body: params.body,
         errorPrefix: params.errorPrefix,

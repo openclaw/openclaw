@@ -108,22 +108,7 @@ describe("package withRemoteHttpResponse", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects URLs outside the configured remote policy before fetching", async () => {
-    const deps = makeFetchDeps();
-
-    await expect(
-      withRemoteHttpResponse({
-        url: "https://other.example/v1/embeddings",
-        ssrfPolicy: { allowedHostnames: ["memory.example"] },
-        onResponse: async () => undefined,
-        ...deps,
-      }),
-    ).rejects.toThrow("Blocked hostname");
-
-    expect(deps.calls).toHaveLength(0);
-  });
-
-  it("rejects redirects outside the configured remote policy", async () => {
+  it("rejects redirects outside the initial configured remote host", async () => {
     const calls: unknown[] = [];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ input, init });
@@ -136,11 +121,10 @@ describe("package withRemoteHttpResponse", () => {
     await expect(
       withRemoteHttpResponse({
         url: "https://memory.example/v1/embeddings",
-        ssrfPolicy: { allowedHostnames: ["memory.example"] },
         fetchImpl,
         onResponse: async () => undefined,
       }),
-    ).rejects.toThrow("Blocked hostname");
+    ).rejects.toThrow("Blocked hostname (not configured remote host)");
 
     expect(calls).toHaveLength(1);
   });

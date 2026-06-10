@@ -6,7 +6,7 @@ import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runt
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -144,7 +144,7 @@ function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): bo
 
 async function assertSubframeNavigationAllowed(
   frameUrl: string,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<void> {
   if (!ssrfPolicy || (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))) {
     // Non-network frame URLs like about:blank and about:srcdoc do not cross the
@@ -175,7 +175,7 @@ function snapshotNetworkFrameUrl(frame: Frame): string | null {
 async function assertObservedDelayedNavigations(opts: {
   cdpUrl: string;
   page: Page;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   targetId?: string;
   observed: ObservedDelayedNavigations;
 }): Promise<void> {
@@ -255,7 +255,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   cdpUrl: string;
   page: Page;
   previousUrl: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   targetId?: string;
 }): Promise<void> {
   if (!opts.ssrfPolicy) {
@@ -341,7 +341,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   cdpUrl: string;
   page: Page;
   previousUrl: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   targetId?: string;
 }): Promise<T> {
   if (!opts.ssrfPolicy) {
@@ -531,7 +531,7 @@ export async function clickViaPlaywright(opts: {
   modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
   delayMs?: number;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -641,7 +641,7 @@ export async function clickCoordsViaPlaywright(opts: {
   button?: "left" | "right" | "middle";
   delayMs?: number;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
@@ -747,7 +747,7 @@ export async function selectOptionViaPlaywright(opts: {
   selector?: string;
   values: string[];
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -792,7 +792,7 @@ export async function pressKeyViaPlaywright(opts: {
   targetId?: string;
   key: string;
   delayMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const key = normalizeOptionalString(opts.key) ?? "";
@@ -836,7 +836,7 @@ export async function typeViaPlaywright(opts: {
   submit?: boolean;
   slowly?: boolean;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -914,7 +914,7 @@ export async function fillFormViaPlaywright(opts: {
   targetId?: string;
   fields: BrowserFormField[];
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
@@ -989,7 +989,7 @@ export async function fillFormViaPlaywright(opts: {
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   fn: string;
   ref?: string;
   timeoutMs?: number;
@@ -1459,7 +1459,7 @@ async function executeSingleAction(
   cdpUrl: string,
   targetId?: string,
   evaluateEnabled?: boolean,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
   depth = 0,
   signal?: AbortSignal,
 ): Promise<unknown> {
@@ -1646,7 +1646,7 @@ export async function executeActViaPlaywright(opts: {
   action: BrowserActRequest;
   targetId?: string;
   evaluateEnabled?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   signal?: AbortSignal;
 }): Promise<{
   result?: unknown;
@@ -1706,7 +1706,7 @@ export async function batchViaPlaywright(opts: {
   actions: BrowserActRequest[];
   stopOnError?: boolean;
   evaluateEnabled?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   depth?: number;
   signal?: AbortSignal;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {

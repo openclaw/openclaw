@@ -18,7 +18,7 @@ import {
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
@@ -52,7 +52,7 @@ export {
 };
 export { parseBrowserHttpUrl as parseHttpUrl };
 
-type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
+type BrowserNetworkTargetPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
   /**
    * Legacy raw-config alias. Keep it out of the public BrowserConfig type while
    * still accepting old user files until doctor rewrites them.
@@ -84,7 +84,7 @@ export type ResolvedBrowserConfig = {
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   tabCleanup: ResolvedBrowserTabCleanupConfig;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   extraArgs: string[];
 };
 
@@ -279,8 +279,10 @@ function resolveCdpPortRangeStart(
 
 const normalizeStringList = normalizeOptionalTrimmedStringList;
 
-function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
-  const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
+function resolveBrowserNetworkTargetPolicy(
+  cfg: BrowserConfig | undefined,
+): NetworkTargetPolicy | undefined {
+  const rawPolicy = cfg?.ssrfPolicy as BrowserNetworkTargetPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
@@ -465,7 +467,7 @@ export function resolveBrowserConfig(
     defaultProfile,
     profiles,
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),
-    ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
+    ssrfPolicy: resolveBrowserNetworkTargetPolicy(cfg),
     extraArgs,
   };
 }

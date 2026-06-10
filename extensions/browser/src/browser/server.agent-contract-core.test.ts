@@ -21,7 +21,7 @@ import {
   setBrowserControlServerEvaluateEnabled,
   setBrowserControlServerProfiles,
   setBrowserControlServerReachable,
-  setBrowserControlServerSsrFPolicy,
+  setBrowserControlServerNetworkTargetPolicy,
   setBrowserControlServerTabUrl,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
@@ -422,7 +422,7 @@ describe("browser control server", () => {
   });
 
   it("agent contract: snapshot blocks pending dialog state on disallowed current tab URLs", async () => {
-    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+    setBrowserControlServerNetworkTargetPolicy({ allowPrivateNetwork: false });
     setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
     const base = await startServerAndBase();
     const realFetch = getBrowserTestFetch();

@@ -653,8 +653,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
-    // Private bundled-plugin helper required by approved OpenClaw-owned plugins.
-    "plugin-sdk/ssrf-runtime-internal": "src/plugin-sdk/ssrf-runtime-internal.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
         ([entry, source]) => [`plugin-sdk/${entry}`, source],

@@ -1,13 +1,10 @@
 // Memory Host SDK helper module supports batch utils behavior.
-import type { SsrFPolicy } from "./ssrf-policy.js";
-
 // Common HTTP and grouping helpers for remote embedding batch clients.
 
 /** Minimal HTTP client config needed by batch providers. */
 export type BatchHttpClientConfig = {
   baseUrl?: string;
   headers?: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
 };
 

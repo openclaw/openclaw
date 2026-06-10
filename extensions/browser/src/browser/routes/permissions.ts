@@ -6,7 +6,7 @@
  */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../../infra/net/ssrf.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
 import { getPwAiModule } from "../pw-ai-module.js";
@@ -72,7 +72,7 @@ async function grantPermissions(params: {
   requiredPermissions: string[];
   optionalPermissions: string[];
   timeoutMs: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }) {
   const allPermissions = [
     ...new Set([...params.requiredPermissions, ...params.optionalPermissions]),

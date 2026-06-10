@@ -1,7 +1,10 @@
 // Matrix plugin module implements channel account paths behavior.
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import type { PinnedDispatcherPolicy, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type {
+  PinnedDispatcherPolicy,
+  NetworkTargetPolicy,
+} from "openclaw/plugin-sdk/security-runtime";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import type { CoreConfig } from "./types.js";
@@ -12,7 +15,7 @@ type ResolveMatrixAuth = (params: { cfg: CoreConfig; accountId?: string }) => Pr
   userId: string;
   deviceId?: string;
   allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }>;
 
@@ -24,7 +27,7 @@ type ProbeMatrix = (params: {
   timeoutMs: number;
   accountId?: string;
   allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }) => Promise<MatrixProbe>;
 

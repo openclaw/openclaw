@@ -9,8 +9,6 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
@@ -60,7 +58,7 @@ const lookupNvidiaFeaturedModelHostname = (async (
     return await dnsLookup(hostname, { ...options, family: 4 });
   }
   return await dnsLookup(hostname, { family: 4 });
-}) as LookupFn;
+}) as typeof dnsLookup;
 
 export function buildNvidiaProvider(): ModelProviderConfig {
   const provider = {
@@ -115,7 +113,6 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
       timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
       ttlMs: FEATURED_MODEL_CACHE_TTL_MS,
       requireHttps: true,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
       // The featured catalog is an NVIDIA-owned CloudFront URL. Some resolvers
       // stall for seconds on the default all-family lookup; IPv4 pinning keeps
       // the guarded fixed-host fetch on the fast path.

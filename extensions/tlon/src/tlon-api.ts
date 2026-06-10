@@ -6,7 +6,7 @@ import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
-import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
+import { networkTargetPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
 
 type ClientConfig = {
   shipUrl: string;
@@ -160,7 +160,9 @@ function sanitizeFileName(fileName: string): string {
 
 async function getAuthCookie(config: ClientConfig): Promise<string> {
   return await authenticate(config.shipUrl, await config.getCode(), {
-    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
+    ssrfPolicy: networkTargetPolicyFromDangerouslyAllowPrivateNetwork(
+      config.dangerouslyAllowPrivateNetwork,
+    ),
   });
 }
 
@@ -169,7 +171,7 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
     {
       baseUrl: config.shipUrl,
       cookie,
-      ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+      ssrfPolicy: networkTargetPolicyFromDangerouslyAllowPrivateNetwork(
         config.dangerouslyAllowPrivateNetwork,
       ),
     },

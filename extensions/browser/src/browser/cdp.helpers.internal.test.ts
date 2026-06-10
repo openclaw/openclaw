@@ -18,16 +18,11 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime-internal")>();
-  return {
-    ...actual,
-    registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/browser-cdp-proxy-bypass", () => ({
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
 
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { NetworkTargetBlockedError } from "../infra/net/ssrf.js";
 import {
   assertCdpEndpointAllowed,
   fetchCdpChecked,
@@ -144,7 +139,9 @@ describe("cdp.helpers internal", () => {
     });
 
     it("converts SSRF-blocked errors from the underlying fetch into a browser-scoped error", async () => {
-      fetchWithSsrFGuardMock.mockRejectedValueOnce(new SsrFBlockedError("blocked by policy"));
+      fetchWithSsrFGuardMock.mockRejectedValueOnce(
+        new NetworkTargetBlockedError("blocked by policy"),
+      );
       await expect(
         fetchCdpChecked("http://127.0.0.1:9222/json/version", 250),
       ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);

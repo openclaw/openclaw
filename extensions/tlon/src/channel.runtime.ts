@@ -15,7 +15,7 @@ import {
 import { configureClient } from "./tlon-api.js";
 import { resolveTlonAccount } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
-import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
+import { networkTargetPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
 import { urbitFetch } from "./urbit/fetch.js";
 import {
   buildMediaStory,
@@ -39,7 +39,7 @@ async function createHttpPokeApi(params: {
   ship: string;
   dangerouslyAllowPrivateNetwork?: boolean;
 }) {
-  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+  const ssrfPolicy = networkTargetPolicyFromDangerouslyAllowPrivateNetwork(
     params.dangerouslyAllowPrivateNetwork,
   );
   const cookie = await authenticate(params.url, params.code, { ssrfPolicy });
@@ -209,7 +209,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
 
 export async function probeTlonAccount(account: ConfiguredTlonAccount) {
   try {
-    const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+    const ssrfPolicy = networkTargetPolicyFromDangerouslyAllowPrivateNetwork(
       account.dangerouslyAllowPrivateNetwork,
     );
     const cookie = await authenticate(account.url, account.code, { ssrfPolicy });

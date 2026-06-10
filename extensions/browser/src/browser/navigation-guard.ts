@@ -9,7 +9,7 @@ import {
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
-  type SsrFPolicy,
+  type NetworkTargetPolicy,
 } from "../infra/net/ssrf.js";
 import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
 
@@ -35,7 +35,7 @@ export class InvalidBrowserNavigationUrlError extends Error {
 
 /** Policy inputs applied to browser page navigation checks. */
 export type BrowserNavigationPolicyOptions = {
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
 };
 
@@ -50,7 +50,7 @@ export type BrowserNavigationRequestLike = {
 
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
   opts?: { browserProxyMode?: BrowserNavigationProxyMode },
 ): BrowserNavigationPolicyOptions {
   return {
@@ -62,14 +62,16 @@ export function withBrowserNavigationPolicy(
 }
 
 /** Return true when strict policy requires redirect-chain inspection. */
-export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
+export function requiresInspectableBrowserNavigationRedirects(
+  ssrfPolicy?: NetworkTargetPolicy,
+): boolean {
   return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
 }
 
 /** Return true when a URL needs redirect inspection under strict policy. */
 export function requiresInspectableBrowserNavigationRedirectsForUrl(
   url: string,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): boolean {
   if (!requiresInspectableBrowserNavigationRedirects(ssrfPolicy)) {
     return false;
@@ -86,7 +88,10 @@ function isIpLiteralHostname(hostname: string): boolean {
   return isIP(normalizeHostname(hostname)) !== 0;
 }
 
-function isExplicitlyAllowedBrowserHostname(hostname: string, ssrfPolicy?: SsrFPolicy): boolean {
+function isExplicitlyAllowedBrowserHostname(
+  hostname: string,
+  ssrfPolicy?: NetworkTargetPolicy,
+): boolean {
   const normalizedHostname = normalizeHostname(hostname);
   const exactMatches = ssrfPolicy?.allowedHostnames ?? [];
   if (exactMatches.some((value) => normalizeHostname(value) === normalizedHostname)) {

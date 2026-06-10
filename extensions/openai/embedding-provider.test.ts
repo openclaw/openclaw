@@ -34,7 +34,6 @@ function expectFetchRemoteEmbeddingVectorsBody(body: Record<string, unknown>) {
   expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith({
     url: "https://embeddings.example/v1/embeddings",
     headers: { Authorization: "Bearer test" },
-    ssrfPolicy: undefined,
     fetchImpl: undefined,
     signal: undefined,
     body,

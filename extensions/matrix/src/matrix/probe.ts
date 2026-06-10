@@ -1,7 +1,7 @@
 // Matrix plugin module implements probe behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/security-runtime";
+import type { NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BaseProbeResult } from "../runtime-api.js";
 import { isBunRuntime } from "./client/runtime.js";
@@ -31,7 +31,7 @@ export async function probeMatrix(params: {
   timeoutMs?: number;
   accountId?: string | null;
   allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixProbe> {
   const started = Date.now();

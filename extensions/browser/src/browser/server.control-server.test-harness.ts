@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
@@ -15,7 +15,7 @@ type HarnessState = {
   reachable: boolean;
   cfgAttachOnly: boolean;
   cfgEvaluateEnabled: boolean;
-  cfgSsrfPolicy: SsrFPolicy | undefined;
+  cfgSsrfPolicy: NetworkTargetPolicy | undefined;
   cfgDefaultProfile: string;
   cfgProfiles: Record<
     string,
@@ -72,7 +72,9 @@ export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
 }
 
 /** Sets the mocked Browser SSRF policy. */
-export function setBrowserControlServerSsrFPolicy(policy: SsrFPolicy | undefined): void {
+export function setBrowserControlServerNetworkTargetPolicy(
+  policy: NetworkTargetPolicy | undefined,
+): void {
   state.cfgSsrfPolicy = policy;
 }
 

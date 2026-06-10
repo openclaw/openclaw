@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -344,7 +344,7 @@ async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean
 export async function isChromeReachable(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<boolean> {
   try {
     await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
@@ -388,7 +388,7 @@ async function fetchChromeVersion(
 export async function getChromeWebSocketUrl(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<string | null> {
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
@@ -425,7 +425,7 @@ export async function isChromeCdpReady(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
+  ssrfPolicy?: NetworkTargetPolicy,
 ): Promise<boolean> {
   const diagnostic = await diagnoseChromeCdp(cdpUrl, timeoutMs, handshakeTimeoutMs, ssrfPolicy);
   if (!diagnostic.ok) {

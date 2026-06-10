@@ -4,11 +4,11 @@
  */
 
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/security-runtime";
+import type { NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
-const ZALO_MEDIA_SSRF_POLICY: SsrFPolicy = {};
+const ZALO_MEDIA_SSRF_POLICY: NetworkTargetPolicy = {};
 
 export type ZaloFetch = (input: string, init?: RequestInit) => Promise<Response>;
 

@@ -215,6 +215,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/browser-config` | Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
+    | `plugin-sdk/browser-cdp-proxy-bypass` | Local-only Browser plugin CDP managed-proxy bypass bridge; not exported from the package and not for third-party plugins |
     | `plugin-sdk/agent-harness-task-runtime` | Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/codex-mcp-projection` | Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
     | `plugin-sdk/codex-native-task-runtime` | Private bundled Codex helper for native task mirror/runtime wiring; not for third-party plugins |

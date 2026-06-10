@@ -1,17 +1,15 @@
 // Matrix plugin module implements transport behavior.
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
-import {
-  closeDispatcher,
-  createPinnedDispatcher,
-  resolvePinnedHostnameWithPolicy,
-  type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
   buildTimeoutAbortSignal,
+  closeDispatcher,
+  createPinnedDispatcher,
   fetchWithRuntimeDispatcherOrMockedGlobal,
+  resolvePinnedHostnameWithPolicy,
+  type NetworkTargetPolicy,
+  type PinnedDispatcherPolicy,
 } from "./transport-runtime-api.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -127,7 +125,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   init?: RequestInit;
   signal?: AbortSignal;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
   let currentUrl = new URL(params.url);
@@ -231,7 +229,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
 }
 
 export function createMatrixGuardedFetch(params: {
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
@@ -269,7 +267,7 @@ export async function performMatrixRequest(params: {
   raw?: boolean;
   maxBytes?: number;
   readIdleTimeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   allowAbsoluteEndpoint?: boolean;
 }): Promise<{ response: Response; text: string; buffer: Buffer }> {

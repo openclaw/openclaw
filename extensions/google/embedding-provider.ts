@@ -1,6 +1,5 @@
 // Google provider module implements model/runtime integration.
 import {
-  buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
@@ -20,7 +19,6 @@ import {
   providerOperationRetryConfig,
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
@@ -29,7 +27,6 @@ import {
 export type GeminiEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
   model: string;
   modelPath: string;
   apiKeys: string[];
@@ -254,7 +251,6 @@ async function fetchGeminiEmbeddingPayload(params: {
       };
       return await withRemoteHttpResponse({
         url: params.endpoint,
-        ssrfPolicy: params.client.ssrfPolicy,
         signal: params.signal,
         init: {
           method: "POST",
@@ -411,7 +407,6 @@ async function resolveGeminiEmbeddingClient(
     normalizeOptionalString(providerConfig?.baseUrl) ||
     DEFAULT_GOOGLE_API_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
-  const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     ...headerOverrides,
@@ -435,5 +430,5 @@ async function resolveGeminiEmbeddingClient(
     embedEndpoint: `${baseUrl}/${modelPath}:embedContent`,
     batchEndpoint: `${baseUrl}/${modelPath}:batchEmbedContents`,
   });
-  return { baseUrl, headers, ssrfPolicy, model, modelPath, apiKeys, outputDimensionality };
+  return { baseUrl, headers, model, modelPath, apiKeys, outputDimensionality };
 }

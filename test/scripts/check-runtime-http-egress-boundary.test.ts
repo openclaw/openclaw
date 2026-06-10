@@ -91,13 +91,14 @@ describe("check-runtime-http-egress-boundary", () => {
   it("catches removed public SSRF SDK subpaths", () => {
     const violations = collect({
       "src/agents/example-runtime.ts":
-        'import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-policy"; import { resolvePinnedHostname } from "openclaw/plugin-sdk/ssrf-dispatcher";',
+        'import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-policy"; import { resolvePinnedHostname } from "openclaw/plugin-sdk/ssrf-dispatcher"; import { internal } from "openclaw/plugin-sdk/ssrf-runtime-internal";',
     });
 
     expect(violations).toEqual(
       expect.arrayContaining([
         expect.stringContaining("retired openclaw/plugin-sdk/ssrf-policy vocabulary"),
         expect.stringContaining("retired openclaw/plugin-sdk/ssrf-dispatcher vocabulary"),
+        expect.stringContaining("retired openclaw/plugin-sdk/ssrf-runtime-internal vocabulary"),
       ]),
     );
   });

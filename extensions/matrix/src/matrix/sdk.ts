@@ -13,8 +13,8 @@ import {
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/security-runtime";
+import type { NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeNullableString,
   normalizeStringEntries,
@@ -375,7 +375,7 @@ export class MatrixClient {
       idbSnapshotPath?: string;
       cryptoDatabasePrefix?: string;
       autoBootstrapCrypto?: boolean;
-      ssrfPolicy?: SsrFPolicy;
+      ssrfPolicy?: NetworkTargetPolicy;
       dispatcherPolicy?: PinnedDispatcherPolicy;
     } = {},
   ) {

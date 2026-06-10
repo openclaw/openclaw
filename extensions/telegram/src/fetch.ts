@@ -23,7 +23,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   createPinnedLookup,
   type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
+} from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Agent, fetch as undiciFetch } from "undici";
 import { normalizeTelegramApiRoot } from "./api-root.js";

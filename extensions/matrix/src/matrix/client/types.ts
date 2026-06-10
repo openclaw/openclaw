@@ -1,6 +1,6 @@
 // Matrix type declarations define plugin contracts.
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/security-runtime";
+import type { NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 
 export type MatrixResolvedConfig = {
   homeserver: string;
@@ -12,7 +12,7 @@ export type MatrixResolvedConfig = {
   initialSyncLimit?: number;
   encryption?: boolean;
   allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
@@ -35,7 +35,7 @@ export type MatrixAuth = {
   initialSyncLimit?: number;
   encryption?: boolean;
   allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 };
 

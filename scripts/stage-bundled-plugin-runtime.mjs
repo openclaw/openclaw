@@ -82,7 +82,6 @@ const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
   "qa-channel-protocol.js",
   "qa-lab.js",
   "qa-runtime.js",
-  "ssrf-runtime-internal.js",
   "test-utils.js",
 ];
 

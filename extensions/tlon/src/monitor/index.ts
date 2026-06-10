@@ -9,7 +9,7 @@ import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
-import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "../urbit/context.js";
+import { networkTargetPolicyFromDangerouslyAllowPrivateNetwork } from "../urbit/context.js";
 import type { DmInvite, Foreigns } from "../urbit/foreigns.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
@@ -83,7 +83,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const botShipName = normalizeShip(account.ship);
   runtime.log?.(`[tlon] Starting monitor for ${botShipName}`);
 
-  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+  const ssrfPolicy = networkTargetPolicyFromDangerouslyAllowPrivateNetwork(
     account.dangerouslyAllowPrivateNetwork,
   );
 

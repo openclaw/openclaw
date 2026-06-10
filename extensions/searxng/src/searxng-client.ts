@@ -15,13 +15,13 @@ import {
   wrapWebContent,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertHttpUrlTargetsPrivateNetwork,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
-} from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+} from "openclaw/plugin-sdk/security-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveSearxngBaseUrl,
   resolveSearxngCategories,

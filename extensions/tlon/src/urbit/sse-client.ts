@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { LookupFn, NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
 import { urbitFetch } from "./fetch.js";
@@ -14,7 +14,7 @@ type UrbitSseLogger = {
 
 type UrbitSseOptions = {
   ship?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   onReconnect?: (client: UrbitSSEClient) => Promise<void> | void;
@@ -69,7 +69,7 @@ export class UrbitSSEClient {
   maxReconnectDelay: number;
   isConnected = false;
   logger: UrbitSseLogger;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   streamRelease: (() => Promise<void>) | null = null;

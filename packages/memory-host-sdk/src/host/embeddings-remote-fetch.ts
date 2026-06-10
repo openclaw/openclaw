@@ -1,6 +1,5 @@
 // Memory Host SDK module implements embeddings remote fetch behavior.
 import { postJson } from "./post-json.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
 
 // Fetches and validates OpenAI-compatible embedding responses.
 
@@ -39,7 +38,6 @@ function resolveExpectedEmbeddingCount(body: unknown): number | undefined {
 export async function fetchRemoteEmbeddingVectors(params: {
   url: string;
   headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   body: unknown;
@@ -48,7 +46,6 @@ export async function fetchRemoteEmbeddingVectors(params: {
   return await postJson({
     url: params.url,
     headers: params.headers,
-    ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
     signal: params.signal,
     body: params.body,

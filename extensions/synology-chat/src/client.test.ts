@@ -24,8 +24,8 @@ vi.mock("node:http", async () => {
   return { ...actual, default: httpModule, request: httpRequest, get: httpGet };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
-  formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => ({
+  ...(await vi.importActual("openclaw/plugin-sdk/security-runtime")),
   resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
 }));
 

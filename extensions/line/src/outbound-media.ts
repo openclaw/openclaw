@@ -1,6 +1,6 @@
 // Line plugin module implements outbound media behavior.
-import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/security-runtime";
+import type { NetworkTargetPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LineOutboundMediaKind = "image" | "video" | "audio";
@@ -20,7 +20,7 @@ type ResolveLineOutboundMediaOpts = {
   trackingId?: string;
 };
 
-const LINE_OUTBOUND_MEDIA_SSRF_POLICY: SsrFPolicy = {
+const LINE_OUTBOUND_MEDIA_SSRF_POLICY: NetworkTargetPolicy = {
   allowPrivateNetwork: false,
 };
 

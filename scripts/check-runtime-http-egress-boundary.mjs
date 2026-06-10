@@ -19,6 +19,10 @@ const RETIRED_GUARD_PATTERNS = [
     pattern: /openclaw\/plugin-sdk\/ssrf-runtime(?:["']|$)/u,
   },
   {
+    name: "openclaw/plugin-sdk/ssrf-runtime-internal",
+    pattern: /openclaw\/plugin-sdk\/ssrf-runtime-internal(?:["']|$)/u,
+  },
+  {
     name: "openclaw/plugin-sdk/ssrf-policy",
     pattern: /openclaw\/plugin-sdk\/ssrf-policy(?:["']|$)/u,
   },
@@ -45,7 +49,7 @@ const RETIRED_GUARD_PATTERNS = [
   },
 ];
 const RETIRED_FETCH_RUNTIME_EXPORT_PATTERN =
-  /\b(?:createPinnedLookup|PinnedDispatcherPolicy|SsrFPolicy|LookupFn|SsrFBlockedError|fetchWithSsrFGuard|GUARDED_FETCH_MODE)\b/u;
+  /\bexport\s+(?:type\s+)?\{[^}]*\b(?:createPinnedLookup|PinnedDispatcherPolicy|SsrFPolicy|SsrFBlockedError|fetchWithSsrFGuard|GUARDED_FETCH_MODE)\b/u;
 
 const RAW_FETCH_ALLOWLIST = new Map(
   [
@@ -282,7 +286,6 @@ const RAW_FETCH_ALLOWLIST = new Map(
 
 const RETIRED_VOCABULARY_ALLOWLIST = new Set([
   "src/infra/net/ssrf.ts",
-  "src/plugin-sdk/ssrf-runtime-internal.ts",
   "src/commands/doctor/shared/legacy-config-migrate.ts",
   "src/commands/doctor/shared/legacy-web-fetch-migrate.ts",
 ]);

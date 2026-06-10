@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
@@ -160,7 +160,7 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
 async function prepareSnapshotPageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<Page> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
@@ -185,7 +185,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   targetId?: string;
   limit?: number;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   const page = await prepareSnapshotPageViaPlaywright({
@@ -244,7 +244,7 @@ export async function snapshotAiViaPlaywright(opts: {
   timeoutMs?: number;
   maxChars?: number;
   urls?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
@@ -322,7 +322,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   options?: RoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
 }): Promise<{
   snapshot: string;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
@@ -384,7 +384,7 @@ export async function navigateViaPlaywright(opts: {
   targetId?: string;
   url: string;
   timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
 }): Promise<{ url: string }> {
   const isRetryableNavigateError = (err: unknown): boolean => {

@@ -41,7 +41,11 @@ const sessionMocks = vi.hoisted(() => ({
     if (!(err instanceof Error)) {
       return false;
     }
-    return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
+    return (
+      err.name === "NetworkTargetBlockedError" ||
+      err.name === "SsrFBlockedError" ||
+      err.name === "InvalidBrowserNavigationUrlError"
+    );
   }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   respondToObservedDialogOnPage: vi.fn(async () => {

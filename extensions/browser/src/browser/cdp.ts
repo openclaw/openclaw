@@ -5,7 +5,7 @@
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { NetworkTargetPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -202,7 +202,7 @@ export type CdpActionTimeouts = {
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: NetworkTargetPolicy;
   timeouts?: CdpActionTimeouts;
 }): Promise<{ targetId: string }> {
   await assertBrowserNavigationAllowed({
@@ -224,6 +224,7 @@ export async function createTargetViaCdp(opts: {
     const discoveryUrl = isWebSocketUrl(opts.cdpUrl)
       ? normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl)
       : opts.cdpUrl;
+    await assertCdpEndpointAllowed(discoveryUrl, opts.ssrfPolicy);
     let version: { webSocketDebuggerUrl?: string } | null = null;
     try {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(

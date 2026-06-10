@@ -83,10 +83,9 @@ function copyFlatDeclarations(fromDir: string, toDir: string): void {
 const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
 const flatDeclarationTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-const requiredPackagedPrivatePluginSdkEntrypoints = ["ssrf-runtime-internal"] as const;
 const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
-  : [...new Set([...publicPluginSdkEntrypoints, ...requiredPackagedPrivatePluginSdkEntrypoints])];
+  : publicPluginSdkEntrypoints;
 const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
 
 try {

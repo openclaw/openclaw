@@ -2,14 +2,13 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Lmstudio provider module implements model/runtime integration.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
-  buildRemoteBaseUrlPolicy,
   createRemoteEmbeddingProvider,
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import { networkTargetPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/security-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -24,7 +23,6 @@ const log = createSubsystemLogger("memory/embeddings");
 type LmstudioEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
   model: string;
 };
 export const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = LMSTUDIO_DEFAULT_EMBEDDING_MODEL;
@@ -113,12 +111,10 @@ export async function createLmstudioEmbeddingProvider(
       json: true,
       headers: headerOverrides,
     }) ?? {};
-  const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
   const client: LmstudioEmbeddingClient = {
     baseUrl,
     model,
     headers,
-    ssrfPolicy,
   };
 
   try {
@@ -126,8 +122,8 @@ export async function createLmstudioEmbeddingProvider(
       baseUrl,
       apiKey,
       headers: headerOverrides,
-      ssrfPolicy,
       modelKey: model,
+      ssrfPolicy: networkTargetPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
       timeoutMs: 120_000,
     });
   } catch (error) {

@@ -7,7 +7,7 @@ import {
   coerceSecretRef,
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-runtime-internal";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -27,7 +27,7 @@ import {
   isPrivateNetworkOptInEnabled,
   normalizeAccountId,
   normalizeOptionalAccountId,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+  networkTargetPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./config-runtime-api.js";
 import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
@@ -432,7 +432,7 @@ function buildMatrixNetworkFields(params: {
     ...(params.allowPrivateNetwork
       ? {
           allowPrivateNetwork: true,
-          ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
+          ssrfPolicy: networkTargetPolicyFromDangerouslyAllowPrivateNetwork(true),
         }
       : {}),
     ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
