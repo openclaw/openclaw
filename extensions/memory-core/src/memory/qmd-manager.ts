@@ -242,15 +242,23 @@ function hasIgnoredMemoryWatchSegment(relativePath: string): boolean {
 
 function shouldIgnoreMemoryWatchPath(watchPath: string, roots: readonly string[]): boolean {
   const normalized = path.normalize(watchPath);
+  let matchedRelative: string | null = null;
+  let matchedRootLength = -1;
   for (const watchRoot of roots) {
     const normalizedRoot = path.normalize(watchRoot);
     const relative = path.relative(normalizedRoot, normalized);
-    if (relative === "") {
+    if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      if (normalizedRoot.length > matchedRootLength) {
+        matchedRelative = relative;
+        matchedRootLength = normalizedRoot.length;
+      }
+    }
+  }
+  if (matchedRelative !== null) {
+    if (matchedRelative === "") {
       return false;
     }
-    if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-      return hasIgnoredMemoryWatchSegment(relative);
-    }
+    return hasIgnoredMemoryWatchSegment(matchedRelative);
   }
   return hasIgnoredMemoryWatchSegment(normalized);
 }

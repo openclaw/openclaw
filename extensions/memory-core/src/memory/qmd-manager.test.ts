@@ -635,6 +635,44 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("prefers a nested explicit qmd collection root over a broader watched root", async () => {
+    const nestedRoot = path.join(workspaceDir, "build");
+    cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            { path: nestedRoot, pattern: "**/*.md", name: "build" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+    const ignored = firstWatchOptions().ignored;
+    expect(ignored?.(path.join(nestedRoot, "note.md"))).toBe(false);
+    expect(ignored?.(path.join(nestedRoot, "..notes", "daily.md"))).toBe(false);
+    expect(ignored?.(path.join(nestedRoot, "node_modules", "pkg", "note.md"))).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(true);
+
+    await manager.close();
+  });
+
   it("delays qmd watch sync until changed file stats settle", async () => {
     vi.useFakeTimers();
     cfg = {
