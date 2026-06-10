@@ -1654,10 +1654,6 @@ describe("connectGateway", () => {
     host.chatRunId = "main-run-reasoning";
     host.chatMessages = [persistedUser];
     loadChatHistoryMock.mockClear();
-    loadChatHistoryMock.mockImplementationOnce(async () => {
-      host.chatMessages = [persistedUser, persistedAssistant];
-      return undefined;
-    });
 
     client.emitEvent({
       event: "session.message",
@@ -1680,7 +1676,7 @@ describe("connectGateway", () => {
     });
 
     expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toEqual([persistedUser, persistedAssistant]);
+    expect(host.chatMessages).toEqual([persistedUser]);
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
     expect(
@@ -1826,10 +1822,6 @@ describe("connectGateway", () => {
     emitToolResultEvent(client);
     expect(host.toolStreamOrder).toHaveLength(1);
     loadChatHistoryMock.mockClear();
-    loadChatHistoryMock.mockImplementationOnce(async () => {
-      host.chatMessages = [persistedUser, persistedAssistant];
-      return undefined;
-    });
 
     client.emitEvent({
       event: "session.message",
@@ -1854,7 +1846,7 @@ describe("connectGateway", () => {
     await Promise.resolve();
 
     expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toEqual([persistedUser, persistedAssistant]);
+    expect(host.chatMessages).toEqual([persistedUser]);
     expect(host.toolStreamOrder).toHaveLength(0);
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);

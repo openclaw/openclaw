@@ -1629,6 +1629,38 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatThinkingLevel).toBe("medium");
   });
 
+  it("restores a deferred reasoning final after the transient final is removed", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "Think then answer" }],
+      timestamp: 100,
+    };
+    const persistedAssistant = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private reasoning" },
+        { type: "text", text: "Final answer" },
+      ],
+      timestamp: 101,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, persistedAssistant],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, persistedAssistant]);
+    expect(
+      state.chatMessages.filter((message) => requireRecord(message).role === "assistant"),
+    ).toHaveLength(1);
+  });
+
   it("omits literal global agentId until selected/default agent is known", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const state = createState({
