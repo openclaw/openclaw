@@ -2157,6 +2157,57 @@ describe("abortChatRun", () => {
     expectTextChatMessage(state.chatMessages.at(-1), "assistant", "Partial reply");
   });
 
+  it("does not terminalize when the abort response does not include the active run", async () => {
+    const request = vi.fn().mockResolvedValue({ aborted: false, runIds: [] });
+    const state = createState({
+      connected: true,
+      chatRunId: "run-1",
+      chatStream: "Partial reply",
+      chatStreamStartedAt: 10,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await abortChatRun(state);
+
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      runId: "run-1",
+    });
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatStream).toBe("Partial reply");
+    expect(state.chatMessages).toStrictEqual([]);
+  });
+
+  it("does not terminalize a newer run after a stale abort response", async () => {
+    const deferred = createDeferred<{ aborted: boolean; runIds: string[] }>();
+    const request = vi.fn().mockReturnValue(deferred.promise);
+    const state = createState({
+      connected: true,
+      chatRunId: "run-1",
+      chatStream: "Partial reply",
+      chatStreamStartedAt: 10,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const abort = abortChatRun(state);
+    state.chatRunId = "run-2";
+    state.chatStream = "Newer reply";
+    state.chatStreamStartedAt = 20;
+    deferred.resolve({ aborted: true, runIds: ["run-1"] });
+    const result = await abort;
+
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      runId: "run-1",
+    });
+    expect(state.chatRunId).toBe("run-2");
+    expect(state.chatStream).toBe("Newer reply");
+    expect(state.chatStreamStartedAt).toBe(20);
+    expect(state.chatMessages).toStrictEqual([]);
+  });
+
   it("formats structured non-auth connect failures for chat abort", async () => {
     // Abort now shares the same structured connect-error formatter as send.
     const request = vi.fn().mockRejectedValue(

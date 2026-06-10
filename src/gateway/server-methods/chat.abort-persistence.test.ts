@@ -320,6 +320,50 @@ describe("chat abort transcript persistence", () => {
     expect(entry.runtimeMs).toBe((entry.endedAt as number) - startedAt);
   });
 
+  it("does not let stale abort persistence overwrite a newer session run", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-lifecycle-stale-",
+    );
+    const runId = "idem-abort-lifecycle-stale";
+    const abortedStartedAt = 1_700_000_000_000;
+    const newerStartedAt = abortedStartedAt + 1_000;
+    await writeSessionStoreEntry(transcriptPath, sessionId, {
+      status: "running",
+      startedAt: newerStartedAt,
+      updatedAt: newerStartedAt,
+      endedAt: undefined,
+      runtimeMs: undefined,
+      abortedLastRun: false,
+    });
+    const active = createActiveRun("main", { sessionId });
+    active.startedAtMs = abortedStartedAt;
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, active]]),
+      chatRunBuffers: new Map([[runId, ""]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: [runId] });
+    const entry = await readSessionStoreEntry(transcriptPath);
+    expect(entry.status).toBe("running");
+    expect(entry.abortedLastRun).toBe(false);
+    expect(entry.startedAt).toBe(newerStartedAt);
+    expect(entry.updatedAt).toBe(newerStartedAt);
+    expect(entry.endedAt).toBeUndefined();
+    expect(entry.runtimeMs).toBeUndefined();
+  });
+
   it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture(
       "openclaw-chat-abort-idempotency-collision-",

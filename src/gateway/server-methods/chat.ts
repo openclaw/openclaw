@@ -1870,8 +1870,17 @@ function buildAbortedLifecyclePatch(
   if (snapshot.sessionId && current.sessionId && current.sessionId !== snapshot.sessionId) {
     return null;
   }
+  const snapshotStartedAt = finitePositiveTimestamp(snapshot.startedAtMs);
+  const currentStartedAt = finitePositiveTimestamp(current.startedAt);
+  if (
+    snapshotStartedAt !== undefined &&
+    currentStartedAt !== undefined &&
+    currentStartedAt > snapshotStartedAt
+  ) {
+    return null;
+  }
   const endedAt = finitePositiveTimestamp(snapshot.endedAtMs) ?? Date.now();
-  const startedAt = finitePositiveTimestamp(snapshot.startedAtMs) ?? current.startedAt;
+  const startedAt = snapshotStartedAt ?? current.startedAt;
   return {
     updatedAt: endedAt,
     status: "killed",
