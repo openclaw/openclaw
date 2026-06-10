@@ -1676,7 +1676,13 @@ describe("connectGateway", () => {
     });
 
     expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toEqual([persistedUser]);
+    expect(host.chatMessages).toEqual([
+      persistedUser,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
     expect(
@@ -1846,7 +1852,13 @@ describe("connectGateway", () => {
     await Promise.resolve();
 
     expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toEqual([persistedUser]);
+    expect(host.chatMessages).toEqual([
+      persistedUser,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Tool-backed final answer" }],
+      },
+    ]);
     expect(host.toolStreamOrder).toHaveLength(0);
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);

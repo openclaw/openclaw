@@ -35,7 +35,7 @@ import {
 } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { loadChatComposerSnapshot, restoreChatComposerState } from "./chat/composer-persistence.ts";
-import { extractText, extractThinking } from "./chat/message-extract.ts";
+import { extractThinking } from "./chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -985,11 +985,6 @@ function handleTerminalChatEvent(
       return false;
     }
     const completedRunId = runId ?? null;
-    dropTransientDeferredThinkingFinalMessage(
-      host,
-      payload,
-      opts.deferredSessionMessageHasThinking === true,
-    );
     void loadChatHistory(host as unknown as ChatState).finally(() => {
       if (completedRunId && host.chatRunId && host.chatRunId !== completedRunId) {
         return;
@@ -1002,44 +997,6 @@ function handleTerminalChatEvent(
   resetToolStream(toolHost);
   flushQueue();
   return false;
-}
-
-function dropTransientDeferredThinkingFinalMessage(
-  host: GatewayHost,
-  payload: ChatEventPayload | undefined,
-  deferredSessionMessageHasThinking: boolean,
-): void {
-  if (!deferredSessionMessageHasThinking || payload?.state !== "final" || !payload.message) {
-    return;
-  }
-  if (extractThinking(payload.message)) {
-    return;
-  }
-  const chatState = host as unknown as ChatState;
-  const messages = chatState.chatMessages;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return;
-  }
-  if (!messageMatchesTransientFinalPayload(messages[messages.length - 1], payload.message)) {
-    return;
-  }
-  chatState.chatMessages = messages.slice(0, -1);
-}
-
-function messageMatchesTransientFinalPayload(message: unknown, payloadMessage: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-  if (role && role !== "assistant") {
-    return false;
-  }
-  if (extractThinking(message)) {
-    return false;
-  }
-  const messageText = extractText(message)?.trim();
-  const payloadText = extractText(payloadMessage)?.trim();
-  return Boolean(messageText && payloadText && messageText === payloadText);
 }
 
 function isEventForDifferentActiveRun(
@@ -1111,7 +1068,6 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     deferredReloadHost.pendingSessionMessageReloadHasThinking = false;
   }
   if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
-    dropTransientDeferredThinkingFinalMessage(host, payload, deferredSessionMessageHasThinking);
     void loadChatHistory(host as unknown as ChatState);
     return;
   }

@@ -252,13 +252,13 @@ function historyHasSameOrNewerDisplayMessage(
   signature: string,
   message: unknown,
 ): boolean {
-  const timestamp = messageTimestampMs(message);
-  if (timestamp == null) {
-    return false;
-  }
   return historyMessages.some((historyMessage) => {
     if (messageDisplaySignature(historyMessage) !== signature) {
       return false;
+    }
+    const timestamp = messageTimestampMs(message);
+    if (timestamp == null) {
+      return true;
     }
     const historyTimestamp = messageTimestampMs(historyMessage);
     return historyTimestamp != null && historyTimestamp >= timestamp;
