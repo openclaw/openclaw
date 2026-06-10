@@ -1712,6 +1712,14 @@ async function runLegacyMigrationPlans(
             warnings,
           });
         }
+        if (allEntriesCovered && plan.removeSource) {
+          try {
+            await plan.removeSource();
+            changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+          } catch (err) {
+            warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
+          }
+        }
       });
       continue;
     }

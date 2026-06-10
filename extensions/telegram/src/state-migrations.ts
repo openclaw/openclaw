@@ -5,7 +5,6 @@ import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channe
 import { resolveChannelAllowFromPath } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  type PersistentDedupeEntry,
   type PersistentDedupeLegacyJsonImportEntry,
   createPersistentDedupeImportEntry,
   listPersistentDedupeLegacyJsonFileEntries,
@@ -130,20 +129,37 @@ function remainingMessageDispatchDedupeTtlMs(seenAt: number, now: number): numbe
   return ttlMs > 0 ? ttlMs : undefined;
 }
 
-function listTelegramLegacyMessageDispatchPluginStateEntries(params: {
+function openTelegramLegacyMessageDispatchBucketStore(env: NodeJS.ProcessEnv) {
+  return createPluginStateSyncKeyedStore<unknown>("telegram", {
+    namespace: TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE,
+    maxEntries: TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_MAX_ENTRIES,
+    env,
+  });
+}
+
+function readTelegramLegacyMessageDispatchBuckets(params: {
   accountId: string;
   env: NodeJS.ProcessEnv;
   now?: number;
-}): PersistentDedupeLegacyJsonImportEntry[] {
-  const store = createPluginStateSyncKeyedStore<unknown>("telegram", {
-    namespace: TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE,
-    maxEntries: TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_MAX_ENTRIES,
-    env: params.env,
-  });
+}): { importEntries: PersistentDedupeLegacyJsonImportEntry[]; recordKeys: string[] } {
+  const store = openTelegramLegacyMessageDispatchBucketStore(params.env);
   const latestSeenAtByKey = new Map<string, number>();
+  const recordKeys: string[] = [];
   for (const entry of store.entries()) {
     const record = readLegacyMessageDispatchDedupeRecord(entry.value);
-    if (!record || record.namespace !== params.accountId) {
+    if (!record) {
+      continue;
+    }
+    // Lock rows persist as `<accountId>:lock` buckets without dedupe entries;
+    // track them as removable so cleanup empties the retired namespace.
+    const ownsRecord =
+      record.namespace === params.accountId ||
+      record.namespace.startsWith(`${params.accountId}:`);
+    if (!ownsRecord) {
+      continue;
+    }
+    recordKeys.push(entry.key);
+    if (record.namespace !== params.accountId) {
       continue;
     }
     for (const [key, seenAt] of Object.entries(record.entries)) {
@@ -151,7 +167,7 @@ function listTelegramLegacyMessageDispatchPluginStateEntries(params: {
     }
   }
   const now = params.now ?? Date.now();
-  return [...latestSeenAtByKey.entries()].flatMap(([key, seenAt]) => {
+  const importEntries = [...latestSeenAtByKey.entries()].flatMap(([key, seenAt]) => {
     const ttlMs = remainingMessageDispatchDedupeTtlMs(seenAt, now);
     return ttlMs == null
       ? []
@@ -166,33 +182,17 @@ function listTelegramLegacyMessageDispatchPluginStateEntries(params: {
           }),
         ];
   });
+  return { importEntries, recordKeys };
 }
 
-function hasCurrentMessageDispatchDedupeTargets(params: {
-  namespace: string;
-  entries: PersistentDedupeLegacyJsonImportEntry[];
+function removeTelegramLegacyMessageDispatchBuckets(params: {
+  accountId: string;
   env: NodeJS.ProcessEnv;
-}): boolean {
-  const store = createPluginStateSyncKeyedStore<PersistentDedupeEntry>(
-    TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
-    {
-      namespace: params.namespace,
-      maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
-      defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
-      env: params.env,
-    },
-  );
-  const existingByKey = new Map(store.entries().map((entry) => [entry.key, entry.value]));
-  return params.entries.every((entry) => {
-    const existingValue = existingByKey.get(entry.key);
-    return (
-      existingValue != null &&
-      !shouldReplacePersistentDedupeEntry({
-        existingValue,
-        incomingValue: entry.value,
-      })
-    );
-  });
+}): void {
+  const store = openTelegramLegacyMessageDispatchBucketStore(params.env);
+  for (const key of readTelegramLegacyMessageDispatchBuckets(params).recordKeys) {
+    store.delete(key);
+  }
 }
 
 function mapTelegramMessageDispatchDedupeImportEntries(params: {
@@ -491,19 +491,15 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
           }),
       };
     });
-    let pluginStateEntries: PersistentDedupeLegacyJsonImportEntry[];
+    let legacyRecordKeys: string[];
     try {
-      pluginStateEntries = listTelegramLegacyMessageDispatchPluginStateEntries({
-        accountId,
-        env,
-      });
+      legacyRecordKeys = readTelegramLegacyMessageDispatchBuckets({ accountId, env }).recordKeys;
     } catch {
-      pluginStateEntries = [];
+      legacyRecordKeys = [];
     }
-    if (
-      pluginStateEntries.length === 0 ||
-      hasCurrentMessageDispatchDedupeTargets({ namespace, entries: pluginStateEntries, env })
-    ) {
+    // Emit the plan while any retired bucket rows remain (even TTL-expired ones)
+    // so doctor --fix imports live entries and then deletes the legacy source.
+    if (legacyRecordKeys.length === 0) {
       return jsonPlans;
     }
     const pluginStatePlan: ChannelLegacyStateMigrationPlan = {
@@ -516,14 +512,12 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
       maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
       defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
       scopeKey: "",
+      cleanupWhenEmpty: true,
       preview: `- Telegram message dispatch dedupe: plugin state (${TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE}) → plugin state (${namespace})`,
       shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
         shouldReplacePersistentDedupeEntry({ existingValue, incomingValue }),
-      readEntries: () =>
-        listTelegramLegacyMessageDispatchPluginStateEntries({
-          accountId,
-          env,
-        }),
+      readEntries: () => readTelegramLegacyMessageDispatchBuckets({ accountId, env }).importEntries,
+      removeSource: () => removeTelegramLegacyMessageDispatchBuckets({ accountId, env }),
     };
     return jsonPlans.concat(pluginStatePlan);
   });

@@ -18,6 +18,8 @@ export type ChannelLegacyStateMigrationPlan =
       stateDir?: string;
       cleanupSource?: "rename";
       cleanupWhenEmpty?: boolean;
+      /** Deletes a non-file legacy source (e.g. plugin-state rows) once all entries are covered. */
+      removeSource?: () => void | Promise<void>;
       preview?: string;
       shouldReplaceExistingEntry?: (params: {
         key: string;
