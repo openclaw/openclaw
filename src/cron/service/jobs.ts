@@ -802,7 +802,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
-  opts?: { defaultAgentId?: string; nowMs?: number },
+  opts?: { defaultAgentId?: string; scheduleValidationNowMs?: number },
 ) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -882,8 +882,11 @@ export function applyJobPatch(
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
-  if (patch.schedule !== undefined || patch.enabled === true) {
-    assertCronExpressionSatisfiable(job, opts?.nowMs ?? Date.now());
+  if (
+    opts?.scheduleValidationNowMs !== undefined &&
+    (patch.schedule !== undefined || patch.enabled === true)
+  ) {
+    assertCronExpressionSatisfiable(job, opts.scheduleValidationNowMs);
   }
 }
 

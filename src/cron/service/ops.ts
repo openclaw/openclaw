@@ -458,7 +458,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     const nextJob = structuredClone(job);
     applyJobPatch(nextJob, patch, {
       defaultAgentId: state.deps.defaultAgentId,
-      nowMs: now,
+      scheduleValidationNowMs: now,
     });
     if (nextJob.schedule.kind === "every") {
       const anchor = nextJob.schedule.anchorMs;
