@@ -588,8 +588,10 @@ export async function createVoiceCallRuntime(params: {
             config.realtime.tools,
           ),
           toolPolicy: config.realtime.toolPolicy,
-          // Self-echo guard (off by default); configurable via realtime config.
+          // Half-duplex echo guard (on by default) + its tuning knobs.
           suppressInputDuringPlayback: config.realtime.suppressInputDuringPlayback,
+          echoSuppressionWindowMs: config.realtime.echoSuppressionWindowMs,
+          echoBargeInRms: config.realtime.echoBargeInRms,
           // Group-call "speak only when addressed" gate (instruction-based on the realtime path).
           groupCallGate: resolveGroupCallGateConfig(config.msteams?.groupCall),
           // CVI #4 vision spend cap for look_at_screen (0 = unlimited).
