@@ -703,7 +703,7 @@ export function createWebFetchTool(options?: {
         return providerFallbackCache;
       };
       const params = args as Record<string, unknown>;
-      const url = readStringParam(params, "url", { required: true });
+      const url = readStringParam(params, "url", { required: true }).trim().replace(/\s+/g, "");
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
