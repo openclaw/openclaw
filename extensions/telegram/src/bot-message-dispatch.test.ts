@@ -1327,6 +1327,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("HelloWorld");
   });
 
+  it("sizes block-mode preview chunks from streaming.preview.chunk", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "block",
+      cfg: {
+        channels: {
+          telegram: { streaming: { preview: { chunk: { minChars: 100, maxChars: 600 } } } },
+        },
+      },
+      telegramCfg: { streaming: { mode: "block" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 600 });
+  });
+
+  it("uses the shared block chunk default when block mode has no chunk config", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "block",
+      telegramCfg: { streaming: { mode: "block" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 800 });
+  });
+
+  it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg: {
+        channels: {
+          telegram: { streaming: { preview: { chunk: { maxChars: 600 } } } },
+        },
+      },
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 4096 });
+  });
+
   it("streams text-only finals into the answer message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {

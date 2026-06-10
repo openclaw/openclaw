@@ -25,6 +25,8 @@ export function resolveGeneratedModuleFormatter(params) {
 
   return resolvePnpmRunner({
     comSpec: params.comSpec,
+    cwd: params.repoRoot,
+    env: params.env,
     npmExecPath: params.npmExecPath,
     nodeExecPath: params.nodeExecPath,
     platform,

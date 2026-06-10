@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { loadSessionStore } from "./store-load.js";
-import { closeSqliteSessionStoreDatabase, replaceSqliteSessionStore } from "./store-sqlite.js";
 import { clearSessionStoreCacheForTest } from "./store-writer-state.js";
 import type { SessionEntry } from "./types.js";
 
@@ -33,10 +32,8 @@ export function useTempSessionsFixture(prefix: string) {
 
 export function writeSessionStoreForTest(storePath: string, store: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.rmSync(storePath, { force: true });
   clearSessionStoreCacheForTest();
-  replaceSqliteSessionStore(storePath, store as Record<string, SessionEntry>);
-  closeSqliteSessionStoreDatabase(storePath);
+  fs.writeFileSync(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   clearSessionStoreCacheForTest();
 }
 
@@ -50,9 +47,5 @@ export async function writeSessionStoreForTestAsync(
 export function readSessionStoreForTest<T extends object = SessionEntry>(
   storePath: string,
 ): Record<string, T> {
-  try {
-    return loadSessionStore(storePath, { skipCache: true }) as Record<string, T>;
-  } finally {
-    closeSqliteSessionStoreDatabase(storePath);
-  }
+  return loadSessionStore(storePath, { skipCache: true }) as Record<string, T>;
 }

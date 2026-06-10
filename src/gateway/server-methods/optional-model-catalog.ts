@@ -68,7 +68,9 @@ export async function loadOptionalServerMethodModelCatalog(
       const logOnceKey = options?.logOnceKey ?? "session-metadata";
       if (!loggedSlowCatalogKeys.has(logOnceKey)) {
         loggedSlowCatalogKeys.add(logOnceKey);
-        context.logGateway.debug(`${surface} continuing without model catalog after ${timeoutMs}ms`);
+        context.logGateway.debug(
+          `${surface} continuing without model catalog after ${timeoutMs}ms`,
+        );
       }
       return undefined;
     }

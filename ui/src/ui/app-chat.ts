@@ -1521,7 +1521,7 @@ function historyIdleProofIsStaleForSelectedRow(
   return selectedStartedAt >= historyUpdatedAt;
 }
 
-function flushChatQueueAfterIdleSessionReconciliation(
+export function flushChatQueueAfterIdleSessionReconciliation(
   host: ChatHost,
   sessionKey: string,
   historyRefresh: Promise<ChatHistoryResult | undefined>,

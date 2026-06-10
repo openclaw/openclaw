@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -302,7 +301,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshCall.nextSessionId).toBe("session-rotated");
     expect(refreshCall.nextSessionFile).toContain("session-rotated.jsonl");
 
-    const persisted = readSessionStoreForTest(storePath) as {
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
       main: SessionEntry;
     };
     expect(persisted.main.sessionId).toBe("session-rotated");
@@ -527,7 +526,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(1);
     expect(persisted.main.memoryFlushLastFailedAt).toBe(1_700_000_000_000);
     expect(persisted.main.memoryFlushLastFailureError).toContain("provider crashed during flush");
@@ -572,7 +571,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(0);
     expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
     expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
@@ -606,7 +605,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(0);
     expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
     expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
@@ -643,7 +642,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushCompactionCount).toBe(1);
     expect(persisted.main.memoryFlushFailureCount).toBe(TEST_MAX_FLUSH_FAILURES);
     expect(emitAgentEventMock).toHaveBeenCalledWith(
@@ -695,7 +694,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(2);
   });
 

@@ -1202,4 +1202,182 @@ describe("codex conversation binding", () => {
       type: "dangerFullAccess",
     });
   });
+
+  it("blocks Guardian-mode bound turns with stale no-approval policy on custom model providers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "local-model",
+        modelProvider: "lmstudio",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hello",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        timeoutMs: 50,
+        pluginConfig: {
+          appServer: {
+            mode: "guardian",
+          },
+        },
+      },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain(
+      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+    );
+    expect(turnStartParams).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("infers custom model providers for legacy bound turns without stored modelProvider", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "lmstudio/local-model",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          content: "hello",
+          channel: "telegram",
+          isGroup: false,
+          commandAuthorized: true,
+        },
+        {
+          channelId: "telegram",
+          pluginBinding: {
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "telegram",
+            accountId: "default",
+            conversationId: "5185575566",
+            boundAt: Date.now(),
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile,
+              workspaceDir: tempDir,
+            },
+          },
+        },
+        {
+          timeoutMs: 50,
+          pluginConfig: {
+            appServer: {
+              mode: "guardian",
+            },
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+        ),
+      },
+    });
+
+    expect(turnStartParams).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
 });

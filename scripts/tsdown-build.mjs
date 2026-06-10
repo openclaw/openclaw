@@ -572,6 +572,7 @@ export function resolveTsdownBuildInvocation(params = {}) {
     };
   }
   const runner = resolvePnpmRunner({
+    env,
     pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,

@@ -42,6 +42,7 @@ type WorkflowJob = {
   name?: string;
   needs?: string | string[];
   permissions?: Record<string, string>;
+  "runs-on"?: string;
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -1394,9 +1395,12 @@ describe("package artifact reuse", () => {
       "run_live_matrix_sharded",
       "run_live_telegram",
       "run_live_discord",
+      "run_live_whatsapp",
+      "run_live_slack",
+      "run_live_runtime_token_efficiency",
     ]) {
-      expect(qaWorkflow).toMatch(
-        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName)["runs-on"]).toBe(
+        "blacksmith-16vcpu-ubuntu-2404",
       );
     }
     expectTextToIncludeAll(liveE2eWorkflow, [
