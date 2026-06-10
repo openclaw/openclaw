@@ -15,6 +15,9 @@ packages:
     path: ../shared/OpenClawKit
   Swabble:
     path: ../swabble
+  TopNotch:
+    url: https://github.com/zats/TopNotch.git
+    exactVersion: 0.1.0
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     exactVersion: 147.0.0
@@ -75,6 +78,7 @@ targets:
         product: OpenClawProtocol
       - package: Swabble
         product: SwabbleKit
+      - package: TopNotch
       - package: WebRTC
       - sdk: AppIntents.framework
     preBuildScripts:
