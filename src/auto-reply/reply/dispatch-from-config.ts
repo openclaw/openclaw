@@ -148,7 +148,11 @@ import type {
   ReplyDispatcher,
 } from "./reply-dispatcher.types.js";
 import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  forceClearReplyRunBySessionId,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -777,6 +781,13 @@ function visibleRecoveryClearedActiveWork(outcome: StuckSessionRecoveryOutcome):
   );
 }
 
+function isSameReplyOperation(
+  left: ReplyOperation | undefined,
+  right: ReplyOperation | undefined,
+): boolean {
+  return Boolean(left && right && left === right);
+}
+
 function visibleRecoveryShouldKeepWaiting(outcome: StuckSessionRecoveryOutcome): boolean {
   return (
     outcome.status === "skipped" &&
@@ -1289,7 +1300,21 @@ export async function dispatchReplyFromConfig(
       ) {
         operationSessionId = admission.activeOperation.sessionId;
         const recovery = await recoverStaleVisibleOperation(admission.activeOperation);
-        const activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
+        let activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
+        if (
+          recovery &&
+          visibleRecoveryClearedActiveWork(recovery) &&
+          isSameReplyOperation(activeAfterRecovery, admission.activeOperation)
+        ) {
+          forceClearReplyRunBySessionId(
+            admission.activeOperation.sessionId,
+            new Error("Stale visible reply operation recovered without clearing reply registry"),
+          );
+          activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
+          if (isSameReplyOperation(activeAfterRecovery, admission.activeOperation)) {
+            break;
+          }
+        }
         const replyOperationStillActive = Boolean(activeAfterRecovery);
         if (
           replyOperationStillActive &&

@@ -116,6 +116,215 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("reclaims a pure stale reply registry lock when recovery finds no active work", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:pure-stale-registry";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+    diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockResolvedValue({
+      status: "noop",
+      action: "none",
+      reason: "no_active_work",
+      sessionId: "active-session",
+      sessionKey,
+    });
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "second telegram direct turn",
+      }),
+      cfg: {
+        diagnostics: {
+          stuckSessionWarnMs: 1_000,
+          stuckSessionAbortMs: 1_000,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(activeOperation.result).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+  });
+
+  it("does not clear a fresh reply operation with the same session id after recovery", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:fresh-same-session";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    let freshOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+    diagnosticMocks.requestStuckDiagnosticSessionRecovery
+      .mockImplementationOnce(async () => {
+        activeOperation.complete();
+        freshOperation = createReplyOperation({
+          sessionKey,
+          sessionId: "active-session",
+          resetTriggered: false,
+        });
+        freshOperation.setPhase("running");
+        return {
+          status: "noop",
+          action: "none",
+          reason: "no_active_work",
+          sessionId: "active-session",
+          sessionKey,
+        };
+      })
+      .mockImplementationOnce(async () => {
+        freshOperation?.fail("run_failed", new Error("fresh operation later became stale"));
+        return {
+          status: "aborted",
+          action: "abort_embedded_run",
+          sessionId: "active-session",
+          sessionKey,
+          activeSessionId: "active-session",
+          activeWorkKind: "embedded_run",
+          aborted: true,
+          drained: true,
+          forceCleared: false,
+          released: 0,
+        };
+      });
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "second telegram direct turn",
+      }),
+      cfg: {
+        diagnostics: {
+          stuckSessionWarnMs: 1_000,
+          stuckSessionAbortMs: 1_000,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(freshOperation?.result).toBeNull();
+    expect(replyResolver).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps waiting when recovery observes active reply work", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:active-reply-work";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+    diagnosticMocks.requestStuckDiagnosticSessionRecovery
+      .mockResolvedValueOnce({
+        status: "skipped",
+        action: "keep_lane",
+        reason: "active_reply_work",
+        sessionId: "active-session",
+        sessionKey,
+        activeSessionId: "active-session",
+        activeWorkKind: "embedded_run",
+      })
+      .mockImplementationOnce(async () => {
+        activeOperation.fail("run_failed", new Error("stale reply operation"));
+        return {
+          status: "aborted",
+          action: "abort_embedded_run",
+          sessionId: "active-session",
+          sessionKey,
+          activeSessionId: "active-session",
+          activeWorkKind: "embedded_run",
+          aborted: true,
+          drained: true,
+          forceCleared: false,
+          released: 0,
+        };
+      });
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "second telegram direct turn",
+      }),
+      cfg: {
+        diagnostics: {
+          stuckSessionWarnMs: 1_000,
+          stuckSessionAbortMs: 1_000,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(activeOperation.result).toBeNull();
+    expect(replyResolver).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps waiting when another recovery is already in flight", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:telegram:direct:in-flight";
@@ -258,7 +467,7 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps waiting when recovery releases a lane but reply work remains active", async () => {
+  it("clears stale reply work after recovery releases lane state", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:telegram:direct:released-lane";
     const activeOperation = createReplyOperation({
@@ -300,9 +509,6 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).toHaveBeenCalledTimes(1);
-    expect(replyResolver).not.toHaveBeenCalled();
-
-    activeOperation.complete();
     const result = await resultPromise;
 
     expect(result).toMatchObject({
@@ -311,6 +517,10 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     });
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(activeOperation.result).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
   });
 
   it("does not run visible stuck recovery when diagnostics are disabled", async () => {
