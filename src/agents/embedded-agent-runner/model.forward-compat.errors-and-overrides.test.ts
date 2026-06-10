@@ -90,6 +90,9 @@ vi.mock("../model-suppression.js", () => {
       (provider === "openai" &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark" &&
         shouldSuppressOpenAISpark({ api, baseUrl, config })),
+    shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) =>
+      provider === "azure-openai-responses" &&
+      id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
     buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
       if (
         (provider !== "openai" && provider !== "azure-openai-responses") ||
@@ -243,6 +246,61 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
   it("rejects inline native openai gpt-5.3-codex-spark rows", () => {
     const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent", {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                ...makeModel("gpt-5.3-codex-spark"),
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    );
+  });
+
+  it("rejects baseUrl-only inline native openai gpt-5.3-codex-spark rows", () => {
+    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent", {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                ...makeModel("gpt-5.3-codex-spark"),
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    );
+  });
+
+  it("rejects inline native openai gpt-5.3-codex-spark before OAuth fallback", () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+
+    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent", {
+      auth: {
+        profiles: {
+          "openai:codex": { provider: "openai", mode: "oauth" },
+        },
+        order: {
+          openai: ["openai:codex"],
+        },
+      },
       models: {
         providers: {
           openai: {

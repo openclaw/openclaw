@@ -872,31 +872,12 @@ function resolveExplicitModelWithRegistry(params: {
     provider,
     modelId,
   });
-  if (inlineMatch?.api) {
-    // Unconditional suppressions (no `when` clause) represent absolute provider
-    // capability blocks that cannot be overridden by inline user configuration.
-    // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
-    // intentionally bypassable when the user has explicitly configured the model.
-    // (#74451)
-    const suppressesInlineModel =
-      shouldUnconditionallySuppress({
-        provider,
-        id: modelId,
-        ...(cfg ? { config: cfg } : {}),
-        ...(workspaceDir ? { workspaceDir } : {}),
-      }) ||
-      (isOpenAICodexSparkRef({ provider, modelId }) &&
-        shouldSuppressBuiltInModel({
-          provider,
-          id: modelId,
-          ...(inlineMatch.api ? { api: inlineMatch.api } : {}),
-          ...(inlineMatch.baseUrl ? { baseUrl: inlineMatch.baseUrl } : {}),
-          ...(cfg ? { config: cfg } : {}),
-          ...(workspaceDir ? { workspaceDir } : {}),
-        }));
-    if (suppressesInlineModel) {
+  if (inlineMatch) {
+    if (inlineModelMatchIsSuppressed({ provider, modelId, inlineMatch, cfg, workspaceDir })) {
       return { kind: "suppressed" };
     }
+  }
+  if (inlineMatch?.api) {
     const staticCatalogModel = resolveBundledStaticCatalogModel({
       provider,
       modelId,
@@ -1134,7 +1115,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
 function isOpenAICodexSparkRef(params: { provider: string; modelId: string }): boolean {
   return (
     normalizeProviderId(params.provider) === OPENAI_PROVIDER_ID &&
-    normalizeStaticProviderModelId(OPENAI_PROVIDER_ID, params.modelId) ===
+    normalizeStaticProviderModelId(OPENAI_PROVIDER_ID, params.modelId).trim().toLowerCase() ===
       OPENAI_CODEX_SPARK_MODEL_ID
   );
 }
@@ -1142,14 +1123,38 @@ function isOpenAICodexSparkRef(params: { provider: string; modelId: string }): b
 function shouldAttemptSuppressedCodexHarnessModel(params: {
   provider: string;
   modelId: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  authProfile?: ReturnType<typeof resolveDynamicModelAuthProfile>;
 }): boolean {
-  return isOpenAICodexSparkRef(params);
+  if (!isOpenAICodexSparkRef(params)) {
+    return false;
+  }
+  if (openAICodexSparkRouteSelectsDirectOpenAI(params)) {
+    return false;
+  }
+  const providerConfig = resolveConfiguredProviderConfig(params.cfg, params.provider);
+  return (
+    providerConfigSelectsCodexHarness(providerConfig) ||
+    isCodexHarnessAuthProfile(params.authProfile)
+  );
 }
 
-function providerConfigSelectsCodexHarness(providerConfig: InlineProviderConfig | undefined) {
-  const authMode = (providerConfig as { auth?: unknown } | undefined)?.auth;
+type OpenAIRouteConfig = {
+  api?: string | null;
+  baseUrl?: string;
+  auth?: unknown;
+};
+
+function normalizeRouteString(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function providerConfigSelectsCodexHarness(providerConfig: OpenAIRouteConfig | undefined) {
+  const api = normalizeRouteString(providerConfig?.api);
+  const authMode = normalizeRouteString(providerConfig?.auth);
   return (
-    providerConfig?.api === OPENAI_CHATGPT_RESPONSES_API ||
+    api === OPENAI_CHATGPT_RESPONSES_API ||
     authMode === "oauth" ||
     authMode === "token"
   );
@@ -1170,20 +1175,92 @@ function isNativeOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
-function providerConfigSelectsDirectOpenAI(providerConfig: InlineProviderConfig | undefined) {
-  const authMode = (providerConfig as { auth?: unknown } | undefined)?.auth;
+function providerConfigSelectsDirectOpenAI(providerConfig: OpenAIRouteConfig | undefined) {
+  const api = normalizeRouteString(providerConfig?.api);
+  const authMode = normalizeRouteString(providerConfig?.auth);
+  if (api === OPENAI_CHATGPT_RESPONSES_API || authMode === "oauth" || authMode === "token") {
+    return false;
+  }
+  const hasBaseUrl = Boolean(providerConfig?.baseUrl?.trim());
+  if (hasBaseUrl) {
+    return (
+      isNativeOpenAIBaseUrl(providerConfig?.baseUrl) &&
+      (!api || api === "openai-responses" || api === "openai-completions")
+    );
+  }
   return (
-    providerConfig?.api === "openai-responses" ||
-    providerConfig?.api === "openai-completions" ||
+    api === "openai-responses" ||
+    api === "openai-completions" ||
     authMode === "api-key" ||
-    isNativeOpenAIBaseUrl(providerConfig?.baseUrl)
+    authMode === "api_key"
   );
 }
 
 function isCodexHarnessAuthProfile(
-  authProfile: ReturnType<typeof resolveDynamicModelAuthProfile>,
+  authProfile: ReturnType<typeof resolveDynamicModelAuthProfile> | undefined,
 ): boolean {
-  return authProfile.authProfileMode === "oauth" || authProfile.authProfileMode === "token";
+  return authProfile?.authProfileMode === "oauth" || authProfile?.authProfileMode === "token";
+}
+
+function findInlineRouteForModel(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+}): OpenAIRouteConfig | undefined {
+  return findInlineModelMatch({
+    providers: params.cfg?.models?.providers ?? {},
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+}
+
+function openAICodexSparkRouteSelectsDirectOpenAI(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+}): boolean {
+  if (!isOpenAICodexSparkRef(params)) {
+    return false;
+  }
+  const inlineRoute = findInlineRouteForModel(params);
+  if (providerConfigSelectsDirectOpenAI(inlineRoute)) {
+    return true;
+  }
+  return providerConfigSelectsDirectOpenAI(
+    resolveConfiguredProviderConfig(params.cfg, params.provider),
+  );
+}
+
+function inlineModelMatchIsSuppressed(params: {
+  provider: string;
+  modelId: string;
+  inlineMatch: OpenAIRouteConfig;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+}): boolean {
+  // Unconditional suppressions (no `when` clause) represent absolute provider
+  // capability blocks that cannot be overridden by inline user configuration.
+  // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
+  // intentionally bypassable when the user has explicitly configured the model.
+  // (#74451)
+  return (
+    shouldUnconditionallySuppress({
+      provider: params.provider,
+      id: params.modelId,
+      ...(params.cfg ? { config: params.cfg } : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }) ||
+    (isOpenAICodexSparkRef(params) &&
+      shouldSuppressBuiltInModel({
+        provider: params.provider,
+        id: params.modelId,
+        ...(params.inlineMatch.api ? { api: params.inlineMatch.api } : {}),
+        ...(params.inlineMatch.baseUrl ? { baseUrl: params.inlineMatch.baseUrl } : {}),
+        ...(params.cfg ? { config: params.cfg } : {}),
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      }))
+  );
 }
 
 function isCodexHarnessModel(model: Model | undefined): boolean {
@@ -1202,6 +1279,9 @@ function resolveSuppressedCodexHarnessModel(params: {
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
   if (!isOpenAICodexSparkRef(params)) {
+    return undefined;
+  }
+  if (openAICodexSparkRouteSelectsDirectOpenAI(params)) {
     return undefined;
   }
   const providerConfig = resolveConfiguredProviderConfig(params.cfg, params.provider);
@@ -1766,6 +1846,9 @@ export async function resolveModelAsync(
     const model = shouldAttemptSuppressedCodexHarnessModel({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
+      cfg,
+      workspaceDir,
+      authProfile,
     })
       ? await resolveDynamicAttempt()
       : undefined;
