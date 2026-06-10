@@ -1255,21 +1255,23 @@ export class MsteamsProvider implements VoiceCallProvider {
       if (signal.aborted) {
         return;
       }
-      try {
-        state.session.send({
-          type: "audio.frame",
-          seq: state.outboundSeq,
-          timestampMs: state.outboundTimestampMs,
-          payloadBase64: frame.toString("base64"),
-        });
-      } catch (err) {
-        // WS send failed (socket closed mid-playback, e.g. caller hung up). Log it AND rethrow so
-        // the caller (playTts/speak) sees the failure and finalizes the turn correctly — swallowing
-        // it would make playback report success on a dead socket.
+      // The worker socket can close mid-playback (caller hangs up between frames). `session.send`
+      // drops the frame silently and returns false rather than throwing, so make the failure visible:
+      // abort playback so playTts/speak finalize the turn instead of advancing seq/timestamps and
+      // reporting the audio as delivered on a dead socket.
+      const delivered = state.session.send({
+        type: "audio.frame",
+        seq: state.outboundSeq,
+        timestampMs: state.outboundTimestampMs,
+        payloadBase64: frame.toString("base64"),
+      });
+      if (!delivered) {
         this.logger?.warn(
-          `MsteamsProvider: audio.frame send failed for ${state.providerCallId} — ${describeError(err)}; aborting playback`,
+          `MsteamsProvider: audio.frame dropped for ${state.providerCallId} — Teams socket closed; aborting playback`,
         );
-        throw err;
+        throw new Error(
+          `msteams audio send failed for ${state.providerCallId}: session socket closed`,
+        );
       }
       state.outboundSeq += 1;
       state.outboundTimestampMs += FRAME_DURATION_MS;
