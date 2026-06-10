@@ -467,6 +467,60 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("does not clear active reply work when recovery fails", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:recovery-failed";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+    diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockResolvedValue({
+      status: "failed",
+      action: "none",
+      reason: "exception",
+      sessionId: "active-session",
+      sessionKey,
+      error: "recovery failed",
+    });
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "second telegram direct turn",
+      }),
+      cfg: {
+        diagnostics: {
+          stuckSessionWarnMs: 1_000,
+          stuckSessionAbortMs: 1_000,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(activeOperation.result).toBeNull();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("clears stale reply work after recovery releases lane state", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:telegram:direct:released-lane";
