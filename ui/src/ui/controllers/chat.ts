@@ -251,21 +251,31 @@ function historyHasSameOrNewerDisplayMessage(
   historyMessages: unknown[],
   signature: string,
   message: unknown,
+  previousMessages: unknown[] = [],
 ): boolean {
   return historyMessages.some((historyMessage) => {
     if (messageDisplaySignature(historyMessage) !== signature) {
       return false;
-    }
-    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-    if (role === "assistant" && extractThinking(historyMessage) && !extractThinking(message)) {
-      return true;
     }
     const timestamp = messageTimestampMs(message);
     if (timestamp == null) {
       return true;
     }
     const historyTimestamp = messageTimestampMs(historyMessage);
-    return historyTimestamp != null && historyTimestamp >= timestamp;
+    if (historyTimestamp != null && historyTimestamp >= timestamp) {
+      return true;
+    }
+    const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+    return (
+      role === "assistant" &&
+      Boolean(extractThinking(historyMessage)) &&
+      !extractThinking(message) &&
+      !previousMessages.some(
+        (previousMessage) =>
+          messageDisplaySignature(previousMessage) === signature &&
+          Boolean(extractThinking(previousMessage)),
+      )
+    );
   });
 }
 
@@ -342,7 +352,9 @@ function collectLateOptimisticTailMessages(
     if (!signature) {
       return [];
     }
-    if (historyHasSameOrNewerDisplayMessage(historyMessages, signature, message)) {
+    if (
+      historyHasSameOrNewerDisplayMessage(historyMessages, signature, message, previousMessages)
+    ) {
       continue;
     }
     lateTail.push(message);

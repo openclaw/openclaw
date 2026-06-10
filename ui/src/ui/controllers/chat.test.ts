@@ -2438,6 +2438,55 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([persistedUser, liveAssistant]);
   });
 
+  it("keeps a newer repeated final when stale history has older reasoning with the same text", async () => {
+    const olderUser = {
+      role: "user",
+      content: [{ type: "text", text: "First ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const olderReasoningAssistant = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "older private reasoning" },
+        { type: "text", text: "Repeated final" },
+      ],
+      timestamp: 100,
+      __openclaw: { seq: 2 },
+    };
+    const newerUser = {
+      role: "user",
+      content: [{ type: "text", text: "Ask again" }],
+      timestamp: 200,
+    };
+    const newerLiveAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Repeated final" }],
+      timestamp: 300,
+    };
+    const history = createDeferred<{ messages: unknown[]; thinkingLevel: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [olderUser, olderReasoningAssistant],
+    });
+
+    const load = loadChatHistory(state);
+    state.chatMessages = [olderUser, olderReasoningAssistant, newerUser, newerLiveAssistant];
+    history.resolve({
+      messages: [olderUser, olderReasoningAssistant],
+      thinkingLevel: "low",
+    });
+    await load;
+
+    expect(state.chatMessages).toEqual([
+      olderUser,
+      olderReasoningAssistant,
+      newerUser,
+      newerLiveAssistant,
+    ]);
+  });
+
   it("keeps active streamed assistant text when history reload returns a stale snapshot", async () => {
     const persistedUser = {
       role: "user",
