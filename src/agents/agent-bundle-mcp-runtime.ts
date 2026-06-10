@@ -858,6 +858,19 @@ export function createSessionMcpRuntime(params: {
       sessions.clear();
       await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));
     },
+    async reloadServer(serverName: string) {
+      failIfDisposed();
+      const session = sessions.get(serverName);
+      if (session) {
+        sessions.delete(serverName);
+        await disposeSession(session);
+      }
+      // Invalidate the combined catalog so the next getCatalog() call
+      // reconnects to this server and re-fetches its tool list.
+      catalogInvalidationGeneration += 1;
+      catalog = null;
+      catalogInFlight = undefined;
+    },
   };
 }
 
