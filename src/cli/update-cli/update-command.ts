@@ -3469,14 +3469,16 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   let preManagedServiceStop: PreManagedServiceStop | undefined;
-  const stopManagedServiceBeforeMutableUpdate = async () => {
+  const gitMutationRoot =
+    updateInstallKind === "git" ? (switchToGit ? resolveGitInstallDir() : root) : null;
+  const stopManagedServiceBeforeMutableUpdate = async (mutationRoot: string = root) => {
     if (updateInstallKind !== "package" && updateInstallKind !== "git") {
       return;
     }
     try {
       preManagedServiceStop = await maybeStopManagedServiceBeforeMutableUpdate({
         updateInstallKind,
-        root,
+        root: mutationRoot,
         shouldRestart,
         jsonMode: Boolean(opts.json),
       });
@@ -3552,7 +3554,9 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
             stop,
             devTargetRef,
             beforeGitMutation:
-              updateInstallKind === "git" ? stopManagedServiceBeforeMutableUpdate : undefined,
+              updateInstallKind === "git"
+                ? () => stopManagedServiceBeforeMutableUpdate(gitMutationRoot ?? root)
+                : undefined,
           });
   } catch (err) {
     stop();
