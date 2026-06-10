@@ -1271,6 +1271,23 @@ export async function runMemorySearch(
         typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
           ? manager.status().workspaceDir
           : undefined;
+      if (opts.json) {
+        defaultRuntime.writeJson({ results });
+        if (dreamingEnabled && workspaceDir) {
+          void recordShortTermRecalls({
+            workspaceDir,
+            query,
+            results,
+            timezone: dreaming.timezone,
+          }).catch(() => {
+            // Recall tracking is best-effort and must not block normal search results.
+          });
+        }
+        if (!process.env.VITEST) {
+          setImmediate(() => process.exit(process.exitCode ?? 0));
+        }
+        return;
+      }
       if (dreamingEnabled) {
         void recordShortTermRecalls({
           workspaceDir,
@@ -1280,10 +1297,6 @@ export async function runMemorySearch(
         }).catch(() => {
           // Recall tracking is best-effort and must not block normal search results.
         });
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({ results });
-        return;
       }
       const identityWarning =
         typeof manager.status === "function"
