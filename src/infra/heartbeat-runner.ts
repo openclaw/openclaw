@@ -2057,12 +2057,16 @@ export async function runHeartbeatOnce(opts: {
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
     }
-    await markCommitmentsStatus({
-      cfg,
-      ids: dueCommitmentIds,
-      status: shouldSkipMain ? "dismissed" : "sent",
-      nowMs: startedAt,
-    });
+    // Only mark sent when delivery actually succeeded.
+    // Suppressed deliveries (no visible result) stay pending for the next heartbeat cycle.
+    if (shouldSkipMain || send.status === "sent") {
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: shouldSkipMain ? "dismissed" : "sent",
+        nowMs: startedAt,
+      });
+    }
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
