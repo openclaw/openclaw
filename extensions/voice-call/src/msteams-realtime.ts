@@ -324,8 +324,12 @@ export interface MsteamsRealtimeCall {
   pushAudio(pcm16k: Buffer): void;
   /** Update Teams recording status (gates the consult tool + background task). */
   setRecordingActive(active: boolean): void;
-  /** Tear down the realtime session. */
-  close(): void;
+  /**
+   * Tear down the realtime session. Pass a `reason` for a manager-driven hangup (idle timeout, notify
+   * auto-hangup, explicit endCall) to ALSO close the Teams worker session so the call actually ends;
+   * omit it for a caller-driven `session.end` (the session is already closing).
+   */
+  close(reason?: string): void;
 }
 
 /**
@@ -1039,7 +1043,7 @@ export function createMsteamsRealtimeCall(params: {
     setRecordingActive: (active: boolean) => {
       recordingActive = active;
     },
-    close: () => {
+    close: (reason?: string) => {
       if (closed) {
         return;
       }
@@ -1052,6 +1056,15 @@ export function createMsteamsRealtimeCall(params: {
         realtime.close();
       } catch {
         // best-effort teardown
+      }
+      // A manager-driven hangup passes a reason — also close the Teams worker session so the call
+      // actually ends. A caller-driven session.end passes none (the session is already closing).
+      if (reason !== undefined) {
+        try {
+          session.close(reason);
+        } catch {
+          // best-effort teardown
+        }
       }
     },
   };
