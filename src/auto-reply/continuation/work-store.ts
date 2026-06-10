@@ -381,6 +381,23 @@ export function pendingWorkCount(sessionKey: string): number {
   return listTaskFlowsForOwnerKey(sessionKey).filter(isRecoverableWorkFlow).length;
 }
 
+/**
+ * Count only QUEUED (future, undelivered) continuation-work flows.
+ *
+ * The #986 maxPendingWork cap uses this rather than {@link pendingWorkCount}
+ * (which also counts `running`). At enqueue time the currently-driving wake is
+ * still `running` (it is only marked succeeded after `getReplyFromConfig`
+ * returns), so counting `running` would make the active wake reject its own
+ * serial successor — at `maxPendingWork:1` a normal one-at-a-time chain would
+ * self-cap to zero. Counting only `queued` means the cap bounds *future pending*
+ * wakes (the flood surface) without penalizing the in-flight driver.
+ */
+export function queuedPendingWorkCount(sessionKey: string): number {
+  return listTaskFlowsForOwnerKey(sessionKey).filter(
+    (flow) => isContinuationWorkFlow(flow) && flow.status === "queued",
+  ).length;
+}
+
 export function hasLiveOrRecentlyDispatchedContinuationWork(sessionKey: string): boolean {
   return listTaskFlowsForOwnerKey(sessionKey).some(
     (flow) =>

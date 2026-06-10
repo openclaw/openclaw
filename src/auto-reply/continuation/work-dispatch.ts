@@ -16,7 +16,7 @@ import {
   markPendingWorkFailed,
   markPendingWorkSuperseded,
   markPendingWorkTurnGranted,
-  pendingWorkCount,
+  queuedPendingWorkCount,
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   requeuePendingWork,
@@ -238,21 +238,28 @@ export function partitionSupersededWork(
   if (works.length <= 1 || graceMs <= 0) {
     return { drive: [...works], superseded: [] };
   }
-  let newestElectedAt = -Infinity;
-  for (const work of works) {
-    if (work.electedAt > newestElectedAt) {
-      newestElectedAt = work.electedAt;
+  // Identify the single newest-elected member. A synchronous batch enqueue can
+  // stamp identical `electedAt` (the store writes are sync), so ties are broken
+  // by `hop` (durable monotonic enqueue order within a chain) — the higher hop
+  // is the newer intent. Without the tie-break, same-ms rows fall to array
+  // order and the OLDEST stale wake could be kept while the newest is folded
+  // (Codex #988 review :252).
+  let newestIdx = 0;
+  for (let i = 1; i < works.length; i++) {
+    const w = works[i];
+    const best = works[newestIdx];
+    if (w.electedAt > best.electedAt || (w.electedAt === best.electedAt && w.hop > best.hop)) {
+      newestIdx = i;
     }
   }
   const drive: PendingContinuationWork[] = [];
   const superseded: PendingContinuationWork[] = [];
-  let newestKept = false;
-  for (const work of works) {
-    const isNewest = work.electedAt === newestElectedAt && !newestKept;
+  for (let i = 0; i < works.length; i++) {
+    const work = works[i];
+    const isNewest = i === newestIdx;
     const isStale = now - work.dueAt > graceMs;
     if (isNewest) {
       // The single newest-elected member always drives (live intent).
-      newestKept = true;
       drive.push(work);
     } else if (isStale) {
       superseded.push(work);
@@ -399,7 +406,10 @@ export async function scheduleContinuationWork(params: {
   // (the multi-continue_work flood foot-gun). Enforced at enqueue so a flood can
   // never pile up beyond the cap regardless of chain depth. Treated as a cap
   // (capped: true) so the batch ends early with partial-success preserved.
-  const pending = pendingWorkCount(params.sessionKey);
+  // Counts only QUEUED (future) wakes — not the currently-driving `running`
+  // flow — so a serial chain at maxPendingWork:1 can still schedule its own
+  // successor (the active wake is excluded; see queuedPendingWorkCount).
+  const pending = queuedPendingWorkCount(params.sessionKey);
   if (pending >= params.config.maxPendingWork) {
     params.log?.(
       `[continuation:work-rejected] pending-capped for ${params.sessionKey}: ${pending}/${params.config.maxPendingWork}`,

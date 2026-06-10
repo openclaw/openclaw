@@ -909,6 +909,21 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     expect(drive.map((w) => w.hop).toSorted()).toEqual([2, 3]);
     expect(superseded.map((w) => w.hop)).toEqual([1]);
   });
+
+  it("tie-breaks same-millisecond electedAt by hop — keeps the highest-hop newest intent (#988 :252)", () => {
+    // Synchronous batch enqueue can stamp identical electedAt; the newest intent
+    // is the highest hop, NOT the first array-order row. consumePendingWork
+    // sorts createdAt asc, so the stale older sibling appears first.
+    const works = [
+      work({ hop: 1, electedAt: 5_000, dueAt: NOW - 500_000 }), // same ms, oldest hop, stale
+      work({ hop: 2, electedAt: 5_000, dueAt: NOW - 400_000 }), // same ms, middle hop, stale
+      work({ hop: 3, electedAt: 5_000, dueAt: NOW - 300_000 }), // same ms, NEWEST hop
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    // The highest-hop (3) is the kept newest — NOT the first array row (hop 1).
+    expect(drive.map((w) => w.hop)).toEqual([3]);
+    expect(superseded.map((w) => w.hop).toSorted()).toEqual([1, 2]);
+  });
 });
 
 describe("#986 maxPendingWork cap (Guard 1)", () => {
@@ -965,5 +980,37 @@ describe("#986 maxPendingWork cap (Guard 1)", () => {
     // The 3 earlier elections stayed durably enqueued (not silently dropped).
     const queued = [...mockFlows.values()].filter((f) => f.ownerKey === sessionKey);
     expect(queued).toHaveLength(3);
+  });
+
+  it("does NOT count the active driving (running) wake against the cap — serial maxPendingWork:1 still schedules its successor (#988 :403)", async () => {
+    const capOne = { ...config, maxPendingWork: 1, maxChainLength: 100 } satisfies ContinuationRuntimeConfig;
+    // Simulate the in-flight driver: one continuation-work flow currently
+    // `running` (its turn is being driven; markPendingWorkTurnGranted hasn't run
+    // yet). A serial chain at maxPendingWork:1 must still schedule the successor
+    // — the running driver is NOT a pending future wake.
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: 1_000_000,
+      dueAt: 1_001_000,
+      maxChainLength: 100,
+    });
+    const driver = [...mockFlows.values()].find((f) => f.ownerKey === sessionKey);
+    if (driver) {
+      driver.status = "running";
+    }
+
+    const result = await scheduleContinuationWork({
+      sessionKey,
+      chainState: { currentChainCount: 1, chainStartedAt: 1_000_000, accumulatedChainTokens: 0 },
+      request: { delaySeconds: 1, reason: "serial successor under cap 1" },
+      config: capOne,
+    });
+
+    // Pre-fix this rejected (running driver counted → pending 1 >= cap 1).
+    // Post-fix the running driver is excluded, so the successor schedules.
+    expect(result.scheduled).toBe(true);
+    expect(result.capped).toBe(false);
   });
 });

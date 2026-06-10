@@ -2959,7 +2959,7 @@ export async function runReplyAgent(replyParams: {
             // emit for multi-election turns to keep single-work behavior intact.
             if (batchResult.cappedCount > 0 && workRequests.length > 1) {
               enqueueSystemEvent(
-                `[continuation] ${batchResult.cappedCount} of ${workRequests.length} continue_work elections were not scheduled (chain/cost cap).`,
+                `[continuation] ${batchResult.cappedCount} of ${workRequests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
                 { sessionKey, trusted: true },
               );
             }

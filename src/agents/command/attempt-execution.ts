@@ -23,6 +23,7 @@ import {
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -1009,6 +1010,17 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   });
   if (result.scheduledCount === 0) {
     return;
+  }
+  // #986 cap-notice symmetry: surface cap-dropped elections on the subagent-init
+  // lane too, matching the main-reply lane (agent-runner). Without this, a
+  // subagent turn's partial cap-drop is silent even though the tool told the
+  // model each call was "scheduled". Multi-election only, to keep single-work
+  // behavior intact (Rune #988 review residual + frond fold-in).
+  if (result.cappedCount > 0 && params.requests.length > 1) {
+    enqueueSystemEvent(
+      `[continuation] ${result.cappedCount} of ${params.requests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
+      { sessionKey: params.sessionKey, trusted: true },
+    );
   }
   persistContinuationChainState({
     sessionEntry: params.sessionEntry,
