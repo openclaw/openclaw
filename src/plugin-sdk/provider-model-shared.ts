@@ -1,3 +1,10 @@
+import {
+  CLAUDE_FABLE_5_THINKING_PROFILE,
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeXhighEffort,
+} from "@openclaw/llm-core";
 // Provider model helpers normalize model catalog entries shared by provider plugins.
 import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -27,6 +34,14 @@ export type {
   ModelApi,
   ModelProviderDeclarationConfig as ModelProviderConfig,
 } from "../config/types.models.js";
+export {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeNativeThinkingLevelMap,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+} from "@openclaw/llm-core";
 export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
@@ -100,14 +115,6 @@ export {
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 
-const CLAUDE_OPUS_48_MODEL_PREFIXES = ["claude-opus-4-8", "claude-opus-4.8"] as const;
-const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
-const CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES = [
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-] as const;
 const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "off" },
   { id: "minimal" },
@@ -136,47 +143,40 @@ export function isProxyReasoningUnsupportedModelHint(
   return getModelProviderHint(modelId) === "x-ai";
 }
 
-function matchesClaudeModelPrefix(modelId: string, prefixes: readonly string[]): boolean {
-  const lower = normalizeOptionalLowercaseString(modelId);
-  return Boolean(lower && prefixes.some((prefix) => lower.startsWith(prefix)));
-}
-
-function isClaudeOpus47ModelId(modelId: string): boolean {
-  return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_47_MODEL_PREFIXES);
-}
-
-function isClaudeOpus48ModelId(modelId: string): boolean {
-  return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_48_MODEL_PREFIXES);
-}
-
 /** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
 export function isClaudeAdaptiveThinkingDefaultModelId(
   /** Claude model id to check against adaptive-thinking default families. */
   modelId: string,
 ): boolean {
-  return matchesClaudeModelPrefix(modelId, CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES);
+  const ref = { id: modelId };
+  return supportsClaudeAdaptiveThinking(ref) && !supportsClaudeNativeXhighEffort(ref);
 }
 
 /** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
 export function resolveClaudeThinkingProfile(
   /** Claude model id used to choose available thinking levels and defaults. */
   modelId: string,
+  params?: Record<string, unknown>,
+  options?: { includeNativeMax?: boolean },
 ): ProviderThinkingProfile {
-  if (isClaudeOpus48ModelId(modelId)) {
+  const ref = { id: modelId, params };
+  const canonicalModelId = resolveClaudeModelIdentity(ref);
+  if (resolveClaudeFable5ModelIdentity(ref)) {
+    return CLAUDE_FABLE_5_THINKING_PROFILE;
+  }
+  if (supportsClaudeNativeXhighEffort(ref)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
       defaultLevel: "off",
     };
   }
-  if (isClaudeOpus47ModelId(modelId)) {
+  if (isClaudeAdaptiveThinkingDefaultModelId(canonicalModelId)) {
     return {
-      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "off",
-    };
-  }
-  if (isClaudeAdaptiveThinkingDefaultModelId(modelId)) {
-    return {
-      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "adaptive" }],
+      levels: [
+        ...BASE_CLAUDE_THINKING_LEVELS,
+        { id: "adaptive" },
+        ...(options?.includeNativeMax ? [{ id: "max" as const }] : []),
+      ],
       defaultLevel: "adaptive",
     };
   }
