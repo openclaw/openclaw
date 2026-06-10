@@ -685,12 +685,16 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(`git -C ${tempDir} reset --hard`);
     expect(calls).toContain(`git -C ${tempDir} checkout --force feature`);
     expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+    expect(calls).toContain(`git -C ${tempDir} branch -D main`);
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
       calls.indexOf(`git -C ${tempDir} checkout -B main ${selectedSha}`),
     );
     expect(
       calls.indexOf(`git -C ${tempDir} branch --set-upstream-to origin/main main`),
     ).toBeLessThan(calls.indexOf(`git -C ${tempDir} reset --hard`));
+    expect(calls.indexOf(`git -C ${tempDir} reset --hard abc123`)).toBeLessThan(
+      calls.indexOf(`git -C ${tempDir} branch -D main`),
+    );
   });
 
   it("fetches only the requested tag for explicit dev tag target refs", async () => {

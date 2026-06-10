@@ -819,6 +819,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
     let gitMutationPrepared = false;
+    let createdDevBranchDuringUpdate = false;
     const prepareGitMutation = async () => {
       if (gitMutationPrepared) {
         return;
@@ -881,6 +882,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             "--hard",
             beforeSha,
           ]);
+          if (createdDevBranchDuringUpdate) {
+            await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
+              "git",
+              "-C",
+              gitRoot,
+              "branch",
+              "-D",
+              DEV_BRANCH,
+            ]);
+          }
         }
         return;
       }
@@ -892,6 +903,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         "--detach",
         beforeSha,
       ]);
+      if (createdDevBranchDuringUpdate) {
+        await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "branch",
+          "-D",
+          DEV_BRANCH,
+        ]);
+      }
     };
     const buildGitErrorResultWithRollback = async (reason: string): Promise<UpdateRunResult> => {
       await rollbackGitCheckout();
@@ -1330,6 +1351,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             return failure;
           }
           checkedOutSelectedSha = localMainStep.exitCode !== 0;
+          createdDevBranchDuringUpdate = checkedOutSelectedSha;
           if (checkedOutSelectedSha && selectedDevUpstream) {
             const upstreamFailure = await runRequiredGitStep(
               `git branch --set-upstream-to ${selectedDevUpstream} ${DEV_BRANCH}`,
