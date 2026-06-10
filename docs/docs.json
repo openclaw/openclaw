@@ -1434,6 +1434,7 @@
                   "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
+                  "providers/llmbase",
                   "providers/lmstudio",
                   "providers/minimax",
                   "providers/mistral",
