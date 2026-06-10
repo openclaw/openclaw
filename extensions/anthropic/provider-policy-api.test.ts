@@ -161,21 +161,27 @@ describe("anthropic provider policy public artifact", () => {
         provider: "claude-cli",
         modelId: "claude-fable-5",
       }),
-    ).toBeNull();
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
   });
 
-  it("keeps adaptive-only Claude profiles aligned with the runtime provider", () => {
-    const profile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-    });
+  it("exposes native max without xhigh for direct Claude 4.6 routes", () => {
+    for (const provider of ["anthropic", "claude-cli"]) {
+      const profile = resolveThinkingProfile({
+        provider,
+        modelId: "claude-opus-4-6",
+      });
 
-    if (!profile) {
-      throw new Error("Expected Anthropic policy profile");
+      if (!profile) {
+        throw new Error(`Expected ${provider} policy profile`);
+      }
+      expect(levelIds(profile.levels)).toContain("adaptive");
+      expect(levelIds(profile.levels)).toContain("max");
+      expect(profile.defaultLevel).toBe("adaptive");
+      expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual(["max"]);
     }
-    expect(levelIds(profile.levels)).toContain("adaptive");
-    expect(profile.defaultLevel).toBe("adaptive");
-    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {

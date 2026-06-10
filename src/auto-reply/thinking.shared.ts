@@ -28,6 +28,7 @@ export type UsageDisplayLevel = "off" | "tokens" | "full";
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
+  api?: string;
   reasoning?: boolean;
   params?: Record<string, unknown>;
   compat?: {

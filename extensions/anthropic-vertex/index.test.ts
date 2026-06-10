@@ -89,6 +89,8 @@ describe("anthropic-vertex provider plugin", () => {
       xhigh: "xhigh",
       max: "max",
     });
+    expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
   });
 
   it("owns Anthropic-style replay policy", async () => {
@@ -136,6 +138,13 @@ describe("anthropic-vertex provider plugin", () => {
     } as never);
     expect(fableProfile?.defaultLevel).toBe("high");
     expect(fableProfile?.preserveWhenCatalogReasoningFalse).toBe(true);
+
+    const aliasProfile = provider.resolveThinkingProfile?.({
+      provider: "anthropic-vertex",
+      modelId: "production-claude",
+      params: { canonicalModelId: "claude-fable-5" },
+    } as never);
+    expect(aliasProfile?.defaultLevel).toBe("high");
   });
 
   it("restores Fable metadata for explicit Vertex catalog rows", async () => {
@@ -170,6 +179,32 @@ describe("anthropic-vertex provider plugin", () => {
         xhigh: "xhigh",
         max: "max",
       },
+    });
+
+    const aliasNormalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic-vertex",
+      modelId: "production-claude",
+      model: {
+        id: "production-claude",
+        name: "Production Claude",
+        api: "anthropic-messages",
+        provider: "anthropic-vertex",
+        baseUrl: "https://aiplatform.googleapis.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+        params: { canonicalModelId: "claude-fable-5" },
+        thinkingLevelMap: { max: null },
+      },
+    } as never);
+    expect(aliasNormalized).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: null },
     });
   });
 

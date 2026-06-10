@@ -18,13 +18,18 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveClaudeFable5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  supportsClaudeAdaptiveThinking,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
+import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
 
 const log = createSubsystemLogger("bedrock-discovery");
 
@@ -152,26 +157,10 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
   return undefined;
 }
 
-function isKnownAdaptiveClaudeModelId(modelId: string): boolean {
-  if (resolveClaudeFable5ModelIdentity({ id: modelId })) {
-    return true;
-  }
-  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
-  return [modelId, stripped].some((candidate) =>
-    /(?:^|[/.:])anthropic\.claude-opus-4[.-][78](?:$|[-.:/])/i.test(candidate),
-  );
-}
-
 function resolveKnownThinkingLevelMap(
   modelId: string,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
-  if (resolveClaudeFable5ModelIdentity({ id: modelId })) {
-    return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
-  }
-  if (!isKnownAdaptiveClaudeModelId(modelId)) {
-    return undefined;
-  }
-  return { xhigh: "xhigh", max: "max" };
+  return resolveBedrockNativeThinkingLevelMap(modelId);
 }
 
 function resolveKnownMaxTokens(modelId: string): number | undefined {
@@ -286,7 +275,7 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
 }
 
 function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  if (isKnownAdaptiveClaudeModelId(summary.modelId ?? "")) {
+  if (supportsClaudeAdaptiveThinking({ id: summary.modelId })) {
     return true;
   }
   const haystack = normalizeLowercaseStringOrEmpty(
@@ -471,14 +460,14 @@ function resolveInferenceProfiles(
     const knownThinkingLevelMap = resolveKnownThinkingLevelMap(
       baseModelId ?? profile.inferenceProfileId,
     );
-    const canonicalFableId = resolveClaudeFable5ModelIdentity({ id: baseModelId });
+    const canonicalClaudeId = resolveClaudeModelIdentity({ id: baseModelId });
 
     discovered.push({
       id: profile.inferenceProfileId,
       name: profile.inferenceProfileName?.trim() || profile.inferenceProfileId,
       reasoning:
         baseModel?.reasoning ??
-        isKnownAdaptiveClaudeModelId(baseModelId ?? profile.inferenceProfileId),
+        supportsClaudeAdaptiveThinking({ id: baseModelId ?? profile.inferenceProfileId }),
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
       contextWindow:
@@ -492,7 +481,9 @@ function resolveInferenceProfiles(
       ...(baseModel?.thinkingLevelMap || knownThinkingLevelMap
         ? { thinkingLevelMap: baseModel?.thinkingLevelMap ?? knownThinkingLevelMap }
         : {}),
-      ...(canonicalFableId ? { params: { canonicalModelId: canonicalFableId } } : {}),
+      ...(canonicalClaudeId.startsWith("claude-")
+        ? { params: { canonicalModelId: canonicalClaudeId } }
+        : {}),
     });
   }
   return discovered;

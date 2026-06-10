@@ -6,11 +6,15 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  ProviderNormalizeResolvedModelContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
@@ -20,7 +24,9 @@ import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapte
 import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
 import {
   isOpus47OrNewerBedrockModelRef,
+  resolveBedrockNativeThinkingLevelMap,
   resolveBedrockClaudeThinkingProfile,
+  supportsBedrockNativeMaxEffort,
 } from "./thinking-policy.js";
 
 type GuardrailConfig = {
@@ -41,6 +47,29 @@ type AmazonBedrockPluginConfig = {
   };
   guardrail?: GuardrailConfig;
 };
+
+function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeResolvedModelContext) {
+  const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(modelId, model.params);
+  if (!thinkingLevelMap) {
+    return undefined;
+  }
+  const reasoning =
+    model.reasoning ||
+    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
+  const current = model.thinkingLevelMap;
+  const currentEfforts = current as Record<string, string | null | undefined> | undefined;
+  if (
+    reasoning === model.reasoning &&
+    Object.entries(thinkingLevelMap).every(([level, effort]) => currentEfforts?.[level] === effort)
+  ) {
+    return undefined;
+  }
+  return {
+    ...model,
+    reasoning,
+    thinkingLevelMap: { ...thinkingLevelMap, ...current },
+  };
+}
 
 const BEDROCK_SERVICE_TIER_VALUES = ["flex", "priority", "default", "reserved"] as const;
 type BedrockServiceTier = (typeof BEDROCK_SERVICE_TIER_VALUES)[number];
@@ -336,7 +365,7 @@ function injectBedrockCachePoints(
   }
 }
 
-function patchOpus47MaxThinkingEffort(payload: Record<string, unknown>): void {
+function patchMaxThinkingEffort(payload: Record<string, unknown>): void {
   const fieldsValue = payload.additionalModelRequestFields;
   const fields =
     fieldsValue && typeof fieldsValue === "object" && !Array.isArray(fieldsValue)
@@ -400,9 +429,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     model?: { params?: Record<string, unknown> };
     streamFn?: StreamFn;
   }) => {
+    const modelRef = { id: modelId, params: model?.params };
     if (
       isAnthropicBedrockModel(modelId) ||
-      resolveClaudeFable5ModelIdentity({ id: modelId, params: model?.params })
+      resolveClaudeModelIdentity(modelRef).startsWith("claude-")
     ) {
       return streamFn;
     }
@@ -418,11 +448,12 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     modelRef: { id: string; params?: Record<string, unknown> },
     options: TOptions,
   ): TOptions {
-    if (
-      (!isOpus47OrNewerBedrockModelRef(modelRef.id) &&
-        !resolveClaudeFable5ModelIdentity(modelRef)) ||
-      !("temperature" in options)
-    ) {
+    const canonicalModelId = resolveClaudeModelIdentity(modelRef);
+    const omitsTemperature =
+      isOpus47OrNewerBedrockModelRef(modelRef.id) ||
+      isOpus47OrNewerBedrockModelRef(canonicalModelId) ||
+      resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
+    if (!omitsTemperature || !("temperature" in options)) {
       return options;
     }
     const next = { ...options } as typeof options & { temperature?: unknown };
@@ -525,12 +556,17 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       },
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
+    normalizeResolvedModel: normalizeBedrockResolvedModel,
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentPluginConfig = resolveCurrentPluginConfig(config);
       const currentGuardrail = currentPluginConfig?.guardrail;
       const modelRef = { id: modelId, params: model?.params };
       const fable5 = resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
+      const canonicalModelId = resolveClaudeModelIdentity(modelRef);
+      const opus47OrNewer =
+        isOpus47OrNewerBedrockModelRef(modelId) || isOpus47OrNewerBedrockModelRef(canonicalModelId);
+      const supportsNativeMax = supportsBedrockNativeMaxEffort(modelId, model?.params);
       let wrapped =
         (currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
           ? createGuardrailWrapStreamFn(
@@ -560,9 +596,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
-      const shouldOmitTemperature = isOpus47OrNewerBedrockModelRef(modelId) || fable5;
-      const shouldPatchMaxThinking =
-        isOpus47OrNewerBedrockModelRef(modelId) && thinkingLevel === "max";
+      const shouldOmitTemperature = opus47OrNewer || fable5;
+      const shouldPatchMaxThinking = supportsNativeMax && thinkingLevel === "max";
 
       // For known Anthropic models (heuristic match), enable injection immediately.
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
@@ -597,7 +632,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                     onPayload: (payload: unknown, payloadModel: unknown) => {
                       if (payload && typeof payload === "object") {
                         const payloadRecord = payload as Record<string, unknown>;
-                        patchOpus47MaxThinkingEffort(payloadRecord);
+                        patchMaxThinkingEffort(payloadRecord);
                         omitUnsupportedClaudePayloadTemperature(payloadRecord);
                       }
                       return originalOnPayload?.(payload, payloadModel);
@@ -632,7 +667,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                   const payloadRecord = payload as Record<string, unknown>;
                   injectBedrockCachePoints(payloadRecord, cacheRetention);
                   if (shouldPatchMaxThinking) {
-                    patchOpus47MaxThinkingEffort(payloadRecord);
+                    patchMaxThinkingEffort(payloadRecord);
                   }
                   if (shouldOmitTemperature) {
                     omitUnsupportedClaudePayloadTemperature(payloadRecord);
@@ -664,7 +699,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                   injectBedrockCachePoints(payloadRecord, cacheRetention);
                 }
                 if (shouldPatchMaxThinking) {
-                  patchOpus47MaxThinkingEffort(payloadRecord);
+                  patchMaxThinkingEffort(payloadRecord);
                 }
                 if (traits.omitTemperature) {
                   omitUnsupportedClaudePayloadTemperature(payloadRecord);

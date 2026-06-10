@@ -51,7 +51,8 @@ export default definePluginEntry({
       ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
       normalizeResolvedModel: ({ modelId, model }) =>
         normalizeAnthropicVertexResolvedModel(modelId, model),
-      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
+      resolveThinkingProfile: ({ modelId, params }) =>
+        resolveClaudeThinkingProfile(modelId, params, { includeNativeMax: true }),
       resolveSyntheticAuth: () => {
         if (!hasAnthropicVertexAvailableAuth()) {
           return undefined;

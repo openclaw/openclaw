@@ -1,11 +1,12 @@
 // Agent Core module implements compaction behavior.
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamFn,
-  Usage,
+import {
+  resolveClaudeFable5ModelIdentity,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+  type StreamFn,
+  type Usage,
 } from "../../../../llm-core/src/index.js";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
@@ -518,7 +519,10 @@ function createSummarizationOptions(
   thinkingLevel: ThinkingLevel | undefined,
 ): SimpleStreamOptions {
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
-  if (model.reasoning && thinkingLevel) {
+  const fableReasoning =
+    (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
+    resolveClaudeFable5ModelIdentity(model) !== undefined;
+  if ((model.reasoning || fableReasoning) && thinkingLevel) {
     options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   return options;

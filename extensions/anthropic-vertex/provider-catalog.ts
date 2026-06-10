@@ -7,6 +7,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveClaudeFable5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveAnthropicVertexRegion } from "./region.js";
 /** Default Anthropic Vertex model used for implicit provider catalogs. */
@@ -63,6 +64,7 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
       input: ["text", "image"],
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       maxTokens: 128000,
+      thinkingLevelMap: { xhigh: null, max: "max" },
     }),
     buildAnthropicVertexModel({
       id: ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
@@ -71,6 +73,7 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
       input: ["text", "image"],
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
       maxTokens: 128000,
+      thinkingLevelMap: { xhigh: null, max: "max" },
     }),
   ];
 }
@@ -80,18 +83,18 @@ export function normalizeAnthropicVertexResolvedModel(
   modelId: string,
   model: ProviderRuntimeModel,
 ): ProviderRuntimeModel | undefined {
-  if (!normalizeLowercaseStringOrEmpty(modelId).startsWith("claude-fable-5")) {
+  if (!resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params })) {
     return undefined;
   }
   const input: ProviderRuntimeModel["input"] = model.input.includes("image")
     ? model.input
     : [...model.input, "image"];
   const thinkingLevelMap = {
-    ...model.thinkingLevelMap,
     off: "low",
     minimal: "low",
     xhigh: "xhigh",
     max: "max",
+    ...model.thinkingLevelMap,
   };
   if (
     model.reasoning &&

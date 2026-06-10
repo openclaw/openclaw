@@ -313,6 +313,40 @@ describe("amazon-bedrock provider plugin", () => {
     );
   });
 
+  it("normalizes explicit Claude 4.6 rows with native max metadata", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      model: {
+        id: "us.anthropic.claude-opus-4-6-v1",
+        name: "Claude Opus 4.6",
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 4096,
+      },
+    } as never);
+
+    expect(normalized?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
+
+    const restricted = provider.normalizeResolvedModel?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      model: {
+        ...(normalized as NonNullable<typeof normalized>),
+        thinkingLevelMap: { max: null },
+      },
+    } as never);
+
+    expect(restricted?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
+  });
+
   it("mirrors Claude Opus 4.7 thinking levels for Bedrock model refs", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -550,6 +584,31 @@ describe("amazon-bedrock provider plugin", () => {
     expect(result).not.toHaveProperty("cacheRetention", "none");
   });
 
+  it("omits temperature for canonical Bedrock Opus aliases", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const model = {
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      id: "production-claude",
+      params: { canonicalModelId: "claude-opus-4-8" },
+    };
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: model.id,
+      model,
+      streamFn: spyStreamFn,
+    } as never);
+
+    const result = wrapped?.(model as never, { messages: [] } as never, {
+      temperature: 0.2,
+      maxTokens: 10,
+    }) as Record<string, unknown> | undefined;
+
+    expectWrappedResultFields(result, { maxTokens: 10 });
+    expect(result).not.toHaveProperty("temperature");
+    expect(result).not.toHaveProperty("cacheRetention", "none");
+  });
+
   it("omits temperature for dotted Bedrock Opus 4.7 model ids", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({
@@ -670,6 +729,36 @@ describe("amazon-bedrock provider plugin", () => {
       additionalModelRequestFields: {
         thinking: { type: "adaptive" },
         output_config: { effort: "xhigh" },
+      },
+    };
+
+    await (result?.onPayload as ((p: Record<string, unknown>) => unknown) | undefined)?.(payload);
+
+    expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: "max" });
+  });
+
+  it("preserves Bedrock Opus 4.6 max thinking in the final payload", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      streamFn: spyStreamFn,
+      thinkingLevel: "max",
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-opus-4-6-v1",
+      } as never,
+      { messages: [] } as never,
+      { reasoning: "high" } as never,
+    ) as Record<string, unknown> | undefined;
+    const payload = {
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive" },
+        output_config: { effort: "high" },
       },
     };
 

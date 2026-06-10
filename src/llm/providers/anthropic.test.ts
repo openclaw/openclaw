@@ -272,14 +272,6 @@ describe("Anthropic provider", () => {
             Promise.resolve(
               createSseResponse([
                 {
-                  type: "message_start",
-                  message: {
-                    id: "msg_partial",
-                    model: "claude-fable-5",
-                    usage: { input_tokens: 1, output_tokens: 0 },
-                  },
-                },
-                {
                   type: "content_block_start",
                   index: 0,
                   content_block: { type: "text", text: "" },
@@ -357,7 +349,10 @@ describe("Anthropic provider", () => {
     expect(JSON.stringify(assistantMessage)).not.toContain("sig_model_bound");
   });
 
-  it("clamps max adaptive effort when the Claude model does not advertise it", async () => {
+  it.each([
+    { reasoning: "xhigh", expectedEffort: "high" },
+    { reasoning: "max", expectedEffort: "max" },
+  ] as const)("maps Claude 4.6 $reasoning effort", async ({ reasoning, expectedEffort }) => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(
       makeAnthropicModel({
@@ -369,7 +364,7 @@ describe("Anthropic provider", () => {
       },
       {
         apiKey: "sk-ant-provider",
-        reasoning: "max",
+        reasoning,
         onPayload: (payload) => {
           capturedPayload = payload;
         },
@@ -379,9 +374,50 @@ describe("Anthropic provider", () => {
     await stream.result();
 
     expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
-      effort: "high",
+      effort: expectedEffort,
     });
   });
+
+  it.each([
+    {
+      id: "claude-opus-4.6-1m",
+      reasoning: "xhigh",
+      thinkingLevelMap: { xhigh: null, max: null },
+      expectedEffort: "high",
+    },
+    {
+      id: "claude-opus-4.7-1m-internal",
+      reasoning: "max",
+      thinkingLevelMap: { xhigh: "xhigh" },
+      expectedEffort: "xhigh",
+    },
+  ] as const)(
+    "honors proxy effort restrictions for $id",
+    async ({ id, reasoning, thinkingLevelMap, expectedEffort }) => {
+      let capturedPayload: unknown;
+      const stream = streamSimpleAnthropic(
+        makeAnthropicModel({
+          id,
+          provider: "github-copilot",
+          thinkingLevelMap,
+        }),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        {
+          apiKey: "copilot-token",
+          reasoning,
+          onPayload: (payload) => {
+            capturedPayload = payload;
+          },
+        },
+      );
+
+      await stream.result();
+
+      expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
+        effort: expectedEffort,
+      });
+    },
+  );
 
   it("uses always-on adaptive thinking for Claude Fable 5", async () => {
     let capturedPayload: unknown;
@@ -421,11 +457,6 @@ describe("Anthropic provider", () => {
       name: "Claude Fable 5",
       params: undefined,
     },
-    {
-      id: "claude-fable-5-prod",
-      name: "Production Claude",
-      params: { canonicalModelId: "claude-opus-4-8" },
-    },
   ])("does not infer the Fable contract from noncanonical metadata", async (overrides) => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(
@@ -448,6 +479,67 @@ describe("Anthropic provider", () => {
     expect(capturedPayload).toMatchObject({ temperature: 0.2 });
     expect(capturedPayload).not.toHaveProperty("thinking");
   });
+
+  it("uses canonical Claude policy for deployment aliases", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "production-claude",
+        name: "Production Claude",
+        params: { canonicalModelId: "claude-opus-4-8" },
+        reasoning: false,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "xhigh",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      model: "production-claude",
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+  });
+
+  it.each([
+    { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
+    { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
+  ] as const)(
+    "normalizes temperature for canonical $canonicalModelId aliases when thinking is off",
+    async ({ canonicalModelId, expectedTemperature }) => {
+      let capturedPayload: unknown;
+      const stream = streamSimpleAnthropic(
+        makeAnthropicModel({
+          id: "production-claude",
+          params: { canonicalModelId },
+          reasoning: false,
+          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        }),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        {
+          apiKey: "sk-ant-provider",
+          temperature: 0.2,
+          onPayload: (payload) => {
+            capturedPayload = payload;
+          },
+        },
+      );
+
+      await stream.result();
+
+      expect((capturedPayload as { temperature?: number }).temperature).toBe(expectedTemperature);
+    },
+  );
 
   it("normalizes forced Fable tool choice to auto", async () => {
     let capturedPayload: unknown;
@@ -511,6 +603,34 @@ describe("Anthropic provider", () => {
         output_config: { effort: testCase.effort },
       });
     }
+  });
+
+  it("honors provider effort restrictions for Claude Fable 5", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "github-copilot",
+        reasoning: false,
+        thinkingLevelMap: { xhigh: null, max: null },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "copilot-token",
+        reasoning: "xhigh",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    });
   });
 
   it("uses the Claude Fable 5 contract on Anthropic Vertex", async () => {

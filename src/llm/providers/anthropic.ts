@@ -12,7 +12,13 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
-import { usesClaudeFable5MessagesContract } from "../../shared/anthropic-model-contract.js";
+import {
+  resolveClaudeNativeThinkingLevelMap,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+} from "../../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../../shared/anthropic-refusal.js";
 import { createDeferredEventBuffer } from "../../shared/deferred-event-buffer.js";
 import { notifyLlmRequestActivity } from "../../shared/llm-request-activity.js";
@@ -405,6 +411,7 @@ async function* iterateSseMessages(
 async function* iterateAnthropicEvents(
   response: Response,
   signal?: AbortSignal,
+  requireMessageStop = false,
 ): AsyncGenerator<RawMessageStreamEvent> {
   if (!response.body) {
     throw new Error("Attempted to iterate over an Anthropic response with no body");
@@ -439,7 +446,7 @@ async function* iterateAnthropicEvents(
     }
   }
 
-  if (sawMessageStart && !sawMessageEnd) {
+  if ((sawMessageStart || requireMessageStop) && !sawMessageEnd) {
     throw new Error("Anthropic stream ended before message_stop");
   }
 }
@@ -535,7 +542,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       };
       const blocks = output.content as Block[];
 
-      for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+      for await (const event of iterateAnthropicEvents(
+        response,
+        options?.signal,
+        refusalBuffer !== undefined,
+      )) {
         if (event.type === "message_start") {
           output.responseId = event.message.id;
           output.responseModel = event.message.model;
@@ -770,19 +781,11 @@ function normalizeAnthropicToolChoice(
  * Check if a model supports adaptive thinking (Fable 5, Opus 4.6+, Sonnet 4.6).
  */
 function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
-  const modelId = model.id;
-  // Adaptive-thinking model IDs (with or without date suffix)
-  return (
-    usesClaudeFable5MessagesContract(model) ||
-    modelId.includes("opus-4-6") ||
-    modelId.includes("opus-4.6") ||
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("opus-4-7") ||
-    modelId.includes("opus-4.7") ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+  return supportsClaudeAdaptiveThinking(model);
+}
+
+function supportsNativeXhighEffort(model: Model<"anthropic-messages">): boolean {
+  return supportsClaudeNativeXhighEffort(model);
 }
 
 /**
@@ -794,11 +797,17 @@ function mapThinkingLevelToEffort(
   level: SimpleStreamOptions["reasoning"],
 ): AnthropicEffort {
   const requestedLevel = level as ModelThinkingLevel | undefined;
-  const clampedLevel =
-    requestedLevel && !usesClaudeFable5MessagesContract(model)
-      ? clampThinkingLevel(model, requestedLevel)
-      : requestedLevel;
-  const mapped = clampedLevel ? model.thinkingLevelMap?.[clampedLevel] : undefined;
+  const hasCanonicalAlias = typeof model.params?.canonicalModelId === "string";
+  const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
+  const clampModel = {
+    ...model,
+    ...(hasCanonicalAlias ? { reasoning: true } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+  };
+  const clampedLevel = requestedLevel
+    ? clampThinkingLevel(clampModel, requestedLevel)
+    : requestedLevel;
+  const mapped = clampedLevel ? thinkingLevelMap?.[clampedLevel] : undefined;
   if (typeof mapped === "string") {
     return mapped as AnthropicEffort;
   }
@@ -813,9 +822,9 @@ function mapThinkingLevelToEffort(
     case "high":
       return "high";
     case "xhigh":
-      return "xhigh";
+      return supportsNativeXhighEffort(model) ? "xhigh" : "high";
     case "max":
-      return "max";
+      return supportsClaudeNativeMaxEffort(model) ? "max" : "high";
     default:
       return "high";
   }
@@ -1025,11 +1034,11 @@ function buildParams(
     params.system = system;
   }
 
-  // Temperature is incompatible with extended thinking (adaptive or budget-based).
+  // Thinking and post-4.6 Claude models reject custom temperature values.
   if (
     options?.temperature !== undefined &&
     !options?.thinkingEnabled &&
-    !usesClaudeFable5MessagesContract(model)
+    !supportsNativeXhighEffort(model)
   ) {
     params.temperature = options.temperature;
   }
@@ -1046,7 +1055,7 @@ function buildParams(
   // 4.6+ and Sonnet 4.6),
   // budget-based (older models), or explicitly disabled.
   const fable5 = usesClaudeFable5MessagesContract(model);
-  if (fable5 || model.reasoning) {
+  if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
     if (fable5 || options?.thinkingEnabled) {
       // Default to "summarized" so Opus 4.7+ and Mythos Preview behave like
       // older Claude 4 models (whose API default is also "summarized").

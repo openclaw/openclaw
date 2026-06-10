@@ -52,13 +52,19 @@ import {
   type ToolCall,
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
-import { resolveClaudeFable5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeXhighEffort,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAnthropicRefusal,
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
+import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
@@ -193,19 +199,27 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
     try {
       const client = new BedrockRuntimeClient(config);
       const cacheRetention = resolveCacheRetention(options.cacheRetention);
+      const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
+      const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
+        ?.thinking;
+      const sendsAdaptiveThinking =
+        thinking !== null &&
+        typeof thinking === "object" &&
+        (thinking as { type?: unknown }).type === "adaptive";
       let commandInput = {
         modelId: model.id,
         messages: convertMessages(context, model, cacheRetention),
         system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-          ...(options.temperature !== undefined && !fable5 && { temperature: options.temperature }),
+          ...(options.temperature !== undefined &&
+            !sendsAdaptiveThinking && { temperature: options.temperature }),
         },
         toolConfig: convertToolConfig(
           context.tools,
           fable5 ? normalizeFableToolChoice(options.toolChoice) : options.toolChoice,
         ),
-        additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
+        additionalModelRequestFields,
         ...(fable5 ? { additionalModelResponseFieldPaths: ["/stop_details"] } : {}),
         ...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
       };
@@ -227,11 +241,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         );
       }
 
-      let sawMessageStart = false;
       let sawMessageStop = false;
       for await (const item of response.stream!) {
         if (item.messageStart) {
-          sawMessageStart = true;
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
             throw new Error(
               "Unexpected assistant message start but got user message start instead",
@@ -270,7 +282,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         }
       }
 
-      if (refusalBuffer && sawMessageStart && !sawMessageStop) {
+      if (refusalBuffer && !sawMessageStop) {
         throw new Error("Bedrock stream ended before messageStop");
       }
       if (options.signal?.aborted) {
@@ -532,53 +544,53 @@ function handleContentBlockStop(
   }
 }
 
-/**
- * Check if the model supports adaptive thinking (Opus 4.6+, Sonnet 4.6).
- * Checks both model ID and model name to support application inference profiles
- * whose ARNs don't contain the model name.
- */
-function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
-  const values = modelName ? [modelId, modelName] : [modelId];
-  return values.flatMap((value) => {
-    const lower = value.toLowerCase();
-    return [lower, lower.replace(/[\s_.:]+/g, "-")];
-  });
+function resolveClaudeProfileNameModelId(modelName?: string): string | undefined {
+  const normalized =
+    modelName
+      ?.trim()
+      .toLowerCase()
+      .replace(/[\s_.:]+/g, "-") ?? "";
+  if (!normalized.includes("claude")) {
+    return undefined;
+  }
+  const family = /(?:fable-5|opus-4-(?:6|7|8)|sonnet-4-6)(?:$|-)/.exec(normalized)?.[0];
+  return family ? `claude-${family.replace(/-$/, "")}` : undefined;
 }
 
+/** Check canonical metadata and profile names for adaptive Claude support. */
 function supportsAdaptiveThinking(model: Model<"bedrock-converse-stream">): boolean {
-  if (usesClaudeFable5BedrockContract(model)) {
-    return true;
-  }
-  const candidates = getModelMatchCandidates(model.id, model.name);
-  return candidates.some(
-    (s) =>
-      s.includes("opus-4-6") ||
-      s.includes("opus-4-7") ||
-      s.includes("opus-4-8") ||
-      s.includes("sonnet-4-6") ||
-      s.includes("claude-fable-5"),
+  const profileModelId = resolveClaudeProfileNameModelId(model.name);
+  return (
+    supportsClaudeAdaptiveThinking(model) || supportsClaudeAdaptiveThinking({ id: profileModelId })
   );
 }
 
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
-  if (usesClaudeFable5BedrockContract(model)) {
-    return true;
-  }
-  const candidates = getModelMatchCandidates(model.id, model.name);
-  return candidates.some((s) => s.includes("opus-4-7") || s.includes("opus-4-8"));
+  const profileModelId = resolveClaudeProfileNameModelId(model.name);
+  return (
+    supportsClaudeNativeXhighEffort(model) ||
+    supportsClaudeNativeXhighEffort({ id: profileModelId })
+  );
+}
+
+function supportsNativeMaxEffort(model: Model<"bedrock-converse-stream">): boolean {
+  const profileModelId = resolveClaudeProfileNameModelId(model.name);
+  return (
+    supportsBedrockNativeMaxEffort(model.id, model.params) ||
+    supportsBedrockNativeMaxEffort(profileModelId ?? "")
+  );
 }
 
 function mapThinkingLevelToEffort(
   model: Model<"bedrock-converse-stream">,
   level: SimpleStreamOptions["reasoning"],
 ): "low" | "medium" | "high" | "xhigh" | "max" {
-  if (level === "xhigh" && supportsNativeXhighEffort(model)) {
-    return "xhigh";
-  }
-
   const mapped = level ? model.thinkingLevelMap?.[level] : undefined;
   if (typeof mapped === "string") {
     return mapped as "low" | "medium" | "high" | "xhigh" | "max";
+  }
+  if ((level === "xhigh" || level === "max") && mapped === null) {
+    return "high";
   }
 
   switch (level) {
@@ -589,8 +601,10 @@ function mapThinkingLevelToEffort(
       return "medium";
     case "high":
       return "high";
+    case "xhigh":
+      return supportsNativeXhighEffort(model) ? "xhigh" : "high";
     case "max":
-      return supportsNativeXhighEffort(model) ? "max" : "high";
+      return supportsNativeMaxEffort(model) ? "max" : "high";
     default:
       return "high";
   }
@@ -619,6 +633,9 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
   if (usesClaudeFable5BedrockContract(model)) {
     return true;
   }
+  if (resolveClaudeModelIdentity(model).startsWith("claude-")) {
+    return true;
+  }
   const id = model.id.toLowerCase();
   const name = model.name?.toLowerCase() ?? "";
   return (
@@ -632,7 +649,9 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
 
 function supportsPromptCaching(model: Model<"bedrock-converse-stream">): boolean {
   return (
-    usesClaudeFable5BedrockContract(model) || supportsBedrockPromptCaching(model.id, model.name)
+    usesClaudeFable5BedrockContract(model) ||
+    supportsBedrockPromptCaching(model.id, model.name) ||
+    supportsBedrockPromptCaching(resolveClaudeModelIdentity(model), model.name)
   );
 }
 
@@ -967,7 +986,12 @@ function buildAdditionalModelRequestFields(
   model: Model<"bedrock-converse-stream">,
   options: BedrockOptions,
 ): DocumentType | undefined {
-  if (!options.reasoning || (!model.reasoning && !usesClaudeFable5BedrockContract(model))) {
+  if (
+    !options.reasoning ||
+    (!model.reasoning &&
+      !usesClaudeFable5BedrockContract(model) &&
+      !supportsAdaptiveThinking(model))
+  ) {
     return undefined;
   }
 

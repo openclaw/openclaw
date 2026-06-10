@@ -642,14 +642,6 @@ describe("anthropic transport stream", () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
         {
-          type: "message_start",
-          message: {
-            id: "msg_partial",
-            model: "claude-fable-5",
-            usage: { input_tokens: 1, output_tokens: 0 },
-          },
-        },
-        {
           type: "content_block_start",
           index: 0,
           content_block: { type: "text", text: "" },
@@ -2077,7 +2069,7 @@ describe("anthropic transport stream", () => {
     expect(cancelCalled).toBe(true);
   });
 
-  it("maps adaptive thinking effort for Claude 4.6 transport runs", async () => {
+  it("maps unsupported xhigh to high effort for Claude 4.6 transport runs", async () => {
     const model = makeAnthropicTransportModel({
       id: "claude-opus-4-6",
       name: "Claude Opus 4.6",
@@ -2097,8 +2089,110 @@ describe("anthropic transport stream", () => {
 
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive" });
-    expect(payload.output_config).toEqual({ effort: "max" });
+    expect(payload.output_config).toEqual({ effort: "high" });
   });
+
+  it("does not infer adaptive thinking from forward-compatible effort maps", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-future",
+      name: "Future Claude",
+      provider: "github-copilot",
+      reasoning: true,
+      thinkingLevelMap: { xhigh: null, max: "max" },
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think as much as supported." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "copilot-token",
+        reasoning: "max",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "enabled", budget_tokens: 7168 });
+    expect(payload.output_config).toBeUndefined();
+  });
+
+  it("honors provider effort restrictions for transport runs", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4.7-1m-internal",
+      name: "Claude Opus 4.7",
+      provider: "github-copilot",
+      maxTokens: 64_000,
+      thinkingLevelMap: { xhigh: "xhigh" },
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think as much as supported." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "copilot-token",
+        reasoning: "max",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.output_config).toEqual({ effort: "xhigh" });
+  });
+
+  it("uses canonical Claude policy for transport deployment aliases", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "production-claude",
+      name: "Production Claude",
+      params: { canonicalModelId: "claude-opus-4-8" },
+      reasoning: false,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think extra hard." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "xhigh",
+        temperature: 0.2,
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.model).toBe("production-claude");
+    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.output_config).toEqual({ effort: "xhigh" });
+    expect(payload).not.toHaveProperty("temperature");
+  });
+
+  it.each([
+    { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
+    { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
+  ] as const)(
+    "normalizes temperature for canonical $canonicalModelId transport aliases when thinking is off",
+    async ({ canonicalModelId, expectedTemperature }) => {
+      const model = makeAnthropicTransportModel({
+        id: "production-claude",
+        name: "Production Claude",
+        params: { canonicalModelId },
+        reasoning: false,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        maxTokens: 8192,
+      });
+
+      await runTransportStream(
+        model,
+        { messages: [{ role: "user", content: "Reply briefly." }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api", temperature: 0.2 } as AnthropicStreamOptions,
+      );
+
+      expect(latestAnthropicRequest().payload.temperature).toBe(expectedTemperature);
+    },
+  );
 
   it("uses always-on adaptive thinking for Claude Fable 5 transport runs", async () => {
     const model = makeAnthropicTransportModel({
@@ -2179,6 +2273,33 @@ describe("anthropic transport stream", () => {
     }
   });
 
+  it("honors provider effort restrictions for Claude Fable 5 transport runs", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      provider: "github-copilot",
+      reasoning: false,
+      thinkingLevelMap: { xhigh: null, max: null },
+      maxTokens: 128_000,
+    });
+
+    guardedFetchMock.mockImplementation(async () => createSseResponse());
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think carefully." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "copilot-token",
+        reasoning: "xhigh",
+      } as unknown as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.output_config).toEqual({ effort: "high" });
+  });
+
   it("uses the Claude Fable 5 contract on Anthropic Vertex transport runs", async () => {
     const model = makeAnthropicTransportModel({
       id: "claude-fable-5",
@@ -2208,6 +2329,7 @@ describe("anthropic transport stream", () => {
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",
       maxTokens: 8192,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     });
 
     await runTransportStream(
@@ -2250,11 +2372,13 @@ describe("anthropic transport stream", () => {
     expect(payload.output_config).toEqual({ effort: "max" });
   });
 
-  it("clamps max thinking effort for Claude models without native max support", async () => {
+  it("honors provider routes that exclude native max effort", async () => {
     const model = makeAnthropicTransportModel({
       id: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
+      provider: "github-copilot",
       maxTokens: 8192,
+      thinkingLevelMap: { xhigh: null, max: null },
     });
 
     await runTransportStream(

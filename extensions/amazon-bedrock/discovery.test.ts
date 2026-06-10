@@ -462,7 +462,9 @@ describe("bedrock discovery", () => {
       input: ["text", "image"],
       contextWindow: 1000000,
       maxTokens: 4096,
+      params: { canonicalModelId: "claude-sonnet-4-6" },
     });
+    expect(usProfile?.thinkingLevelMap).toBeUndefined();
     expectModelFields(euProfile, { input: ["text", "image"] });
     expectModelFields(globalProfile, { input: ["text", "image"] });
 
@@ -598,6 +600,8 @@ describe("bedrock discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 4096,
       input: ["text"],
+      params: { canonicalModelId: "claude-opus-4-6-v1:0" },
+      thinkingLevelMap: { xhigh: null, max: "max" },
     });
   });
 

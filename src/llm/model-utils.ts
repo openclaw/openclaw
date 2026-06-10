@@ -1,4 +1,8 @@
 // Provides model selection, usage, and thinking-level utility helpers.
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeNativeThinkingLevelMap,
+} from "@openclaw/llm-core";
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
@@ -22,16 +26,25 @@ const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
   "max",
 ];
 
+function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
+  return model.api === "anthropic-messages"
+    ? (resolveClaudeNativeThinkingLevelMap(model) ?? model.thinkingLevelMap)
+    : model.thinkingLevelMap;
+}
+
 /** Returns thinking levels exposed by a reasoning-capable model. */
 export function getSupportedThinkingLevels<TApi extends Api>(
   model: Model<TApi>,
 ): ModelThinkingLevel[] {
-  if (!model.reasoning) {
+  const fableContract =
+    model.api === "anthropic-messages" && resolveClaudeFable5ModelIdentity(model) !== undefined;
+  if (!model.reasoning && !fableContract) {
     return ["off"];
   }
+  const thinkingLevelMap = resolveThinkingLevelMap(model);
 
   return EXTENDED_THINKING_LEVELS.filter((level) => {
-    const mapped = model.thinkingLevelMap?.[level];
+    const mapped = thinkingLevelMap?.[level];
     if (mapped === null) {
       return false;
     }
@@ -55,6 +68,18 @@ export function clampThinkingLevel<TApi extends Api>(
   const requestedIndex = EXTENDED_THINKING_LEVELS.indexOf(level);
   if (requestedIndex === -1) {
     return availableLevels[0] ?? "off";
+  }
+
+  // Explicit provider opt-outs are hard caps. Downgrade them before considering
+  // stronger levels so unsupported xhigh/max requests cannot increase cost.
+  const thinkingLevelMap = resolveThinkingLevelMap(model);
+  if ((level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null) {
+    for (let i = requestedIndex - 1; i >= 0; i--) {
+      const candidate = EXTENDED_THINKING_LEVELS[i];
+      if (availableLevels.includes(candidate)) {
+        return candidate;
+      }
+    }
   }
 
   // Prefer the next stronger available level, then walk down if the request was above the model cap.

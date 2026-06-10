@@ -5,7 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost } from "../llm/model-utils.js";
+import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
 import type { AnthropicOptions } from "../llm/providers/anthropic.js";
 import type {
   AssistantMessageDiagnostic,
@@ -15,7 +15,13 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
-import { usesClaudeFable5MessagesContract } from "../shared/anthropic-model-contract.js";
+import {
+  resolveClaudeNativeThinkingLevelMap,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+} from "../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
@@ -130,15 +136,6 @@ type MutableAssistantOutput = {
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
-function isClaudeOpus47OrNewerModel(modelId: string): boolean {
-  return (
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("opus-4-7") ||
-    modelId.includes("opus-4.7")
-  );
-}
-
 function normalizeAnthropicToolChoice(
   model: AnthropicTransportModel,
   toolChoice: AnthropicTransportOptions["toolChoice"],
@@ -153,27 +150,29 @@ function normalizeAnthropicToolChoice(
 }
 
 function supportsNativeXhighEffort(model: AnthropicTransportModel): boolean {
-  return usesClaudeFable5MessagesContract(model) || isClaudeOpus47OrNewerModel(model.id);
-}
-
-function isClaudeOpus46Model(modelId: string): boolean {
-  return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
+  return supportsClaudeNativeXhighEffort(model);
 }
 
 function supportsAdaptiveThinking(model: AnthropicTransportModel): boolean {
-  return (
-    supportsNativeXhighEffort(model) ||
-    isClaudeOpus46Model(model.id) ||
-    model.id.includes("sonnet-4-6") ||
-    model.id.includes("sonnet-4.6")
-  );
+  return supportsClaudeAdaptiveThinking(model);
 }
 
 function mapThinkingLevelToEffort(
   level: ThinkingLevel | "off",
   model: AnthropicTransportModel,
 ): AnthropicAdaptiveEffort {
-  switch (level) {
+  const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
+  const clampModel = {
+    ...model,
+    ...(typeof model.params?.canonicalModelId === "string" ? { reasoning: true } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+  };
+  const resolvedLevel = clampThinkingLevel(clampModel, level);
+  const mapped = thinkingLevelMap?.[resolvedLevel];
+  if (typeof mapped === "string") {
+    return mapped as AnthropicAdaptiveEffort;
+  }
+  switch (resolvedLevel) {
     case "off":
     case "minimal":
     case "low":
@@ -181,12 +180,9 @@ function mapThinkingLevelToEffort(
     case "medium":
       return "medium";
     case "xhigh":
-      if (supportsNativeXhighEffort(model)) {
-        return "xhigh";
-      }
-      return isClaudeOpus46Model(model.id) ? "max" : "high";
+      return supportsNativeXhighEffort(model) ? "xhigh" : "high";
     case "max":
-      return supportsNativeXhighEffort(model) ? "max" : "high";
+      return supportsClaudeNativeMaxEffort(model) ? "max" : "high";
     default:
       return "high";
   }
@@ -900,7 +896,7 @@ function buildAnthropicParams(
   if (
     options?.temperature !== undefined &&
     !options.thinkingEnabled &&
-    !usesClaudeFable5MessagesContract(model)
+    !supportsNativeXhighEffort(model)
   ) {
     params.temperature = options.temperature;
   }
@@ -911,7 +907,7 @@ function buildAnthropicParams(
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
   }
   const fable5 = usesClaudeFable5MessagesContract(model);
-  if (fable5 || model.reasoning) {
+  if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
     if (fable5 || options?.thinkingEnabled) {
       if (supportsAdaptiveThinking(model)) {
         params.thinking = fable5
@@ -1051,7 +1047,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
-        let sawMessageStart = false;
         let sawMessageStop = false;
         const eventIndexKey = (eventIndex: unknown) =>
           typeof eventIndex === "number" ? eventIndex : -1;
@@ -1166,7 +1161,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             throw new Error(error?.message || "Anthropic Messages stream failed");
           }
           if (event.type === "message_start") {
-            sawMessageStart = true;
             const message = event.message as
               | { id?: string; model?: string; usage?: Record<string, unknown> }
               | undefined;
@@ -1477,7 +1471,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
-        if (refusalBuffer && sawMessageStart && !sawMessageStop) {
+        if (refusalBuffer && !sawMessageStop) {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (transportOptions.signal?.aborted) {

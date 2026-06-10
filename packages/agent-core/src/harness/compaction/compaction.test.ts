@@ -6,17 +6,17 @@ import { generateSummary } from "./compaction.js";
 describe("generateSummary thinking options", () => {
   it("maps explicit Fable off to low effort for compaction", async () => {
     const model: Model = {
-      id: "claude-fable-5",
-      name: "Claude Fable 5",
+      id: "production-fable",
+      name: "Production Fable",
       api: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
-      reasoning: true,
+      reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1_000_000,
       maxTokens: 128_000,
-      thinkingLevelMap: { off: "low" },
+      params: { canonicalModelId: "claude-fable-5" },
     };
     const summaryMessage: AssistantMessage = {
       role: "assistant",

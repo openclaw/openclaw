@@ -5,10 +5,18 @@
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
+  clampThinkingLevel,
   stream as streamDefault,
   type Model,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -42,36 +50,29 @@ const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
 };
 
 function isClaudeOpus47OrNewerModel(modelId: string): boolean {
-  return (
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("opus-4-7") ||
-    modelId.includes("opus-4.7")
-  );
+  return supportsClaudeNativeXhighEffort({ id: modelId });
 }
 
 function isClaudeFable5Model(modelId: string): boolean {
-  return modelId.includes("claude-fable-5");
-}
-
-function isClaudeOpus46Model(modelId: string): boolean {
-  return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    isClaudeFable5Model(modelId) ||
-    isClaudeOpus47OrNewerModel(modelId) ||
-    isClaudeOpus46Model(modelId) ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+  return supportsClaudeAdaptiveThinking({ id: modelId });
 }
 
 function mapAnthropicAdaptiveEffort(
-  reasoning: string,
+  reasoning: NonNullable<ProviderStreamOptions["reasoning"]>,
+  model: Model<"anthropic-messages">,
   modelId: string,
 ): AnthropicVertexAdaptiveEffort {
+  const clampModel =
+    typeof model.params?.canonicalModelId === "string" ? { ...model, reasoning: true } : model;
+  const resolvedReasoning = clampThinkingLevel(clampModel, reasoning);
+  const mapped = model.thinkingLevelMap?.[resolvedReasoning];
+  if (typeof mapped === "string") {
+    return mapped as AnthropicVertexAdaptiveEffort;
+  }
   const effortMap: Record<string, AnthropicVertexAdaptiveEffort> = {
     off: "low",
     minimal: "low",
@@ -82,12 +83,10 @@ function mapAnthropicAdaptiveEffort(
       ? "xhigh"
       : isClaudeOpus47OrNewerModel(modelId)
         ? "xhigh"
-        : isClaudeOpus46Model(modelId)
-          ? "max"
-          : "high",
-    max: isClaudeFable5Model(modelId) || isClaudeOpus47OrNewerModel(modelId) ? "max" : "high",
+        : "high",
+    max: supportsClaudeNativeMaxEffort({ id: modelId }) ? "max" : "high",
   };
-  return effortMap[reasoning] ?? "high";
+  return effortMap[resolvedReasoning] ?? "high";
 }
 
 function resolveAnthropicVertexMaxTokens(params: {
@@ -171,9 +170,14 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const fable5 = isClaudeFable5Model(model.id);
+    const contractModelId = resolveClaudeModelIdentity(model);
+    const fable5 = isClaudeFable5Model(contractModelId);
+    const adaptiveThinking =
+      fable5 || Boolean(options?.reasoning && supportsAdaptiveThinking(contractModelId));
     const temperature =
-      fable5 || isClaudeOpus47OrNewerModel(model.id) ? undefined : options?.temperature;
+      adaptiveThinking || isClaudeOpus47OrNewerModel(contractModelId)
+        ? undefined
+        : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {
       client,
       ...(temperature !== undefined ? { temperature } : {}),
@@ -192,11 +196,12 @@ export function createAnthropicVertexStreamFn(
     };
 
     if (options?.reasoning) {
-      if (supportsAdaptiveThinking(model.id)) {
+      if (supportsAdaptiveThinking(contractModelId)) {
         opts.thinkingEnabled = true;
         opts.effort = mapAnthropicAdaptiveEffort(
           options.reasoning,
-          model.id,
+          transportModel,
+          contractModelId,
         ) as AnthropicVertexEffort;
       } else {
         opts.thinkingEnabled = true;

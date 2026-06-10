@@ -167,7 +167,7 @@ describe("Bedrock profile endpoint resolution", () => {
 });
 
 describe("Bedrock thinking effort mapping", () => {
-  it("clamps max effort for Claude models without native max support", () => {
+  it("caps max effort at high for Claude Sonnet 4.6", () => {
     expect(
       testing.mapThinkingLevelToEffort(
         bedrockModel({
@@ -175,6 +175,18 @@ describe("Bedrock thinking effort mapping", () => {
           name: "Claude Sonnet 4.6",
         }),
         "max",
+      ),
+    ).toBe("high");
+  });
+
+  it("caps unsupported xhigh effort at high for Claude Opus 4.6", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "anthropic.claude-opus-4-6-v1:0",
+          name: "Claude Opus 4.6",
+        }),
+        "xhigh",
       ),
     ).toBe("high");
   });
@@ -189,6 +201,31 @@ describe("Bedrock thinking effort mapping", () => {
         "max",
       ),
     ).toBe("max");
+  });
+
+  it("uses canonical Claude policy for deployment aliases", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "production-claude",
+          name: "Production Claude",
+          params: { canonicalModelId: "claude-opus-4-8" },
+        }),
+        "max",
+      ),
+    ).toBe("max");
+  });
+
+  it("preserves adaptive effort for opaque profiles with descriptive Claude names", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-abc",
+          name: "Claude Production Opus 4.8",
+        }),
+        "xhigh",
+      ),
+    ).toBe("xhigh");
   });
 });
 
@@ -275,7 +312,6 @@ describe("Bedrock Fable contract", () => {
     vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       $metadata: { httpStatusCode: 200 },
       stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
         {
           contentBlockDelta: {
             contentBlockIndex: 0,
@@ -377,4 +413,64 @@ describe("Bedrock Fable contract", () => {
 
     expect(activityCount).toBeGreaterThan(0);
   });
+});
+
+describe("Bedrock canonical Claude aliases", () => {
+  it.each([
+    {
+      canonicalModelId: "claude-opus-4-8",
+      reasoning: "xhigh" as const,
+      thinkingLevelMap: { xhigh: "xhigh" as const, max: "max" as const },
+      expectedEffort: "xhigh",
+    },
+    {
+      canonicalModelId: "claude-opus-4-6",
+      reasoning: "max" as const,
+      thinkingLevelMap: { xhigh: null, max: "max" as const },
+      expectedEffort: "max",
+    },
+    {
+      canonicalModelId: "claude-opus-4-6",
+      reasoning: "max" as const,
+      thinkingLevelMap: { xhigh: null, max: null },
+      expectedEffort: "high",
+    },
+  ])(
+    "uses adaptive thinking and omits temperature for $canonicalModelId aliases",
+    async ({ canonicalModelId, reasoning, thinkingLevelMap, expectedEffort }) => {
+      const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([
+          { messageStart: { role: ConversationRole.ASSISTANT } },
+          { messageStop: { stopReason: "end_turn" } },
+        ]),
+      } as never);
+      const model = bedrockModel({
+        id: "production-claude",
+        name: "Production Claude",
+        reasoning: false,
+        params: { canonicalModelId },
+        thinkingLevelMap,
+      });
+
+      await streamSimpleBedrock(
+        model,
+        { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] } as never,
+        {
+          reasoning,
+          temperature: 0.2,
+        },
+      ).result();
+
+      const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+      expect(command.input).toMatchObject({
+        modelId: "production-claude",
+        inferenceConfig: {},
+        additionalModelRequestFields: {
+          thinking: { type: "adaptive", display: "summarized" },
+          output_config: { effort: expectedEffort },
+        },
+      });
+    },
+  );
 });

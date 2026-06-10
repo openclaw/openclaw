@@ -2,8 +2,12 @@
  * Provider-policy API for Anthropic and Claude CLI. Core calls this lightweight
  * path for config defaults and thinking profiles.
  */
-import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  resolveClaudeModelIdentity,
+  resolveClaudeThinkingProfile,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { CLAUDE_CLI_OFF_THINKING_PROFILE } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
@@ -20,15 +24,27 @@ export function applyConfigDefaults(params: Parameters<typeof applyAnthropicConf
 }
 
 /** Resolve Claude thinking profile for Anthropic or Claude CLI providers. */
-export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
+export function resolveThinkingProfile(params: {
+  provider: string;
+  modelId: string;
+  params?: Record<string, unknown>;
+}) {
+  const contractModelId = resolveClaudeModelIdentity({
+    id: params.modelId,
+    params: params.params,
+  });
   switch (params.provider.trim().toLowerCase()) {
     case "anthropic":
-      return resolveClaudeThinkingProfile(params.modelId);
+      return resolveClaudeThinkingProfile(contractModelId, undefined, {
+        includeNativeMax: true,
+      });
     case "claude-cli":
-      if (params.modelId.trim().toLowerCase().startsWith("claude-fable-5")) {
-        return null;
+      if (contractModelId.startsWith("claude-fable-5")) {
+        return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
-      return resolveClaudeThinkingProfile(params.modelId);
+      return resolveClaudeThinkingProfile(contractModelId, undefined, {
+        includeNativeMax: true,
+      });
     default:
       return null;
   }
