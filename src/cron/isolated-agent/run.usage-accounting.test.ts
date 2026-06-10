@@ -60,4 +60,46 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       promptTokens: undefined,
     });
   });
+
+  it("falls back to aggregate usage when final-call usage is empty", async () => {
+    const cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    mockRunCronFallbackPassthrough();
+    deriveSessionTotalTokensMock.mockReturnValueOnce(77000);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          usage: {
+            input: 75000,
+            output: 2000,
+            cacheRead: 5000,
+            cacheWrite: 0,
+          },
+          lastCallUsage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+        },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.totalTokens).toBe(77000);
+    expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
+    expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
+      usage: {
+        input: 75000,
+        output: 2000,
+        cacheRead: 5000,
+        cacheWrite: 0,
+      },
+      contextTokens: 128000,
+      promptTokens: undefined,
+    });
+  });
 });
