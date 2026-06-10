@@ -1028,6 +1028,11 @@ export const dispatchTelegramMessage = async ({
   });
   let finalAnswerDeliveryStarted = false;
   let finalAnswerDelivered = false;
+  // While the durable verbose commentary lane is active, the ephemeral draft
+  // yields its commentary lines so commentary is not rendered in both lanes.
+  // Tool/plan lines keep the draft: they have no durable counterpart in
+  // streamed runs, so yielding them would lose information.
+  let verboseProgressActive: () => boolean = () => false;
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string; startImmediately?: boolean },
@@ -2035,6 +2040,20 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
+                        if (verboseProgressActive()) {
+                          // The durable verbose progress lane owns tool/commentary
+                          // payloads for this run: deliver as a real standalone
+                          // message instead of diverting into the streaming draft,
+                          // which is ephemeral and discarded at final.
+                          if (
+                            await sendPayload(
+                              applyTextToPayload(effectivePayload, segment.update.text),
+                            )
+                          ) {
+                            blockDelivered = true;
+                          }
+                          continue;
+                        }
                         const canRepresentAsTransientProgress = canUseNativeToolProgressDraft({
                           payload: effectivePayload,
                           reply,
@@ -2325,6 +2344,9 @@ export const dispatchTelegramMessage = async ({
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
                     !isRoomEvent && Boolean(answerLane.stream),
+                  onVerboseProgressVisibility: (isActive) => {
+                    verboseProgressActive = isActive;
+                  },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
                   onToolStart: async (payload) => {
@@ -2349,6 +2371,9 @@ export const dispatchTelegramMessage = async ({
                   },
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
+                      if (verboseProgressActive()) {
+                        return;
+                      }
                       await progressDraft.pushCommentaryProgress(payload.progressText, {
                         itemId: payload.itemId,
                       });
