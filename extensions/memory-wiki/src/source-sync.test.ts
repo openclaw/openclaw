@@ -30,6 +30,50 @@ const bridgeResult = {
   pagePaths: ["sources/alpha.md"],
 };
 
+function createBridgeConfig(): Parameters<typeof syncMemoryWikiImportedSources>[0]["config"] {
+  return {
+    vaultMode: "bridge",
+    vault: {
+      path: "/tmp/memory-wiki-source-sync-test",
+      renderMode: "native",
+    },
+    obsidian: {
+      enabled: false,
+      useOfficialCli: false,
+      openAfterWrites: false,
+    },
+    bridge: {
+      enabled: true,
+      readMemoryArtifacts: true,
+      indexDreamReports: true,
+      indexDailyNotes: true,
+      indexMemoryRoot: true,
+      followMemoryEvents: false,
+    },
+    unsafeLocal: {
+      allowPrivateMemoryCoreAccess: false,
+      paths: [],
+    },
+    ingest: {
+      autoCompile: true,
+      maxConcurrentJobs: 2,
+      allowUrlIngest: false,
+    },
+    search: {
+      backend: "local",
+      corpus: "wiki",
+    },
+    context: {
+      includeCompiledDigestPrompt: false,
+    },
+    render: {
+      preserveHumanBlocks: true,
+      createBacklinks: true,
+      createDashboards: true,
+    },
+  } as Parameters<typeof syncMemoryWikiImportedSources>[0]["config"];
+}
+
 describe("syncMemoryWikiImportedSources", () => {
   beforeEach(() => {
     syncBridgeMock.mockReset();
@@ -48,9 +92,7 @@ describe("syncMemoryWikiImportedSources", () => {
   });
 
   it("routes bridge mode through bridge sync and merges refresh results", async () => {
-    const config = { vaultMode: "bridge" } as Parameters<
-      typeof syncMemoryWikiImportedSources
-    >[0]["config"];
+    const config = createBridgeConfig();
     const appConfig = { agents: { list: [{ id: "main", default: true }] } } as Parameters<
       typeof syncMemoryWikiImportedSources
     >[0]["appConfig"];
@@ -69,6 +111,37 @@ describe("syncMemoryWikiImportedSources", () => {
       indexRefreshReason: "import-changed",
       indexUpdatedFiles: ["index.md", "sources/index.md"],
     });
+  });
+
+  it("coalesces concurrent bridge sync and index refresh for the same vault", async () => {
+    const config = createBridgeConfig();
+    const appConfig = { agents: { list: [{ id: "main", default: true }] } } as Parameters<
+      typeof syncMemoryWikiImportedSources
+    >[0]["appConfig"];
+    let resolveBridge!: (value: typeof bridgeResult) => void;
+    syncBridgeMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveBridge = resolve;
+      }),
+    );
+
+    const first = syncMemoryWikiImportedSources({ config, appConfig });
+    const second = syncMemoryWikiImportedSources({ config, appConfig });
+
+    expect(syncBridgeMock).toHaveBeenCalledTimes(1);
+    expect(refreshIndexesMock).not.toHaveBeenCalled();
+
+    resolveBridge(bridgeResult);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
+    expect(firstResult).toEqual({
+      ...bridgeResult,
+      indexesRefreshed: true,
+      indexRefreshReason: "import-changed",
+      indexUpdatedFiles: ["index.md", "sources/index.md"],
+    });
+    expect(secondResult).toEqual(firstResult);
   });
 
   it("routes unsafe-local mode through unsafe-local sync", async () => {
