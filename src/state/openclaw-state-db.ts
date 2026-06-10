@@ -11,6 +11,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawStateSqliteDir,
@@ -110,6 +111,27 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
   }
 }
 
+const stateDbLog = createSubsystemLogger("state/db");
+
+/** Targets already warned about, so chmod-less filesystems warn once per path. */
+const chmodWarnedTargets = new Set<string>();
+
+// Permission hardening is best-effort: some filesystems (Azure Files, NFS,
+// certain Docker volume drivers) reject chmod, and the database stays usable
+// without it. This mirrors the policy already documented in
+// runOpenClawStateWriteTransaction, so a chmod failure never aborts startup.
+function bestEffortChmodSync(target: string, mode: number): void {
+  try {
+    chmodSync(target, mode);
+  } catch (err) {
+    if (chmodWarnedTargets.has(target)) {
+      return;
+    }
+    chmodWarnedTargets.add(target);
+    stateDbLog.warn(`skipped permission hardening for ${target}: ${String(err)}`);
+  }
+}
+
 function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
   const dir = path.dirname(pathname);
   const defaultDir = resolveOpenClawStateSqliteDir(env);
@@ -122,12 +144,12 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
   // Default state contains credentials-adjacent metadata; custom existing dirs keep caller modes.
   if (isDefaultStateDatabase || !dirExisted) {
-    chmodSync(dir, OPENCLAW_STATE_DIR_MODE);
+    bestEffortChmodSync(dir, OPENCLAW_STATE_DIR_MODE);
   }
   for (const suffix of OPENCLAW_STATE_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (existsSync(candidate)) {
-      chmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
+      bestEffortChmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
     }
   }
 }
