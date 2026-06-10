@@ -371,17 +371,24 @@ describe("gateway tool", () => {
       }
       return { ok: true };
     });
-    const tool = requireGatewayTool();
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
 
-    await expect(
-      tool.execute("call-indexed-replace-path", {
-        action: "config.patch",
-        raw: '{ agents: { list: [{ id: "main", model: "openai/gpt-5.5" }] } }',
-        replacePaths: ["agents.list[0]"],
-      }),
-    ).rejects.toThrow("gateway config.patch cannot change protected config paths");
-    expectGatewayMethodCalled("config.get");
-    expectGatewayMethodNotCalled("config.patch");
+    const raw = '{ agents: { list: [{ id: "main", model: "openai/gpt-5.5" }] } }';
+    const result = await tool.execute("call-indexed-replace-path", {
+      action: "config.patch",
+      raw,
+      replacePaths: ["agents.list[0]"],
+    });
+
+    expect(result.details).toMatchObject({ ok: true });
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.patch",
+      raw,
+      sessionKey,
+      replacePaths: ["agents.list[]"],
+    });
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {
