@@ -2466,7 +2466,7 @@ describe("resolveGatewayModelSupportsImages", () => {
     ).resolves.toBe(true);
   });
 
-  test("treats google-gemini-cli Gemini models as image-capable even when catalog metadata is stale or missing", async () => {
+  test("treats google-gemini-cli Gemini models as image-capable even when catalog metadata is stale", async () => {
     await expect(
       resolveGatewayModelSupportsImages({
         model: "gemini-3.5-flash",
@@ -2481,6 +2481,49 @@ describe("resolveGatewayModelSupportsImages", () => {
         ],
       }),
     ).resolves.toBe(true);
+  });
+
+  test("treats google-gemini-cli Gemini CLI aliases as image-capable with stale catalog metadata", async () => {
+    const aliases = ["pro", "flash", "flash-lite"];
+    for (const alias of aliases) {
+      await expect(
+        resolveGatewayModelSupportsImages({
+          model: alias,
+          provider: "google-gemini-cli",
+          loadGatewayModelCatalog: async () => [
+            {
+              id: alias,
+              name: alias,
+              provider: "google-gemini-cli",
+              input: ["text"],
+            },
+          ],
+        }),
+      ).resolves.toBe(true);
+    }
+  });
+
+  test("treats google-gemini-cli Gemini models as image-capable when model entry is missing from catalog entirely", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gemini-3.5-flash",
+        provider: "google-gemini-cli",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("treats google-gemini-cli CLI aliases as image-capable when model entry is missing from catalog entirely", async () => {
+    const aliases = ["pro", "flash", "flash-lite"];
+    for (const alias of aliases) {
+      await expect(
+        resolveGatewayModelSupportsImages({
+          model: alias,
+          provider: "google-gemini-cli",
+          loadGatewayModelCatalog: async () => [],
+        }),
+      ).resolves.toBe(true);
+    }
   });
 
   test("matches catalog model ids case-insensitively for explicit providers", async () => {

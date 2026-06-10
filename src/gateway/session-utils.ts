@@ -1782,7 +1782,13 @@ export async function resolveGatewayModelSupportsImages(params: {
       }
       if (
         normalizedProvider === "google-gemini-cli" &&
-        normalizedCandidates.some((candidate) => candidate.startsWith("gemini-"))
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "pro" ||
+            candidate === "flash" ||
+            candidate === "flash-lite" ||
+            candidate.startsWith("gemini-"),
+        )
       ) {
         return true;
       }
@@ -1802,7 +1808,13 @@ export async function resolveGatewayModelSupportsImages(params: {
     }
     if (
       normalizedProvider === "google-gemini-cli" &&
-      normalizedCandidates.some((candidate) => candidate.startsWith("gemini-"))
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "pro" ||
+          candidate === "flash" ||
+          candidate === "flash-lite" ||
+          candidate.startsWith("gemini-"),
+      )
     ) {
       return true;
     }
