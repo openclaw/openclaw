@@ -5,7 +5,6 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearMemoryCoreWorkspaceNamespace,
-  DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
@@ -216,7 +215,6 @@ export async function auditDreamingArtifacts(params: {
       const ingestionNamespaces = [
         DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
         DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-        DREAMING_DAILY_INGESTION_NAMESPACE,
       ] as const;
       for (const namespace of ingestionNamespaces) {
         const entries = await readMemoryCoreWorkspaceEntries({
