@@ -31,6 +31,7 @@ import {
 } from "../msteams-realtime.js";
 import type { MsteamsTtsProvider } from "../msteams-tts.js";
 import { describeMsteamsVideoFrameOwner, type MsteamsVideoFrame } from "../msteams-video-frame.js";
+import { MsteamsVisionStore } from "../msteams-vision-store.js";
 import { generateVoiceResponse } from "../response-generator.js";
 import { chunkAudio } from "../telephony-audio.js";
 import type {
@@ -50,7 +51,6 @@ import type {
   WebhookVerificationResult,
 } from "../types.js";
 import { estimateVisemes } from "../viseme-estimate.js";
-import { VisionBudget } from "../vision-budget.js";
 import type { VoiceCallProvider } from "./base.js";
 
 export interface MsteamsProviderOptions {
@@ -169,19 +169,15 @@ export class MsteamsProvider implements VoiceCallProvider {
   private readonly realtimeCalls = new Map<string, MsteamsRealtimeCall>();
 
   /**
-   * Latest sampled inbound video frame per call+source, so the agent can "look" at what the caller
-   * is showing (camera / screen-share). Recording-gated and path-agnostic (works for both the
-   * streaming and realtime paths). Only the most recent frame per source is kept.
+   * Latest inbound video frames per call (per source) so the agent can "look" at what the caller is
+   * showing (camera / screen-share), plus the per-call vision spend cap. The provider applies the
+   * recording gate before storing; path-agnostic (streaming + realtime).
    */
-  private readonly latestVideoFrames = new Map<
-    string,
-    { camera?: MsteamsVideoFrame; screenshare?: MsteamsVideoFrame }
-  >();
+  private readonly vision = new MsteamsVisionStore(
+    () => this.responseRuntime?.voiceConfig.msteams?.maxVisionPerMinute ?? 30,
+  );
   /** Recording-active state per call (both paths), used to gate inbound video like audio. */
   private readonly recordingActiveByCall = new Map<string, boolean>();
-
-  /** Per-call vision spend cap (streaming frame attach). Lazily built from config. */
-  private visionBudgetInstance: VisionBudget | null = null;
 
   /** Shared secret (also used to sign the outbound place-call request). */
   private readonly sharedSecret?: string;
@@ -292,7 +288,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     // Share ONE VisionBudget across streaming + realtime so handleSessionEnd's release() frees both
     // paths' per-call windows (previously the realtime budget's callId entries leaked forever).
     if (deps.visionBudget) {
-      this.visionBudgetInstance = deps.visionBudget;
+      this.vision.setBudget(deps.visionBudget);
     }
   }
 
@@ -642,13 +638,6 @@ export class MsteamsProvider implements VoiceCallProvider {
   }
 
   /** Per-call vision spend cap (built once from config; 0 = unlimited). */
-  private visionBudget(): VisionBudget {
-    this.visionBudgetInstance ??= new VisionBudget(
-      this.responseRuntime?.voiceConfig.msteams?.maxVisionPerMinute ?? 30,
-    );
-    return this.visionBudgetInstance;
-  }
-
   /**
    * Buffer the latest inbound video frame per source so the agent can "look" at it on demand.
    * Recording-gated (Media Access API): video is media-derived data and must not be processed
@@ -668,18 +657,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     if (this.requireRecordingStatus() && !this.recordingActiveByCall.get(info.callId)) {
       return;
     }
-    const frames = this.latestVideoFrames.get(info.callId) ?? {};
-    frames[info.source] = {
-      source: info.source,
-      dataBase64: info.dataBase64,
-      mime: info.mime,
-      width: info.width,
-      height: info.height,
-      ts: info.ts,
-      participantId: info.participantId,
-      participantName: info.participantName,
-    };
-    this.latestVideoFrames.set(info.callId, frames);
+    this.vision.store(info);
     this.logger?.debug?.(
       `MsteamsProvider: video.frame ${info.callId} ${info.source} ${info.width}x${info.height}` +
         (info.participantName ? ` from ${info.participantName}` : ""),
@@ -694,14 +672,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     providerCallId: string,
     source?: "camera" | "screenshare",
   ): MsteamsVideoFrame | undefined {
-    const frames = this.latestVideoFrames.get(providerCallId);
-    if (!frames) {
-      return undefined;
-    }
-    if (source) {
-      return frames[source];
-    }
-    return frames.screenshare ?? frames.camera;
+    return this.vision.getLatest(providerCallId, source);
   }
 
   /** Whether the Teams recording-status gate is enforced (default true). */
@@ -834,7 +805,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     if (
       frame &&
       frame.dataBase64 !== state.lastVisionFrame &&
-      this.visionBudget().tryConsume(state.providerCallId, Date.now())
+      this.vision.budget().tryConsume(state.providerCallId, Date.now())
     ) {
       images = [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }];
       state.lastVisionFrame = frame.dataBase64;
@@ -879,9 +850,8 @@ export class MsteamsProvider implements VoiceCallProvider {
   }
 
   private handleSessionEnd(info: { callId: string; reason: string }): void {
-    this.latestVideoFrames.delete(info.callId);
+    this.vision.release(info.callId);
     this.recordingActiveByCall.delete(info.callId);
-    this.visionBudgetInstance?.release(info.callId);
     this.clearOutboundTimer(info.callId);
     this.clearTimedOutOutbound(info.callId);
     // Outbound realtime calls have a CallRecord (manager.initiateCall); read it before disposal
