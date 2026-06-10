@@ -48,8 +48,8 @@ import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
-const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
-  () => import("./channel-react-action.js"),
+const loadWhatsAppChannelMessageAction = createLazyRuntimeModule(
+  () => import("./channel-message-action.js"),
 );
 
 function resolveWhatsAppTargetInfo(raw: string) {
@@ -109,6 +109,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       commands: whatsappCommandPolicy,
       agentPrompt: {
+        messageToolHints: () => [
+          '- WhatsApp list prompts include `Options:` rows with `rowId:` values. To select one, call `message` with `action="list-reply"`, `selectedRowId` set to that rowId value, and the visible row `title`; do not send the row title as plain text.',
+        ],
         reactionGuidance: ({ cfg, accountId }) => {
           const level = resolveWhatsAppAgentReactionGuidance({
             cfg,
@@ -151,9 +154,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
-        supportsAction: ({ action }) => action === "react" || action === "upload-file",
+        messageActionTargetAliases: {
+          "list-reply": { aliases: ["chatJid", "chatId"] },
+        },
+        supportsAction: ({ action }) =>
+          action === "react" || action === "upload-file" || action === "list-reply",
         resolveExecutionMode: ({ action }) =>
-          action === "react" || action === "upload-file" ? "gateway" : "local",
+          action === "react" || action === "upload-file" || action === "list-reply"
+            ? "gateway"
+            : "local",
         handleAction: async ({
           action,
           params,
@@ -166,7 +175,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           toolContext,
         }) =>
           await (
-            await loadWhatsAppChannelReactAction()
+            await loadWhatsAppChannelMessageAction()
           ).handleWhatsAppMessageAction({
             action,
             params,

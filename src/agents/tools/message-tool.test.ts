@@ -288,6 +288,10 @@ function getToolProperties(tool: ReturnType<CreateMessageTool>) {
   return (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
 }
 
+function getToolRequired(tool: ReturnType<CreateMessageTool>) {
+  return (tool.parameters as { required?: string[] }).required ?? [];
+}
+
 function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
 }
@@ -1651,6 +1655,38 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("messageId");
     expect(tool.description).toContain("Supports actions: send.");
     expect(tool.description).not.toContain("react");
+  });
+
+  it("does not require scoped action fields for every message action", () => {
+    const plugin = createChannelPlugin({
+      id: "whatsapp",
+      label: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "WhatsApp test plugin.",
+      actions: ["send", "list-reply"],
+      toolSchema: {
+        actions: ["list-reply"],
+        properties: {
+          selectedRowId: Type.Optional(Type.String()),
+          title: Type.Optional(Type.String()),
+        },
+      },
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "whatsapp",
+    });
+    const properties = getToolProperties(tool);
+    const required = getToolRequired(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send", "list-reply"]);
+    expect(properties).toHaveProperty("selectedRowId");
+    expect(properties).toHaveProperty("title");
+    expect(required).not.toContain("selectedRowId");
+    expect(required).not.toContain("title");
   });
 
   it("uses discovery account scope for other configured channel actions", () => {
