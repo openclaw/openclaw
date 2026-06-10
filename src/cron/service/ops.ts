@@ -31,6 +31,7 @@ import {
   findJobOrThrow,
   hasScheduledNextRunAtMs,
   isJobEnabled,
+  minIntervalFloorAtMs,
   isJobDue,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
@@ -557,15 +558,25 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     }
 
     nextJob.updatedAtMs = now;
+    // Update re-arms keep the cron.minInterval fire-time floor: without it, a
+    // bare {enabled: true} update would reset a floor-deferred next fire back
+    // to the natural (too fast) slot, defeating the operator limit.
+    const rearmedNextRunAtMs = () => {
+      const naturalNext = computeJobNextRunAtMs(nextJob, now);
+      if (naturalNext === undefined) {
+        return undefined;
+      }
+      return Math.max(naturalNext, minIntervalFloorAtMs(state.deps.cronConfig, nextJob));
+    };
     if (scheduleChanged || enabledChanged) {
       if (isJobEnabled(nextJob)) {
-        nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+        nextJob.state.nextRunAtMs = rearmedNextRunAtMs();
       } else {
         nextJob.state.nextRunAtMs = undefined;
         nextJob.state.runningAtMs = undefined;
       }
     } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
-      nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
+      nextJob.state.nextRunAtMs = rearmedNextRunAtMs();
     }
 
     if (state.store) {

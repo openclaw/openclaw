@@ -36,9 +36,12 @@ export type CronConfig = {
   /**
    * Minimum allowed interval between fires for recurring jobs (`every` and
    * `cron` schedules). Accepts a duration string (e.g. "30s", "5m", "1h") or a
-   * number of milliseconds. Bare numbers are milliseconds. Enforced when jobs
-   * are created or edited; omit or set `0` to disable the floor (default).
-   * One-shot `at` jobs are exempt.
+   * number of milliseconds. Bare numbers are milliseconds. Two-layer
+   * enforcement: create/update rejects schedules below the floor (early
+   * feedback), and the scheduler paces re-arms at fire time so consecutive
+   * fires stay at least this far apart, covering jobs that predate the limit.
+   * Omit or set `0` to disable the floor (default). One-shot `at` jobs are
+   * exempt; transient-failure retries follow `cron.retry`.
    */
   minInterval?: string | number;
   /** Override default retry policy for one-shot jobs on transient errors. */

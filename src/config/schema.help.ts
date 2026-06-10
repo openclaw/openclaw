@@ -1716,7 +1716,7 @@ export const FIELD_HELP: Record<string, string> = {
   "cron.maxConcurrentRuns":
     "Defaults to 8. Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
   "cron.minInterval":
-    "Minimum interval allowed between fires for recurring `every` and `cron` jobs (for example `30s`, `5m`, `1h`; bare numbers are milliseconds). Enforced when jobs are created or edited, so creation is rejected with a clear error if the schedule would fire more often than this floor. Omit or set `0` (default) to disable the limit. One-shot `at` jobs are exempt. Use this as a guardrail against accidental high-frequency schedules.",
+    "Minimum interval allowed between fires for recurring `every` and `cron` jobs (for example `30s`, `5m`, `1h`; bare numbers are milliseconds). Creating or editing a schedule below this floor is rejected with a clear error, and the scheduler additionally paces re-arms at fire time so consecutive fires stay at least this far apart — including for jobs created before the limit was set. Omit or set `0` (default) to disable the limit. One-shot `at` jobs are exempt. Use this as a guardrail against accidental or wasteful high-frequency schedules.",
   "cron.retry":
     "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
   "cron.retry.maxAttempts":

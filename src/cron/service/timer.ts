@@ -69,6 +69,7 @@ import {
   errorBackoffMs,
   hasScheduledNextRunAtMs,
   isJobEnabled,
+  minIntervalFloorAtMs,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
   recordScheduleComputeError,
@@ -898,19 +899,26 @@ export function applyJobResult(
       );
       normalNext = computeNormalNext();
       const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
+      // The cron.minInterval floor also bounds post-error re-arms so a
+      // persistently failing fast job cannot out-fire the operator limit.
+      // Manual force runs (preserveSchedule) never shift the schedule.
+      const floorAtMs = opts?.preserveSchedule
+        ? 0
+        : minIntervalFloorAtMs(state.deps.cronConfig, job);
+      const lowerBoundMs = Math.max(backoffNext, floorAtMs);
+      // Use whichever is later: the natural next run or the backoff/floor delay.
       job.state.nextRunAtMs =
         job.schedule.kind === "cron"
           ? resolveCronNextRunWithLowerBound({
               state,
               job,
               naturalNext: normalNext,
-              lowerBoundMs: backoffNext,
+              lowerBoundMs,
               context: "error_backoff",
             })
           : normalNext !== undefined
-            ? Math.max(normalNext, backoffNext)
-            : backoffNext;
+            ? Math.max(normalNext, lowerBoundMs)
+            : lowerBoundMs;
       state.deps.log.info(
         {
           jobId: job.id,
@@ -935,21 +943,41 @@ export function applyJobResult(
         // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
         recordScheduleComputeError({ state, job, err });
       }
+      // Fire-time floor for cron.minInterval (see minIntervalFloorAtMs).
+      // Manual force runs (preserveSchedule) never shift the schedule.
+      const floorAtMs = opts?.preserveSchedule
+        ? 0
+        : minIntervalFloorAtMs(state.deps.cronConfig, job);
+      if (floorAtMs > 0 && naturalNext !== undefined && naturalNext < floorAtMs) {
+        // A deferred fire means the stored schedule is tighter than the
+        // operator floor (e.g. a job predating the limit); warn so the job
+        // gets fixed rather than paced silently forever.
+        state.deps.log.warn(
+          {
+            jobId: job.id,
+            jobName: job.name,
+            naturalNextRunAtMs: naturalNext,
+            flooredNextRunAtMs: floorAtMs,
+          },
+          "cron: next fire deferred to the cron.minInterval floor",
+        );
+      }
       if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
         // after the current run ended.  Prevents spin-loops when the
         // schedule computation lands in the same second due to
         // timezone/croner edge cases (see #17821).
-        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+        const lowerBoundMs = Math.max(result.endedAt + MIN_REFIRE_GAP_MS, floorAtMs);
         job.state.nextRunAtMs = resolveCronNextRunWithLowerBound({
           state,
           job,
           naturalNext,
-          lowerBoundMs: minNext,
+          lowerBoundMs,
           context: "completion",
         });
       } else {
-        job.state.nextRunAtMs = naturalNext;
+        job.state.nextRunAtMs =
+          naturalNext === undefined ? undefined : Math.max(naturalNext, floorAtMs);
       }
     } else {
       job.state.nextRunAtMs = undefined;
@@ -1508,6 +1536,11 @@ function isRunnableJob(params: {
     // Only replay a "missed slot" when there is concrete run history.
     return false;
   }
+  // A missed slot inside the cron.minInterval floor window is not runnable,
+  // or restart catch-up would undo fires deferred at re-arm.
+  if (nowMs < minIntervalFloorAtMs(params.state.deps.cronConfig, job)) {
+    return false;
+  }
   return previousRunAtMs > lastRunAtMs;
 }
 
@@ -1587,8 +1620,11 @@ function deferPendingBackoffMissedCronSlots(
     ) {
       continue;
     }
-    if (job.state.nextRunAtMs !== backoffUntilMs) {
-      job.state.nextRunAtMs = backoffUntilMs;
+    // Keep the cron.minInterval floor when re-deferring to pending backoff;
+    // a restart must not pull a floored next fire back below the limit.
+    const deferredToMs = Math.max(backoffUntilMs, minIntervalFloorAtMs(state.deps.cronConfig, job));
+    if (job.state.nextRunAtMs !== deferredToMs) {
+      job.state.nextRunAtMs = deferredToMs;
       changed = true;
     }
   }

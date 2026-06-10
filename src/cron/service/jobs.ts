@@ -5,6 +5,7 @@ import {
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronMinIntervalMs } from "../../config/cron-limits.js";
+import type { CronConfig } from "../../config/types.cron.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
@@ -43,11 +44,19 @@ const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 
 /**
- * Consecutive cron fires sampled to find a schedule's tightest gap. Irregular
- * expressions (e.g. fire at :00 and :01) are judged by their smallest interval,
- * so a handful of samples is enough to catch a too-frequent burst.
+ * Consecutive cron fires sampled at create/update to catch too-frequent
+ * schedules early (e.g. fire at :00 and :01). Sampling is best-effort by
+ * design — an expression can hide tighter gaps beyond any bounded window — so
+ * the fire-time floor in timer.ts enforces the actual cron.minInterval limit.
  */
 const CRON_MIN_INTERVAL_SAMPLE_RUNS = 6;
+
+/**
+ * Dispatch jitter absorbed by the fire-time floor so a schedule whose cadence
+ * exactly equals cron.minInterval is not deferred off its slots (and warned)
+ * by a few ms of timer latency on every run.
+ */
+const CRON_MIN_INTERVAL_DISPATCH_SLACK_MS = 2_000;
 const staggerOffsetCache = new Map<string, number>();
 
 type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
@@ -236,6 +245,12 @@ function shouldRepairFutureCronNextRunAtMs(params: {
     return false;
   }
 
+  // A floor-deferred fire is a legitimate non-slot value; skip repair so
+  // maintenance ticks do not re-derive the same floored timestamp forever.
+  if (nextRun <= minIntervalFloorAtMs(state.deps.cronConfig, job)) {
+    return false;
+  }
+
   let naturalNext: number | undefined;
   try {
     naturalNext = computeStaggeredCronNextRunAtMs(job, nowMs);
@@ -323,9 +338,10 @@ function smallestCronGapMs(schedule: CronSchedule, nowMs: number): number | unde
 /**
  * Rejects recurring schedules whose tightest fire interval is below the
  * operator-configured floor (`cron.minInterval`). One-shot `at` jobs are exempt
- * and a floor of `0` disables the guardrail. `cron` expressions are sampled
- * across consecutive fires so irregular schedules are judged by their smallest
- * gap rather than an average.
+ * and a floor of `0` disables the guardrail. This is the early-feedback layer:
+ * `every` checks are exact, `cron` expressions are judged by bounded sampling.
+ * The enforced contract is the fire-time floor in timer.ts, which paces every
+ * recurring job at re-arm — including jobs that predate the configured limit.
  */
 export function assertScheduleMeetsMinInterval(
   schedule: CronSchedule,
@@ -350,6 +366,32 @@ export function assertScheduleMeetsMinInterval(
   if (smallestGapMs !== undefined && smallestGapMs < minIntervalMs) {
     throw minIntervalError(smallestGapMs, minIntervalMs);
   }
+}
+
+/**
+ * cron.minInterval fire-time floor: earliest allowed next fire for a recurring
+ * job whose last fire started at `state.lastRunAtMs`. This is the enforced
+ * operator contract (creation validation is feedback only); every nextRunAtMs
+ * writer must respect it or the limit is just a suggestion. Returns 0 — the
+ * identity for Math.max — when no floor applies (one-shot `at` jobs, no run
+ * history, or an unset/zero floor).
+ */
+export function minIntervalFloorAtMs(
+  cronConfig: Pick<CronConfig, "minInterval"> | undefined,
+  job: Pick<CronJob, "schedule" | "state">,
+): number {
+  if (job.schedule.kind === "at") {
+    return 0;
+  }
+  const lastFireStartedAtMs = job.state.lastRunAtMs;
+  if (!isFiniteTimestamp(lastFireStartedAtMs)) {
+    return 0;
+  }
+  const minIntervalMs = resolveCronMinIntervalMs(cronConfig);
+  if (minIntervalMs <= 0) {
+    return 0;
+  }
+  return lastFireStartedAtMs + minIntervalMs - CRON_MIN_INTERVAL_DISPATCH_SLACK_MS;
 }
 
 /** Validates that session target and payload kind form a supported cron job shape. */
@@ -707,6 +749,12 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       if (newNext !== undefined) {
         newNext = backoffFloor !== undefined ? Math.max(newNext, backoffFloor) : newNext;
       }
+    }
+    // Recomputes must not land a next fire within the cron.minInterval floor,
+    // or maintenance repair would undo fires deferred at re-arm (timer.ts).
+    if (newNext !== undefined) {
+      const floorAtMs = minIntervalFloorAtMs(params.state.deps.cronConfig, params.job);
+      newNext = Math.max(newNext, floorAtMs);
     }
     if (params.job.state.nextRunAtMs !== newNext) {
       params.job.state.nextRunAtMs = newNext;
