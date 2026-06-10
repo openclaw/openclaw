@@ -2181,6 +2181,61 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("caps the temporal decay candidate pool so qmd stdout stays bounded", async () => {
+    const baseDefaults = (cfg as { agents?: { defaults?: Record<string, unknown> } }).agents
+      ?.defaults;
+    cfg = {
+      ...cfg,
+      agents: {
+        ...(cfg as { agents?: Record<string, unknown> }).agents,
+        defaults: {
+          ...baseDefaults,
+          memorySearch: {
+            ...(baseDefaults?.memorySearch as Record<string, unknown>),
+            query: { hybrid: { temporalDecay: { enabled: true, halfLifeDays: 30 } } },
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          limits: { maxResults: 20 },
+        },
+      },
+    } as OpenClawConfig;
+
+    const seenLimits: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const flagIndex = args.indexOf("-n");
+        if (flagIndex >= 0 && args[flagIndex + 1]) {
+          seenLimits.push(args[flagIndex + 1]);
+        }
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit("data", JSON.stringify([]));
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    await manager.search("router glacier backup", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    // 20 * 4 = 80 raw candidates would risk overflowing MAX_QMD_OUTPUT_CHARS;
+    // the widened pool must clamp to the candidate cap (50) instead.
+    expect(seenLimits).toContain("50");
+    expect(seenLimits).not.toContain("80");
+    await manager.close();
+  });
+
   it("keeps invalid qmd query stdout failed after a non-zero exit", async () => {
     cfg = {
       ...cfg,

@@ -88,6 +88,10 @@ const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 // Mirrors the builtin hybrid engine's DEFAULT_HYBRID_CANDIDATE_MULTIPLIER so
 // temporal decay re-ranks over a comparable raw candidate pool.
 const QMD_TEMPORAL_DECAY_CANDIDATE_MULTIPLIER = 4;
+// Hard cap on the widened candidate pool so 4x limits cannot push qmd's JSON
+// stdout (each entry carries a multi-line snippet) past MAX_QMD_OUTPUT_CHARS
+// and turn an enabled decay into parse failures on large indexes.
+const QMD_TEMPORAL_DECAY_CANDIDATE_CAP = 50;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -1254,9 +1258,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     // With temporal decay enabled, widen the raw candidate pool the same way
     // the builtin hybrid engine does (maxResults * candidateMultiplier), so a
     // fresh document ranked just below the raw top N can still be rescued by
-    // recency re-ranking before the final truncation.
+    // recency re-ranking before the final truncation. The cap keeps the qmd
+    // CLI's JSON output within the stdout budget regardless of maxResults.
     const limit = this.temporalDecay.enabled
-      ? resultLimit * QMD_TEMPORAL_DECAY_CANDIDATE_MULTIPLIER
+      ? Math.min(
+          resultLimit * QMD_TEMPORAL_DECAY_CANDIDATE_MULTIPLIER,
+          Math.max(resultLimit, QMD_TEMPORAL_DECAY_CANDIDATE_CAP),
+        )
       : resultLimit;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
@@ -1397,6 +1405,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
+      // Decay only lowers scores, so this raw-score floor is equivalent to the
+      // builtin engine's post-decay filter and never drops a rescuable entry.
       if (score < minScore) {
         continue;
       }
@@ -1428,8 +1438,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       // filename parsing and evergreen exemptions apply; other sources (e.g.
       // session exports outside the workspace) decay by mtime via their
       // absolute path instead of silently skipping decay on a failed stat.
-      const decayInput = ranked.map((entry, index) => ({
-        index,
+      const decayInput = ranked.map((entry) => ({
         score: entry.score,
         source: entry.source,
         path:
@@ -1442,14 +1451,19 @@ export class QmdMemoryManager implements MemorySearchManager {
         temporalDecay: this.temporalDecay,
         workspaceDir: this.workspaceDir,
       });
+      // applyTemporalDecayToHybridResults preserves input order (positional
+      // Promise.all), so decayed[i] rescores ranked[i] without relying on
+      // undeclared-field pass-through.
       // Reapply the relevance floor: decay can push stale hits below the
       // caller's minScore, and the builtin path filters on post-decay scores.
+      // Decay is monotonically non-increasing, so the raw minScore filter
+      // applied while parsing qmd output cannot drop entries that this
+      // post-decay filter would have kept.
       const minScore = opts?.minScore ?? 0;
-      const rankedBeforeDecay = ranked;
       ranked = decayed
+        .map((entry, i) => Object.assign({}, ranked[i], { score: entry.score }))
         .filter((entry) => entry.score >= minScore)
-        .toSorted((a, b) => b.score - a.score)
-        .map((entry) => Object.assign({}, rankedBeforeDecay[entry.index], { score: entry.score }));
+        .toSorted((a, b) => b.score - a.score);
     }
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
