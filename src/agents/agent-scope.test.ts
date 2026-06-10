@@ -1200,7 +1200,7 @@ describe("resolveAgentConfig", () => {
       },
     };
     const workspace = resolveAgentWorkspaceDir(cfg, "main");
-    expect(workspace).toBe(path.resolve("/shared-ws/main"));
+    expect(workspace).toBe(path.resolve("/shared-ws-main"));
   });
 
   it("default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
