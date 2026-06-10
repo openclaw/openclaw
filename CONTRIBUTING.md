@@ -110,6 +110,25 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes, changelog entries, or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit `CHANGELOG.md` in contributor PRs. Maintainers or ClawSweeper add the changelog entry when landing user-facing changes.
 - Run tests: `pnpm build && pnpm check && pnpm test`
+
+### Windows Subsystem for Linux (WSL) Build Notes
+
+If building on WSL, you may encounter issues resolving `google/protobuf descriptor` from `protobufjs`. This is a known cross-filesystem path resolution issue. If `pnpm install` or `pnpm build` fails on WSL, try:
+
+```bash
+# Ensure protobufjs is installed correctly
+pnpm install
+
+# If the build still fails, verify Node.js version (Node 22+ recommended)
+node --version
+
+# On WSL specifically, you may need to ensure protobufjs native bindings
+# are rebuilt for the Linux kernel
+npx pbjs --version
+```
+
+If you continue to have build issues on WSL, please search for existing issues first or ask in Discord.
+
 - For iterative local commits, `scripts/committer --fast "message" <files...>` passes `FAST_COMMIT=1` through to the pre-commit hook so it skips the repo-wide `pnpm check`. Only use it when you've already run equivalent targeted validation for the touched surface.
 - For extension/plugin changes, run the fast local lane first:
   - `pnpm test:extension <extension-name>`
