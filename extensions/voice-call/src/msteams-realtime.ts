@@ -447,6 +447,7 @@ export function createMsteamsRealtimeCall(params: {
   let visionPushTimer: ReturnType<typeof setInterval> | undefined;
   /** Phase 6b: last emotion cued to the worker, so we only send on change (early + self-correcting). */
   let lastSentExpression: string | undefined;
+  let thinking = false;
 
   function recordTranscript(role: "user" | "assistant", text: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
@@ -594,7 +595,7 @@ export function createMsteamsRealtimeCall(params: {
       // turn (partial or final), not only the final — so the face isn't neutral while a happy/sad reply
       // is already being spoken. De-duped on the inferred emotion so unchanged cues aren't spammed, and
       // it self-corrects if later text shifts the emotion (e.g. "sorry … but that's great!").
-      if (role === "assistant" && !closed) {
+      if (role === "assistant" && !closed && !thinking) {
         const emotion = inferEmotion(text);
         if (emotion !== lastSentExpression) {
           lastSentExpression = emotion;
@@ -621,15 +622,19 @@ export function createMsteamsRealtimeCall(params: {
         handleAsyncTask(event, rtSession);
         return;
       }
+      // The remaining tools keep the caller waiting — show a "thinking" face until the result lands
+      // (cleared via finally regardless of success/error; the result speech then re-cues the emotion).
+      setThinking(true);
+      const clearThinking = (): void => setThinking(false);
       if (event.name === MSTEAMS_LOOK_TOOL_NAME) {
-        void handleLook(event, rtSession);
+        void handleLook(event, rtSession).finally(clearThinking);
         return;
       }
       if (event.name === MSTEAMS_SHOW_TOOL_NAME) {
-        void handleShow(event, rtSession);
+        void handleShow(event, rtSession).finally(clearThinking);
         return;
       }
-      void handleToolCall(event, rtSession);
+      void handleToolCall(event, rtSession).finally(clearThinking);
     },
     onError: (error) => {
       logger?.warn(`MsteamsRealtime: bridge error — ${error.message}`);
@@ -701,6 +706,26 @@ export function createMsteamsRealtimeCall(params: {
     };
     const t = setTimeout(check, NOTIFY_AUDIO_QUIET_MS);
     t.unref?.();
+  }
+
+  /**
+   * CVI Phase 6c: while a tool keeps the caller waiting (consult / look / show), cue a "thinking" face
+   * and suppress the reply-emotion cue so it persists; cleared when the result lands, after which the
+   * result speech re-cues the real emotion.
+   */
+  function setThinking(on: boolean): void {
+    if (on === thinking || closed) {
+      return;
+    }
+    thinking = on;
+    if (on) {
+      try {
+        session.send({ type: "expression", emotion: "thinking" });
+        lastSentExpression = "thinking";
+      } catch {
+        // non-fatal: expression is a cosmetic cue
+      }
+    }
   }
 
   if (deps.getLatestFrame) {
