@@ -2315,7 +2315,10 @@ async function maybeRestartService(params: {
           ),
         );
       }
-      if (isPackageManagerUpdateMode(params.result.mode)) {
+      if (
+        isPackageManagerUpdateMode(params.result.mode) ||
+        params.requireRunningServiceAfterRestart
+      ) {
         return false;
       }
     }
