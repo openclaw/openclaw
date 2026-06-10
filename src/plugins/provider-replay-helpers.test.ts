@@ -63,7 +63,7 @@ describe("provider replay helpers", () => {
         modelId: "google/gemma-4-26b-a4b-it",
         dropReasoningFromHistory: false,
       }),
-    ).toHaveProperty("dropReasoningFromHistory", true);
+    ).not.toHaveProperty("dropReasoningFromHistory");
     expect(
       buildOpenAICompatibleReplayPolicy("openai-responses", {
         modelId: "google/gemma-4-26b-a4b-it",

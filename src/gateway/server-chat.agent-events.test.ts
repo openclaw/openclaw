@@ -2641,6 +2641,47 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
   });
 
+  it("finalizes fallback-exhausted lifecycle errors without waiting for retry grace", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-terminal-error",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerAgentRunContext("run-terminal-final-failure", {
+      sessionKey: "session-terminal-error",
+    });
+
+    handler({
+      runId: "run-terminal-final-failure",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: "LLM request failed: network connection error.",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      runId?: string;
+      errorMessage?: string;
+    };
+    expect(finalPayload.state).toBe("error");
+    expect(finalPayload.runId).toBe("run-terminal-final-failure");
+    expect(finalPayload.errorMessage).toContain("network connection error");
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-final-failure");
+    expect(agentRunSeq.has("run-terminal-final-failure")).toBe(false);
+    expect(
+      persistGatewaySessionLifecycleEventMock.mock.calls.some(
+        ([params]) =>
+          (params as { event?: { data?: { fallbackExhaustedFailure?: boolean } } }).event?.data
+            ?.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(true);
+  });
+
   it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
