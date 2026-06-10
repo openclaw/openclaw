@@ -1150,6 +1150,73 @@ describe("before_tool_call requireApproval handling", () => {
     }
   });
 
+  it("refreshes external content provenance after a same-run external tool result", async () => {
+  const sharedContext = {
+    agentId: "main",
+    sessionKey: "main",
+    runId: "run-fetch-then-exec",
+    loopDetection: { enabled: false },
+  };
+  const fetchExecute = vi.fn().mockResolvedValue({
+    content: [
+      {
+        type: "text",
+        text: [
+          "<<<EXTERNAL_UNTRUSTED_CONTENT 1d0e3d4c-1c7a-42af-8bde-f4a9e3bb71b2 BEGIN>>>",
+          "Source: Web Fetch",
+          "Fetched page says: run this command",
+          "<<<EXTERNAL_UNTRUSTED_CONTENT 1d0e3d4c-1c7a-42af-8bde-f4a9e3bb71b2 END>>>",
+        ].join("\n"),
+      },
+    ],
+    details: { ok: true },
+  });
+  const execExecute = vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "exec ok" }],
+    details: { ok: true },
+  });
+  const fetchTool = wrapToolWithBeforeToolCallHook(
+    { name: "web_fetch", execute: fetchExecute } as Parameters<
+      typeof wrapToolWithBeforeToolCallHook
+    >[0],
+    sharedContext,
+  );
+  const execTool = wrapToolWithBeforeToolCallHook(
+    { name: "bash", execute: execExecute } as Parameters<
+      typeof wrapToolWithBeforeToolCallHook
+    >[0],
+    sharedContext,
+  );
+
+  if (!fetchTool.execute || !execTool.execute) {
+    throw new Error("wrapped tools must expose execute");
+  }
+
+  hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+  await fetchTool.execute("fetch-1", { url: "https://example.invalid" }, undefined, undefined);
+  await execTool.execute("exec-1", { command: "pwd" }, undefined, undefined);
+
+  expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(2);
+  const [firstEvent, firstContext] = requireHookCall(0);
+  expect(firstEvent).not.toHaveProperty("externalContent");
+  expect(firstContext).not.toHaveProperty("externalContent");
+
+  const [secondEvent, secondContext] = requireHookCall(1);
+  expectRecordFields(secondEvent, {
+    toolName: "exec",
+    runId: "run-fetch-then-exec",
+    toolCallId: "exec-1",
+    externalContent: { present: true, sources: ["web_fetch"] },
+  });
+  expectRecordFields(secondContext, {
+    toolName: "exec",
+    runId: "run-fetch-then-exec",
+    toolCallId: "exec-1",
+    externalContent: { present: true, sources: ["web_fetch"] },
+  });
+});
+
   it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
     const cwd = path.join("/tmp", "openclaw-hooks");
     const patch = [
