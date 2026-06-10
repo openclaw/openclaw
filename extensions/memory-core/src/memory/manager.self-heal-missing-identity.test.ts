@@ -1,0 +1,152 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import type { MemoryIndexManager } from "./manager.js";
+import "./test-runtime-mocks.js";
+
+let providerInitCallCount = 0;
+
+const createEmbeddingProviderMock = vi.hoisted(() =>
+  vi.fn(async () => {
+    providerInitCallCount++;
+    return {
+      requestedProvider: "auto",
+      provider: {
+        id: "openai",
+        model: "text-embedding-3-small",
+        embedBatch: vi.fn(async () => ({
+          embeddings: [[0.1, 0.2, 0.3]],
+          tokensUsed: 10,
+        })),
+      },
+      providerUnavailableReason: undefined,
+    };
+  }),
+);
+
+vi.mock("./embeddings.js", () => ({
+  createEmbeddingProvider: createEmbeddingProviderMock,
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
+  resolveEmbeddingProviderFallbackModel: () => "fts-only",
+}));
+
+describe("memory manager self-heal missing identity with provider init", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
+  let workspaceDir = "";
+  let indexPath = "";
+  let manager: MemoryIndexManager | null = null;
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-mem-self-heal-91167-"),
+    );
+  });
+
+  beforeEach(async () => {
+    createEmbeddingProviderMock.mockClear();
+    providerInitCallCount = 0;
+    workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
+    indexPath = path.join(workspaceDir, "index.sqlite");
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
+    await closeAllMemorySearchManagers();
+  });
+
+  afterAll(async () => {
+    await closeAllMemorySearchManagers();
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  async function createManager(
+    params: { provider?: string; vectorEnabled?: boolean } = {},
+  ): Promise<MemoryIndexManager> {
+    const store =
+      params.vectorEnabled === undefined
+        ? { path: indexPath }
+        : { path: indexPath, vector: { enabled: params.vectorEnabled } };
+    const cfg = {
+      memory: { backend: "builtin" },
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: params.provider ?? "openai",
+            model: "text-embedding-3-small",
+            store,
+            cache: { enabled: false },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    if (!result.manager) {
+      throw new Error(result.error ?? "manager missing");
+    }
+    manager = result.manager as unknown as MemoryIndexManager;
+    return manager;
+  }
+
+  async function seedChunksWithNoMeta(): Promise<void> {
+    const db = new DatabaseSync(indexPath);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chunks (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'memory',
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        text TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS files (
+        path TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'memory',
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL
+      );
+      INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', 'fts-only', 'Alpha topic keep note', '[]', ${Date.now()});
+      INSERT INTO files (path, source, hash, mtime, size)
+        VALUES ('MEMORY.md', 'memory', 'hash-1', ${Date.now()}, 100);
+    `);
+    db.close();
+  }
+
+  it("self-heals missing index identity by initializing provider during sync", async () => {
+    await seedChunksWithNoMeta();
+    const memoryManager = await createManager({ vectorEnabled: false });
+
+    const statusBefore = memoryManager.status();
+    expect(statusBefore.custom?.indexIdentity?.status).toBe("missing");
+
+    await memoryManager.sync({ force: true });
+
+    expect(providerInitCallCount).toBeGreaterThanOrEqual(1);
+    const statusAfter = memoryManager.status();
+    expect(statusAfter.custom?.indexIdentity?.status).toBe("valid");
+    expect(statusAfter.chunks).toBeGreaterThan(0);
+  });
+});

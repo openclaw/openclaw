@@ -2050,7 +2050,7 @@ export abstract class MemoryManagerSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const indexIdentity = resolveMemoryIndexIdentityState({
+    let indexIdentity = resolveMemoryIndexIdentityState({
       meta,
       // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
       provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
@@ -2073,6 +2073,44 @@ export abstract class MemoryManagerSyncOps {
     });
     const hasIndexedChunks = this.hasIndexedChunks();
     const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+    // When index identity is "missing" and a provider is configured but not yet
+    // initialized, ensureProviderInitialized() so canRebuildMissingIdentity
+    // can re-evaluate with the now-available provider, unlocking the self-heal
+    // reindex path instead of staying stuck dirty forever.
+    if (
+      indexIdentity.status === "missing" &&
+      this.provider === null &&
+      this.settings.provider &&
+      this.settings.provider !== "none"
+    ) {
+      try {
+        await this.ensureProviderInitialized();
+        indexIdentity = resolveMemoryIndexIdentityState({
+          meta: this.readMeta(),
+          provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
+          providerKey: this.providerKey ?? undefined,
+          configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+          configuredScopeHash: resolveConfiguredScopeHash({
+            workspaceDir: this.workspaceDir,
+            extraPaths: this.settings.extraPaths,
+            multimodal: {
+              enabled: this.settings.multimodal.enabled,
+              modalities: this.settings.multimodal.modalities,
+              maxFileBytes: this.settings.multimodal.maxFileBytes,
+            },
+          }),
+          chunkTokens: this.settings.chunking.tokens,
+          chunkOverlap: this.settings.chunking.overlap,
+          vectorReady,
+          hasIndexedChunks: this.hasIndexedChunks(),
+          ftsTokenizer: this.settings.store.fts.tokenizer,
+        });
+      } catch {
+        // Provider init failed (unregistered, auth, network) — keep the
+        // original "missing" identity so the fts-only early return still
+        // applies and we don't silently downgrade indexed semantic chunks.
+      }
+    }
     // Missing metadata cannot prove whether existing chunks were semantic.
     // Wait for the configured provider before replacing them with a rebuilt index.
     const canRebuildMissingIdentity =
