@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isInboundCallAllowed } from "../allowlist.js";
-import { resolveVoiceCallEffectiveConfig, type VoiceCallConfig } from "../config.js";
+import { resolveVoiceCallEffectiveConfig, type CallMode, type VoiceCallConfig } from "../config.js";
 import type { CoreAgentDeps, CoreConfig } from "../core-bridge.js";
 import {
   type GroupCallGateConfig,
@@ -541,9 +541,27 @@ export class MsteamsProvider implements VoiceCallProvider {
       return;
     }
 
-    const greetingInstructions = pending.message
-      ? `This is an OUTBOUND callback you placed to deliver a result the caller already asked for — the work is ALREADY DONE. The moment the caller answers, state this result to them directly as a finished answer. Do NOT say you will look it up, work on it, or call back; it is already complete. Deliver exactly this: "${pending.message}". Then briefly ask if they need anything else.`
+    // Outbound result callbacks deliver work that is already done. In "notify" mode (the outbound
+    // default) the model states the result and the call hangs up; in "conversation" mode it states the
+    // result then stays on the line. Per-call metadata.mode wins, else outbound.defaultMode.
+    const record = this.manager?.getCall(pending.internalCallId);
+    const mode: CallMode =
+      (record?.metadata?.mode as CallMode | undefined) ??
+      this.realtimeDeps.voiceConfig?.outbound?.defaultMode ??
+      "conversation";
+    const notify = mode === "notify" && Boolean(pending.message);
+
+    const deliveredResult = pending.message
+      ? `This is an OUTBOUND callback you placed to deliver a result the caller already asked for — the work is ALREADY DONE. The moment the caller answers, state this result to them directly as a finished answer. Do NOT say you will look it up, work on it, or call back; it is already complete. Deliver exactly this: "${pending.message}".`
+      : undefined;
+    const greetingInstructions = deliveredResult
+      ? notify
+        ? `${deliveredResult} Be concise and do NOT ask if they need anything else — the call ends right after you deliver it.`
+        : `${deliveredResult} Then briefly ask if they need anything else.`
       : this.realtimeDeps.greetingInstructions;
+
+    const notifyHangupDelayMs =
+      (this.realtimeDeps.voiceConfig?.outbound?.notifyHangupDelaySec ?? 3) * 1000;
     const realtimeCall = createMsteamsRealtimeCall({
       session,
       deps: {
@@ -552,18 +570,26 @@ export class MsteamsProvider implements VoiceCallProvider {
         // Wire vision on outbound realtime too (parity with inbound) so look_at_screen works if the
         // callee shares video on the call-back.
         getLatestFrame: (source) => this.getLatestVideoFrame(providerCallId, source),
+        // Notify mode: once the model has delivered the result (its first finished turn), hang up after
+        // a short tail for audio playout instead of lingering in conversation.
+        onDeliveryComplete: notify
+          ? () => {
+              const timer = setTimeout(() => {
+                this.logger?.info(
+                  `MsteamsProvider: notify-mode auto-hangup for ${providerCallId} after delivery`,
+                );
+                void this.manager?.endCall(pending.internalCallId);
+              }, notifyHangupDelayMs);
+              timer.unref?.();
+            }
+          : undefined,
       },
     });
     this.realtimeCalls.set(providerCallId, realtimeCall);
     this.outboundRealtimeInternalIds.set(providerCallId, pending.internalCallId);
 
-    // The realtime model speaks the message itself (via the greeting), so clear the queued initial
-    // message so the manager's answered hook does not also TTS-speak it. This deliberately REPLACES
-    // the streaming notify-mode auto-hangup (speakInitialMessage -> notifyHangupDelaySec -> endCall)
-    // with a conversational delivery (state the result, then offer follow-up). The call then ends via
-    // the normal lifecycle — caller hangup (session.end) or the manager's idle timeout — both of which
-    // now tear down the realtime bridge AND hang up the Teams call through teardownCall().
-    const record = this.manager?.getCall(pending.internalCallId);
+    // Clear the queued initial message so the manager's answered hook does not also TTS-speak it (the
+    // realtime model speaks it via the greeting above).
     if (record?.metadata) {
       delete record.metadata.initialMessage;
     }

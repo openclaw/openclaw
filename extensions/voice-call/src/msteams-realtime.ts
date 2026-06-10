@@ -310,6 +310,8 @@ export interface MsteamsRealtimeDeps {
   instructions?: string;
   /** Instruction used to open the call (model speaks first). Empty/undefined = silent join. */
   greetingInstructions?: string;
+  /** Notify mode: invoked once after the model finishes its first response (outbound result delivery). */
+  onDeliveryComplete?: () => void;
   /** Realtime tools exposed to the model (e.g. openclaw_agent_consult). */
   tools?: RealtimeVoiceTool[];
   /** Inbound-call policy applied before bridging (mirrors the streaming path). */
@@ -400,6 +402,7 @@ export function createMsteamsRealtimeCall(params: {
   let outboundTimestampMs = 0;
   let turnId = 0;
   let closed = false;
+  let deliveryComplete = false;
   /** Last time we sent assistant audio to the caller (self-echo gate). */
   let lastOutputAt = 0;
   /**
@@ -591,6 +594,11 @@ export function createMsteamsRealtimeCall(params: {
       }
       if (isFinal) {
         recordTranscript(role, text);
+        // Notify mode (outbound result callback): hang up after the model's first finished response.
+        if (role === "assistant" && !deliveryComplete && deps.onDeliveryComplete) {
+          deliveryComplete = true;
+          deps.onDeliveryComplete();
+        }
       }
     },
     onToolCall: (event, rtSession) => {
