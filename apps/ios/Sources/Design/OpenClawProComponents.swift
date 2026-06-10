@@ -116,21 +116,24 @@ private struct ProPanelBackground: View {
     }
 }
 
-private struct ProLightGlassModifier: ViewModifier {
+private struct ProGlassEffectLayer<Surface: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     let radius: CGFloat
+    var interactive = false
+    @ViewBuilder let surface: Surface
 
-    func body(content: Content) -> some View {
+    var body: some View {
         if #available(iOS 26.0, *), self.colorScheme == .light {
-            content.glassEffect(.regular, in: .rect(cornerRadius: self.radius))
+            self.surface.glassEffect(
+                self.interactive ? .regular.interactive() : .regular,
+                in: .rect(cornerRadius: self.radius))
         } else {
-            content
+            self.surface
         }
     }
 }
 
 private struct ProGlassSurfaceModifier: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
     let fill: Color
     let stroke: Color
     let radius: CGFloat
@@ -139,20 +142,17 @@ private struct ProGlassSurfaceModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: self.radius, style: .continuous)
-        let surfaced = content.background {
-            shape
-                .fill(self.fill)
-                .overlay {
-                    shape.strokeBorder(self.stroke, lineWidth: self.isProminent ? 1.2 : 1)
-                }
-        }
-
-        if #available(iOS 26.0, *), self.colorScheme == .light {
-            surfaced.glassEffect(
-                self.interactive ? .regular.interactive() : .regular,
-                in: .rect(cornerRadius: self.radius))
-        } else {
-            surfaced
+        content.background {
+            ProGlassEffectLayer(
+                radius: self.radius,
+                interactive: self.interactive)
+            {
+                shape
+                    .fill(self.fill)
+                    .overlay {
+                        shape.strokeBorder(self.stroke, lineWidth: self.isProminent ? 1.2 : 1)
+                    }
+            }
         }
     }
 }
@@ -194,12 +194,13 @@ private struct ProPanelSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
-                ProPanelBackground(
-                    radius: self.radius,
-                    tint: self.tint,
-                    isProminent: self.isProminent)
+                ProGlassEffectLayer(radius: self.radius) {
+                    ProPanelBackground(
+                        radius: self.radius,
+                        tint: self.tint,
+                        isProminent: self.isProminent)
+                }
             }
-            .modifier(ProLightGlassModifier(radius: self.radius))
             .shadow(
                 color: self.colorScheme == .dark ? .black.opacity(0.22) : .black.opacity(0.028),
                 radius: self.isProminent ? 9 : 4,
