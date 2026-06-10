@@ -1,3 +1,4 @@
+// Unit-fast test discovery and classification helpers for fast local routing.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -126,7 +127,6 @@ export const forcedUnitFastTestFiles = [
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/library.test.ts",
-  "src/memory-host-sdk/host/backend-config.test.ts",
   "src/media-generation/provider-capabilities.contract.test.ts",
   "src/music-generation/runtime.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
@@ -136,7 +136,6 @@ export const forcedUnitFastTestFiles = [
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
   "src/pairing/pairing-challenge.test.ts",
-  "src/pairing/pairing-store.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",
@@ -241,6 +240,7 @@ const broadUnitFastCandidateSkipGlobs = [
   "src/proxy-capture/runtime.test.ts",
   "src/plugins/install.npm-spec.test.ts",
   "src/plugins/contracts/**/*.test.ts",
+  "src/pairing/pairing-store.test.ts",
   "src/plugin-sdk/browser-subpaths.test.ts",
   "src/security/**/*.test.ts",
   "src/secrets/**/*.test.ts",

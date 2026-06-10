@@ -1,3 +1,4 @@
+// Channel output policy tests cover isolated agent delivery output filtering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCronChannelOutputPolicy,
@@ -40,6 +41,19 @@ describe("cron channel output policy", () => {
       preferFinalAssistantVisibleText: true,
     });
     await expect(resolveCronChannelOutputPolicy("plainchat")).resolves.toEqual({
+      preferFinalAssistantVisibleText: false,
+    });
+  });
+
+  it("prefers final visible text only for unresolved no-delivery runs", async () => {
+    await expect(
+      resolveCronChannelOutputPolicy(undefined, { deliveryRequested: false }),
+    ).resolves.toEqual({
+      preferFinalAssistantVisibleText: true,
+    });
+    await expect(
+      resolveCronChannelOutputPolicy(undefined, { deliveryRequested: true }),
+    ).resolves.toEqual({
       preferFinalAssistantVisibleText: false,
     });
   });

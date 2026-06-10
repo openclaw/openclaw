@@ -1,3 +1,4 @@
+// Control UI module implements app gateway behavior.
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -9,6 +10,7 @@ import {
   flushChatQueueForEvent,
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
+  recordChatSendServerTiming,
   recordFirstAssistantChatTiming,
   refreshChatAvatar,
   scopedAgentListParamsForRefreshTarget,
@@ -685,11 +687,10 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   }
 }
 
-async function loadAgentsThenRefreshActiveTabAfterBootstrap(
+async function loadAgentsThenRefreshActiveTabForClient(
   host: GatewayHost,
   client: GatewayBrowserClient,
 ) {
-  await host.controlUiBootstrapReady?.catch(() => undefined);
   if (host.client !== client) {
     return;
   }
@@ -822,7 +823,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
-      void loadAgentsThenRefreshActiveTabAfterBootstrap(host, client);
+      void loadAgentsThenRefreshActiveTabForClient(host, client);
       scheduleDeferredStartupWork(() => {
         if (host.client !== client) {
           return;
@@ -1220,6 +1221,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat") {
     handleChatGatewayEvent(host, evt.payload as ChatEventPayload | undefined);
+    return;
+  }
+
+  if (evt.event === "chat.send_timing") {
+    recordChatSendServerTiming(
+      host as unknown as Parameters<typeof recordChatSendServerTiming>[0],
+      evt.payload,
+    );
     return;
   }
 

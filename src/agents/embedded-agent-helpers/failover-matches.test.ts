@@ -1,4 +1,6 @@
+// Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
+import { classifyFailoverReason } from "./errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -10,6 +12,7 @@ import {
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
     it("classifies Z.ai 1311 JSON body as billing", () => {
+      // Z.ai 1311 is a plan entitlement failure, not rate limiting.
       const raw =
         '{"code":1311,"message":"The model you requested is not available in your current plan"}';
       expect(isBillingErrorMessage(raw)).toBe(true);
@@ -100,8 +103,38 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Volcengine Coding Plan subscription errors", () => {
+  it("classifies InvalidSubscription JSON body as billing", () => {
+    const raw =
+      '{"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}';
+    expect(isBillingErrorMessage(raw)).toBe(true);
+  });
+
+  it("classifies long InvalidSubscription payloads as billing", () => {
+    const raw = JSON.stringify({
+      error: {
+        code: "InvalidSubscription",
+        message:
+          "Your account does not have a valid coding plan subscription, or your subscription has expired.",
+        details: "x".repeat(700),
+      },
+    });
+    expect(raw.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(raw)).toBe(true);
+  });
+
+  it("classifies InvalidSubscription as billing before auth or rate limit", () => {
+    const raw =
+      '{"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}';
+    expect(isRateLimitErrorMessage(raw)).toBe(false);
+    expect(classifyFailoverReason(raw)).toBe("billing");
+  });
+});
+
 describe("server error status classification", () => {
   it("classifies a bare internal server error status as server error", () => {
+    // Bare status lines from providers should classify, while prefixed prose is
+    // too ambiguous and tested below as a non-match.
     expect(isServerErrorMessage("status: internal server error")).toBe(true);
   });
 

@@ -1,8 +1,10 @@
+// Gateway maintenance tests cover periodic cleanup for media, dedupe records,
+// stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { createChatRunState } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
+import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
 
@@ -33,24 +35,7 @@ function createActiveRun(
 }
 
 function createMaintenanceTimerDeps() {
-  const chatRunState = createChatRunState();
-  return {
-    broadcast: () => {},
-    nodeSendToAllSubscribed: () => {},
-    getPresenceVersion: () => 1,
-    getHealthVersion: () => 1,
-    refreshGatewayHealthSnapshot: async () => ({ ok: true }) as HealthSummary,
-    logHealth: { error: () => {} },
-    dedupe: new Map(),
-    chatAbortControllers: new Map(),
-    chatRunState,
-    chatRunBuffers: chatRunState.buffers,
-    chatDeltaSentAt: chatRunState.deltaSentAt,
-    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
-    removeChatRun: () => undefined,
-    agentRunSeq: new Map(),
-    nodeSendToSession: () => {},
-  };
+  return createGatewayMaintenanceStateForTest();
 }
 
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;

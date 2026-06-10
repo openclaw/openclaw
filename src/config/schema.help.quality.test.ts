@@ -1,3 +1,4 @@
+// Checks config help text quality and coverage.
 import { describe, expect, it } from "vitest";
 import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
@@ -14,6 +15,7 @@ const ROOT_SECTIONS = [
   "commitments",
   "browser",
   "ui",
+  "tui",
   "auth",
   "models",
   "nodeHost",
@@ -43,6 +45,7 @@ const TARGET_KEYS = [
   "memory.citations",
   "memory.backend",
   "memory.qmd.searchMode",
+  "memory.qmd.rerank",
   "memory.qmd.searchTool",
   "memory.qmd.scope",
   "memory.qmd.includeDefaultMemory",
@@ -581,6 +584,47 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "ui.seamColor",
 ] as const;
 
+function titleCaseLabelSegment(segment: string): string {
+  return segment
+    .replace(/\[\]/g, "")
+    .replace(/[*_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function createFieldLabelStub(key: string): string {
+  const segments = key.split(".").filter((segment) => segment !== "*");
+  const leaf = segments.at(-1) ?? key;
+  return titleCaseLabelSegment(leaf) || key;
+}
+
+function collectMissingLabelKeys(
+  helpKeys: readonly string[],
+  labels: Record<string, string>,
+): string[] {
+  return helpKeys.filter((key) => {
+    const label = labels[key];
+    return typeof label !== "string" || label.length === 0;
+  });
+}
+
+function formatMissingLabelFailure(missingKeys: readonly string[]): string {
+  const stubs = missingKeys
+    .map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(createFieldLabelStub(key))},`)
+    .join("\n");
+  return [
+    `${missingKeys.length} help key(s) missing from FIELD_LABELS.`,
+    "Add or adjust these entries in src/config/schema.labels.ts:",
+    "",
+    stubs,
+    "",
+    "Review generated labels before committing; they are mechanical starting points.",
+  ].join("\n");
+}
+
 describe("config help copy quality", () => {
   function requireHelp(key: string): string {
     const help = FIELD_HELP[key];
@@ -621,9 +665,21 @@ describe("config help copy quality", () => {
   });
 
   it("keeps labels in parity for all help keys", () => {
-    for (const key of Object.keys(FIELD_HELP)) {
-      expect(requireLabel(key)).not.toHaveLength(0);
+    const missing = collectMissingLabelKeys(Object.keys(FIELD_HELP), FIELD_LABELS);
+    if (missing.length > 0) {
+      expect.fail(formatMissingLabelFailure(missing));
     }
+  });
+
+  it("prints copy-paste-ready label stubs for missing help labels", () => {
+    const message = formatMissingLabelFailure([
+      "gateway.push",
+      "gateway.push.apns.relay.timeoutMs",
+    ]);
+    expect(message).toContain("2 help key(s) missing from FIELD_LABELS.");
+    expect(message).toContain("src/config/schema.labels.ts");
+    expect(message).toContain(`  "gateway.push": "Push",`);
+    expect(message).toContain(`  "gateway.push.apns.relay.timeoutMs": "Timeout Ms",`);
   });
 
   it("covers the target confusing fields with non-trivial explanations", () => {

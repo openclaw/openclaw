@@ -1,3 +1,4 @@
+/** Tests CLI runner reliability paths for hooks, transcripts, failover, and reply ops. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -39,6 +41,7 @@ vi.mock("../tts/tts.js", () => ({
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 type HookRunnerGlobalStateForTest = {
   hookRunner: unknown;
@@ -46,6 +49,7 @@ type HookRunnerGlobalStateForTest = {
 };
 
 function setHookRunnerForTest(hookRunner: unknown): void {
+  // Keep the module-level hook runner singleton aligned with the mocked getter.
   mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const state = (globalStore[hookRunnerGlobalStateKey] as
@@ -60,8 +64,11 @@ function setHookRunnerForTest(hookRunner: unknown): void {
 }
 
 function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
+  // Session files use the real JSONL shape so transcript/history readers stay
+  // covered without spinning up a full CLI process.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+  setTestEnvValue("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
   const storePath = path.join(path.dirname(sessionFile), "sessions.json");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -134,6 +141,7 @@ function buildPreparedContext(params?: {
   model?: string;
   allowEmptyAssistantReplyAsSilent?: boolean;
 }): PreparedCliRunContext {
+  // Common prepared context fixture for runPreparedCliAgent reliability branches.
   const provider = params?.provider ?? "codex-cli";
   const model = params?.model ?? "gpt-5.4";
   const backend = {
@@ -269,6 +277,8 @@ describe("runCliAgent reliability", () => {
     mockGetGlobalHookRunner.mockReset();
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
+    sessionFileEnvSnapshot?.restore();
+    sessionFileEnvSnapshot = undefined;
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {

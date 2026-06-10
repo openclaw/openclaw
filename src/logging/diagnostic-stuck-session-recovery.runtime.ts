@@ -1,3 +1,4 @@
+// Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -23,10 +24,12 @@ import {
 } from "./diagnostic-session-recovery.js";
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
+// Runtime repair path for diagnostic sessions that appear stuck in processing/waiting states.
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
 const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 const recoveriesInFlight = new Set<string>();
 
+/** Request parameters accepted by the stuck-session recovery runtime. */
 export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
 
 function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
@@ -94,6 +97,7 @@ export async function recoverStuckDiagnosticSession(
 
   recoveriesInFlight.add(key);
   try {
+    // Abort only the generation/state that triggered recovery; stale warnings become observe-only.
     if (
       !isDiagnosticSessionStateCurrent({
         sessionId: params.sessionId,
@@ -166,6 +170,7 @@ export async function recoverStuckDiagnosticSession(
           `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
         );
       }
+      // Active embedded runs own their cleanup; recovery asks them to abort and drain first.
       const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,
@@ -317,6 +322,7 @@ export async function recoverStuckDiagnosticSession(
   }
 }
 
+/** Test hooks for clearing in-flight recovery guards. */
 export const testing = {
   resetRecoveriesInFlight(): void {
     recoveriesInFlight.clear();

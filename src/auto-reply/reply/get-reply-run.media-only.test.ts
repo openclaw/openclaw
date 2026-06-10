@@ -1,3 +1,4 @@
+// Tests media-only get-reply runs and sandboxed media attachment handling.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1050,6 +1051,37 @@ describe("runPreparedReply media-only handling", () => {
     });
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPath");
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
+  });
+
+  it("normalizes second-based inbound timestamps before preparing user turns", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "timestamped followup",
+          RawBody: "timestamped followup",
+          CommandBody: "timestamped followup",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550001",
+          ChatType: "direct",
+          Timestamp: 1_710_000_000,
+        },
+        sessionCtx: {
+          Body: "timestamped followup",
+          BodyStripped: "timestamped followup",
+          Provider: "whatsapp",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550001",
+          ChatType: "direct",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "timestamped followup",
+      timestamp: 1_710_000_000_000,
+    });
   });
 
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {

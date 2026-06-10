@@ -1,3 +1,4 @@
+// Shared Vitest mocks and runtime capture helpers for plugin CLI command tests.
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -25,6 +26,7 @@ type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 
 function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
+  // Tests mutate records freely; clone to keep helper state from leaking across assertions.
   return structuredClone(records);
 }
 
@@ -507,6 +509,7 @@ vi.mock("../plugins/install.js", () => ({
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
     SECURITY_SCAN_BLOCKED: "security_scan_blocked",
     SECURITY_SCAN_FAILED: "security_scan_failed",
+    UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
   },
   installPluginFromNpmSpec: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>

@@ -1,3 +1,4 @@
+// Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -6,6 +7,7 @@ import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
@@ -14,7 +16,7 @@ import {
   resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
+import { loadSessionStore, resolveSessionStoreEntry, updateSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -96,10 +98,7 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: {
   provider?: unknown;
   model?: unknown;
 }): boolean {
-  return (
-    message.provider === "openclaw" &&
-    (message.model === "delivery-mirror" || message.model === "gateway-injected")
-  );
+  return isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model);
 }
 
 export async function resolveSessionTranscriptFile(params: {
@@ -119,6 +118,7 @@ export async function resolveSessionTranscriptFile(params: {
   let sessionEntry = params.sessionEntry;
 
   if (params.sessionStore && params.storePath) {
+    // Persisting the resolved transcript path keeps later tail reads and exports on the same file.
     const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
     const fallbackSessionFile = !sessionEntry?.sessionFile
       ? resolveSessionTranscriptPath(
@@ -297,15 +297,18 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  return await runWithOwnedSessionTranscriptWriteLock(
+  let transcriptMarkerUpdatedAt: number | undefined;
+  const result = await runWithOwnedSessionTranscriptWriteLock<SessionTranscriptAppendResult>(
     { sessionFile, sessionKey: resolved.normalizedKey },
-    async () => {
+    async (): Promise<SessionTranscriptAppendResult> => {
       const explicitIdempotencyKey =
         params.idempotencyKey ??
         ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
       const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
         ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message, params.config)
         : undefined;
+      // Delivery mirrors can be replayed after restart; suppress only when the latest assistant text
+      // is exactly the same post-redaction.
       if (latestEquivalentAssistantId) {
         return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
       }
@@ -336,6 +339,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       if (!appended) {
         return { ok: true, sessionFile, messageId };
       }
+      transcriptMarkerUpdatedAt = Date.now();
 
       switch (params.updateMode ?? "inline") {
         case "inline":
@@ -360,6 +364,15 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       return { ok: true, sessionFile, messageId };
     },
   );
+  if (result.ok && transcriptMarkerUpdatedAt !== undefined) {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: resolved.normalizedKey,
+      update: (current) =>
+        current.sessionId === entry.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+    });
+  }
+  return result;
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
@@ -407,6 +420,7 @@ async function findLatestEquivalentAssistantMessageId(
       if (!candidate || candidate.role !== "assistant") {
         continue;
       }
+      // Stop at the first assistant message: only the tail can be a duplicate mirror replay.
       const candidateText = extractAssistantMessageText(
         redactTranscriptMessage(
           candidate as AgentMessage,

@@ -1,3 +1,6 @@
+/**
+ * Browser CLI form fill, wait, and evaluate commands.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -31,6 +34,7 @@ function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undef
   }
 }
 
+/** Registers Browser fill, wait, and evaluate commands. */
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -123,8 +127,11 @@ export function registerBrowserFormWaitEvalCommands(
 
   browser
     .command("evaluate")
-    .description("Evaluate a function against the page or a ref")
-    .option("--fn <code>", "Function source, e.g. (el) => el.textContent")
+    .description("Evaluate JavaScript against the page or a ref")
+    .option(
+      "--fn <code>",
+      "Function source, expression, or statement body, e.g. const text = el.textContent; return text;",
+    )
     .option("--ref <id>", "Ref from snapshot")
     .option(
       "--timeout-ms <ms>",

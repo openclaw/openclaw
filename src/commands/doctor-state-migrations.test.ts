@@ -1,6 +1,8 @@
+// Doctor state migration tests cover legacy state moves, archive markers, and repair behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -256,6 +258,51 @@ afterEach(async () => {
 function writeJson5(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
+}
+
+function readPrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+    name?: unknown;
+    pk?: unknown;
+  }>;
+  return rows
+    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
+    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
+    .map((row) => row.name as string);
+}
+
+function createLegacyAgentDatabaseRegistry(stateDir: string): string {
+  const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(stateDatabasePath);
+  try {
+    db.exec(`
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        size_bytes INTEGER
+      );
+      INSERT INTO agent_databases (
+        agent_id,
+        path,
+        schema_version,
+        last_seen_at,
+        size_bytes
+      ) VALUES (
+        'worker-1',
+        '/legacy/worker-1/openclaw-agent.sqlite',
+        1,
+        10,
+        20
+      );
+    `);
+  } finally {
+    db.close();
+  }
+  return stateDatabasePath;
 }
 
 function writeLegacySessionsFixture(params: {
@@ -636,6 +683,82 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
 
+  it("migrates the legacy shared state agent registry primary key", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, ".openclaw");
+    const stateDatabasePath = createLegacyAgentDatabaseRegistry(stateDir);
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(detected.preview).toContain(
+      "- Shared SQLite schema: agent database registry primary key → agent_id,path",
+    );
+
+    const result = await runLegacyStateMigrations({ detected });
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Migrated shared state agent database registry primary key → agent_id,path",
+    ]);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(stateDatabasePath);
+    try {
+      expect(readPrimaryKeyColumns(db, "agent_databases")).toEqual(["agent_id", "path"]);
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_databases (
+            agent_id,
+            path,
+            schema_version,
+            last_seen_at,
+            size_bytes
+          ) VALUES (
+            'worker-1',
+            '/relocated/worker-1/openclaw-agent.sqlite',
+            1,
+            20,
+            30
+          )
+          ON CONFLICT(agent_id, path) DO UPDATE SET
+            last_seen_at = excluded.last_seen_at,
+            size_bytes = excluded.size_bytes;
+        `),
+      ).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not repair newer shared state schemas", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, ".openclaw");
+    const stateDatabasePath = createLegacyAgentDatabaseRegistry(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const seededDb = new DatabaseSync(stateDatabasePath);
+    seededDb.exec("PRAGMA user_version = 2;");
+    seededDb.close();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("uses newer schema version 2");
+
+    const db = new DatabaseSync(stateDatabasePath);
+    try {
+      expect(readPrimaryKeyColumns(db, "agent_databases")).toEqual(["agent_id"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("migrates legacy ACP metadata from sessions.json into shared SQLite", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};
@@ -997,6 +1120,55 @@ describe("doctor legacy state migrations", () => {
       const globalEntries = await globalStore.entries();
       expect(globalEntries[0]?.expiresAt).toBeGreaterThan(Date.now());
     });
+  });
+
+  it("removes plugin-state legacy sources through removeSource once covered", async () => {
+    const root = await makeTempRoot();
+    const removeSource = vi.fn();
+    const removeEmptySource = vi.fn();
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test bucket cache",
+        sourcePath: "plugin state:test.legacy-buckets",
+        targetPath: "plugin state:test.bucket-cache",
+        pluginId: "telegram",
+        namespace: "test.bucket-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        removeSource,
+        readEntries: () => [{ key: "default", value: { body: "bucket" } }],
+      },
+      {
+        kind: "plugin-state-import",
+        label: "Test empty bucket cache",
+        sourcePath: "plugin state:test.legacy-empty",
+        targetPath: "plugin state:test.empty-cache",
+        pluginId: "telegram",
+        namespace: "test.empty-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupWhenEmpty: true,
+        removeSource: removeEmptySource,
+        readEntries: () => [],
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(removeSource).toHaveBeenCalledTimes(1);
+    expect(removeEmptySource).toHaveBeenCalledTimes(1);
+    expect(result.changes).toContain(
+      "Removed Test bucket cache legacy source (plugin state:test.legacy-buckets)",
+    );
+    expect(result.changes).toContain(
+      "Removed Test empty bucket cache legacy source (plugin state:test.legacy-empty)",
+    );
   });
 
   it("replaces existing plugin-state entries when a channel import plan asks for it", async () => {

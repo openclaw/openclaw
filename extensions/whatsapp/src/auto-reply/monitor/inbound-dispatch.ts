@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements inbound dispatch behavior.
 import {
   DEFAULT_TIMING,
   type StatusReactionController,
@@ -654,7 +655,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     void statusReactionController.setThinking();
   }
 
-  const { queuedFinal, counts } = await dispatchReplyWithBufferedBlockDispatcher({
+  const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.context,
     cfg: params.cfg,
     replyResolver: params.replyResolver,
@@ -798,7 +799,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
         : {}),
     },
   });
-  const didQueueVisibleReply = hasVisibleInboundReplyDispatch({ queuedFinal, counts });
+  const didQueueVisibleReply = hasVisibleInboundReplyDispatch(dispatchResult);
+  const didDeliverVisibleReply = didSendReply || dispatchResult.observedReplyDelivery === true;
   if (!didQueueVisibleReply) {
     if (statusReactionController) {
       void finalizeWhatsAppStatusReaction({
@@ -819,8 +821,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
   if (statusReactionController) {
     void finalizeWhatsAppStatusReaction({
       controller: statusReactionController,
-      outcome: didSendReply ? "done" : "error",
-      hasFinalResponse: didSendReply,
+      outcome: didDeliverVisibleReply ? "done" : "error",
+      hasFinalResponse: didDeliverVisibleReply,
       removeAckAfterReply,
       timing: statusReactionTiming,
     });
@@ -830,7 +832,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     params.groupHistories.set(params.groupHistoryKey, []);
   }
 
-  return didSendReply;
+  return didDeliverVisibleReply;
 }
 
 async function finalizeWhatsAppStatusReaction(params: {

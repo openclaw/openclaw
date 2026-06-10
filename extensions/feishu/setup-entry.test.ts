@@ -1,3 +1,4 @@
+// Feishu tests cover setup entry plugin behavior.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@larksuiteoapi/node-sdk", () => {
@@ -17,5 +18,16 @@ describe("feishu setup entry", () => {
     expect(setupEntry.features).toEqual({ legacyStateMigrations: true });
     expect(typeof setupEntry.loadSetupPlugin).toBe("function");
     expect(setupEntry.loadLegacyStateMigrationDetector?.()).toBeTypeOf("function");
+    expect(typeof setupEntry.setChannelRuntime).toBe("function");
+  });
+
+  it("wires the Feishu runtime from setup-only registration", async () => {
+    const { default: setupEntry } = await import("./setup-entry.js");
+    const runtime = { channel: { inbound: { run: vi.fn() } } };
+
+    setupEntry.setChannelRuntime?.(runtime as never);
+
+    const { getFeishuRuntime } = await import("./src/runtime.js");
+    expect(getFeishuRuntime()).toBe(runtime);
   });
 });

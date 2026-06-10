@@ -1,3 +1,6 @@
+// Human-facing background task commands.
+// Handles task listing/show/cancel/notify/audit plus registry maintenance for tasks, flows, and sessions.
+
 import fs from "node:fs";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -75,6 +78,38 @@ async function loadTaskCancelConfig() {
   return getRuntimeConfig();
 }
 
+type GatewayTaskCancelSummary = {
+  id?: string;
+  taskId?: string;
+  runtime?: string;
+  runId?: string;
+};
+
+type GatewayTaskCancelResult = {
+  found?: boolean;
+  cancelled?: boolean;
+  reason?: string;
+  task?: GatewayTaskCancelSummary;
+};
+
+async function tryCancelCronTaskViaGateway(
+  task: TaskRecord,
+): Promise<GatewayTaskCancelResult | null> {
+  if (task.runtime !== "cron") {
+    return null;
+  }
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<GatewayTaskCancelResult>({
+      method: "tasks.cancel",
+      params: { taskId: task.taskId },
+      timeoutMs: 5_000,
+    });
+  } catch {
+    return null;
+  }
+}
+
 function configureTaskMaintenanceFromConfig(): void {
   const cfg = getRuntimeConfig();
   configureTaskRegistryMaintenance({
@@ -129,6 +164,7 @@ function buildSessionRegistryPreserveKeys(params: {
   for (const key of Object.keys(params.store)) {
     const jobId = parseCronRunSessionJobId(key);
     if (!jobId) {
+      // Non-cron session rows are outside this maintenance pass; preserve them.
       preserveKeys.add(key);
       continue;
     }
@@ -161,6 +197,7 @@ async function runSessionRegistryMaintenance(params: {
     const beforeStore = loadSessionStore(target.storePath, { skipCache: true });
     const beforeCount = Object.keys(beforeStore).length;
     if (params.apply) {
+      // Apply mode mutates each store atomically through updateSessionStore.
       const applied = await updateSessionStore(
         target.storePath,
         (store) => {
@@ -191,6 +228,7 @@ async function runSessionRegistryMaintenance(params: {
       continue;
     }
     const previewStore = structuredClone(beforeStore);
+    // Preview mode runs pruning against a clone so dry-run output cannot change stores.
     const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
       store: previewStore,
       runningCronJobIds,
@@ -350,6 +388,7 @@ function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
 }) {
+  // Human audit reconciles inspectable tasks first so stale detached runs are reflected.
   const taskFindings = listTaskAuditFindings({ tasks: reconcileInspectableTasks() });
   const flowFindings = listTaskFlowAuditFindings();
   return buildTaskSystemAuditFindings({
@@ -360,6 +399,7 @@ function toSystemAuditFindings(params: {
   });
 }
 
+/** Lists background tasks with optional runtime/status filters. */
 export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
@@ -412,6 +452,7 @@ export async function tasksListCommand(
   }
 }
 
+/** Shows one task record by id or lookup token. */
 export async function tasksShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
@@ -458,6 +499,7 @@ export async function tasksShowCommand(
   }
 }
 
+/** Updates a task's notification policy. */
 export async function tasksNotifyCommand(
   opts: { lookup: string; notify: TaskNotifyPolicy },
   runtime: RuntimeEnv,
@@ -480,11 +522,30 @@ export async function tasksNotifyCommand(
   runtime.log(`Updated ${updated.taskId} notify policy to ${updated.notifyPolicy}.`);
 }
 
+/** Cancels a detached task run by lookup token. */
 export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
     runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
+    return;
+  }
+  const gatewayResult = await tryCancelCronTaskViaGateway(task);
+  if (gatewayResult) {
+    if (!gatewayResult.found) {
+      runtime.error(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup));
+      runtime.exit(1);
+      return;
+    }
+    if (!gatewayResult.cancelled) {
+      runtime.error(gatewayResult.reason ?? `Could not cancel task: ${opts.lookup}`);
+      runtime.exit(1);
+      return;
+    }
+    const updated = gatewayResult.task;
+    runtime.log(
+      `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+    );
     return;
   }
   const result = await cancelDetachedTaskRunById({
@@ -507,6 +568,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
   );
 }
 
+/** Prints or serializes combined task/task-flow audit findings. */
 export async function tasksAuditCommand(
   opts: {
     json?: boolean;
@@ -587,6 +649,7 @@ export async function tasksAuditCommand(
   }
 }
 
+/** Previews or applies task, task-flow, and backing session-registry maintenance. */
 export async function tasksMaintenanceCommand(
   opts: { json?: boolean; apply?: boolean },
   runtime: RuntimeEnv,

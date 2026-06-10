@@ -147,9 +147,9 @@
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "25.9.1",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.1.tgz",
-      "integrity": "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg==",
+      "version": "25.9.2",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.2.tgz",
+      "integrity": "sha512-G05zqtJhcDLb8uslf5EjCxXg9G1KQxiV8OS0R26IC//Eoyitzqe8z37I7cqvnZlrlSfgocQRfSn/AHBZJJFyGw==",
       "license": "MIT",
       "dependencies": {
         "undici-types": ">=7.24.0 <7.24.7"
@@ -168,6 +168,15 @@
       "license": "MIT",
       "dependencies": {
         "@types/node": "*"
+      }
+    },
+    "node_modules/@types/ws/node_modules/@types/node": {
+      "version": "25.9.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.1.tgz",
+      "integrity": "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg==",
+      "license": "MIT",
+      "dependencies": {
+        "undici-types": ">=7.24.0 <7.24.7"
       }
     },
     "node_modules/accepts": {
@@ -1155,9 +1164,9 @@
       "license": "MIT"
     },
     "node_modules/semver": {
-      "version": "7.8.1",
-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.1.tgz",
-      "integrity": "sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==",
+      "version": "7.8.2",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.2.tgz",
+      "integrity": "sha512-c8jsqUZm3omBOI66G90z1Dyw5z622G8oLG+omfsHBJf3CWQTlOcwOjvOG6wtiNfW6anKm/eA39LMwMtMez2TiQ==",
       "license": "ISC",
       "bin": {
         "semver": "bin/semver.js"

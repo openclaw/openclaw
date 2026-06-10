@@ -1,3 +1,6 @@
+/**
+ * Classifies incomplete terminal assistant turns and retry instructions.
+ */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -230,6 +233,11 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
+/**
+ * Marks whether retrying the attempt can safely replay the prompt. Mutating
+ * tools, async work, committed delivery, spawned sessions, and cron writes all
+ * count as side effects that make blind replay unsafe.
+ */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
@@ -247,12 +255,18 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+/** Falls back to replay-unsafe metadata when older attempt records lack replay details. */
 export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+/**
+ * Builds the user-visible incomplete-turn warning when a terminal attempt did
+ * not produce a safe final assistant response and no committed delivery/progress
+ * already completed the task.
+ */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -266,9 +280,17 @@ export function resolveIncompleteTurnPayloadText(params: {
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  // Unsigned thinking payloads count toward payloadCount but carry no user-visible
+  // content; bypass the visible-text guard when unsigned thinking was the only output
+  // so that incomplete-turn stall detection fires below. (#89787)
+  const unsignedThinkingOnlyTerminal =
+    params.payloadCount !== 0 &&
+    !joinAssistantTexts(params.attempt.assistantTexts).length &&
+    isUnsignedThinkingOnlyAssistantTurn(assistant);
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal) ||
+    (params.payloadCount !== 0 && !toolUseTerminal && !unsignedThinkingOnlyTerminal) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -300,9 +322,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
   });
-  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
-    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
-  );
+  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
     payloadCount: params.payloadCount,
     attempt: params.attempt,
@@ -310,6 +330,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
+    !unsignedThinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -321,6 +342,11 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+/**
+ * Allows one retry when the provider returned no assistant turn at all and the
+ * attempt has no side effects, active lifecycle items, delivery, or terminal
+ * assistant/tool state.
+ */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
@@ -437,6 +463,7 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
   return false;
 }
 
+/** Emits the silent-reply token for cron turns whose last successful tool result is silent. */
 export function resolveSilentToolResultReplyPayload(params: {
   isCronTrigger: boolean;
   payloadCount: number;
@@ -464,6 +491,11 @@ export function resolveSilentToolResultReplyPayload(params: {
     : null;
 }
 
+/**
+ * Marks replay invalid whenever the recorded attempt might not be safe to
+ * replay or the current run ended in a compaction/incomplete-turn state that
+ * needs a fresh prompt boundary.
+ */
 export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
@@ -476,6 +508,7 @@ export function resolveReplayInvalidFlag(params: {
   );
 }
 
+/** Classifies the persisted run state used by session recovery and resume logic. */
 export function resolveRunLivenessState(params: {
   payloadCount: number;
   aborted: boolean;
@@ -506,6 +539,20 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
     return false;
   }
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
+}
+
+// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
+// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
+// so the content.length > 0 guard is required to distinguish the two cases.
+function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
+  if (message == null || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
 }
 
 function isEmptyResponseAssistantTurn(params: {
@@ -588,6 +635,7 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+/** Allows configured silent handling for replay-safe empty or reasoning-only assistant turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -601,12 +649,27 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
+  // Post-tool empty stops are ambiguous provider failures, not intentional silence.
+  // Let the retry/incomplete-turn paths decide whether replay is safe.
+  if (
+    params.attempt.toolMetas.length > 0 &&
+    isEmptyResponseAssistantTurn({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    })
+  ) {
+    return false;
+  }
   return isNonVisibleAssistantTurnEligibleForSilentReply({
     payloadCount: params.payloadCount,
     attempt: params.attempt,
   });
 }
 
+/**
+ * Builds the retry instruction for reasoning-only turns that consumed provider
+ * output budget but produced no visible assistant text.
+ */
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -638,13 +701,17 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   if (assistant?.stopReason === "error") {
     return null;
   }
-  if (!isReasoningOnlyAssistantTurn(assistant)) {
+  if (!isReasoningOnlyAssistantTurn(assistant) && !isUnsignedThinkingOnlyAssistantTurn(assistant)) {
     return null;
   }
 
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+/**
+ * Builds the retry instruction for empty assistant turns when the provider/model
+ * is eligible for non-visible turn recovery.
+ */
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -762,6 +829,7 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
+/** Detects short multilingual approval prompts that should continue execution immediately. */
 export function isLikelyExecutionAckPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
@@ -781,6 +849,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
+/** Builds the fast-path execution instruction for short approval prompts like "go ahead". */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -820,6 +889,7 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
   return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
 }
 
+/** Extracts the visible plan text and normalized step list from a plan-only reply. */
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -889,6 +959,7 @@ function isSingleActionThenNarrativePattern(params: {
   );
 }
 
+/** Retry budget for plan-only recovery, higher for strict-agentic models. */
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedAgentExecutionContract,
 ): number {
@@ -897,6 +968,11 @@ export function resolvePlanningOnlyRetryLimit(
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
+/**
+ * Builds the retry instruction for assistant turns that only promised a plan
+ * instead of taking concrete action. The guard excludes real side effects,
+ * non-actionable prompts, explicit completions, and multi-tool progress.
+ */
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
