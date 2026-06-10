@@ -3,7 +3,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { resolveAnnounceTargetFromKey, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentAnnounceContext,
+  buildAgentToAgentMessageContext,
+  buildAgentToAgentReplyContext,
+  resolveAnnounceTargetFromKey,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
@@ -90,5 +96,51 @@ describe("resolvePingPongTurns", () => {
     expect(
       resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 50 } } } as never),
     ).toBe(20);
+  });
+});
+
+describe("agent-to-agent context builders", () => {
+  it("includes the requester identity name in the initial prompt context", () => {
+    const text = buildAgentToAgentMessageContext({
+      requesterName: "Stevo",
+      requesterSessionKey: "agent:habit:telegram:direct:123",
+      requesterChannel: "telegram",
+      targetSessionKey: "agent:story:main",
+    });
+
+    expect(text).toContain("Agent 1 (requester) name: Stevo.");
+    expect(text).toContain("Agent 1 (requester) session: agent:habit:telegram:direct:123.");
+  });
+
+  it("includes the requester identity name in ping-pong reply prompts", () => {
+    const text = buildAgentToAgentReplyContext({
+      requesterName: "Stevo",
+      requesterSessionKey: "agent:habit:telegram:direct:123",
+      requesterChannel: "telegram",
+      targetSessionKey: "agent:story:main",
+      targetChannel: "main",
+      currentRole: "requester",
+      turn: 1,
+      maxTurns: 5,
+    });
+
+    expect(text).toContain("Agent 1 (requester) name: Stevo.");
+    expect(text).toContain("Turn 1 of 5.");
+  });
+
+  it("includes the requester identity name in the announce prompt", () => {
+    const text = buildAgentToAgentAnnounceContext({
+      requesterName: "Stevo",
+      requesterSessionKey: "agent:habit:telegram:direct:123",
+      requesterChannel: "telegram",
+      targetSessionKey: "agent:story:main",
+      targetChannel: "telegram",
+      originalMessage: "Please summarize the latest status.",
+      roundOneReply: "First pass reply.",
+      latestReply: "Final answer.",
+    });
+
+    expect(text).toContain("Agent 1 (requester) name: Stevo.");
+    expect(text).toContain("Original request: Please summarize the latest status.");
   });
 });
