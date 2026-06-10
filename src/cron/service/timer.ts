@@ -78,6 +78,7 @@ export { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 export { wake } from "./wake.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
+const HEARTBEAT_SKIP_DISABLED = "disabled";
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -275,6 +276,13 @@ type TransientCronRetryDecision = {
   reason: "transient retry" | "max retries exhausted" | "permanent error";
 };
 
+type DisabledHeartbeatOneShotRetryDecision = {
+  retryable: boolean;
+  consecutiveSkipped: number;
+  backoffMs?: number;
+  reason: "disabled heartbeat retry" | "max retries exhausted";
+};
+
 function resolveCronNextRunWithLowerBound(params: {
   state: CronServiceState;
   job: CronJob;
@@ -344,6 +352,27 @@ function resolveTransientCronRetryDecision(params: {
     retryCategory: retryHint.category,
     backoffMs: errorBackoffMs(consecutiveErrors, retryConfig.backoffMs),
     reason: "transient retry",
+  };
+}
+
+function resolveDisabledHeartbeatOneShotRetryDecision(params: {
+  cronConfig?: CronConfig;
+  consecutiveSkipped: number | undefined;
+}): DisabledHeartbeatOneShotRetryDecision {
+  const retryConfig = resolveRetryConfig(params.cronConfig);
+  const consecutiveSkipped = params.consecutiveSkipped ?? 0;
+  if (consecutiveSkipped > retryConfig.maxAttempts) {
+    return {
+      retryable: false,
+      consecutiveSkipped,
+      reason: "max retries exhausted",
+    };
+  }
+  return {
+    retryable: true,
+    consecutiveSkipped,
+    backoffMs: errorBackoffMs(consecutiveSkipped, retryConfig.backoffMs),
+    reason: "disabled heartbeat retry",
   };
 }
 
@@ -423,6 +452,44 @@ function resolveDeliveryState(params: {
     };
   }
   return { status: "unknown", failureNotification: { status: "not-requested" } };
+}
+
+function shouldRetryDisabledHeartbeatOneShot(
+  job: CronJob,
+  result: { status: CronRunStatus; error?: string },
+): boolean {
+  return (
+    job.schedule.kind === "at" &&
+    job.sessionTarget === "main" &&
+    job.wakeMode === "now" &&
+    result.status === "skipped" &&
+    result.error === HEARTBEAT_SKIP_DISABLED
+  );
+}
+
+function isScheduledTerminalOneShotRetry(
+  job: CronJob,
+  lastRunStatus: CronRunStatus,
+  lastRun: unknown,
+  nextRun: unknown,
+): boolean {
+  if (
+    !isJobEnabled(job) ||
+    typeof nextRun !== "number" ||
+    typeof lastRun !== "number" ||
+    nextRun <= lastRun
+  ) {
+    return false;
+  }
+  if (lastRunStatus === "error") {
+    return true;
+  }
+  return (
+    lastRunStatus === "skipped" &&
+    job.sessionTarget === "main" &&
+    job.wakeMode === "now" &&
+    job.state.lastError === HEARTBEAT_SKIP_DISABLED
+  );
 }
 
 /** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
@@ -532,10 +599,42 @@ export function applyJobResult(
 
   const shouldDelete =
     job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+  const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      if (result.status === "ok" || result.status === "skipped") {
+      if (retryDisabledHeartbeatOneShot) {
+        const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
+          cronConfig: state.deps.cronConfig,
+          consecutiveSkipped: job.state.consecutiveSkipped,
+        });
+        if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
+          job.enabled = true;
+          job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
+          state.deps.log.info(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              consecutiveSkipped: retryDecision.consecutiveSkipped,
+              backoffMs: retryDecision.backoffMs,
+              nextRunAtMs: job.state.nextRunAtMs,
+            },
+            "cron: scheduling one-shot retry after disabled heartbeat",
+          );
+        } else {
+          job.enabled = false;
+          job.state.nextRunAtMs = undefined;
+          state.deps.log.warn(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              consecutiveSkipped: retryDecision.consecutiveSkipped,
+              reason: retryDecision.reason,
+            },
+            "cron: disabling one-shot job after disabled heartbeat retries",
+          );
+        }
+      } else if (result.status === "ok" || result.status === "skipped") {
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
@@ -1025,16 +1124,14 @@ function isRunnableJob(params: {
   const lastRunStatus = resolveJobLastRunStatus(job);
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
     // One-shot with terminal status: skip unless it's a transient-error retry.
-    // Retries have nextRunAtMs > lastRunAtMs (scheduled after the failed run) (#24355).
-    // ok/skipped or error-without-retry always skip (#13845).
+    // Retries have nextRunAtMs > lastRunAtMs (scheduled after the failed/skipped run)
+    // and include disabled-heartbeat delivery retries that must survive restart catch-up (#24355, #91775).
+    // ok/skipped-without-retry or error-without-retry always skip (#13845).
     const lastRun = job.state.lastRunAtMs;
     const nextRun = job.state.nextRunAtMs;
     if (
-      lastRunStatus === "error" &&
-      isJobEnabled(job) &&
-      typeof nextRun === "number" &&
-      typeof lastRun === "number" &&
-      nextRun > lastRun
+      isScheduledTerminalOneShotRetry(job, lastRunStatus, lastRun, nextRun) &&
+      typeof nextRun === "number"
     ) {
       return nowMs >= nextRun;
     }

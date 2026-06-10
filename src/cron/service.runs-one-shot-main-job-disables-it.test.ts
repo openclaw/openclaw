@@ -60,6 +60,7 @@ type CronHarnessOptions = {
   runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
   runHeartbeatOnce?: NonNullable<CronServiceDeps["runHeartbeatOnce"]>;
   nowMs?: () => number;
+  cronConfig?: CronServiceDeps["cronConfig"];
   wakeNowHeartbeatBusyMaxWaitMs?: number;
   wakeNowHeartbeatBusyRetryDelayMs?: number;
   withEvents?: boolean;
@@ -76,6 +77,7 @@ async function createCronHarness(options: CronHarnessOptions = {}) {
     cronEnabled: true,
     log: noopLogger,
     ...(options.nowMs ? { nowMs: options.nowMs } : {}),
+    ...(options.cronConfig ? { cronConfig: options.cronConfig } : {}),
     ...(options.wakeNowHeartbeatBusyMaxWaitMs !== undefined
       ? { wakeNowHeartbeatBusyMaxWaitMs: options.wakeNowHeartbeatBusyMaxWaitMs }
       : {}),
@@ -321,6 +323,91 @@ describe("CronService", () => {
     expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
     expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
     expect(requestHeartbeat).toHaveBeenCalled();
+
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("keeps a one-shot main job retryable when immediate heartbeat is disabled", async () => {
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } = await createCronHarness({
+      runHeartbeatOnce,
+      nowMs: () => atMs,
+    });
+    if (!events) {
+      throw new Error("missing event harness");
+    }
+    const job = await addMainOneShotHelloJob(cron, {
+      atMs,
+      name: "one-shot heartbeat disabled",
+    });
+
+    vi.setSystemTime(new Date(atMs));
+    await vi.runOnlyPendingTimersAsync();
+    const finished = await events.waitFor(
+      (evt) => evt.jobId === job.id && evt.action === "finished",
+    );
+
+    expect(finished.status).toBe("skipped");
+    expect(finished.error).toBe("disabled");
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated).toBeDefined();
+    expect(updated?.enabled).toBe(true);
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(updated?.state.consecutiveSkipped).toBe(1);
+    expect(updated?.state.nextRunAtMs).toBe(atMs + 30_000);
+
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("disables a disabled-heartbeat one-shot when its retry budget is exhausted", async () => {
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } = await createCronHarness({
+      runHeartbeatOnce,
+      nowMs: () => atMs,
+      cronConfig: { retry: { maxAttempts: 0, backoffMs: [30_000] } },
+    });
+    if (!events) {
+      throw new Error("missing event harness");
+    }
+    const job = await addMainOneShotHelloJob(cron, {
+      atMs,
+      name: "one-shot heartbeat disabled exhausted",
+    });
+
+    vi.setSystemTime(new Date(atMs));
+    await vi.runOnlyPendingTimersAsync();
+    const finished = await events.waitFor(
+      (evt) => evt.jobId === job.id && evt.action === "finished",
+    );
+
+    expect(finished.status).toBe("skipped");
+    expect(finished.error).toBe("disabled");
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated).toBeDefined();
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(updated?.state.consecutiveSkipped).toBe(1);
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
 
     await stopCronAndCleanup(cron, store);
   });
