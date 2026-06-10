@@ -61,6 +61,13 @@ const REALTIME_SAMPLE_RATE_HZ = 24_000;
 const MAX_TRANSCRIPT_ENTRIES = 40;
 
 /**
+ * Notify-mode delivery: once the model finishes its first turn, treat its audio as drained after this
+ * much silence (no frames sent), so a notify auto-hangup waits for the spoken result to finish instead
+ * of clipping it on a fixed timer.
+ */
+const NOTIFY_AUDIO_QUIET_MS = 1000;
+
+/**
  * Half-duplex echo guard window: while our own audio is (or was within this window) playing on the
  * call, the caller leg can carry it back as acoustic echo. We drop that caller input to the realtime
  * model so its server-VAD does not answer our own voice — unless it is loud enough to be a barge-in.
@@ -601,10 +608,11 @@ export function createMsteamsRealtimeCall(params: {
       }
       if (isFinal) {
         recordTranscript(role, text);
-        // Notify mode (outbound result callback): hang up after the model's first finished response.
+        // Notify mode (outbound result callback): after the model's first finished response, wait for
+        // its audio to drain before signalling delivery-complete so the hangup never clips the result.
         if (role === "assistant" && !deliveryComplete && deps.onDeliveryComplete) {
           deliveryComplete = true;
-          deps.onDeliveryComplete();
+          watchAudioDrainThenSignal();
         }
       }
     },
@@ -672,6 +680,27 @@ export function createMsteamsRealtimeCall(params: {
         );
       }
     }
+  }
+
+  /**
+   * Notify mode: after the model's first finished turn, wait until its audio has drained (no frames
+   * sent for {@link NOTIFY_AUDIO_QUIET_MS}) before signalling delivery-complete, so a caller-side
+   * hangup never clips the spoken result. Polls on a short timer; stops if the call closes.
+   */
+  function watchAudioDrainThenSignal(): void {
+    const check = (): void => {
+      if (closed) {
+        return;
+      }
+      if (Date.now() - lastOutputAt >= NOTIFY_AUDIO_QUIET_MS) {
+        deps.onDeliveryComplete?.();
+        return;
+      }
+      const t = setTimeout(check, 250);
+      t.unref?.();
+    };
+    const t = setTimeout(check, NOTIFY_AUDIO_QUIET_MS);
+    t.unref?.();
   }
 
   if (deps.getLatestFrame) {

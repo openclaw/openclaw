@@ -256,25 +256,36 @@ describe("createMsteamsRealtimeCall", () => {
     expect(mock.sendAudio).toHaveBeenCalledTimes(1);
   });
 
-  it("notify mode: fires onDeliveryComplete once on the first assistant-final transcript", () => {
-    const ctx = createMockSession();
-    const mock = createMockProvider();
-    const onDeliveryComplete = vi.fn();
-    createMsteamsRealtimeCall({
-      session: ctx.session,
-      deps: { provider: mock.provider, providerConfig: {}, onDeliveryComplete },
-    });
-    const req = mock.getRequest();
+  it("notify mode: signals onDeliveryComplete once after the model's audio drains", () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      const onDeliveryComplete = vi.fn();
+      createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: { provider: mock.provider, providerConfig: {}, onDeliveryComplete },
+      });
+      const req = mock.getRequest();
 
-    // A partial, and a non-assistant final, must not trigger it.
-    req.onTranscript?.("assistant", "Here is", false);
-    req.onTranscript?.("user", "ok", true);
-    expect(onDeliveryComplete).not.toHaveBeenCalled();
+      // A partial, and a non-assistant final, do not start the drain watch.
+      req.onTranscript?.("assistant", "Here is", false);
+      req.onTranscript?.("user", "ok", true);
+      vi.advanceTimersByTime(5000);
+      expect(onDeliveryComplete).not.toHaveBeenCalled();
 
-    // First assistant-final = result delivered → fire exactly once, even across later turns.
-    req.onTranscript?.("assistant", "Here is your result.", true);
-    req.onTranscript?.("assistant", "Anything else?", true);
-    expect(onDeliveryComplete).toHaveBeenCalledTimes(1);
+      // First assistant-final starts the drain watch — it is NOT fired synchronously.
+      req.onTranscript?.("assistant", "Here is your result.", true);
+      expect(onDeliveryComplete).not.toHaveBeenCalled();
+
+      // Once the audio has been quiet long enough it fires exactly once, even across later turns.
+      vi.advanceTimersByTime(2000);
+      req.onTranscript?.("assistant", "Anything else?", true);
+      vi.advanceTimersByTime(2000);
+      expect(onDeliveryComplete).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("notifyInboundFrame pushes a changed frame to the model and dedupes an unchanged one", () => {
