@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
+import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
@@ -298,6 +300,53 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
+type ChannelMaxLinesConfig = {
+  maxLinesPerMessage?: number;
+  accounts?: Record<string, { maxLinesPerMessage?: number }>;
+};
+
+function resolveMaxLinesPerMessage(
+  cfg: OpenClawConfig | undefined,
+  channel?: string,
+  accountId?: string,
+): number | undefined {
+  if (!channel) {
+    return undefined;
+  }
+  const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
+  const channelSection = (channelsConfig?.[channel] ??
+    (cfg as Record<string, unknown> | undefined)?.[channel]) as
+    | ChannelMaxLinesConfig
+    | undefined;
+  if (!channelSection) {
+    return undefined;
+  }
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const accounts = channelSection.accounts;
+  if (accounts && typeof accounts === "object") {
+    const direct = resolveAccountEntry(accounts, normalizedAccountId);
+    if (typeof direct?.maxLinesPerMessage === "number") {
+      return direct.maxLinesPerMessage;
+    }
+  }
+  return typeof channelSection.maxLinesPerMessage === "number"
+    ? channelSection.maxLinesPerMessage
+    : undefined;
+}
+
+function buildSendFormatting(
+  parseMode?: "HTML",
+  maxLinesPerMessage?: number,
+): { parseMode?: "HTML"; maxLinesPerMessage?: number } | undefined {
+  if (!parseMode && maxLinesPerMessage == null) {
+    return undefined;
+  }
+  return {
+    ...(parseMode ? { parseMode } : {}),
+    ...(maxLinesPerMessage != null ? { maxLinesPerMessage } : {}),
+  };
+}
+
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
@@ -391,7 +440,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       signal: params.abortSignal,
       silent: params.silent,
       mediaAccess: params.mediaAccess,
-      formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
+      formatting: buildSendFormatting(params.parseMode, resolveMaxLinesPerMessage(cfg, channel, params.accountId)),
       mirror: params.mirror
         ? {
             ...params.mirror,
