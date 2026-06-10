@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
@@ -38,9 +40,51 @@ describe("writeImportedSourcePage", () => {
   });
 
   afterEach(async () => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.useRealTimers();
     await fs.rm(suiteRoot, { recursive: true, force: true });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "retries when fs-safe reports a transient imported page path mismatch",
+    async () => {
+      const sourcePath = path.join(suiteRoot, "source.txt");
+      await fs.writeFile(sourcePath, "source body", "utf8");
+      const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
+        entries: {},
+        version: 1,
+      };
+      let pathMismatchCount = 0;
+      __setFsSafeTestHooksForTest({
+        afterOpen: () => {
+          if (pathMismatchCount === 0) {
+            pathMismatchCount += 1;
+            throw new FsSafeError("path-mismatch", "imported page path changed during write");
+          }
+        },
+      });
+
+      const result = await writeImportedSourcePage({
+        vaultRoot: suiteRoot,
+        syncKey: "unsafe:source",
+        sourcePath,
+        sourceUpdatedAtMs: Date.parse("2026-05-01T12:00:00.000Z"),
+        sourceSize: 11,
+        renderFingerprint: "fingerprint",
+        pagePath: "pages/source.md",
+        group: "unsafe-local",
+        state,
+        buildRendered: (raw, updatedAt) => `updatedAt: ${updatedAt}\n${raw}`,
+      });
+
+      expect(pathMismatchCount).toBe(1);
+      expect(result.pagePath).toBe("pages/source.md");
+      await expect(fs.readFile(path.join(suiteRoot, "pages/source.md"), "utf8")).resolves.toBe(
+        "updatedAt: 2026-05-01T12:00:00.000Z\nsource body",
+      );
+      expect(state.entries["unsafe:source"]?.pagePath).toBe("pages/source.md");
+    },
+  );
 
   it("falls back when the source mtime is outside the Date range", async () => {
     vi.useFakeTimers();

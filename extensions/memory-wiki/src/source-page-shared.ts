@@ -11,8 +11,8 @@ import {
 import { writeGuardedVaultPage } from "./vault-page-write.js";
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
-
-export async function writeImportedSourcePage(params: {
+type ImportedSourceVault = Awaited<ReturnType<typeof fsRoot>>;
+type WriteImportedSourcePageParams = {
   vaultRoot: string;
   syncKey: string;
   sourcePath: string;
@@ -23,9 +23,30 @@ export async function writeImportedSourcePage(params: {
   group: MemoryWikiImportedSourceGroup;
   state: ImportedSourceState;
   buildRendered: (raw: string, updatedAt: string) => string;
-}): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
-  const vault = await fsRoot(params.vaultRoot);
-  const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
+};
+
+const IMPORTED_SOURCE_PAGE_PATH_MISMATCH_RETRIES = 2;
+
+function isPathMismatchError(error: unknown): error is FsSafeError {
+  return error instanceof FsSafeError && error.code === "path-mismatch";
+}
+
+function wrapImportedSourcePageFsSafeError(error: FsSafeError, pagePath: string): Error {
+  if (error.code === "symlink" || error.code === "path-alias") {
+    return new Error(`Refusing to write imported source page through symlink: ${pagePath}`, {
+      cause: error,
+    });
+  }
+  return new Error(
+    `Refusing to write imported source page (${error.code}): ${pagePath}: ${error.message}`,
+    {
+      cause: error,
+    },
+  );
+}
+
+async function statImportedSourcePage(vault: ImportedSourceVault, pagePath: string) {
+  return await vault.stat(pagePath).catch((error: unknown) => {
     if (
       error instanceof FsSafeError &&
       (error.code === "not-found" || error.code === "path-alias")
@@ -34,6 +55,13 @@ export async function writeImportedSourcePage(params: {
     }
     throw error;
   });
+}
+
+async function writeImportedSourcePageOnce(
+  vault: ImportedSourceVault,
+  params: WriteImportedSourcePageParams,
+): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
+  const pageStat = await statImportedSourcePage(vault, params.pagePath);
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
   const shouldSkip = await shouldSkipImportedSourceWrite({
@@ -52,7 +80,14 @@ export async function writeImportedSourcePage(params: {
 
   const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
-  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
+  const existing = pageStat
+    ? await vault.readText(params.pagePath).catch((error: unknown) => {
+        if (isPathMismatchError(error)) {
+          throw error;
+        }
+        return "";
+      })
+    : "";
   const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;
   if (existing !== nextRendered) {
     await writeGuardedVaultPage({
@@ -77,4 +112,24 @@ export async function writeImportedSourcePage(params: {
     },
   });
   return { pagePath: params.pagePath, changed: existing !== nextRendered, created };
+}
+
+export async function writeImportedSourcePage(
+  params: WriteImportedSourcePageParams,
+): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
+  const vault = await fsRoot(params.vaultRoot);
+  for (let attempt = 0; attempt <= IMPORTED_SOURCE_PAGE_PATH_MISMATCH_RETRIES; attempt += 1) {
+    try {
+      return await writeImportedSourcePageOnce(vault, params);
+    } catch (error) {
+      if (isPathMismatchError(error) && attempt < IMPORTED_SOURCE_PAGE_PATH_MISMATCH_RETRIES) {
+        continue;
+      }
+      if (error instanceof FsSafeError) {
+        throw wrapImportedSourcePageFsSafeError(error, params.pagePath);
+      }
+      throw error;
+    }
+  }
+  throw new Error("Imported source page write retry loop exited unexpectedly");
 }
