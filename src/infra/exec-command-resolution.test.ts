@@ -1,7 +1,7 @@
 // Covers exec command resolution and allowlist paths.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { compileSafeRegex, compileSafeRegexDetailed } from "../security/safe-regex.js";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
