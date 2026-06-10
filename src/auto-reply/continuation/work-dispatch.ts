@@ -9,7 +9,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
 import { checkContinuationBudget } from "./scheduler.js";
-import type { ChainState, ContinuationRuntimeConfig } from "./types.js";
+import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
 import {
   consumePendingWork,
   enqueuePendingWork,
@@ -361,6 +361,63 @@ export async function scheduleContinuationWork(params: {
   // can start the next turn; the timer fires on the next event-loop tick.
   armWorkTimer(params.sessionKey, fireAt);
   return { scheduled: true, capped: false, chainState: nextState };
+}
+
+export type ContinuationWorkBatchResult = {
+  /** Elections that successfully enqueued a durable wake. */
+  scheduledCount: number;
+  /** Elections rejected once the cumulative chain/cost cap was reached. */
+  cappedCount: number;
+  /** True when a cap rejection ended the batch early. */
+  capped: boolean;
+  /** Chain state after the last scheduled election; persist this once. */
+  chainState: ChainState;
+};
+
+/**
+ * Schedule every continue_work election captured in a single model turn.
+ *
+ * A single model response can emit N `continue_work` tool calls; each is its
+ * own flow with its own delay/reason and must deliver its own wake. The chain
+ * state is threaded across elections so chain/cost caps apply cumulatively.
+ *
+ * Partial success is load-bearing (#982): when a later election trips the cap,
+ * the earlier valid elections MUST stay scheduled — silently dropping them is
+ * exactly the regression this batches against. A cap rejection ends the batch
+ * because the cumulative chain count only grows, so every later election would
+ * hit the same cap.
+ */
+export async function scheduleContinuationWorkBatch(params: {
+  sessionKey: string;
+  chainState: ChainState;
+  requests: readonly ContinueWorkRequest[];
+  config: ContinuationRuntimeConfig;
+  parentRunId?: string;
+  log?: (message: string) => void;
+}): Promise<ContinuationWorkBatchResult> {
+  let chainState = params.chainState;
+  let scheduledCount = 0;
+  for (const request of params.requests) {
+    const result = await scheduleContinuationWork({
+      sessionKey: params.sessionKey,
+      chainState,
+      request,
+      config: params.config,
+      ...(params.parentRunId !== undefined ? { parentRunId: params.parentRunId } : {}),
+      ...(params.log ? { log: params.log } : {}),
+    });
+    if (!result.scheduled) {
+      return {
+        scheduledCount,
+        cappedCount: params.requests.length - scheduledCount,
+        capped: result.capped,
+        chainState,
+      };
+    }
+    chainState = result.chainState;
+    scheduledCount += 1;
+  }
+  return { scheduledCount, cappedCount: 0, capped: false, chainState };
 }
 
 export async function recoverPendingContinuationWork(): Promise<{

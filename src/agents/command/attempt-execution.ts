@@ -703,11 +703,13 @@ export async function runAgentAttempt(params: {
   // this wiring, createOpenClawTools sees no continueWorkOpts on the spawn-init
   // path, so typed continue_work never registers for turn-1 subagent tool calls.
   const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
-  let attemptContinueWorkRequest: ContinueWorkRequest | undefined;
+  // Accumulate every continue_work election fired this turn; capturing only the
+  // last one silently drops the rest (#982).
+  const attemptContinueWorkRequests: ContinueWorkRequest[] = [];
   const continueWorkOpts = continuationEnabled
     ? {
         requestContinuation: (request: ContinueWorkRequest) => {
-          attemptContinueWorkRequest = request;
+          attemptContinueWorkRequests.push(request);
         },
       }
     : undefined;
@@ -901,13 +903,30 @@ export async function runAgentAttempt(params: {
         import("../../auto-reply/tokens.js"),
       ]);
       const continuationPayloads = embeddedRunResult.payloads ?? [];
+      const firstWorkRequest = attemptContinueWorkRequests[0];
       const extraction = extractContinuationSignal({
         payloads: continuationPayloads.map((payload) => ({ ...payload })),
-        ...(attemptContinueWorkRequest ? { continueWorkRequest: attemptContinueWorkRequest } : {}),
+        ...(firstWorkRequest ? { continueWorkRequest: firstWorkRequest } : {}),
         enabled: true,
         sessionKey: params.sessionKey,
       });
       if (extraction.signal?.kind === "work") {
+        // Tool elections fan out one wake each; a bracket signal has no per-tool
+        // array, so it schedules a single election from the merged signal.
+        const requests =
+          !extraction.fromBracket && attemptContinueWorkRequests.length > 0
+            ? attemptContinueWorkRequests
+            : [
+                {
+                  reason: extraction.workReason ?? "",
+                  ...(extraction.signal.delayMs !== undefined
+                    ? { delaySeconds: extraction.signal.delayMs / 1000 }
+                    : {}),
+                  ...(extraction.signal.traceparent
+                    ? { traceparent: extraction.signal.traceparent }
+                    : {}),
+                },
+              ];
         if (extraction.fromBracket) {
           for (let i = continuationPayloads.length - 1; i >= 0; i--) {
             const payload = continuationPayloads[i];
@@ -928,17 +947,7 @@ export async function runAgentAttempt(params: {
           sessionStore: params.sessionStore,
           storePath: params.storePath,
           runId: params.runId,
-          request: {
-            reason: extraction.workReason ?? "",
-            ...(extraction.signal.delayMs !== undefined
-              ? { delaySeconds: extraction.signal.delayMs / 1000 }
-              : !extraction.fromBracket && attemptContinueWorkRequest
-                ? { delaySeconds: attemptContinueWorkRequest.delaySeconds }
-                : {}),
-            ...(extraction.signal.traceparent
-              ? { traceparent: extraction.signal.traceparent }
-              : {}),
-          },
+          requests,
           cfg: params.cfg,
           runResult: embeddedRunResult,
         });
@@ -966,14 +975,14 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   runId: string;
-  request: { reason: string; delaySeconds?: number; traceparent?: string };
+  requests: { reason: string; delaySeconds?: number; traceparent?: string }[];
   cfg: OpenClawConfig;
   runResult: EmbeddedAgentRunResult;
 }): Promise<void> {
   const [
     { resolveLiveContinuationRuntimeConfig },
     { loadContinuationChainState, persistContinuationChainState },
-    { scheduleContinuationWork },
+    { scheduleContinuationWorkBatch },
     { resolveSessionStoreEntry, updateSessionStore },
   ] = await Promise.all([
     import("../../auto-reply/continuation/config.js"),
@@ -986,19 +995,19 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   const tailUsage = params.runResult.meta?.agentMeta?.usage;
   const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
   const chainState = loadContinuationChainState(params.sessionEntry, turnTokens);
-  const result = await scheduleContinuationWork({
+  const result = await scheduleContinuationWorkBatch({
     sessionKey: params.sessionKey,
     chainState,
-    request: {
-      reason: params.request.reason,
-      delaySeconds: params.request.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
-      ...(params.request.traceparent ? { traceparent: params.request.traceparent } : {}),
-    },
+    requests: params.requests.map((request) => ({
+      reason: request.reason,
+      delaySeconds: request.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
+      ...(request.traceparent ? { traceparent: request.traceparent } : {}),
+    })),
     config: continuationConfig,
     parentRunId: params.runId,
     log: (message) => log.info(message),
   });
-  if (!result.scheduled) {
+  if (result.scheduledCount === 0) {
     return;
   }
   persistContinuationChainState({

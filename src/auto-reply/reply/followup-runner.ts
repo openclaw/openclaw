@@ -763,7 +763,9 @@ export function createFollowupRunner(params: {
         | undefined;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
-      let attemptContinueWorkRequest: ContinueWorkRequest | undefined;
+      // Accumulate every continue_work election fired this turn; capturing only
+      // the last one silently drops the rest (#982).
+      const attemptContinueWorkRequests: ContinueWorkRequest[] = [];
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
@@ -1042,7 +1044,7 @@ export function createFollowupRunner(params: {
                   runtimeConfig?.agents?.defaults?.continuation?.enabled === true
                     ? {
                         requestContinuation: (request: ContinueWorkRequest) => {
-                          attemptContinueWorkRequest = request;
+                          attemptContinueWorkRequests.push(request);
                         },
                       }
                     : undefined,
@@ -1262,10 +1264,19 @@ export function createFollowupRunner(params: {
       // The election is durable TaskFlow state; the dispatcher only arms a
       // maturity timer and can replay it after gateway restart.
       const continuationEnabled = runtimeConfig?.agents?.defaults?.continuation?.enabled === true;
-      let effectiveContinueWorkRequest:
-        | { reason: string; delaySeconds?: number; traceparent?: string }
-        | undefined = attemptContinueWorkRequest;
-      if (!effectiveContinueWorkRequest && continuationEnabled && sessionKey) {
+      // One entry per continue_work tool call this turn; each fans out its own
+      // wake. Falls back to a single bracket-derived election when the model
+      // used [[CONTINUE_WORK]] text instead of the tool (subagent leaf path).
+      let effectiveContinueWorkRequests: {
+        reason: string;
+        delaySeconds?: number;
+        traceparent?: string;
+      }[] = attemptContinueWorkRequests;
+      if (
+        effectiveContinueWorkRequests.length === 0 &&
+        continuationEnabled &&
+        sessionKey
+      ) {
         const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
           import("../continuation/signal.js"),
           import("../tokens.js"),
@@ -1291,22 +1302,24 @@ export function createFollowupRunner(params: {
               break;
             }
           }
-          effectiveContinueWorkRequest = {
-            reason: extraction.workReason ?? "",
-            ...(extraction.signal.delayMs !== undefined
-              ? { delaySeconds: extraction.signal.delayMs / 1000 }
-              : {}),
-            ...(extraction.signal.traceparent
-              ? { traceparent: extraction.signal.traceparent }
-              : {}),
-          };
+          effectiveContinueWorkRequests = [
+            {
+              reason: extraction.workReason ?? "",
+              ...(extraction.signal.delayMs !== undefined
+                ? { delaySeconds: extraction.signal.delayMs / 1000 }
+                : {}),
+              ...(extraction.signal.traceparent
+                ? { traceparent: extraction.signal.traceparent }
+                : {}),
+            },
+          ];
         }
       }
-      if (effectiveContinueWorkRequest && continuationEnabled && sessionKey) {
+      if (effectiveContinueWorkRequests.length > 0 && continuationEnabled && sessionKey) {
         const [
           { resolveLiveContinuationRuntimeConfig },
           { loadContinuationChainState, persistContinuationChainState },
-          { scheduleContinuationWork },
+          { scheduleContinuationWorkBatch },
           { updateSessionStore: updateSessionStoreFromStoreModule, resolveSessionStoreEntry },
         ] = await Promise.all([
           import("../continuation/config.js"),
@@ -1321,22 +1334,19 @@ export function createFollowupRunner(params: {
         const chainState =
           continuationChainStateAfterDelegateDispatch ??
           loadContinuationChainState(tailEntry, turnTokens);
-        const scheduleResult = await scheduleContinuationWork({
+        const scheduleResult = await scheduleContinuationWorkBatch({
           sessionKey,
           chainState,
-          request: {
-            reason: effectiveContinueWorkRequest.reason,
-            delaySeconds:
-              effectiveContinueWorkRequest.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
-            ...(effectiveContinueWorkRequest.traceparent
-              ? { traceparent: effectiveContinueWorkRequest.traceparent }
-              : {}),
-          },
+          requests: effectiveContinueWorkRequests.map((request) => ({
+            reason: request.reason,
+            delaySeconds: request.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
+            ...(request.traceparent ? { traceparent: request.traceparent } : {}),
+          })),
           config: continuationConfig,
           parentRunId: runId,
           log: (message) => defaultRuntime.log(message),
         });
-        if (scheduleResult.scheduled) {
+        if (scheduleResult.scheduledCount > 0) {
           persistContinuationChainState({
             sessionEntry: tailEntry,
             count: scheduleResult.chainState.currentChainCount,
