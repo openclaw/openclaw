@@ -11,6 +11,7 @@ import {
 } from "./server-http.test-harness.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import { withTempConfig } from "./test-temp-config.js";
+import { VERSION } from "../version.js";
 
 type GatewayServerHarness = Parameters<typeof dispatchRequest>[0];
 type GatewayRequestOptions = Parameters<typeof createRequest>[0];
@@ -256,7 +257,7 @@ describe("gateway probe endpoints", () => {
         const { res, getBody } = await sendGatewayRequest(server, { path: "/healthz" });
 
         expect(res.statusCode).toBe(200);
-        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live", version: VERSION }));
       },
     });
   });
@@ -274,7 +275,7 @@ describe("gateway probe endpoints", () => {
         const { res, getBody } = await sendGatewayRequest(server, { path: "/healthz" });
 
         expect(res.statusCode).toBe(200);
-        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live", version: VERSION }));
         expect(getRuntimeConfig).not.toHaveBeenCalled();
       },
     });
@@ -298,7 +299,9 @@ describe("gateway probe endpoints", () => {
         await dispatchRequest(server, healthReq, healthResponse.res);
 
         expect(healthResponse.res.statusCode).toBe(200);
-        expect(healthResponse.getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+        expect(healthResponse.getBody()).toBe(
+          JSON.stringify({ ok: true, status: "live", version: VERSION }),
+        );
 
         const readyReq = createRequest({ path: "/readyz" });
         const readyResponse = createResponse();

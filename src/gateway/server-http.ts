@@ -12,6 +12,7 @@ import type { WebSocketServer } from "ws";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { VERSION } from "../version.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -317,7 +318,7 @@ async function handleGatewayProbeRequest(
     }
   } else {
     statusCode = 200;
-    body = JSON.stringify({ ok: true, status });
+    body = JSON.stringify({ ok: true, status, version: VERSION });
   }
   res.statusCode = statusCode;
   res.end(method === "HEAD" ? undefined : body);
