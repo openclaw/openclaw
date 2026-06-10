@@ -138,6 +138,25 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("keeps implicit runtime context alongside explicit runtime blocks", () => {
+    const effectiveText = "exec completed (abc123, code 0) :: output text";
+    const explicitRuntimeContext = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "secret runtime context",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: [effectiveText, "", explicitRuntimeContext].join("\n"),
+        transcriptPrompt: "[OpenClaw heartbeat poll]",
+      }),
+    ).toEqual({
+      prompt: "[OpenClaw heartbeat poll]",
+      runtimeContext: [effectiveText, "", explicitRuntimeContext].join("\n"),
+    });
+  });
+
   it("extracts multiple hidden runtime context blocks", () => {
     const effectivePrompt = [
       "runtime prefix",
