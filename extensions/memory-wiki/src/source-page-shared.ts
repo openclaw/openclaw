@@ -12,6 +12,7 @@ import { writeGuardedVaultPage } from "./vault-page-write.js";
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
 type ImportedSourceVault = Awaited<ReturnType<typeof fsRoot>>;
+type WriteImportedSourcePageResult = { pagePath: string; changed: boolean; created: boolean };
 type WriteImportedSourcePageParams = {
   vaultRoot: string;
   syncKey: string;
@@ -60,7 +61,7 @@ async function statImportedSourcePage(vault: ImportedSourceVault, pagePath: stri
 async function writeImportedSourcePageOnce(
   vault: ImportedSourceVault,
   params: WriteImportedSourcePageParams,
-): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
+): Promise<WriteImportedSourcePageResult> {
   const pageStat = await statImportedSourcePage(vault, params.pagePath);
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
@@ -89,7 +90,8 @@ async function writeImportedSourcePageOnce(
       })
     : "";
   const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;
-  if (existing !== nextRendered) {
+  const result = { pagePath: params.pagePath, changed: existing !== nextRendered, created };
+  if (result.changed) {
     await writeGuardedVaultPage({
       vault,
       pagePath: params.pagePath,
@@ -111,12 +113,12 @@ async function writeImportedSourcePageOnce(
       renderFingerprint: params.renderFingerprint,
     },
   });
-  return { pagePath: params.pagePath, changed: existing !== nextRendered, created };
+  return result;
 }
 
 export async function writeImportedSourcePage(
   params: WriteImportedSourcePageParams,
-): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
+): Promise<WriteImportedSourcePageResult> {
   const vault = await fsRoot(params.vaultRoot);
   for (let attempt = 0; attempt <= IMPORTED_SOURCE_PAGE_PATH_MISMATCH_RETRIES; attempt += 1) {
     try {

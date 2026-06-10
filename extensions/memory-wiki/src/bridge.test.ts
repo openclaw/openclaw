@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import {
   clearMemoryPluginState,
   type MemoryPluginPublicArtifact,
@@ -11,6 +12,7 @@ import {
   appendMemoryHostEvent,
   resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
@@ -34,6 +36,7 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
     clearMemoryPluginState();
   });
 
@@ -321,6 +324,73 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(listArtifactsCount).toBe(2);
     expect(third.skippedCount).toBe(1);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps import counts after recovering a bridge page path mismatch",
+    async () => {
+      const workspaceDir = await createBridgeWorkspace("path-mismatch-workspace");
+      const { rootDir: vaultDir, config } = await createVault({
+        rootDir: nextCaseRoot("path-mismatch-vault"),
+        config: {
+          vaultMode: "bridge",
+          bridge: {
+            enabled: true,
+            readMemoryArtifacts: true,
+            indexMemoryRoot: true,
+          },
+        },
+      });
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
+      registerBridgeArtifacts([
+        {
+          kind: "memory-root",
+          workspaceDir,
+          relativePath: "MEMORY.md",
+          absolutePath: memoryPath,
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+      ]);
+      const appConfig: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", default: true, workspace: workspaceDir }],
+        },
+      };
+      let pathMismatchCount = 0;
+      __setFsSafeTestHooksForTest({
+        afterOpen: (filePath) => {
+          if (
+            pathMismatchCount === 0 &&
+            filePath.includes(`${path.sep}sources${path.sep}bridge-`)
+          ) {
+            pathMismatchCount += 1;
+            throw new FsSafeError("path-mismatch", "bridge page changed during write");
+          }
+        },
+      });
+
+      const result = await syncMemoryWikiBridgeSources({ config, appConfig });
+
+      expect(pathMismatchCount).toBe(1);
+      expect(result.importedCount).toBe(1);
+      expect(result.updatedCount).toBe(0);
+      expect(result.skippedCount).toBe(0);
+      const ingestLogs = (
+        await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8")
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type?: unknown; details?: unknown })
+        .filter((line) => line.type === "ingest");
+      expect(ingestLogs).toHaveLength(1);
+      expect(ingestLogs[0]?.details).toMatchObject({
+        importedCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+      });
+    },
+  );
 
   it("returns a no-op result outside bridge mode", async () => {
     const { config } = await createVault({ rootDir: nextCaseRoot("isolated") });

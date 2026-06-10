@@ -78,7 +78,7 @@ describe("writeImportedSourcePage", () => {
       });
 
       expect(pathMismatchCount).toBe(1);
-      expect(result.pagePath).toBe("pages/source.md");
+      expect(result).toEqual({ pagePath: "pages/source.md", changed: true, created: true });
       await expect(fs.readFile(path.join(suiteRoot, "pages/source.md"), "utf8")).resolves.toBe(
         "updatedAt: 2026-05-01T12:00:00.000Z\nsource body",
       );
