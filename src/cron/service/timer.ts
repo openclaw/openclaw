@@ -1517,6 +1517,9 @@ async function executeMainSessionCronJob(
       return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
     if (heartbeatResult.status === "skipped") {
+      if (heartbeatResult.reason === "disabled") {
+        return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+      }
       return {
         status: "skipped",
         error: heartbeatResult.reason,

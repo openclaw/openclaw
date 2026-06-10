@@ -449,6 +449,40 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("deletes a queued one-shot main job when immediate heartbeat is disabled", async () => {
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } = await createCronHarness({
+      runHeartbeatOnce,
+    });
+    if (!events) {
+      throw new Error("missing event harness");
+    }
+    const job = await addMainOneShotHelloJob(cron, {
+      atMs: Date.parse("2025-12-13T00:00:02.000Z"),
+      name: "one-shot heartbeat disabled",
+    });
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+    const finished = await events.waitFor(
+      (evt) => evt.jobId === job.id && evt.action === "finished",
+    );
+
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(finished.status).toBe("ok");
+    expect(finished.error).toBeUndefined();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("runs an isolated job without posting a fallback summary to main", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
     const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
