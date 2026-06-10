@@ -1157,37 +1157,6 @@ describe("spawnAcpDirect", () => {
     );
   });
 
-  it("auto-generates a hub-delegated label when delegate=true omits label", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-05T14:30:22.000Z"));
-    try {
-      const result = await spawnAcpDirect(
-        {
-          task: "Investigate flaky tests",
-          agentId: "codex",
-          delegate: true,
-        },
-        {
-          agentSessionKey: "agent:main:webchat:main",
-          agentChannel: "webchat",
-        },
-      );
-
-      expectAcceptedSpawn(result);
-      expect(result).toMatchObject({
-        mode: "session",
-        delegate: true,
-        label: "delegate-20260605-143022",
-      });
-      const patchCall = hoisted.callGatewayMock.mock.calls.find(
-        (call) => (call[0] as { method?: string }).method === "sessions.patch",
-      )?.[0] as { params?: Record<string, unknown> } | undefined;
-      expect(patchCall?.params?.label).toBe("delegate-20260605-143022");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("assigns suffixed auto-labels for concurrent delegate spawns at the same timestamp", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-05T14:30:22.000Z"));

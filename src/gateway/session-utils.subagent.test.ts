@@ -96,69 +96,69 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(result.sessions.map((session) => session.key)).toEqual([delegateKey]);
   });
 
-  test("projects acp last activity on hub-delegated session rows", () => {
-    const ownerSessionKey = "agent:main:webchat:main";
-    const delegateKey = "agent:codex:acp:worker";
-    const createdAt = 1_000;
-    const lastActivityAt = 50_000;
-
-    const result = listSessionsFromStore({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store: {
-        [delegateKey]: {
-          sessionId: "sess-worker",
-          updatedAt: lastActivityAt,
-          label: "repo-fix",
-          hubDelegated: { ownerSessionKey, createdAt },
-          acp: { lastActivityAt } as SessionEntry["acp"],
-        },
-      },
-      opts: { hubDelegatedOwner: ownerSessionKey },
-    });
-
-    expect(result.sessions[0]?.acpLastActivityAt).toBe(lastActivityAt);
-  });
-
-  test("projects sqlite acp last activity on hub-delegated session rows", async () => {
-    await withStateDirEnv("openclaw-session-utils-acp-meta-", async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "agents/codex/sessions/sessions.json");
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  test.each([
+    ["json acp block", { lastActivityAt: 50_000 } as SessionEntry["acp"], 50_000],
+    ["sqlite acp metadata", undefined, 50_000],
+  ] as const)(
+    "projects acp last activity on hub-delegated session rows from $0",
+    async (source, jsonAcp, expectedActivity) => {
       const ownerSessionKey = "agent:main:webchat:main";
       const delegateKey = "agent:codex:acp:worker";
       const createdAt = 1_000;
-      const lastActivityAt = 50_000;
-      writeSessionStoreForTest(storePath, {
-        [delegateKey]: {
-          sessionId: "sess-worker",
-          updatedAt: lastActivityAt,
-          label: "repo-fix",
-          hubDelegated: { ownerSessionKey, createdAt },
-        },
-      });
-      writeAcpSessionMetaForMigration({
-        sessionKey: delegateKey,
-        sessionId: "sess-worker",
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-worker",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt,
-        },
-      });
+
+      if (source === "sqlite acp metadata") {
+        await withStateDirEnv("openclaw-session-utils-acp-meta-", async ({ stateDir }) => {
+          const storePath = path.join(stateDir, "agents/codex/sessions/sessions.json");
+          fs.mkdirSync(path.dirname(storePath), { recursive: true });
+          writeSessionStoreForTest(storePath, {
+            [delegateKey]: {
+              sessionId: "sess-worker",
+              updatedAt: expectedActivity,
+              label: "repo-fix",
+              hubDelegated: { ownerSessionKey, createdAt },
+            },
+          });
+          writeAcpSessionMetaForMigration({
+            sessionKey: delegateKey,
+            sessionId: "sess-worker",
+            meta: {
+              backend: "acpx",
+              agent: "codex",
+              runtimeSessionName: "codex-worker",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: expectedActivity,
+            },
+          });
+
+          const result = listSessionsFromStore({
+            cfg: { ...cfg, session: { store: storePath } },
+            storePath,
+            store: loadSessionStore(storePath),
+            opts: { hubDelegatedOwner: ownerSessionKey },
+          });
+          expect(result.sessions[0]?.acpLastActivityAt).toBe(expectedActivity);
+        });
+        return;
+      }
 
       const result = listSessionsFromStore({
-        cfg: { ...cfg, session: { store: storePath } },
-        storePath,
-        store: loadSessionStore(storePath),
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store: {
+          [delegateKey]: {
+            sessionId: "sess-worker",
+            updatedAt: expectedActivity,
+            label: "repo-fix",
+            hubDelegated: { ownerSessionKey, createdAt },
+            acp: jsonAcp,
+          },
+        },
         opts: { hubDelegatedOwner: ownerSessionKey },
       });
-
-      expect(result.sessions[0]?.acpLastActivityAt).toBe(lastActivityAt);
-    });
-  });
+      expect(result.sessions[0]?.acpLastActivityAt).toBe(expectedActivity);
+    },
+  );
 
   test("applies limit before transcript enrichment", () => {
     const store: Record<string, SessionEntry> = {

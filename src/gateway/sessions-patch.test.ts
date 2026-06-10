@@ -743,56 +743,47 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("rejects hub-delegated marker when spawnedBy drifts from owner", async () => {
-    const store: Record<string, SessionEntry> = {};
-    const before = structuredClone(store);
-
-    const result = await runPatch({
-      storeKey: "agent:codex:acp:child",
-      store,
-      patch: {
+  test.each([
+    [
+      "new marker with mismatched spawnedBy",
+      {},
+      {
         key: "agent:codex:acp:child",
-        hubDelegated: {
-          ownerSessionKey: "agent:main:main",
-          createdAt: 1_700_000_000_000,
-        },
+        hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1_700_000_000_000 },
         spawnedBy: "agent:attacker:main",
       },
-    });
-    expectPatchError(
-      result,
-      "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
-    );
-    expect(store).toEqual(before);
-  });
-
-  test("rejects spawnedBy patch that drifts from existing hub-delegated owner", async () => {
-    const store: Record<string, SessionEntry> = {
-      "agent:codex:acp:child": {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        hubDelegated: {
-          ownerSessionKey: "agent:main:main",
-          createdAt: 1,
+    ],
+    [
+      "spawnedBy patch drift on existing owner",
+      {
+        "agent:codex:acp:child": {
+          sessionId: "sess-1",
+          updatedAt: 1,
+          hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
         },
       },
-    };
-    const before = structuredClone(store);
-
-    const result = await runPatch({
-      storeKey: "agent:codex:acp:child",
-      store,
-      patch: {
+      {
         key: "agent:codex:acp:child",
         spawnedBy: "agent:attacker:main",
       },
-    });
-    expectPatchError(
-      result,
-      "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
-    );
-    expect(store).toEqual(before);
-  });
+    ],
+  ] as const)(
+    "rejects hub-delegated lineage mismatch without mutating store ($0)",
+    async (_label, storeSeed, patch) => {
+      const store: Record<string, SessionEntry> = { ...storeSeed };
+      const before = structuredClone(store);
+
+      expectPatchError(
+        await runPatch({
+          storeKey: "agent:codex:acp:child",
+          store,
+          patch,
+        }),
+        "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
+      );
+      expect(store).toEqual(before);
+    },
+  );
 
   test("rejects hub-delegated labels found in another harness store", async () => {
     const result = await runPatch({
