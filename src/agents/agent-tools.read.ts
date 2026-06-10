@@ -965,12 +965,16 @@ async function statHostFile(absolutePath: string) {
 
 async function writeWorkspaceFile(
   root: string,
-  rootPromise: ReturnType<typeof fsRoot>,
+  getRoot: () => ReturnType<typeof fsRoot>,
   absolutePath: string,
   content: string,
 ) {
+  // Validate the path before starting the fs-safe root: call getRoot() (which opens the
+  // root dir, rejecting if the workspace is missing) only after toCanonicalRelativeWorkspacePath
+  // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
+  // rejection when validation fails first — the readFile/access paths already defer the same way.
   const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-  await (await rootPromise).write(relative, content, { mkdir: true });
+  await (await getRoot()).write(relative, content, { mkdir: true });
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
@@ -1005,7 +1009,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, getRoot(), absolutePath, content),
+      writeWorkspaceFile(root, getRoot, absolutePath, content),
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return (await (await getRoot()).read(relative)).buffer;
@@ -1046,7 +1050,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       return safeRead.buffer;
     },
     writeFile: (absolutePath: string, content: string) =>
-      writeWorkspaceFile(root, getRoot(), absolutePath, content),
+      writeWorkspaceFile(root, getRoot, absolutePath, content),
     access: async (absolutePath: string) => {
       let relative: string;
       try {
