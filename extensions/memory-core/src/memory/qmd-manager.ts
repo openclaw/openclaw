@@ -429,11 +429,24 @@ function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv): string[] {
   return candidates;
 }
 
+function resolveMcporterProjectConfigCandidates(workspaceDir: string): string[] {
+  const projectConfigDir = path.resolve(workspaceDir, "config");
+  return [
+    path.join(projectConfigDir, "mcporter.json"),
+    path.join(projectConfigDir, "mcporter.jsonc"),
+  ];
+}
+
 async function readRawMcporterEntry(
   serverName: string,
   env: NodeJS.ProcessEnv,
+  workspaceDir: string,
 ): Promise<RawMcporterEntry | null> {
-  for (const candidate of resolveMcporterConfigCandidates(env)) {
+  const allCandidates = [
+    ...resolveMcporterConfigCandidates(env),
+    ...resolveMcporterProjectConfigCandidates(workspaceDir),
+  ];
+  for (const candidate of allCandidates) {
     let text: string;
     try {
       text = await fs.readFile(candidate, "utf8");
@@ -469,12 +482,26 @@ async function readRawMcporterEntry(
 }
 
 function hasMcporterStdioLifecycleOrLogging(server: RawMcporterEntry): boolean {
-  return (
-    server.lifecycle !== undefined ||
-    (typeof server.logging === "object" &&
-      server.logging !== null &&
-      (server.logging as Record<string, unknown>).enabled === true)
-  );
+  if (server.lifecycle !== undefined) {
+    return true;
+  }
+  const logging =
+    typeof server.logging === "object" && server.logging !== null
+      ? (server.logging as Record<string, unknown>)
+      : null;
+  if (!logging) {
+    return false;
+  }
+  // Detect top-level logging.enabled (mcporter legacy shape) and nested
+  // logging.daemon.enabled (mcporter current shape: src/config-schema.ts:39-49).
+  if (logging.enabled === true) {
+    return true;
+  }
+  const daemon =
+    typeof logging.daemon === "object" && logging.daemon !== null
+      ? (logging.daemon as Record<string, unknown>)
+      : null;
+  return daemon?.enabled === true;
 }
 
 function getQmdEmbedQueueState(): QmdEmbedQueueState {
@@ -2711,7 +2738,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
     }
 
-    const rawEntry = await readRawMcporterEntry(serverName, this.mcporterEnv);
+    const rawEntry = await readRawMcporterEntry(serverName, this.mcporterEnv, this.workspaceDir);
     const server = this.toMcporterRawServerEntry(serialized, rawEntry);
     if (!server) {
       if (serverName === "qmd") {

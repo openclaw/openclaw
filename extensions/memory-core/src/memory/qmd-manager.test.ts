@@ -215,6 +215,7 @@ const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalQmdConfigDir = process.env.QMD_CONFIG_DIR;
 const originalMcporterConfig = process.env.MCPORTER_CONFIG;
+const originalHome = process.env.HOME;
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -345,6 +346,7 @@ describe("QmdMemoryManager", () => {
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir, { recursive: true });
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.HOME = tmpRoot;
     // Keep the default Windows path unresolved for most tests so spawn mocks can
     // match the logical package command. Tests that verify wrapper resolution
     // install explicit shim fixtures inline.
@@ -426,6 +428,11 @@ describe("QmdMemoryManager", () => {
       delete process.env.MCPORTER_CONFIG;
     } else {
       process.env.MCPORTER_CONFIG = originalMcporterConfig;
+    }
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
     }
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
@@ -4585,6 +4592,304 @@ describe("QmdMemoryManager", () => {
     await expect(
       manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
     ).resolves.toEqual([]);
+
+    await manager.close();
+  });
+
+  it("reads project config when MCPORTER_CONFIG is unset", async () => {
+    delete process.env.MCPORTER_CONFIG;
+    delete process.env.XDG_CONFIG_HOME;
+
+    const projectConfigDir = path.join(workspaceDir, "config");
+    await fs.mkdir(projectConfigDir, { recursive: true });
+    const projectMcporterConfig = path.join(projectConfigDir, "mcporter.json");
+    await fs.writeFile(
+      projectMcporterConfig,
+      JSON.stringify({
+        mcpServers: {
+          qmd: {
+            command: "qmd",
+            args: ["mcp"],
+            env: { PROJECT_KEEP: "1" },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "qmd",
+            source: "user",
+            command: "qmd",
+            args: ["mcp"],
+            env: { PROJECT_KEEP: "1" },
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(args).not.toContain("--config");
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await manager.close();
+  });
+
+  it("preserves MCPORTER_CONFIG precedence over project config", async () => {
+    const userMcporterConfig = path.join(tmpRoot, "user-mcporter.json");
+    await fs.writeFile(
+      userMcporterConfig,
+      JSON.stringify({
+        mcpServers: {
+          qmd: {
+            command: "qmd",
+            args: ["mcp"],
+            env: { USER_KEEP: "1" },
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env.MCPORTER_CONFIG = userMcporterConfig;
+    delete process.env.XDG_CONFIG_HOME;
+
+    const projectConfigDir = path.join(workspaceDir, "config");
+    await fs.mkdir(projectConfigDir, { recursive: true });
+    const projectMcporterConfig = path.join(projectConfigDir, "mcporter.json");
+    await fs.writeFile(
+      projectMcporterConfig,
+      JSON.stringify({
+        mcpServers: {
+          qmd: {
+            command: "qmd",
+            args: ["mcp"],
+            env: { PROJECT_KEEP: "1" },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    let configCallCount = 0;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        configCallCount += 1;
+        const configPath = args[args.indexOf("--config") + 1];
+        if (configPath === userMcporterConfig) {
+          emitAndClose(
+            child,
+            "stdout",
+            JSON.stringify({
+              name: "qmd",
+              source: "user",
+              command: "qmd",
+              args: ["mcp"],
+              env: { USER_KEEP: "1" },
+            }),
+          );
+        } else {
+          emitAndClose(child, "stderr", "Server not found", 1);
+        }
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    expect(configCallCount).toBe(1);
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).not.toContain("--config");
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await manager.close();
+  });
+
+  it("routes stdio servers with logging.daemon.enabled to external mode", async () => {
+    const userMcporterConfig = path.join(tmpRoot, "user-mcporter.json");
+    await fs.writeFile(
+      userMcporterConfig,
+      JSON.stringify({
+        mcpServers: {
+          qmd: {
+            command: "qmd",
+            args: ["mcp"],
+            logging: { daemon: { enabled: true, logFile: "/var/log/qmd.log" } },
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env.MCPORTER_CONFIG = userMcporterConfig;
+    delete process.env.XDG_CONFIG_HOME;
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "qmd",
+            source: "user",
+            command: "qmd",
+            args: ["mcp"],
+            logging: { daemon: { enabled: true, logFile: "/var/log/qmd.log" } },
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(args).not.toContain("--config");
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await manager.close();
+  });
+
+  it("routes bare qmd mcp with empty logging to generated mode", async () => {
+    delete process.env.MCPORTER_CONFIG;
+    delete process.env.XDG_CONFIG_HOME;
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "qmd",
+            source: "user",
+            command: "qmd",
+            args: ["mcp"],
+            logging: {},
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).toContain("--config");
+    const configPath = args[args.indexOf("--config") + 1];
+    expect(configPath.replace(/\\/g, "/")).toContain("/agents/main/qmd/mcporter/mcporter.json");
 
     await manager.close();
   });
