@@ -27,6 +27,7 @@ describe("resolveContinuationRuntimeConfig", () => {
       maxChainLength: 10,
       costCapTokens: 500_000,
       maxDelegatesPerTurn: 5,
+      maxPendingWork: 32,
       crossSessionTargeting: "disabled",
       earlyWarningBand: 0.3125,
     });
@@ -43,6 +44,7 @@ describe("resolveContinuationRuntimeConfig", () => {
             maxChainLength: 100,
             costCapTokens: 0,
             maxDelegatesPerTurn: 20,
+            maxPendingWork: 32,
             crossSessionTargeting: "enabled",
             contextPressureThreshold: 0.8,
             earlyWarningBand: 0,
@@ -59,6 +61,7 @@ describe("resolveContinuationRuntimeConfig", () => {
       maxChainLength: 100,
       costCapTokens: 0,
       maxDelegatesPerTurn: 20,
+      maxPendingWork: 32,
       crossSessionTargeting: "enabled",
       contextPressureThreshold: 0.8,
       earlyWarningBand: 0,
@@ -83,6 +86,21 @@ describe("resolveContinuationRuntimeConfig", () => {
     expect(config.maxChainLength).toBe(10);
     expect(config.costCapTokens).toBe(500_000);
     expect(config.maxDelegatesPerTurn).toBe(5);
+  });
+
+  it("clamps maxPendingWork to default when non-positive (#986)", () => {
+    const zero = resolveContinuationRuntimeConfig({
+      agents: { defaults: { continuation: { maxPendingWork: 0 } } },
+    } as never);
+    expect(zero.maxPendingWork).toBe(32);
+    const negative = resolveContinuationRuntimeConfig({
+      agents: { defaults: { continuation: { maxPendingWork: -7 } } },
+    } as never);
+    expect(negative.maxPendingWork).toBe(32);
+    const configured = resolveContinuationRuntimeConfig({
+      agents: { defaults: { continuation: { maxPendingWork: 8 } } },
+    } as never);
+    expect(configured.maxPendingWork).toBe(8);
   });
 
   it("rejects invalid contextPressureThreshold", () => {
@@ -157,6 +175,7 @@ describe("clampDelayMs", () => {
     maxChainLength: 10,
     costCapTokens: 500_000,
     maxDelegatesPerTurn: 5,
+    maxPendingWork: 32,
     crossSessionTargeting: "disabled",
     earlyWarningBand: 0.3125,
   };

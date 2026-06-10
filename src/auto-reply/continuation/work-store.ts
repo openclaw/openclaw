@@ -290,6 +290,51 @@ export function markPendingWorkFailed(work: PendingContinuationWork, summary: st
   });
 }
 
+/**
+ * Mark a matured continuation-work flow superseded (#986 drain-superseded).
+ *
+ * Used when a stale backlog member is collapsed in favour of a newer election in
+ * the same drain batch — the wake is NOT driven; the flow is finished cleanly so
+ * it stops re-arming. Distinct from failure (no system-warning, no retry): a
+ * superseded wake was intentionally folded, not dropped by error.
+ */
+export function markPendingWorkSuperseded(
+  work: PendingContinuationWork,
+  summary: string,
+): boolean {
+  if (!work.flowId || work.expectedRevision === undefined) {
+    return false;
+  }
+  const current = getTaskFlowById(work.flowId);
+  const state = current ? decodeWorkState(current) : undefined;
+  const now = Date.now();
+  const finished = finishFlow({
+    flowId: work.flowId,
+    expectedRevision: work.expectedRevision,
+    currentStep: `superseded: ${summary}`.slice(0, 200),
+    stateJson: {
+      ...(state ?? {
+        kind: "continuation_work",
+        sessionKey: work.sessionKey,
+        hop: work.hop,
+        delayMs: work.delayMs,
+        electedAt: work.electedAt,
+        dueAt: work.dueAt,
+        maxChainLength: work.maxChainLength,
+      }),
+      turnGrantedAt: now,
+    },
+    updatedAt: now,
+    endedAt: now,
+  });
+  if (!finished.applied) {
+    log.warn(
+      `[continuation:work-supersede-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
+    );
+  }
+  return finished.applied;
+}
+
 export function peekSoonestUnmaturedWorkDueAt(sessionKey: string): number | undefined {
   const now = Date.now();
   let soonest: number | undefined;

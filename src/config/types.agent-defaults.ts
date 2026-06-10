@@ -495,6 +495,12 @@ export type AgentDefaultsConfig = {
     /** Maximum number of continue_delegate tool calls per agent turn (default: 5). */
     maxDelegatesPerTurn?: number;
     /**
+     * Maximum concurrent undelivered continue_work flows per session (#986;
+     * default: 32). Enforced at enqueue; bounds the multi-continue_work flood
+     * independently of maxChainLength (lineage depth).
+     */
+    maxPendingWork?: number;
+    /**
      * Context-pressure awareness threshold (exclusive (0.0, 1.0]). When the session's token
      * usage exceeds this fraction of the context window, a [system:context-pressure]
      * event is injected pre-run so the agent can elect evacuation. Disabled when

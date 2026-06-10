@@ -10,6 +10,7 @@ const baseConfig: ContinuationRuntimeConfig = {
   maxChainLength: 10,
   costCapTokens: 500_000,
   maxDelegatesPerTurn: 5,
+  maxPendingWork: 32,
   crossSessionTargeting: "disabled",
 };
 

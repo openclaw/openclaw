@@ -102,6 +102,7 @@ vi.mock("./config.js", async (importOriginal) => {
       enabled: true,
       maxChainLength: 8,
       maxDelegatesPerTurn: 4,
+      maxPendingWork: 32,
       defaultDelayMs: 1_000,
       minDelayMs: 1_000,
       maxDelayMs: 60_000,
@@ -228,6 +229,7 @@ import {
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   dispatchPendingContinuationWork,
+  partitionSupersededWork,
   recoverPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
@@ -239,6 +241,7 @@ const config = {
   enabled: true,
   maxChainLength: 8,
   maxDelegatesPerTurn: 4,
+  maxPendingWork: 32,
   defaultDelayMs: 1_000,
   minDelayMs: 1_000,
   maxDelayMs: 60_000,
@@ -831,5 +834,136 @@ describe("durable continuation_work dispatch", () => {
         context: expect.objectContaining({ Body: expect.stringContaining("new queued") }),
       }),
     ]);
+  });
+});
+
+function work(
+  partial: Partial<{ hop: number; electedAt: number; dueAt: number }> = {},
+): Parameters<typeof partitionSupersededWork>[0][number] {
+  return {
+    sessionKey: "agent:main:s",
+    hop: partial.hop ?? 1,
+    delayMs: 1_000,
+    electedAt: partial.electedAt ?? 1_000,
+    dueAt: partial.dueAt ?? 2_000,
+    maxChainLength: 8,
+    flowId: `f-${partial.hop ?? 1}`,
+    expectedRevision: 0,
+  };
+}
+
+describe("#986 partitionSupersededWork (drain-superseded)", () => {
+  const GRACE = 120_000;
+  const NOW = 1_000_000;
+
+  it("passes a single matured work through untouched", () => {
+    const works = [work({ hop: 1, electedAt: 1, dueAt: 1 })];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    expect(drive).toHaveLength(1);
+    expect(superseded).toHaveLength(0);
+  });
+
+  it("never collapses when grace is non-positive (guard disabled)", () => {
+    const works = [
+      work({ hop: 1, electedAt: 1, dueAt: 1 }),
+      work({ hop: 2, electedAt: 2, dueAt: 2 }),
+      work({ hop: 3, electedAt: 3, dueAt: 3 }),
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, 0, NOW);
+    expect(drive).toHaveLength(3);
+    expect(superseded).toHaveLength(0);
+  });
+
+  it("folds stale older siblings into the newest-elected member (backlog)", () => {
+    // All three matured long ago (overdue >> grace): a genuine stale pile.
+    const works = [
+      work({ hop: 1, electedAt: 100, dueAt: NOW - 500_000 }),
+      work({ hop: 2, electedAt: 200, dueAt: NOW - 400_000 }),
+      work({ hop: 3, electedAt: 300, dueAt: NOW - 300_000 }),
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    expect(drive.map((w) => w.hop)).toEqual([3]); // newest-elected drives
+    expect(superseded.map((w) => w.hop).toSorted()).toEqual([1, 2]);
+  });
+
+  it("preserves a close burst that is not yet stale (within grace)", () => {
+    // Three matured just now, none overdue past grace: distinct close burst.
+    const works = [
+      work({ hop: 1, electedAt: 100, dueAt: NOW - 10 }),
+      work({ hop: 2, electedAt: 200, dueAt: NOW - 5 }),
+      work({ hop: 3, electedAt: 300, dueAt: NOW }),
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    expect(drive).toHaveLength(3);
+    expect(superseded).toHaveLength(0);
+  });
+
+  it("keeps the newest even if it is itself overdue, folds only stale older", () => {
+    const works = [
+      work({ hop: 1, electedAt: 100, dueAt: NOW - 500_000 }), // stale older
+      work({ hop: 2, electedAt: 200, dueAt: NOW - 1_000 }), // recent, not stale
+      work({ hop: 3, electedAt: 300, dueAt: NOW - 300_000 }), // newest, stale-but-newest
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    // newest (hop 3) always drives; hop 2 within grace drives; hop 1 stale folds.
+    expect(drive.map((w) => w.hop).toSorted()).toEqual([2, 3]);
+    expect(superseded.map((w) => w.hop)).toEqual([1]);
+  });
+});
+
+describe("#986 maxPendingWork cap (Guard 1)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    mockFlows.clear();
+    flowCounter = 0;
+    resetContinuationWorkDispatchForTests();
+  });
+  afterEach(() => {
+    resetContinuationWorkDispatchForTests();
+    vi.useRealTimers();
+  });
+
+  const sessionKey = "agent:main:flood";
+  const baseChain = { currentChainCount: 0, chainStartedAt: 1_000_000, accumulatedChainTokens: 0 };
+
+  it("rejects a new election once pendingWorkCount is at maxPendingWork", async () => {
+    const capped = { ...config, maxPendingWork: 2, maxChainLength: 100 } satisfies ContinuationRuntimeConfig;
+    // Pre-fill the store to the cap (2 queued flows).
+    enqueuePendingWork({ sessionKey, hop: 1, delayMs: 1_000, electedAt: 1_000_000, dueAt: 1_001_000, maxChainLength: 100 });
+    enqueuePendingWork({ sessionKey, hop: 2, delayMs: 1_000, electedAt: 1_000_000, dueAt: 1_001_000, maxChainLength: 100 });
+
+    const result = await scheduleContinuationWork({
+      sessionKey,
+      chainState: baseChain,
+      request: { delaySeconds: 1, reason: "over the pending cap" },
+      config: capped,
+    });
+
+    expect(result.scheduled).toBe(false);
+    expect(result.capped).toBe(true);
+  });
+
+  it("batch ends early on pending-cap but preserves earlier scheduled elections (#982 partial-success)", async () => {
+    const capped = { ...config, maxPendingWork: 3, maxChainLength: 100 } satisfies ContinuationRuntimeConfig;
+    // Start empty; a 5-election batch should schedule 3, then hit the cap.
+    const result = await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: baseChain,
+      requests: [
+        { delaySeconds: 1, reason: "a" },
+        { delaySeconds: 1, reason: "b" },
+        { delaySeconds: 1, reason: "c" },
+        { delaySeconds: 1, reason: "d" },
+        { delaySeconds: 1, reason: "e" },
+      ],
+      config: capped,
+    });
+
+    expect(result.scheduledCount).toBe(3);
+    expect(result.cappedCount).toBe(2);
+    expect(result.capped).toBe(true);
+    // The 3 earlier elections stayed durably enqueued (not silently dropped).
+    const queued = [...mockFlows.values()].filter((f) => f.ownerKey === sessionKey);
+    expect(queued).toHaveLength(3);
   });
 });
