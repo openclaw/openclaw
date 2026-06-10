@@ -580,6 +580,27 @@ describe("sendMessage", () => {
     });
   });
 
+  it("resolves defaultAccount maxLinesPerMessage when accountId is omitted", async () => {
+    await sendMessage({
+      cfg: {
+        channels: {
+          forum: {
+            maxLinesPerMessage: 50,
+            defaultAccount: "bot1",
+            accounts: { bot1: { maxLinesPerMessage: 30 } },
+          },
+        },
+      },
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+    });
+
+    expectDeliveryCallFields({
+      formatting: { maxLinesPerMessage: 30 },
+    });
+  });
+
   it("omits formatting when no parseMode and no maxLinesPerMessage configured", async () => {
     await sendMessage({
       cfg: {},

@@ -315,8 +315,7 @@ function resolveMaxLinesPerMessage(
     return undefined;
   }
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
-  const channelSection = (channelsConfig?.[channel] ??
-    (cfg as Record<string, unknown> | undefined)?.[channel]) as
+  const channelSection = channelsConfig?.[channel] as
     | ChannelMaxLinesConfig
     | undefined;
   if (!channelSection) {
