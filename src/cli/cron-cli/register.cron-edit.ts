@@ -108,7 +108,11 @@ export function registerCronEditCommand(cron: Command) {
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs")
-      .option("--clear-model", "Remove model override (use agent/default model)", false)
+      .option(
+        "--clear-model",
+        "Remove the per-job model override (restore normal cron model precedence)",
+        false,
+      )
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")

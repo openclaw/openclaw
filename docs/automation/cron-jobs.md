@@ -158,7 +158,7 @@ If stdout is non-empty, that text is the delivered result. If stdout is empty an
   Model override; uses the selected allowed model for the job.
 </ParamField>
 <ParamField path="--clear-model" type="boolean">
-  On `cron edit`, removes a stored model override so the job reverts to the agent/default model. Cannot be combined with `--model`.
+  On `cron edit`, removes the per-job model override so the job follows normal cron model-selection precedence (a stored cron-session override if set, otherwise the agent/default model). Cannot be combined with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override.
