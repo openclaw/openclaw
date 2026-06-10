@@ -164,6 +164,10 @@ describe("exec resolve_exec_env hook wiring", () => {
         sessionKey: "agent:main:telegram:chat-1",
         messageProvider: "telegram",
         channelId: "chat-1",
+        channelContext: {
+          sender: { id: "ou_1", unionId: "on_1" },
+          chat: { id: "oc_1" },
+        },
       },
     );
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({

@@ -40,6 +40,8 @@ export type AgentRunContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   currentChannelId?: string;
+  /** Transport-native chat/conversation ID for plugin hook identity context. */
+  chatId?: string;
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
   senderId?: string | null;

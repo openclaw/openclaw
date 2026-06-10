@@ -1,7 +1,7 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
-import type { PluginHookAgentContext } from "./hook-types.js";
+import type { PluginHookAgentContext, PluginHookChannelContext } from "./hook-types.js";
 
 const TARGET_PREFIXES = new Set(["channel", "chat", "direct", "dm", "group", "thread", "user"]);
 
@@ -118,5 +118,40 @@ export function buildAgentHookContextChannelFields(params: {
     channelId,
     chatId: channelId,
     senderId: normalizeOptionalString(params.senderId),
+  };
+}
+
+export function buildAgentHookContextIdentityFields(params: {
+  trigger?: string | null;
+  senderId?: string | null;
+  chatId?: string | null;
+  channelContext?: PluginHookChannelContext;
+}): Pick<PluginHookAgentContext, "senderId" | "chatId" | "channelContext"> {
+  const trigger = normalizeOptionalString(params.trigger);
+  if (trigger && trigger !== "user") {
+    return {};
+  }
+
+  const senderId = normalizeOptionalString(params.senderId);
+  const chatId = normalizeOptionalString(params.chatId);
+  const sender = senderId
+    ? { ...params.channelContext?.sender, id: senderId }
+    : params.channelContext?.sender;
+  const chat = chatId
+    ? { ...params.channelContext?.chat, id: chatId }
+    : params.channelContext?.chat;
+  const channelContext =
+    sender || chat || params.channelContext
+      ? {
+          ...params.channelContext,
+          ...(sender ? { sender } : {}),
+          ...(chat ? { chat } : {}),
+        }
+      : undefined;
+
+  return {
+    ...(senderId ? { senderId } : {}),
+    ...(chatId ? { chatId } : {}),
+    ...(channelContext ? { channelContext } : {}),
   };
 }
