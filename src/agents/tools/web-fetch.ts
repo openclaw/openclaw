@@ -438,24 +438,31 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   let parsedUrl: URL;
-  const cleanedUrl = params.url.replace(/\s+/g, "");
+  // Preserve standard URL percent-encoding for valid URLs; strip internal
+  // whitespace only as a recovery step for malformed ones (LLMs sometimes
+  // generate URLs with accidental spaces, e.g. "https:// docs.example.com").
   try {
-    parsedUrl = new URL(cleanedUrl);
+    parsedUrl = new URL(params.url);
   } catch {
-    throw new Error("Invalid URL: must be http or https");
+    try {
+      parsedUrl = new URL(params.url.replace(/\s+/g, ""));
+    } catch {
+      throw new Error("Invalid URL: must be http or https");
+    }
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
+  const normalizedUrl = parsedUrl.href;
 
   const start = Date.now();
   let res: Response;
   let release: (() => Promise<void>) | null;
-  let finalUrl = cleanedUrl;
+  let finalUrl = normalizedUrl;
   try {
     const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
-      url: cleanedUrl,
+      url: normalizedUrl,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
@@ -507,7 +514,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
-        urlToFetch: cleanedUrl,
+        urlToFetch: normalizedUrl,
         cacheKey,
         tookMs: Date.now() - start,
       });
@@ -615,7 +622,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
     const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
     const payload = {
-      url: cleanedUrl,
+      url: normalizedUrl,
       finalUrl, // Keep raw
       status: res.status,
       contentType: normalizedContentType, // Protocol metadata, don't wrap

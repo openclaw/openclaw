@@ -210,7 +210,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(tokenLogs).toHaveLength(0);
   });
 
-  it("strips whitespace from URLs with internal spaces (#91651)", async () => {
+  it("recovers from URLs with accidental internal whitespace (#91651)", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Cleaned\n\nURL works."));
     global.fetch = withFetchPreconnect(fetchSpy);
 
@@ -224,6 +224,28 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const fetchArg = fetchSpy.mock.calls[0][0];
     expect(typeof fetchArg).toBe("string");
     expect(fetchArg).toMatch(/^https:\/\/docs\.example\.com\/page/);
+    expect(result).toBeDefined();
+  });
+
+  it("preserves valid path/query spaces as percent-encoding", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(markdownResponse("# Valid\n\nPath with spaces works."));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+    // Valid URL whose path contains a space; standard URL parser encodes it.
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/a b/search?q=hello world",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const fetchArg = fetchSpy.mock.calls[0][0];
+    // Valid URL path/query spaces should be percent-encoded, not stripped.
+    // "a b" → "a%20b", "hello world" → "hello%20world"
+    expect(fetchArg).toContain("a%20b");
+    expect(fetchArg).toContain("hello%20world");
+    expect(fetchArg).not.toContain("ab");
     expect(result).toBeDefined();
   });
 });
