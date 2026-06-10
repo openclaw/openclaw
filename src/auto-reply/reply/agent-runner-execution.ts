@@ -2544,6 +2544,7 @@ export async function runAgentTurnWithFallback(params: {
                       ) {
                         await params.opts?.onItemEvent?.({
                           itemId: readStringValue(evt.data.itemId),
+                          toolCallId: readStringValue(evt.data.toolCallId),
                           kind: readStringValue(evt.data.kind),
                           title: readStringValue(evt.data.title),
                           name: itemName,
