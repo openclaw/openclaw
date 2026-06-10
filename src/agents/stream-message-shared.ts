@@ -94,6 +94,14 @@ export function buildAssistantMessageWithZeroUsage(params: {
 // to a live stream-error turn (and the repair pass remains idempotent).
 export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
 
+export function stripStreamErrorFallbackPrefix(text: string): string {
+  if (!text.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
+    return text;
+  }
+  const rest = text.slice(STREAM_ERROR_FALLBACK_TEXT.length);
+  return rest.trim().length > 0 ? rest : text;
+}
+
 export function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
   errorMessage: string;
