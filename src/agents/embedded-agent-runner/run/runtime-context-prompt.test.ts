@@ -115,6 +115,29 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("uses effective text as implicit runtime context when transcriptPrompt is not found", () => {
+    // Heartbeat/exec-event scenario: transcriptPrompt is a placeholder
+    // (e.g. "[OpenClaw heartbeat poll]") that doesn't appear in the
+    // actual effective prompt (e.g. exec event output). The fallback
+    // extracts the entire effective text as hidden runtime context so
+    // it persists via custom_message for subsequent model turns.
+    const effectivePrompt = [
+      "An async command you ran earlier has completed.",
+      "exec completed (abc123, code 0) :: output text",
+      "Please relay the command output.",
+    ].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: "[OpenClaw heartbeat poll]",
+      }),
+    ).toEqual({
+      prompt: "[OpenClaw heartbeat poll]",
+      runtimeContext: effectivePrompt,
+    });
+  });
+
   it("extracts multiple hidden runtime context blocks", () => {
     const effectivePrompt = [
       "runtime prefix",

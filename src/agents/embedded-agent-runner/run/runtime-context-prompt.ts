@@ -119,10 +119,21 @@ export function resolveRuntimeContextPromptParts(params: {
       : undefined;
   // The hidden context is whatever remains after removing the last visible
   // prompt occurrence, plus any explicit internal runtime-context block.
+  // When transcriptPrompt is defined but not found in effectivePrompt
+  // (e.g. heartbeat placeholder "[OpenClaw heartbeat poll]" vs exec event),
+  // use the extracted text as implicit runtime context so it persists via
+  // custom_message for subsequent model turns (restored legacy fallback).
   const runtimeContext =
     [hiddenRuntimeContext, extracted.runtimeContext]
       .filter((value): value is string => Boolean(value?.trim()))
-      .join("\n\n") || (!prompt.trim() ? extracted.text.trim() : undefined);
+      .join("\n\n") ||
+    (transcriptPrompt !== undefined &&
+    hiddenRuntimeContext === undefined &&
+    extracted.runtimeContext === undefined
+      ? extracted.text.trim()
+      : !prompt.trim()
+        ? extracted.text.trim()
+        : undefined);
   if (!prompt.trim()) {
     return runtimeContext
       ? {
