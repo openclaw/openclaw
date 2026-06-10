@@ -78,9 +78,9 @@ function createConditionalModelSuppressionRegistry(): PluginManifestRegistry {
   };
 }
 
-function createInlineSparkModel(baseUrl: string) {
+function createInlineSparkModel(baseUrl: string, id = "gpt-5.3-codex-spark") {
   return {
-    id: "gpt-5.3-codex-spark",
+    id,
     name: "GPT-5.3 Codex Spark",
     api: "openai-responses",
     baseUrl,
@@ -331,6 +331,36 @@ describe("config model reference validation", () => {
     ]);
   });
 
+  it("rejects conditionally suppressed openai/codex spark provider-qualified inline native API rows", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        models: {
+          providers: {
+            openai: {
+              models: [
+                createInlineSparkModel("https://api.openai.com/v1", "openai/gpt-5.3-codex-spark"),
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.3-codex-spark",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createConditionalModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+  });
+
   it("rejects conditionally suppressed openai/codex spark model refs for direct API base URL config", () => {
     const res = validateConfigObjectWithPlugins(
       {
@@ -435,6 +465,39 @@ describe("config model reference validation", () => {
           providers: {
             openai: {
               models: [createInlineSparkModel("https://proxy.example.test/v1")],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.3-codex-spark",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createConditionalModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts conditionally suppressed openai/codex spark provider-qualified inline custom proxy rows", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        models: {
+          providers: {
+            openai: {
+              models: [
+                createInlineSparkModel(
+                  "https://proxy.example.test/v1",
+                  "openai/gpt-5.3-codex-spark",
+                ),
+              ],
             },
           },
         },

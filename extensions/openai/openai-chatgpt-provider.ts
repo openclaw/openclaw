@@ -677,6 +677,14 @@ export function buildOpenAICodexProviderHooks(): Pick<
           contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_54_MINI_COST,
         }),
+        buildOpenAISyntheticCatalogEntry(gpt54Template, {
+          id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+          reasoning: true,
+          input: ["text"],
+          contextWindow: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+          contextTokens: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        }),
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
     },
   };

@@ -64,6 +64,7 @@ const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
+const OPENAI_GPT_53_CODEX_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CHAT_LATEST_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
 const OPENAI_GPT_55_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
@@ -80,6 +81,12 @@ const OPENAI_GPT_54_NANO_COST = {
   input: 0.2,
   output: 1.25,
   cacheRead: 0.02,
+  cacheWrite: 0,
+} as const;
+const OPENAI_GPT_53_CODEX_SPARK_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
   cacheWrite: 0,
 } as const;
 const OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
@@ -337,11 +344,30 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
 }
 
 function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
+  const models = [...OPENAI_MANIFEST_PROVIDER.models];
+  if (
+    !models.some(
+      (model) =>
+        normalizeLowercaseStringOrEmpty(model.id) ===
+        normalizeLowercaseStringOrEmpty(OPENAI_GPT_53_CODEX_SPARK_MODEL_ID),
+    )
+  ) {
+    models.push({
+      id: OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
+      name: "GPT-5.3 Codex Spark",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: OPENAI_GPT_53_CODEX_SPARK_CONTEXT_TOKENS,
+      contextTokens: OPENAI_GPT_53_CODEX_SPARK_CONTEXT_TOKENS,
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+      cost: OPENAI_GPT_53_CODEX_SPARK_COST,
+    });
+  }
   return {
     baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
     api: "openai-chatgpt-responses",
     auth: "oauth",
-    models: OPENAI_MANIFEST_PROVIDER.models,
+    models,
   };
 }
 

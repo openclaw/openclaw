@@ -579,6 +579,11 @@ describe("buildOpenAIProvider", () => {
     expect(provider.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
     expect(provider.models.length).toBeGreaterThan(0);
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    expect(provider.models.find((model) => model.id === "gpt-5.3-codex-spark")).toMatchObject({
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 

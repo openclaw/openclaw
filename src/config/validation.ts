@@ -2,6 +2,10 @@
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import {
+  normalizeConfiguredProviderCatalogModelId,
+  stripSelfProviderModelPrefix,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -172,6 +176,29 @@ function normalizeBundledChannelId(raw?: string | null): string | null {
   }
   const resolved = bundledChannelAliases.get(normalized) ?? normalized;
   return bundledChannelIdSet.has(resolved) ? resolved : null;
+}
+
+function inlineModelIdMatchesProviderModel(params: {
+  provider: string;
+  configuredModelId?: string | null;
+  model: string;
+}): boolean {
+  const configuredModelId = params.configuredModelId?.trim();
+  if (!configuredModelId) {
+    return false;
+  }
+  const target = normalizeLowercaseStringOrEmpty(params.model);
+  const normalizedConfiguredModelId = normalizeConfiguredProviderCatalogModelId(
+    params.provider,
+    configuredModelId,
+  );
+  const candidates = [
+    configuredModelId,
+    stripSelfProviderModelPrefix(params.provider, configuredModelId),
+    normalizedConfiguredModelId,
+    stripSelfProviderModelPrefix(params.provider, normalizedConfiguredModelId),
+  ];
+  return candidates.some((candidate) => normalizeLowercaseStringOrEmpty(candidate) === target);
 }
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
@@ -1424,8 +1451,12 @@ function validateConfigObjectWithPluginsBase(
     if (!providerConfig || !Array.isArray(providerConfig.models)) {
       return undefined;
     }
-    const modelConfig = providerConfig.models.find(
-      (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === params.model,
+    const modelConfig = providerConfig.models.find((entry) =>
+      inlineModelIdMatchesProviderModel({
+        provider: params.provider,
+        configuredModelId: entry?.id,
+        model: params.model,
+      }),
     );
     if (!modelConfig) {
       return undefined;

@@ -13,10 +13,12 @@ vi.mock("./openai-chatgpt-device-code.js", () => ({
 }));
 
 let buildOpenAIProvider: typeof import("./openai-provider.js").buildOpenAIProvider;
+let buildOpenAICodexProviderHooks: typeof import("./openai-chatgpt-provider.js").buildOpenAICodexProviderHooks;
 
 describe("OpenAI provider Codex transport hooks", () => {
   beforeAll(async () => {
     ({ buildOpenAIProvider } = await import("./openai-provider.js"));
+    ({ buildOpenAICodexProviderHooks } = await import("./openai-chatgpt-provider.js"));
   });
 
   beforeEach(() => {
@@ -208,6 +210,26 @@ describe("OpenAI provider Codex transport hooks", () => {
       contextWindow: 128_000,
       contextTokens: 128_000,
     });
+  });
+
+  it("surfaces Codex Spark in fallback catalog metadata", () => {
+    const hooks = buildOpenAICodexProviderHooks();
+
+    const entries = hooks.augmentModelCatalog?.({
+      env: process.env,
+      entries: [{ provider: "openai", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" }],
+    } as never);
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        name: "gpt-5.3-codex-spark",
+        input: ["text"],
+        contextWindow: 128_000,
+        contextTokens: 128_000,
+      }),
+    );
   });
 
   it("refreshes ChatGPT OAuth credentials under the OpenAI provider", async () => {
