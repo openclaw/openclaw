@@ -118,6 +118,7 @@
     "@openclaw/llm-core": "workspace:*",
     "ignore": "7.0.5",
     "typebox": "1.1.39",
+    "langfuse": "^3.34.0",
     "yaml": "2.9.0"
   }
 }
