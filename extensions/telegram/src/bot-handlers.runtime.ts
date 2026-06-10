@@ -286,7 +286,6 @@ export const registerTelegramHandlers = ({
   const releaseDispatchDedupeKeys = (keys: readonly string[], error?: unknown) => {
     releaseTelegramMessageDispatchReplay({
       guard: messageDispatchReplayGuard,
-      accountId,
       keys,
       error,
     });
@@ -294,7 +293,6 @@ export const registerTelegramHandlers = ({
   const commitDispatchDedupeKeys = async (keys: readonly string[]) => {
     await commitTelegramMessageDispatchReplay({
       guard: messageDispatchReplayGuard,
-      accountId,
       keys,
     });
   };
