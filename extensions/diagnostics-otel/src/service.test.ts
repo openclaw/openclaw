@@ -4527,4 +4527,69 @@ describe("diagnostics-otel service", () => {
     );
     await service.stop?.(ctx);
   });
+
+  test("stamps openclaw.client.* from seeded session.state clientContext onto model.call span", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    // Seed clientContext for sess-1 via a session.state event on the trusted private-data channel.
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "session.state",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:sess-1",
+        state: "processing",
+      },
+      { clientContext: { agentId: "Conductor" } },
+    );
+
+    // Emit a model.call.completed for the same session — no clientContext on this event.
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        runId: "run-ctx-1",
+        callId: "call-ctx-1",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:sess-1",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        durationMs: 120,
+      },
+      {},
+    );
+    await flushDiagnosticEvents();
+
+    const modelSpanAttrs = firstSpanAttributes("openclaw.model.call");
+    expect(modelSpanAttrs["openclaw.client.agentId"]).toBe("Conductor");
+
+    await service.stop?.(ctx);
+  });
+
+  test("model.call span has no openclaw.client.* when no session.state clientContext was seeded", async () => {
+    // Fresh service instance — no seeded clientContext for sess-2.
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        runId: "run-ctx-2",
+        callId: "call-ctx-2",
+        sessionId: "sess-2",
+        sessionKey: "agent:main:sess-2",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        durationMs: 50,
+      },
+      {},
+    );
+    await flushDiagnosticEvents();
+
+    const modelSpanAttrs = firstSpanAttributes("openclaw.model.call");
+    expect(modelSpanAttrs["openclaw.client.agentId"]).toBeUndefined();
+
+    await service.stop?.(ctx);
+  });
 });
