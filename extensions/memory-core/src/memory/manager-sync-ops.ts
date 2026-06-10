@@ -2084,7 +2084,16 @@ export abstract class MemoryManagerSyncOps {
     // Wait for the configured provider before replacing them with a rebuilt index,
     // unless every existing chunk is FTS-only — in that case rebuilding as
     // FTS-only is safe even without a provider because no semantic data is lost.
-    const hasOnlyFtsChunks = this.hasIndexedChunks() && !this.hasSemanticChunks();
+    // Gate the chunk-model scan: only compute when identity is missing,
+    // chunks exist, and the provider is unavailable (no target session files
+    // is already checked by needsMissingIdentityReindex below).
+    const needsFtsOnlyClassification =
+      indexIdentity.status === "missing" &&
+      hasIndexedChunks &&
+      this.provider === null &&
+      this.settings.provider &&
+      this.settings.provider !== "none";
+    const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
     const canRebuildMissingIdentity =
       this.provider !== null ||
       !this.settings.provider ||
