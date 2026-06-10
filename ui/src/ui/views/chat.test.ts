@@ -1267,6 +1267,30 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
   });
 
+  it("keeps terminal status for the submitted run while its acknowledgement is pending", () => {
+    const container = renderChatView({
+      runStatus: {
+        phase: "done",
+        runId: "run-main",
+        sessionKey: "main",
+        occurredAt: 1_000,
+      },
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 999,
+          sendRunId: "run-main",
+          sendState: "sending",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--done")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+  });
+
   it("does not show prompt-bar progress for reconnect-waiting sends", () => {
     const container = renderChatView({
       queue: [
