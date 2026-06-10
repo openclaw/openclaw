@@ -93,6 +93,16 @@ function writeMigratedSessionState(stateDir: string): void {
   }
 }
 
+function cleanUpgradeSurvivorEnv(env: Record<string, string>): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(childEnv)) {
+    if (key.startsWith("OPENCLAW_UPGRADE_SURVIVOR_")) {
+      delete childEnv[key];
+    }
+  }
+  return { ...childEnv, ...env };
+}
+
 function assertConfiguredPluginState(params: { installPath?: string } = {}): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-"));
   try {
@@ -131,13 +141,13 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     });
 
     execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
-      env: {
-        ...process.env,
+      env: cleanUpgradeSurvivorEnv({
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "survival",
         OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
-      },
+      }),
       stdio: "pipe",
     });
   } finally {
@@ -216,6 +226,24 @@ describe("upgrade survivor assertions", () => {
         assertConfiguredPluginState({ installPath: join(root, "outside-matrix") }),
       ).toThrow(/managed extensions root/);
     } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("ignores parent upgrade survivor stage when asserting configured plugin installs", () => {
+    const previousStage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE;
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE = "baseline";
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-stage-"));
+    try {
+      expect(() =>
+        assertConfiguredPluginState({ installPath: join(root, "outside-matrix") }),
+      ).toThrow(/managed extensions root/);
+    } finally {
+      if (previousStage === undefined) {
+        delete process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE;
+      } else {
+        process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE = previousStage;
+      }
       rmSync(root, { force: true, recursive: true });
     }
   });
