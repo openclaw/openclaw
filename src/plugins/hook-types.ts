@@ -233,6 +233,23 @@ const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES)
 export const isConversationHookName = (hookName: PluginHookName): boolean =>
   conversationHookNameSet.has(hookName);
 
+export interface PluginHookChannelSenderContext {
+  /** Channel-scoped sender ID, matching `ctx.senderId` when both are present. */
+  id?: string;
+}
+
+export interface PluginHookChannelChatContext {
+  /** Transport-native conversation ID, matching `ctx.chatId` when both are present. */
+  id?: string;
+}
+
+export interface PluginHookChannelContext {
+  /** Sender metadata supplied by the originating channel. */
+  sender?: PluginHookChannelSenderContext;
+  /** Chat/conversation metadata supplied by the originating channel. */
+  chat?: PluginHookChannelChatContext;
+}
+
 export type PluginHookAgentContext = {
   runId?: string;
   jobId?: string;
@@ -252,6 +269,17 @@ export type PluginHookAgentContext = {
   contextWindowSource?: PluginHookContextWindowSource;
   /** Native/configured reference window when a lower cap wins. */
   contextWindowReferenceTokens?: number;
+  /** Channel-scoped sender ID (e.g. Feishu open_id, Discord user ID). */
+  senderId?: string;
+  /**
+   * @deprecated Core does not populate cross-app sender ids. Channel plugins
+   * should expose channel-specific identities by augmenting `channel.sender`.
+   */
+  senderExternalId?: string;
+  /** Conversation/chat ID (e.g. Feishu chat_id, Discord channel ID). */
+  chatId?: string;
+  /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */
+  channel?: PluginHookChannelContext;
 };
 
 export type PluginHookContextWindowSource =

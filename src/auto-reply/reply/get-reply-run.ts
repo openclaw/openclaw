@@ -1260,6 +1260,9 @@ export async function runPreparedReply(
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
+    originatingChatId:
+      normalizeOptionalString(sessionCtx.NativeChannelId) ??
+      normalizeOptionalString(sessionCtx.ChatId),
     originatingAccountId: sessionCtx.AccountId,
     originatingThreadId,
     originatingReplyToId: sessionCtx.ReplyToId,
@@ -1285,6 +1288,7 @@ export async function runPreparedReply(
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
+      channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),

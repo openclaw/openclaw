@@ -5,7 +5,10 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
@@ -306,6 +309,12 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedAg
         workspaceDir: params.workspaceDir,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields({
+          trigger: params.trigger,
+          senderId: params.senderId,
+          chatId: params.chatId,
+          channel: params.channelContext,
+        }),
       } as const;
       params.onExecutionPhase?.({
         phase: "before_agent_reply",
@@ -314,7 +323,7 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedAg
       });
       const hookResult = await hookRunner.runBeforeAgentReply(
         { cleanedBody: params.prompt },
-        hookContext,
+        buildAgentHookContext(hookContext),
       );
       if (hookResult?.handled) {
         const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
@@ -409,6 +418,12 @@ export async function runPreparedCliAgent(
       ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
       : {}),
     ...buildAgentHookContextChannelFields(params),
+    ...buildAgentHookContextIdentityFields({
+      trigger: params.trigger,
+      senderId: params.senderId,
+      chatId: params.chatId,
+      channel: params.channelContext,
+    }),
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
@@ -898,6 +913,9 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     currentChannelId: params.currentChannelId,
+    senderId: params.senderId,
+    chatId: params.chatId,
+    channelContext: params.channelContext,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,

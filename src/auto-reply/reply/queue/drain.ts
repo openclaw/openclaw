@@ -52,7 +52,11 @@ export function kickFollowupDrainIfIdle(key: string): void {
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
-  "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+  | "originatingChannel"
+  | "originatingTo"
+  | "originatingChatId"
+  | "originatingAccountId"
+  | "originatingThreadId"
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
@@ -63,6 +67,9 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
     }
     if (!metadata.originatingTo && item.originatingTo) {
       metadata.originatingTo = item.originatingTo;
+    }
+    if (!metadata.originatingChatId && item.originatingChatId) {
+      metadata.originatingChatId = item.originatingChatId;
     }
     if (!metadata.originatingAccountId && item.originatingAccountId) {
       metadata.originatingAccountId = item.originatingAccountId;
@@ -78,6 +85,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
     if (
       metadata.originatingChannel &&
       metadata.originatingTo &&
+      metadata.originatingChatId &&
       metadata.originatingAccountId &&
       metadata.originatingThreadId != null
     ) {
@@ -528,6 +536,7 @@ export function scheduleFollowupDrain(
                     enqueuedAt: Date.now(),
                     originatingChannel: item.originatingChannel,
                     originatingTo: item.originatingTo,
+                    originatingChatId: item.originatingChatId,
                     originatingAccountId: item.originatingAccountId,
                     originatingThreadId: item.originatingThreadId,
                     ...collectSummaryRuntimeMetadata([item]),

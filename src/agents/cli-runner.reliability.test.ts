@@ -1097,6 +1097,12 @@ describe("runCliAgent reliability", () => {
           messageProvider: "acp",
           messageChannel: "telegram",
           trigger: "user",
+          senderId: "sender-1",
+          chatId: "chat-1",
+          channelContext: {
+            sender: { id: "sender-1" },
+            chat: { id: "chat-1" },
+          },
         },
       });
 
@@ -1131,6 +1137,12 @@ describe("runCliAgent reliability", () => {
       expect(llmInputContext.messageProvider).toBe("acp");
       expect(llmInputContext.trigger).toBe("user");
       expect(llmInputContext.channelId).toBe("telegram");
+      expect(llmInputContext.senderId).toBe("sender-1");
+      expect(llmInputContext.chatId).toBe("chat-1");
+      expect(llmInputContext.channel).toEqual({
+        sender: { id: "sender-1" },
+        chat: { id: "chat-1" },
+      });
 
       const llmOutputEvent = requireRecord(
         callArg(hookRunner.runLlmOutput, 0, 0, "llm_output event"),
@@ -1168,7 +1180,16 @@ describe("runCliAgent reliability", () => {
       const assistantMessage = requireRecord(messages[1], "assistant message");
       expect(assistantMessage.role).toBe("assistant");
       expect(assistantMessage.content).toEqual([{ type: "text", text: "hello from cli" }]);
-      expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
+      const agentEndContext = requireRecord(
+        callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context"),
+        "agent_end context",
+      );
+      expect(agentEndContext.senderId).toBe("sender-1");
+      expect(agentEndContext.chatId).toBe("chat-1");
+      expect(agentEndContext.channel).toEqual({
+        sender: { id: "sender-1" },
+        chat: { id: "chat-1" },
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

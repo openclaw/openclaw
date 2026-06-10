@@ -322,6 +322,52 @@ as `discord` or `telegram`, while `ctx.channelId` is the conversation target
 identifier when OpenClaw can derive one from the session key or delivery
 metadata.
 
+When sender identity is available, agent hook contexts also include:
+
+- `ctx.senderId` — channel-scoped sender ID (e.g. Feishu `open_id`, Discord
+  user ID). Populated when the run originates from a user message with known
+  sender metadata.
+- `ctx.chatId` — transport-native conversation identifier (e.g. Feishu
+  `chat_id`, Telegram `chat_id`). Populated when the originating channel
+  provides a native conversation ID.
+- `ctx.channel.sender.id` — the same sender ID as `ctx.senderId`, under a
+  channel-owned object that plugins can extend with channel-specific fields.
+- `ctx.channel.chat.id` — the same conversation ID as `ctx.chatId`, under a
+  channel-owned object that plugins can extend with channel-specific fields.
+
+Core only defines the nested `id` fields. Channel plugins that pass richer
+sender or chat metadata through the inbound helper can augment
+`PluginHookChannelSenderContext` or `PluginHookChannelChatContext` from
+`openclaw/plugin-sdk/channel-inbound`:
+
+```ts
+declare module "openclaw/plugin-sdk/channel-inbound" {
+  interface PluginHookChannelSenderContext {
+    unionId?: string;
+    userId?: string;
+  }
+}
+```
+
+Channel plugins pass those fields through the inbound SDK helper:
+
+```ts
+buildChannelInboundEventContext({
+  // ...
+  channelContext: {
+    sender: { id: senderOpenId, unionId, userId },
+    chat: { id: chatId },
+  },
+});
+```
+
+These fields are optional and absent for system-originated runs (heartbeat,
+cron, exec-event).
+
+`ctx.senderExternalId` remains as a deprecated source-compatibility field for
+older plugins. Core does not populate it; new channel-specific sender identities
+should live under `ctx.channel.sender` through module augmentation.
+
 `agent_end` is an observation hook. Gateway and persistent harness paths run it
 fire-and-forget after the turn, while short-lived one-shot CLI paths wait for the
 hook promise before process cleanup so trusted plugins can flush terminal
