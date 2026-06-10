@@ -157,6 +157,9 @@ If stdout is non-empty, that text is the delivered result. If stdout is empty an
 <ParamField path="--model" type="string">
   Model override; uses the selected allowed model for the job.
 </ParamField>
+<ParamField path="--clear-model" type="boolean">
+  On `cron edit`, removes a stored model override so the job reverts to the agent/default model. Cannot be combined with `--model`.
+</ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override.
 </ParamField>
@@ -471,6 +474,7 @@ Model override note:
 - If the model is allowed, that exact provider/model reaches the isolated agent run.
 - If it is not allowed or cannot be resolved, cron fails the run with an explicit validation error.
 - API `cron.update` payload patches can set `model: null` to clear a stored job model override.
+- `openclaw cron edit <job-id> --clear-model` clears that override from the CLI (same effect as the `model: null` patch) and cannot be combined with `--model`.
 - Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
 - Payload `fallbacks` replaces configured fallbacks for that job; `fallbacks: []` disables fallback and makes the run strict.
 - A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
