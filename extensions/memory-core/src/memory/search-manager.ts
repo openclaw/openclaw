@@ -6,6 +6,7 @@ import {
   resolveAgentContextLimits,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
+  resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -30,6 +31,7 @@ type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   contextLimits: ReturnType<typeof resolveAgentContextLimits>;
+  temporalDecay: { enabled: boolean; halfLifeDays: number };
 };
 
 type CachedQmdManagerEntry = {
@@ -647,7 +649,7 @@ function buildQmdManagerIdentityKey(
 ): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}`;
+  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${JSON.stringify(runtimeConfig.temporalDecay ?? null)}:${runtimeConfig.workspaceDir}`;
 }
 
 function resolveQmdManagerRuntimeConfig(
@@ -658,5 +660,9 @@ function resolveQmdManagerRuntimeConfig(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
+    temporalDecay: resolveMemorySearchConfig(cfg, agentId)?.query.hybrid.temporalDecay ?? {
+      enabled: false,
+      halfLifeDays: 30,
+    },
   };
 }

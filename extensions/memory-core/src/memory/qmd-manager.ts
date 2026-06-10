@@ -13,6 +13,7 @@ import {
   isPathInside,
   root,
   resolveAgentContextLimits,
+  resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
@@ -62,6 +63,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
+import {
+  applyTemporalDecayToHybridResults,
+  DEFAULT_TEMPORAL_DECAY_CONFIG,
+  type TemporalDecayConfig,
+} from "./temporal-decay.js";
 import {
   countChokidarWatchedEntries,
   type MemoryWatchPressureWarningState,
@@ -291,6 +297,7 @@ type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   contextLimits: ReturnType<typeof resolveAgentContextLimits>;
+  temporalDecay: TemporalDecayConfig;
 };
 type BuiltinQmdMcpTool = "query" | "search" | "vector_search" | "deep_search";
 type QmdMcporterSearchParams =
@@ -371,6 +378,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
+  private readonly temporalDecay: TemporalDecayConfig;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
@@ -428,6 +436,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");
     this.syncSettings = params.runtimeConfig.syncSettings;
+    this.temporalDecay = params.runtimeConfig.temporalDecay;
     // QMD uses XDG base dirs for its internal state.
     // Collections are managed via `qmd collection add` and stored inside the index DB.
     // - config:  $XDG_CONFIG_HOME (contexts, etc.)
@@ -1401,6 +1410,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (opts?.sources?.length) {
       const allow = new Set(opts.sources);
       ranked = results.filter((r) => allow.has(r.source));
+    }
+    if (this.temporalDecay.enabled) {
+      // Match the builtin hybrid engine: decay the combined ranking score by
+      // document age so fresher dated memory outranks stale high-frequency hits.
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: ranked,
+        temporalDecay: this.temporalDecay,
+        workspaceDir: this.workspaceDir,
+      });
+      ranked = decayed.toSorted((a, b) => b.score - a.score);
     }
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
@@ -3378,6 +3397,9 @@ function resolveQmdManagerRuntimeConfig(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
+    temporalDecay:
+      resolveMemorySearchConfig(cfg, agentId)?.query.hybrid.temporalDecay ??
+      DEFAULT_TEMPORAL_DECAY_CONFIG,
   };
 }
 
