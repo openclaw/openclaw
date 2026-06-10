@@ -25,7 +25,11 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
-import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
+import {
+  readSkillProposalManifest,
+  readSkillProposalRecord,
+  resolveProposalDraftPath,
+} from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -893,5 +897,157 @@ describe("skill workshop proposals", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "tamper-guard", "SKILL.md")),
     ).rejects.toThrow();
+  });
+
+  it("marks pending create proposals stale when listSkillProposals finds the target skill file already exists", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Auto-Stale Check",
+      description: "Proposal that should go stale",
+      content: "# Auto-Stale\n\nThis skill was installed manually.\n",
+    });
+
+    // Manually create the target skill file on disk (simulating manual install)
+    const skillDir = path.dirname(proposal.record.target.skillFile);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      proposal.record.target.skillFile,
+      "---\nname: auto-stale-check\ndescription: Already installed\n---\n\n# Auto-Stale\n",
+      "utf8",
+    );
+
+    // Proposal should still be pending before reconciliation
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("pending");
+
+    // listSkillProposals with workspaceDir triggers reconciliation
+    await listSkillProposals({ workspaceDir });
+
+    // Proposal should now be stale
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("stale");
+  });
+
+  it("marks pending create proposals stale when inspectSkillProposal finds the target skill file already exists", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Inspect-Stale Test",
+      description: "Proposal to go stale via inspect path",
+      content: "# Inspect-Stale\n\nManually installed.\n",
+    });
+
+    // Manually create the target skill file on disk
+    const skillDir = path.dirname(proposal.record.target.skillFile);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      proposal.record.target.skillFile,
+      "---\nname: inspect-stale-test\ndescription: Installed manually\n---\n\n# Inspect-Stale\n",
+      "utf8",
+    );
+
+    // inspectSkillProposal with workspaceDir should reconcile and return stale
+    const result = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+    expect(result?.record.status).toBe("stale");
+    expect(result?.record.statusReason).toBe("Target skill was created after proposal creation.");
+  });
+
+  it("preserves concurrent applied record during listSkillProposals stale reconciliation (lock-and-reread)", async () => {
+    // Regression: when a concurrent apply changes the record to "applied" before
+    // stale reconciliation runs, the re-read inside the lock should preserve the
+    // "applied" status instead of overwriting it to "stale".
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Concurrent Apply",
+      description: "Applied before stale check",
+      content: "# Concurrent Apply\n\nApplied before stale check.\n",
+    });
+
+    // Manually create the target skill file on disk (triggers stale path)
+    const skillDir = path.dirname(proposal.record.target.skillFile);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(proposal.record.target.skillFile, "# Concurrent Apply\n", "utf8");
+
+    // Manually apply the proposal by writing "applied" status directly to the record.
+    // This simulates what applySkillProposal does before the stale lock re-read.
+    const staleRecord = {
+      ...proposal.record,
+      status: "applied" as const,
+      appliedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const { updateSkillProposalRecord } = await import("./store.js");
+    await updateSkillProposalRecord({ record: staleRecord });
+
+    // listSkillProposals triggers reconcileStaleCreateProposals.
+    // With the lock-and-reread fix, the re-read inside the lock sees "applied"
+    // and skips marking stale. Without the fix, it would use the stale outer
+    // record and overwrite to "stale".
+    await listSkillProposals({ workspaceDir });
+
+    const record = await readSkillProposalRecord(proposal.record.id);
+    expect(record?.status).toBe("applied");
+  });
+
+  it("preserves concurrent applied record during inspectSkillProposal stale reconciliation (lock-and-reread)", async () => {
+    // Regression: same invariant as above but through the inspect path.
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Inspect Concurrent",
+      description: "Applied before inspect stale check",
+      content: "# Inspect Concurrent\n\nApplied before inspect stale check.\n",
+    });
+
+    // Manually create the target skill file on disk
+    const skillDir = path.dirname(proposal.record.target.skillFile);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(proposal.record.target.skillFile, "# Inspect Concurrent\n", "utf8");
+
+    // Manually apply the record to "applied" status
+    const staleRecord = {
+      ...proposal.record,
+      status: "applied" as const,
+      appliedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const { updateSkillProposalRecord } = await import("./store.js");
+    await updateSkillProposalRecord({ record: staleRecord });
+
+    // inspectSkillProposal triggers its own stale check with lock-and-reread.
+    // The re-read should see "applied" and skip marking stale.
+    const result = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+
+    expect(result?.record.status).toBe("applied");
+  });
+
+  it("preserves concurrent rejected record during listSkillProposals stale reconciliation (lock-and-reread)", async () => {
+    // Regression: concurrent "rejected" status should also be preserved.
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Concurrent Reject",
+      description: "Rejected before stale check",
+      content: "# Concurrent Reject\n\nRejected before stale check.\n",
+    });
+
+    // Manually create the target skill file on disk
+    const skillDir = path.dirname(proposal.record.target.skillFile);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(proposal.record.target.skillFile, "# Concurrent Reject\n", "utf8");
+
+    // Manually reject the record
+    const staleRecord = {
+      ...proposal.record,
+      status: "rejected" as const,
+      updatedAt: new Date().toISOString(),
+    };
+    const { updateSkillProposalRecord } = await import("./store.js");
+    await updateSkillProposalRecord({ record: staleRecord });
+
+    await listSkillProposals({ workspaceDir });
+
+    const record = await readSkillProposalRecord(proposal.record.id);
+    expect(record?.status).toBe("rejected");
   });
 });
