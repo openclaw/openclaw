@@ -4,7 +4,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { getMemoryRuntime } from "./memory-state.js";
+import { restoreCachedMemoryPromptState } from "./loader.js";
+import { getMemoryCapabilityRegistration, getMemoryRuntime } from "./memory-state.js";
+import { getActivePluginRuntimeSubagentMode } from "./runtime.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 
 /** Resolves the configured memory slot to the single runtime plugin that may load memory. */
@@ -30,6 +32,72 @@ function resolveMemoryRuntimeWorkspaceDir(cfg: OpenClawConfig): string | undefin
   return resolveUserPath(dir);
 }
 
+type MemoryRuntimeLoadOptions = Parameters<
+  typeof ensureStandaloneRuntimePluginRegistryLoaded
+>[0]["loadOptions"];
+
+function buildMemoryRuntimeLoadOptions(params: {
+  cfg: OpenClawConfig;
+  pluginIds: string[];
+  workspaceDir: string | undefined;
+}): MemoryRuntimeLoadOptions {
+  const gatewayBindable = getActivePluginRuntimeSubagentMode() === "gateway-bindable";
+  return {
+    config: params.cfg,
+    onlyPluginIds: params.pluginIds,
+    workspaceDir: params.workspaceDir,
+    ...(gatewayBindable
+      ? {
+          runtimeOptions: { allowGatewaySubagentBinding: true as const },
+          preferBuiltPluginArtifacts: true,
+        }
+      : {}),
+  };
+}
+
+function getSelectedMemoryPromptCapability(memoryPluginIds: readonly string[]) {
+  const current = getMemoryCapabilityRegistration();
+  if (!current?.capability.promptBuilder || !memoryPluginIds.includes(current.pluginId)) {
+    return undefined;
+  }
+  return current;
+}
+
+/** Ensures the configured memory plugin's prompt capability is registered. */
+export function ensureActiveMemoryCapability(params: { cfg?: OpenClawConfig; pluginId?: string }) {
+  if (!params.cfg) {
+    return undefined;
+  }
+  const memoryPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
+  if (memoryPluginIds.length === 0) {
+    return undefined;
+  }
+  if (params.pluginId && !memoryPluginIds.includes(params.pluginId)) {
+    return undefined;
+  }
+  const selectedCapability = getSelectedMemoryPromptCapability(memoryPluginIds);
+  if (selectedCapability) {
+    return selectedCapability;
+  }
+  const loadedRegistry = getLoadedRuntimePluginRegistry({ requiredPluginIds: memoryPluginIds });
+  const loadedCapability = getSelectedMemoryPromptCapability(memoryPluginIds);
+  if (loadedCapability) {
+    return loadedCapability;
+  }
+  if (!loadedRegistry) {
+    return undefined;
+  }
+  const workspaceDir = resolveMemoryRuntimeWorkspaceDir(params.cfg);
+  restoreCachedMemoryPromptState({
+    ...buildMemoryRuntimeLoadOptions({
+      cfg: params.cfg,
+      pluginIds: memoryPluginIds,
+      workspaceDir,
+    }),
+  });
+  return getSelectedMemoryPromptCapability(memoryPluginIds);
+}
+
 function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   const current = getMemoryRuntime();
   if (current || !cfg) {
@@ -46,11 +114,11 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   const workspaceDir = resolveMemoryRuntimeWorkspaceDir(cfg);
   ensureStandaloneRuntimePluginRegistryLoaded({
     requiredPluginIds: onlyPluginIds,
-    loadOptions: {
-      config: cfg,
-      onlyPluginIds,
+    loadOptions: buildMemoryRuntimeLoadOptions({
+      cfg,
+      pluginIds: onlyPluginIds,
       workspaceDir,
-    },
+    }),
   });
   return getMemoryRuntime();
 }

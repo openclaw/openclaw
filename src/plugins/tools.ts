@@ -17,6 +17,7 @@ import {
 } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
+import { ensureActiveMemoryCapability } from "./memory-runtime.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
@@ -76,6 +77,7 @@ const log = createSubsystemLogger("plugins/tools");
 const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
 const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
+const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
@@ -323,6 +325,38 @@ function readPluginToolName(tool: unknown): string {
   }
   // Optional-tool allowlists need a best-effort name before full shape validation.
   return typeof tool.name === "string" ? tool.name.trim() : "";
+}
+
+function isSelectedMemoryTool(params: {
+  config: PluginLoadOptions["config"];
+  pluginId: string;
+  toolName: string;
+}): boolean {
+  if (!MEMORY_TOOL_NAMES.has(normalizeToolName(params.toolName))) {
+    return false;
+  }
+  const plugins = normalizePluginsConfig(params.config?.plugins);
+  return plugins.slots.memory === params.pluginId;
+}
+
+function ensureActiveMemoryCapabilityForVisibleTools(params: {
+  config: PluginLoadOptions["config"];
+  tools: readonly AnyAgentTool[];
+}): void {
+  for (const tool of params.tools) {
+    const meta = pluginToolMeta.get(tool);
+    if (
+      meta &&
+      isSelectedMemoryTool({
+        config: params.config,
+        pluginId: meta.pluginId,
+        toolName: tool.name,
+      })
+    ) {
+      ensureActiveMemoryCapability({ cfg: params.config, pluginId: meta.pluginId });
+      return;
+    }
+  }
 }
 
 function toElapsedMs(value: number): number {
@@ -1042,6 +1076,7 @@ export function resolvePluginTools(params: {
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const denylist = normalizeDenylist(params.toolDenylist);
   const configCacheKeyMemo = createPluginToolDescriptorConfigCacheKeyMemo();
+  const availabilityConfig = params.context.runtimeConfig ?? context.config;
   let currentRuntimeConfigForDescriptorCache: PluginLoadOptions["config"] | null | undefined =
     params.context.runtimeConfig;
   if (currentRuntimeConfigForDescriptorCache === undefined && params.context.getRuntimeConfig) {
@@ -1054,7 +1089,7 @@ export function resolvePluginTools(params: {
   const cached = resolveCachedPluginTools({
     snapshot,
     config: context.config,
-    availabilityConfig: params.context.runtimeConfig ?? context.config,
+    availabilityConfig,
     env,
     allowlist,
     denylist,
@@ -1073,6 +1108,7 @@ export function resolvePluginTools(params: {
     (pluginId) => !cached.handledPluginIds.has(pluginId),
   );
   if (runtimePluginIds.length === 0) {
+    ensureActiveMemoryCapabilityForVisibleTools({ config: availabilityConfig, tools });
     return tools;
   }
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
@@ -1113,6 +1149,7 @@ export function resolvePluginTools(params: {
           ", ",
         )}]`,
       );
+      ensureActiveMemoryCapabilityForVisibleTools({ config: availabilityConfig, tools });
       return tools;
     }
   }
@@ -1169,7 +1206,7 @@ export function resolvePluginTools(params: {
       ? filterManifestToolNamesForAvailability({
           plugin: manifestPlugin,
           toolNames: availabilityNames,
-          config: params.context.runtimeConfig ?? context.config,
+          config: availabilityConfig,
           env,
           hasAuthForProvider: params.hasAuthForProvider,
         }).filter(
@@ -1247,7 +1284,7 @@ export function resolvePluginTools(params: {
           return isManifestToolNameAvailable({
             plugin: manifestPlugin,
             toolName,
-            config: params.context.runtimeConfig ?? context.config,
+            config: availabilityConfig,
             env,
             hasAuthForProvider: params.hasAuthForProvider,
           });
@@ -1399,5 +1436,6 @@ export function resolvePluginTools(params: {
     }
   }
 
+  ensureActiveMemoryCapabilityForVisibleTools({ config: availabilityConfig, tools });
   return tools;
 }

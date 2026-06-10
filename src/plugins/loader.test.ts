@@ -59,6 +59,7 @@ import {
   loadOpenClawPlugins,
   type PluginLoadOptions,
   PluginLoadReentryError,
+  restoreCachedMemoryPromptState,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
 import {
@@ -3682,6 +3683,55 @@ module.exports = { id: "throws-after-import", register() {} };`,
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
       expectedArtifacts,
     );
+  });
+
+  it("restores cached memory prompt state from activate:false snapshot loads", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "snapshot-memory-prompt",
+      filename: "snapshot-memory-prompt.cjs",
+      body: `module.exports = {
+        id: "snapshot-memory-prompt",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            promptBuilder({ availableTools }) {
+              return availableTools.has("memory_search")
+                ? ["## Snapshot Memory", "Search cached memory first."]
+                : [];
+            },
+          });
+        },
+      };`,
+    });
+    const options = {
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-memory-prompt"],
+          slots: { memory: "snapshot-memory-prompt" },
+        },
+      },
+      onlyPluginIds: ["snapshot-memory-prompt"],
+    } satisfies PluginLoadOptions;
+
+    const registry = loadOpenClawPlugins(options);
+
+    expect(registry.plugins.find((entry) => entry.id === "snapshot-memory-prompt")?.status).toBe(
+      "loaded",
+    );
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+    expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
+
+    const restored = restoreCachedMemoryPromptState(options);
+
+    expect(restored?.pluginId).toBe("snapshot-memory-prompt");
+    expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([
+      "## Snapshot Memory",
+      "Search cached memory first.",
+    ]);
   });
 
   it("uses discovery registration mode for non-activating loads", () => {

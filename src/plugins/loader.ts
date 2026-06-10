@@ -828,6 +828,78 @@ function getReusableCachedPluginRegistry(params: {
   };
 }
 
+function getReusableCachedPluginStateForLoadOptions(
+  options: PluginLoadOptions = {},
+): CachedPluginState | undefined {
+  const activationCandidates: PluginLoadOptions[] = [
+    options,
+    { ...options, activate: false },
+    { ...options, activate: true },
+  ];
+  const candidateOptions: PluginLoadOptions[] = activationCandidates.flatMap((candidate) => [
+    candidate,
+    { ...candidate, toolDiscovery: true },
+  ]);
+  for (const candidate of candidateOptions) {
+    const loadContext = resolvePluginLoadCacheContext(candidate);
+    const cached = getReusableCachedPluginRegistry({
+      cacheKey: loadContext.cacheKey,
+      onlyPluginIds: loadContext.onlyPluginIds,
+      runtimeSubagentMode: loadContext.runtimeSubagentMode,
+      options: candidate,
+    });
+    if (cached) {
+      return cached.state;
+    }
+  }
+  const activeRegistry = getActivePluginRegistry() ?? undefined;
+  const activeCacheKey = getActivePluginRegistryKey();
+  if (!activeRegistry || !activeCacheKey) {
+    return undefined;
+  }
+  for (const candidate of candidateOptions) {
+    const loadContext = resolvePluginLoadCacheContext(candidate);
+    const activeCachedState =
+      getCachedPluginRegistry(activeCacheKey, loadContext.onlyPluginIds) ??
+      getCachedPluginRegistry(activeCacheKey);
+    if (!activeCachedState) {
+      continue;
+    }
+    if (
+      scopedPluginLoadOptionsMatchWiderActiveCacheKey(candidate, activeCacheKey, activeRegistry) ||
+      pluginToolDiscoveryOptionsMatchActiveCacheKey(candidate, activeCacheKey)
+    ) {
+      return activeCachedState;
+    }
+  }
+  return undefined;
+}
+
+export function restoreCachedMemoryPromptState(
+  options: PluginLoadOptions = {},
+): ReturnType<typeof getMemoryCapabilityRegistration> {
+  const cached = getReusableCachedPluginStateForLoadOptions(options);
+  const memoryCapability = cached?.memoryCapability;
+  if (!memoryCapability?.capability.promptBuilder) {
+    return undefined;
+  }
+  const cachedPromptSupplements = cached?.memoryPromptSupplements ?? [];
+  const cachedPromptSupplementPluginIds = new Set(
+    cachedPromptSupplements.map((registration) => registration.pluginId),
+  );
+  restoreMemoryPluginState({
+    capability: memoryCapability,
+    corpusSupplements: listMemoryCorpusSupplements(),
+    promptSupplements: [
+      ...listMemoryPromptSupplements().filter(
+        (registration) => !cachedPromptSupplementPluginIds.has(registration.pluginId),
+      ),
+      ...cachedPromptSupplements,
+    ],
+  });
+  return getMemoryCapabilityRegistration();
+}
+
 function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
   if (!stockRoot) {
     return undefined;
@@ -1975,6 +2047,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
     const pluginLoadStartMs = performance.now();
     let pluginLoadAttemptCount = 0;
+    let snapshotMemoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
+    let snapshotMemoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements> = [];
+    let snapshotMemoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements> = [];
 
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestByRoot.get(candidate.rootDir);
@@ -2700,6 +2775,32 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         );
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
+          const registeredMemoryCapability = getMemoryCapabilityRegistration();
+          if (registeredMemoryCapability?.pluginId === record.id) {
+            snapshotMemoryCapability = registeredMemoryCapability;
+          }
+          const registeredMemoryCorpusSupplements = listMemoryCorpusSupplements().filter(
+            (registration) => registration.pluginId === record.id,
+          );
+          if (registeredMemoryCorpusSupplements.length > 0) {
+            snapshotMemoryCorpusSupplements = [
+              ...snapshotMemoryCorpusSupplements.filter(
+                (registration) => registration.pluginId !== record.id,
+              ),
+              ...registeredMemoryCorpusSupplements,
+            ];
+          }
+          const registeredMemoryPromptSupplements = listMemoryPromptSupplements().filter(
+            (registration) => registration.pluginId === record.id,
+          );
+          if (registeredMemoryPromptSupplements.length > 0) {
+            snapshotMemoryPromptSupplements = [
+              ...snapshotMemoryPromptSupplements.filter(
+                (registration) => registration.pluginId !== record.id,
+              ),
+              ...registeredMemoryPromptSupplements,
+            ];
+          }
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
           restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
@@ -2794,14 +2895,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           commands: listRegisteredPluginCommands(),
           detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
           interactiveHandlers: listPluginInteractiveHandlers(),
-          memoryCapability: getMemoryCapabilityRegistration(),
-          memoryCorpusSupplements: listMemoryCorpusSupplements(),
+          memoryCapability: shouldActivate
+            ? getMemoryCapabilityRegistration()
+            : snapshotMemoryCapability,
+          memoryCorpusSupplements: shouldActivate
+            ? listMemoryCorpusSupplements()
+            : snapshotMemoryCorpusSupplements,
           registry,
           agentHarnesses: listRegisteredAgentHarnesses(),
           compactionProviders: listRegisteredCompactionProviders(),
           embeddingProviders: listRegisteredEmbeddingProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
-          memoryPromptSupplements: listMemoryPromptSupplements(),
+          memoryPromptSupplements: shouldActivate
+            ? listMemoryPromptSupplements()
+            : snapshotMemoryPromptSupplements,
         },
         onlyPluginIds,
       );

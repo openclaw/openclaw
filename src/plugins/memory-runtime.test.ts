@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveRuntimePluginRegistryMock =
   vi.fn<typeof import("./loader.js").resolveRuntimePluginRegistry>();
+const restoreCachedMemoryPromptStateMock =
+  vi.fn<typeof import("./loader.js").restoreCachedMemoryPromptState>();
 const getLoadedRuntimePluginRegistryMock =
   vi.fn<typeof import("./active-runtime-registry.js").getLoadedRuntimePluginRegistry>();
 const ensureStandaloneRuntimePluginRegistryLoadedMock = vi.hoisted(() =>
@@ -13,6 +15,11 @@ const ensureStandaloneRuntimePluginRegistryLoadedMock = vi.hoisted(() =>
 const applyPluginAutoEnableMock =
   vi.fn<typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable>();
 const getMemoryRuntimeMock = vi.fn<typeof import("./memory-state.js").getMemoryRuntime>();
+const getMemoryCapabilityRegistrationMock =
+  vi.fn<typeof import("./memory-state.js").getMemoryCapabilityRegistration>();
+const getActivePluginRuntimeSubagentModeMock = vi.fn<
+  typeof import("./runtime.js").getActivePluginRuntimeSubagentMode
+>(() => "default");
 const resolveAgentWorkspaceDirMock =
   vi.fn<typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir>();
 const resolveDefaultAgentIdMock = vi.fn<
@@ -30,6 +37,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("./loader.js", () => ({
   resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+  restoreCachedMemoryPromptState: restoreCachedMemoryPromptStateMock,
 }));
 
 vi.mock("./active-runtime-registry.js", () => ({
@@ -41,9 +49,15 @@ vi.mock("./runtime/standalone-runtime-registry-loader.js", () => ({
 }));
 
 vi.mock("./memory-state.js", () => ({
+  getMemoryCapabilityRegistration: () => getMemoryCapabilityRegistrationMock(),
   getMemoryRuntime: () => getMemoryRuntimeMock(),
 }));
 
+vi.mock("./runtime.js", () => ({
+  getActivePluginRuntimeSubagentMode: () => getActivePluginRuntimeSubagentModeMock(),
+}));
+
+let ensureActiveMemoryCapability: typeof import("./memory-runtime.js").ensureActiveMemoryCapability;
 let getActiveMemorySearchManager: typeof import("./memory-runtime.js").getActiveMemorySearchManager;
 let resolveActiveMemoryBackendConfig: typeof import("./memory-runtime.js").resolveActiveMemoryBackendConfig;
 let closeActiveMemorySearchManager: typeof import("./memory-runtime.js").closeActiveMemorySearchManager;
@@ -114,6 +128,7 @@ function setAutoEnabledMemoryRuntime() {
 function expectNoMemoryRuntimeBootstrap() {
   expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
   expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  expect(restoreCachedMemoryPromptStateMock).not.toHaveBeenCalled();
   expect(getLoadedRuntimePluginRegistryMock).not.toHaveBeenCalled();
   expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
 }
@@ -148,16 +163,21 @@ describe("memory runtime auto-enable loading", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({
+      ensureActiveMemoryCapability,
       getActiveMemorySearchManager,
       resolveActiveMemoryBackendConfig,
       closeActiveMemorySearchManager,
       closeActiveMemorySearchManagers,
     } = await import("./memory-runtime.js"));
     resolveRuntimePluginRegistryMock.mockReset();
+    restoreCachedMemoryPromptStateMock.mockReset();
     getLoadedRuntimePluginRegistryMock.mockReset();
     ensureStandaloneRuntimePluginRegistryLoadedMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
+    getMemoryCapabilityRegistrationMock.mockReset();
+    getActivePluginRuntimeSubagentModeMock.mockReset();
+    getActivePluginRuntimeSubagentModeMock.mockReturnValue("default");
     resolveAgentWorkspaceDirMock.mockReset();
     resolveDefaultAgentIdMock.mockClear();
     applyPluginAutoEnableMock.mockImplementation((params) => ({
@@ -316,6 +336,113 @@ describe("memory runtime auto-enable loading", () => {
     });
 
     expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalled();
+    expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("restores cached memory prompt state without force-loading the active registry", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    };
+    const capability = {
+      pluginId: "memory-core",
+      capability: {
+        promptBuilder: () => ["## Memory Recall", "Search memory first."],
+      },
+    };
+    const staleCapability = {
+      pluginId: "memory-lancedb",
+      capability: {
+        promptBuilder: () => ["## Stale Memory", "Do not use stale memory."],
+      },
+    };
+    let registeredCapability: typeof capability | typeof staleCapability | undefined =
+      staleCapability;
+    getActivePluginRuntimeSubagentModeMock.mockReturnValue("gateway-bindable");
+    getLoadedRuntimePluginRegistryMock.mockReturnValue({
+      plugins: [
+        { id: "telegram", status: "loaded" },
+        { id: "memory-core", status: "loaded" },
+        { id: "codex", status: "loaded" },
+      ],
+    } as never);
+    getMemoryCapabilityRegistrationMock.mockImplementation(() => registeredCapability as never);
+    restoreCachedMemoryPromptStateMock.mockImplementation(() => {
+      registeredCapability = capability;
+      return undefined as never;
+    });
+
+    const result = ensureActiveMemoryCapability({
+      cfg: rawConfig as never,
+      pluginId: "memory-core",
+    });
+
+    expect(result).toBe(capability);
+    expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledWith({
+      requiredPluginIds: ["memory-core"],
+    });
+    expect(restoreCachedMemoryPromptStateMock).toHaveBeenCalledWith({
+      config: rawConfig,
+      onlyPluginIds: ["memory-core"],
+      workspaceDir: "/resolved-workspace",
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+      preferBuiltPluginArtifacts: true,
+    });
+    expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not restore cached state when the selected prompt capability is already registered", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    };
+    const capability = {
+      pluginId: "memory-core",
+      capability: {
+        promptBuilder: () => ["## Memory Recall", "Search memory first."],
+      },
+    };
+    getMemoryCapabilityRegistrationMock.mockReturnValue(capability as never);
+
+    const result = ensureActiveMemoryCapability({
+      cfg: rawConfig as never,
+      pluginId: "memory-core",
+    });
+
+    expect(result).toBe(capability);
+    expect(getLoadedRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(restoreCachedMemoryPromptStateMock).not.toHaveBeenCalled();
+    expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores prompt capabilities from non-selected memory plugins", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    };
+    getMemoryCapabilityRegistrationMock.mockReturnValue({
+      pluginId: "memory-lancedb",
+      capability: {
+        promptBuilder: () => ["## Stale Memory", "Do not use stale memory."],
+      },
+    } as never);
+
+    const result = ensureActiveMemoryCapability({
+      cfg: rawConfig as never,
+      pluginId: "memory-lancedb",
+    });
+
+    expect(result).toBeUndefined();
+    expect(getLoadedRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
