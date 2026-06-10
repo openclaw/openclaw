@@ -1038,6 +1038,14 @@ export const AgentModelRuntimeEntrySchema = z
   })
   .strict();
 
+export const AgentLlmOpsSchema = z
+  .object({
+    promptPath: z.string().min(1).optional(),
+    promptLabel: z.string().optional().default("production"),
+  })
+  .strict()
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -1090,6 +1098,7 @@ export const AgentEntrySchema = z
     embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
+    llmOps: AgentLlmOpsSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })

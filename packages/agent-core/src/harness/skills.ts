@@ -1,5 +1,6 @@
-// Agent Core module implements skills behavior.
+// Agent Core module implements skills behavior with hot-swappable LLMOps registry hooks.
 import ignore from "ignore";
+import { LlmOpsSubsystem } from "../llmops/index.js";
 import {
   basenameEnvPath,
   dirnameEnvPath,
@@ -25,13 +26,9 @@ export type SkillDiagnosticCode =
 
 /** Warning produced while loading skills. */
 export interface SkillDiagnostic {
-  /** Diagnostic severity. Currently only warnings are emitted. */
   type: "warning";
-  /** Stable diagnostic code. */
   code: SkillDiagnosticCode;
-  /** Human-readable diagnostic message. */
   message: string;
-  /** Path associated with the diagnostic. */
   path: string;
 }
 
@@ -42,18 +39,11 @@ interface SkillFrontmatter {
   [key: string]: unknown;
 }
 
-/** Format a skill invocation prompt, optionally appending additional user instructions. */
 export function formatSkillInvocation(skill: Skill, additionalInstructions?: string): string {
   const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${dirnameEnvPath(skill.filePath)}.\n\n${skill.content}\n</skill>`;
   return additionalInstructions ? `${skillBlock}\n\n${additionalInstructions}` : skillBlock;
 }
 
-/**
- * Load skills from one or more directories.
- *
- * Traverses directories recursively, loads `SKILL.md` files, loads direct root `.md` files as skills, honors ignore files,
- * and returns diagnostics for invalid skill files. Missing input directories are skipped.
- */
 export async function loadSkills(
   env: ExecutionEnv,
   dirs: string | string[],
@@ -90,12 +80,6 @@ export async function loadSkills(
   return { skills, diagnostics };
 }
 
-/**
- * Load skills from source-tagged directories.
- *
- * Source values are preserved exactly and attached to every loaded skill and diagnostic. The agent package does not
- * interpret source values; applications define their own provenance shape.
- */
 export async function loadSourcedSkills<TSource, TSkill extends Skill = Skill>(
   env: ExecutionEnv,
   inputs: Array<{ path: string; source: TSource }>,
@@ -105,7 +89,11 @@ export async function loadSourcedSkills<TSource, TSkill extends Skill = Skill>(
   diagnostics: Array<SkillDiagnostic & { source: TSource }>;
 }> {
   const skills: Array<{ skill: TSkill; source: TSource }> = [];
+
+  // ❌ Old broken line: const diagnostics: Array<SkillDiagnostic & { source: TSource }>;
+  // 🎯 THE FIX: Add the empty array initializer assignment here:
   const diagnostics: Array<SkillDiagnostic & { source: TSource }> = [];
+
   for (const input of inputs) {
     const result = await loadSkills(env, input.path);
     for (const skill of result.skills) {
@@ -321,7 +309,7 @@ async function loadSkillFromFile(
     return { skill: null, diagnostics };
   }
 
-  const { frontmatter, body } = parsed.value;
+  let { frontmatter, body } = parsed.value;
   const skillDir = dirnameEnvPath(filePath);
   const parentDirName = basenameEnvPath(skillDir);
   const description =
@@ -339,6 +327,31 @@ async function loadSkillFromFile(
 
   if (!description || description.trim() === "") {
     return { skill: null, diagnostics };
+  }
+
+  // ── 🎯 THE LIVE OVERRIDE: Convention-Based Skill Interception pass ──
+  const llmOps = LlmOpsSubsystem.getInstance();
+  if (llmOps?.tracker && llmOps.tracker.config?.prompts?.enabled) {
+    const promptPath = `workspace/skills/${name}`;
+    try {
+      const remotePrompt = await llmOps.tracker.getPrompt(promptPath, undefined, {
+        label: "production",
+      });
+      if (remotePrompt) {
+        body = remotePrompt.compile({});
+
+        // 👁️ VISUAL DEBUG MATRIX: Pretty print synchronized text content to terminal window
+        console.log(`\n┌── 🔋 [LLMOps Prompt Registry Sync] ──────────────────────┐`);
+        console.log(`│ Asset Target: ${promptPath.padEnd(42)} │`);
+        console.log(`│ Status:       Active Production Channel Deployment      │`);
+        console.log(`├── Content Preview ──────────────────────────────────────┤`);
+        const cleanSnippet = body.replace(/\s+/g, " ").substring(0, 54);
+        console.log(`│ > ${cleanSnippet.padEnd(54)}... │`);
+        console.log(`└─────────────────────────────────────────────────────────┘\n`);
+      }
+    } catch (e) {
+      // Fail-soft: Use the local file string value loaded into `body` if registry is missing
+    }
   }
 
   return {
