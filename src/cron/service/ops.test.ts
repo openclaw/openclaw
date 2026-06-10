@@ -745,4 +745,60 @@ describe("cron service ops seam coverage", () => {
 
     expect(updated.enabled).toBe(false);
   });
+
+  it("rejects enabling a pre-existing never-matching job", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          id: "legacy-unsatisfiable",
+          name: "legacy unsatisfiable",
+          enabled: false,
+          createdAtMs: now,
+          updatedAtMs: now,
+          schedule: { kind: "cron", expr: "0 0 30 2 *" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "do work" },
+          state: {},
+        },
+      ],
+    });
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    await expect(update(state, "legacy-unsatisfiable", { enabled: true })).rejects.toThrow(
+      /has no upcoming run time and would never fire/,
+    );
+
+    const loaded = await loadCronStore(storePath);
+    expect(loaded.jobs[0]?.enabled).toBe(false);
+  });
+
+  it("uses the service clock when validating a finite-year cron update", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2000-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const job = await add(state, {
+      name: "future finite-year job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 0 * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do work" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    const updated = await update(state, job.id, {
+      schedule: { kind: "cron", expr: "0 0 0 1 1 * 2001", tz: "UTC" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    expect(updated.state.nextRunAtMs).toBe(Date.parse("2001-01-01T00:00:00.000Z"));
+  });
 });
