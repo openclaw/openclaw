@@ -112,6 +112,20 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
           generation: params.request.stateGeneration,
         })
       ) {
+        // Only transition to idle when no new embedded run started after
+        // recovery was initiated.  A fresh embedded run means the session
+        // is still active and should not be idled.
+        const activityClear = clearDiagnosticEmbeddedRunActivityForSession({
+          sessionId: params.request.sessionId,
+          sessionKey: params.request.sessionKey,
+          recoveryStartedAfterEmbeddedRunSequence:
+            params.recoveryStartedAfterEmbeddedRunSequence,
+          recoveryStartedAfterDiagnosticEventSequence:
+            params.recoveryStartedAfterDiagnosticEventSequence,
+        });
+        if (activityClear.blockedByActiveEmbeddedRun) {
+          return;
+        }
         const ghostState = peekDiagnosticSessionState(params.request);
         if (ghostState && ghostState.state !== "idle") {
           ghostState.state = "idle";
