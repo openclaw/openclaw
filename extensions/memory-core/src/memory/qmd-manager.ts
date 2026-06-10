@@ -13,7 +13,6 @@ import {
   isPathInside,
   root,
   resolveAgentContextLimits,
-  resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
@@ -65,7 +64,7 @@ import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 import {
   applyTemporalDecayToHybridResults,
-  DEFAULT_TEMPORAL_DECAY_CONFIG,
+  resolveTemporalDecaySearchConfig,
   type TemporalDecayConfig,
 } from "./temporal-decay.js";
 import {
@@ -3397,9 +3396,7 @@ function resolveQmdManagerRuntimeConfig(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
-    temporalDecay:
-      resolveMemorySearchConfig(cfg, agentId)?.query.hybrid.temporalDecay ??
-      DEFAULT_TEMPORAL_DECAY_CONFIG,
+    temporalDecay: resolveTemporalDecaySearchConfig(cfg, agentId),
   };
 }
 

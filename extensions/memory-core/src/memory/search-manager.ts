@@ -6,7 +6,6 @@ import {
   resolveAgentContextLimits,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
-  resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -24,6 +23,7 @@ import {
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { resolveTemporalDecaySearchConfig } from "./temporal-decay.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
@@ -660,9 +660,6 @@ function resolveQmdManagerRuntimeConfig(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
-    temporalDecay: resolveMemorySearchConfig(cfg, agentId)?.query.hybrid.temporalDecay ?? {
-      enabled: false,
-      halfLifeDays: 30,
-    },
+    temporalDecay: resolveTemporalDecaySearchConfig(cfg, agentId),
   };
 }
