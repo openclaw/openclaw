@@ -47,8 +47,8 @@ describe("loadUsageBarTemplate", () => {
   });
 
   it("does not cache a missing file, so a later-created template is picked up", () => {
-    const path = tmpFile("later.json", JSON.stringify(tplA));
-    const missing = join(dir as string, "missing.json");
+    dir = mkdtempSync(join(tmpdir(), "usage-template-"));
+    const missing = join(dir, "missing.json");
     expect(loadUsageBarTemplate(missing)).toBeUndefined();
     writeFileSync(missing, JSON.stringify(tplB));
     expect(loadUsageBarTemplate(missing)).toMatchObject(tplB);
