@@ -487,6 +487,35 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("does not use remote main fallback when existing local main has no upstream", async () => {
+    await setupGitPackageManagerFixture();
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses({ branch: "feature" }),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} show-ref --verify refs/heads/main`]: { stdout: "main\n" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`]: {
+        code: 1,
+        stderr: "no upstream configured",
+      },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} rev-parse refs/remotes/origin/main`]: { stdout: "remote123\n" },
+    });
+
+    const result = await runWithRunner(runner, { beforeGitMutation });
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("no-upstream");
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+    expect(calls).toContain(`git -C ${tempDir} show-ref --verify refs/heads/main`);
+    expect(calls).toContain(
+      `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`,
+    );
+    expect(calls).not.toContain(`git -C ${tempDir} remote`);
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/remotes/origin/main`);
+    expect(calls).not.toContain(`git -C ${tempDir} checkout main`);
+  });
+
   it("creates local main at the selected fetched preflight SHA when local main is missing", async () => {
     await setupGitPackageManagerFixture();
     const upstreamSha = "upstream123";

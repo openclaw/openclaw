@@ -820,6 +820,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
     let gitMutationPrepared = false;
     let createdDevBranchDuringUpdate = false;
+    let localDevBranchExists: boolean | null = null;
     const prepareGitMutation = async () => {
       if (gitMutationPrepared) {
         return;
@@ -1010,8 +1011,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         preflightBaseSha = targetSha;
         candidatesLocal = [targetSha];
       } else {
-        let remoteBranchRefs: string[] = [];
         if (needsCheckoutMain) {
+          const localMainStep = await runStep(
+            step(
+              `git show-ref ${DEV_BRANCH}`,
+              ["git", "-C", gitRoot, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
+              gitRoot,
+            ),
+          );
+          steps.push(localMainStep);
+          localDevBranchExists = localMainStep.exitCode === 0;
+        }
+        let remoteBranchRefs: string[] = [];
+        if (needsCheckoutMain && localDevBranchExists === false) {
           const remoteStep = await runStep(
             step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
           );
@@ -1330,19 +1342,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         await prepareGitMutation();
         let checkedOutSelectedSha = false;
         if (needsCheckoutMain) {
-          const localMainStep = await runStep(
-            step(
-              `git show-ref ${DEV_BRANCH}`,
-              ["git", "-C", gitRoot, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
-              gitRoot,
-            ),
-          );
-          steps.push(localMainStep);
+          const hasLocalDevBranch = localDevBranchExists !== false;
           const failure = await runRequiredGitStep(
-            localMainStep.exitCode === 0
+            hasLocalDevBranch
               ? `git checkout ${DEV_BRANCH}`
               : `git checkout -B ${DEV_BRANCH} ${selectedSha}`,
-            localMainStep.exitCode === 0
+            hasLocalDevBranch
               ? ["git", "-C", gitRoot, "checkout", DEV_BRANCH]
               : ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, selectedSha],
             "checkout-failed",
@@ -1350,7 +1355,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           if (failure) {
             return failure;
           }
-          checkedOutSelectedSha = localMainStep.exitCode !== 0;
+          checkedOutSelectedSha = !hasLocalDevBranch;
           createdDevBranchDuringUpdate = checkedOutSelectedSha;
           if (checkedOutSelectedSha && selectedDevUpstream) {
             const upstreamFailure = await runRequiredGitStep(
