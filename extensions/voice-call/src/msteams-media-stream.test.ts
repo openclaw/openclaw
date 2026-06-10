@@ -176,6 +176,54 @@ describe("MsteamsMediaStream", () => {
     ).toBe(false);
   });
 
+  it("rejects a replayed upgrade handshake (verified HMAC tuple is single-use)", async () => {
+    const port = randomPort();
+    server = await startServer({ port });
+
+    const callId = "call-replay";
+    const ts = Date.now();
+    const headers = {
+      "x-openclawteamsbridge-timestamp": String(ts),
+      "x-openclawteamsbridge-signature": signHmac(SECRET, ts, callId),
+    };
+
+    // First connection with the signed tuple succeeds...
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}${PATH}/${callId}`, { headers });
+    await new Promise<void>((resolve, reject) => {
+      ws1.once("open", () => resolve());
+      ws1.once("error", reject);
+    });
+    ws1.close();
+    await waitFor(() => server?.sessionCount === 0);
+
+    // ...replaying the SAME tuple (a captured handshake) is rejected even though the
+    // timestamp is still inside the HMAC window and no live session holds the callId.
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}${PATH}/${callId}`, { headers });
+    const outcome = await new Promise<"unexpected-response" | "error" | "open">((resolve) => {
+      ws2.once("unexpected-response", (_req, res) => {
+        expect(res.statusCode).toBe(401);
+        resolve("unexpected-response");
+      });
+      ws2.once("error", () => resolve("error"));
+      ws2.once("open", () => resolve("open"));
+    });
+    expect(outcome).not.toBe("open");
+
+    // A fresh timestamp (legitimate reconnect) is still accepted.
+    const ts2 = ts + 1;
+    const ws3 = new WebSocket(`ws://127.0.0.1:${port}${PATH}/${callId}`, {
+      headers: {
+        "x-openclawteamsbridge-timestamp": String(ts2),
+        "x-openclawteamsbridge-signature": signHmac(SECRET, ts2, callId),
+      },
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws3.once("open", () => resolve());
+      ws3.once("error", reject);
+    });
+    ws3.close();
+  });
+
   it("rejects upgrade with a bad HMAC signature", async () => {
     const port = randomPort();
     server = await startServer({ port });
