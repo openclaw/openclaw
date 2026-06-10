@@ -1488,6 +1488,142 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it.each([
+    { name: "no payloads", result: { payloads: [] } },
+    {
+      name: "tool calls without delivery evidence",
+      result: { payloads: [], meta: { toolSummary: { calls: 1 } } },
+    },
+  ])(
+    "fails session-only completion handoff when the in-process agent returns $name",
+    async ({ result: agentResult }) => {
+      const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+        result: agentResult,
+      });
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session-local",
+          isActive: false,
+        }),
+        getRuntimeConfig: () => ({}) as never,
+      });
+
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:local-session",
+        targetRequesterSessionKey: "agent:main:local-session",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: "announce-local-empty",
+      });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      });
+      expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+        deliver: false,
+        channel: undefined,
+        to: undefined,
+        bestEffortDeliver: true,
+      });
+    },
+  );
+
+  it("accepts session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-silent",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
+  it.each([
+    {
+      name: "accepted session spawn",
+      result: {
+        payloads: [],
+        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+      },
+    },
+    {
+      name: "successful cron add",
+      result: {
+        payloads: [],
+        successfulCronAdds: 1,
+      },
+    },
+  ])("accepts session-only completion handoff with $name evidence", async ({ result }) => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result,
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const delivery = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-side-effect",
+    });
+
+    expectRecordFields(delivery, {
+      delivered: true,
+      path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
   it("does not require generated media delivery for no-target cron completion handoffs", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {

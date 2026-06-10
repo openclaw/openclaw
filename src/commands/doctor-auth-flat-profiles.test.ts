@@ -1,3 +1,4 @@
+// Doctor flat auth-profile tests cover legacy flat profile repair and persisted auth-profile loading.
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -407,6 +408,39 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
     expect(fs.existsSync(authPath)).toBe(false);
     expect(fs.existsSync(`${authPath}.sqlite-import.458.bak`)).toBe(true);
+  });
+
+  it("keeps legacy JSON when SQLite verification misses an imported profile", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-openrouter",
+        },
+      },
+    });
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 464,
+      deps: {
+        loadPersistedAuthProfileStore: () => ({
+          version: 1,
+          profiles: {},
+        }),
+      },
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      `Left auth profile JSON in place for ${authPath} because SQLite verification did not find imported profile(s): openrouter:default.`,
+    ]);
+    expect(fs.existsSync(authPath)).toBe(true);
+    expect(fs.existsSync(`${authPath}.sqlite-import.464.bak`)).toBe(false);
   });
 });
 

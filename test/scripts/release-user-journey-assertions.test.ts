@@ -1,3 +1,4 @@
+// Release User Journey Assertions tests cover release user journey assertions script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
@@ -131,6 +132,31 @@ describe("release user journey assertions", () => {
       expect(result.stderr).toContain("Output tail:");
       expect(result.stderr).toContain("recent output tail");
       expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects oversized JSON artifacts before parsing release user journey config", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+
+    try {
+      mkdirSync(path.dirname(configPath), { recursive: true });
+      writeFileSync(
+        configPath,
+        `DO_NOT_DUMP_OLD_JSON${"x".repeat(2 * 1024 * 1024)}\nrecent json tail`,
+        "utf8",
+      );
+
+      const result = runAssertion(home, ["configure-mock-model", "18080"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("JSON artifact exceeded");
+      expect(result.stderr).toContain("recent json tail");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_JSON");
+      expect(result.stderr.length).toBeLessThan(80 * 1024);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -301,7 +327,9 @@ describe("release user journey assertions", () => {
             "0.2",
           ]),
         ),
-      ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
+      ).rejects.toThrow(
+        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS must be a positive integer. Got: "100ms"',
+      );
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });
@@ -363,7 +391,9 @@ describe("release user journey assertions", () => {
               "hello",
             ]),
         ),
-      ).rejects.toThrow("fixture inbound failed: 500");
+      ).rejects.toThrow(
+        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES must be a positive integer. Got: "16bytes"',
+      );
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });

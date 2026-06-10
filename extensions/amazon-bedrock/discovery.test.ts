@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover discovery plugin behavior.
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -247,6 +248,58 @@ describe("bedrock discovery", () => {
     );
   });
 
+  it("applies Fable limits and reasoning metadata to foundation and profile models", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            modelId: "anthropic.claude-fable-5",
+            modelName: "Claude Fable 5",
+            providerName: "anthropic",
+            inputModalities: ["TEXT", "IMAGE"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "company-fable",
+            inferenceProfileName: "Company Fable",
+            status: "ACTIVE",
+            type: "APPLICATION",
+            models: [
+              {
+                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-fable-5",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const expected = {
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    };
+
+    expectModelFields(
+      models.find((model) => model.id === "anthropic.claude-fable-5"),
+      expected,
+    );
+    expectModelFields(
+      models.find((model) => model.id === "company-fable"),
+      {
+        ...expected,
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    );
+  });
+
   it("caches results when refreshInterval is enabled", async () => {
     mockSingleActiveSummary();
 
@@ -409,7 +462,9 @@ describe("bedrock discovery", () => {
       input: ["text", "image"],
       contextWindow: 1000000,
       maxTokens: 4096,
+      params: { canonicalModelId: "claude-sonnet-4-6" },
     });
+    expect(usProfile?.thinkingLevelMap).toBeUndefined();
     expectModelFields(euProfile, { input: ["text", "image"] });
     expectModelFields(globalProfile, { input: ["text", "image"] });
 
@@ -545,6 +600,8 @@ describe("bedrock discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 4096,
       input: ["text"],
+      params: { canonicalModelId: "claude-opus-4-6-v1:0" },
+      thinkingLevelMap: { xhigh: null, max: "max" },
     });
   });
 

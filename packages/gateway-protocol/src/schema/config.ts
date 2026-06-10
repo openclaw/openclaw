@@ -1,3 +1,4 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -36,22 +37,29 @@ export const ConfigSetParamsSchema = Type.Object(
 );
 
 /** Shared config apply/patch payload with optional restart notification context. */
-const ConfigApplyLikeParamsSchema = Type.Object(
-  {
-    raw: NonEmptyString,
-    baseHash: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(Type.String()),
-    deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
-    note: Type.Optional(Type.String()),
-    restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  },
-  { additionalProperties: false },
-);
+const ConfigApplyLikeParamProperties = {
+  raw: NonEmptyString,
+  baseHash: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(Type.String()),
+  deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
+  note: Type.Optional(Type.String()),
+  restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+} as const;
+
+const ConfigApplyLikeParamsSchema = Type.Object(ConfigApplyLikeParamProperties, {
+  additionalProperties: false,
+});
 
 /** Raw config apply request that may schedule a restart. */
 export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
 /** Raw config patch request that may schedule a restart. */
-export const ConfigPatchParamsSchema = ConfigApplyLikeParamsSchema;
+export const ConfigPatchParamsSchema = Type.Object(
+  {
+    ...ConfigApplyLikeParamProperties,
+    replacePaths: Type.Optional(Type.Array(NonEmptyString, { maxItems: 256 })),
+  },
+  { additionalProperties: false },
+);
 
 /** Empty request payload for fetching the generated config schema. */
 export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: false });

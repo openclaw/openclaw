@@ -282,7 +282,7 @@ export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
 const DEFAULT_SECURITY: ExecSecurity = "full";
 const DEFAULT_ASK: ExecAsk = "off";
-export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
+export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";

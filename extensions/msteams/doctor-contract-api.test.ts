@@ -1,3 +1,4 @@
+// Msteams tests cover doctor contract api plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

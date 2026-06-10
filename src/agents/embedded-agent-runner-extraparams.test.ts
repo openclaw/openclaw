@@ -468,6 +468,8 @@ function createTestOpenAIProviderWrapper(
   streamFn = createCodexNativeWebSearchWrapper(streamFn, {
     config: params.context.config,
     agentDir: params.context.agentDir,
+    agentId: params.context.agentId,
+    nativeWebSearchAllowedByToolPolicy: params.context.nativeWebSearchAllowedByToolPolicy,
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
   streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
@@ -540,10 +542,29 @@ describe("applyExtraParamsToAgent", () => {
       "/tmp/openclaw-workspace",
       model,
       "/tmp/openclaw-agent",
+      undefined,
+      {
+        nativeWebSearchPolicyContext: {
+          sessionKey: "agent:cass:main",
+          sandboxToolPolicy: { deny: ["group:web"] },
+          messageProvider: "teams",
+          agentAccountId: "acct-1",
+          groupId: "group-1",
+          groupChannel: "General",
+          groupSpace: "space-1",
+          spawnedBy: "agent:cass:main",
+          senderId: "alice",
+          senderName: "Alice",
+          senderUsername: "alice-user",
+          senderE164: "+15551234567",
+        },
+      },
     );
 
     expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
     expect(capturedContext?.workspaceDir).toBe("/tmp/openclaw-workspace");
+    expect(capturedContext?.nativeWebSearchAllowedByToolPolicy).toBe(false);
+    expect("nativeWebSearchPolicyContext" in (capturedContext ?? {})).toBe(false);
   });
 
   function runResponsesPayloadMutationCase(params: {
@@ -711,6 +732,153 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
+  });
+
+  it("removes implicit disabled thinking for MiniMax-M3 anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([{}]);
+  });
+
+  it("preserves explicit off thinking for MiniMax-M3 anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "off");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
+  });
+
+  it("rewrites MiniMax-M3 default budget thinking to adaptive", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "enabled", budget_tokens: 1024 },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "adaptive");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "adaptive" },
+      },
+    ]);
+  });
+
+  it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        max_tokens: 8692,
+        thinking: { type: "enabled", budget_tokens: 8192 },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "adaptive");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { maxTokens: 500 });
+
+    expect(payloads).toStrictEqual([
+      {
+        max_tokens: 500,
+        thinking: { type: "adaptive" },
+      },
+    ]);
+  });
+
+  it("preserves downstream explicit MiniMax-M3 thinking overrides", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      onPayload: (payload) => {
+        (payload as Record<string, unknown>).thinking = { type: "disabled" };
+      },
+    });
 
     expect(payloads).toStrictEqual([
       {
