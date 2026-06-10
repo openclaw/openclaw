@@ -1345,7 +1345,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               "checkout-failed",
             );
             if (upstreamFailure) {
-              return upstreamFailure;
+              return await buildGitErrorResultWithRollback("checkout-failed");
             }
           }
         }

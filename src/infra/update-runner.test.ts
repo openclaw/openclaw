@@ -598,6 +598,101 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("rolls back when upstream setup fails after creating local main", async () => {
+    await setupGitPackageManagerFixture();
+
+    const selectedSha = "upstream123";
+    const calls: string[] = [];
+    const beforeGitMutation = vi.fn(async () => {
+      calls.push("beforeGitMutation");
+    });
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      const responses = buildGitWorktreeProbeResponses({ branch: "feature" });
+      const response = responses[key];
+      if (response) {
+        return toCommandResult(response);
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`) {
+        return {
+          stdout: "",
+          stderr: "no upstream configured for branch 'main'",
+          code: 1,
+        };
+      }
+      if (key === `git -C ${tempDir} remote`) {
+        return { stdout: "origin\n", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
+        return { stdout: selectedSha, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-list --max-count=10 ${selectedSha}`) {
+        return { stdout: `${selectedSha}\n`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${selectedSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key);
+        return { stdout: `HEAD is now at ${selectedSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
+        key.endsWith(selectedSha)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install" || key === "pnpm build" || key === "pnpm ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} show-ref --verify refs/heads/main`) {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === `git -C ${tempDir} checkout -B main ${selectedSha}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} branch --set-upstream-to origin/main main`) {
+        return { stdout: "", stderr: "requested upstream does not exist", code: 1 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("checkout-failed");
+    expect(calls).toContain(`git -C ${tempDir} checkout -B main ${selectedSha}`);
+    expect(calls).toContain(`git -C ${tempDir} branch --set-upstream-to origin/main main`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).toContain(`git -C ${tempDir} checkout --force feature`);
+    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+    expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
+      calls.indexOf(`git -C ${tempDir} checkout -B main ${selectedSha}`),
+    );
+    expect(
+      calls.indexOf(`git -C ${tempDir} branch --set-upstream-to origin/main main`),
+    ).toBeLessThan(calls.indexOf(`git -C ${tempDir} reset --hard`));
+  });
+
   it("fetches only the requested tag for explicit dev tag target refs", async () => {
     await setupGitPackageManagerFixture();
     const targetSha = "2222222222222222222222222222222222222222";
