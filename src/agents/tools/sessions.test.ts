@@ -90,7 +90,9 @@ function mockLabelResolveSendGateway(resolveKeys: Array<string | undefined>) {
       if (request.method === "sessions.resolve") {
         const key = resolveKeys[resolveAttempt++];
         if (!key) {
-          throw new Error(`No session found with label: ${request.params?.label ?? "unknown"}`);
+          const labelParam = request.params?.label;
+          const labelText = typeof labelParam === "string" ? labelParam : "unknown";
+          throw new Error(`No session found with label: ${labelText}`);
         }
         return { key };
       }
