@@ -38,8 +38,8 @@ function inheritedUpdateTimeout(
   return inheritOptionFromParent<string>(command, "timeout");
 }
 
-function registerUpdateRepairCommand(update: Command, name: string, params?: { hidden?: boolean }) {
-  const command = params?.hidden ? update.command(name, { hidden: true }) : update.command(name);
+function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
+  const command = update.command(name, { hidden });
   command
     .description("Repair post-update doctor and plugin convergence")
     .option("--json", "Output result as JSON", false)
@@ -154,8 +154,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       }
     });
 
-  registerUpdateRepairCommand(update, "repair");
-  registerUpdateRepairCommand(update, "finalize", { hidden: true });
+  registerUpdateFinalizationCommand(update, "repair", false);
+  registerUpdateFinalizationCommand(update, "finalize", true);
 
   update
     .command("wizard")
