@@ -633,7 +633,7 @@ describe("update-cli", () => {
 
   const mockGitUpdateAfterMutation = (result = makeOkUpdateResult({ mode: "git" })) => {
     vi.mocked(runGatewayUpdate).mockImplementationOnce(async (opts) => {
-      await opts.beforeGitMutation?.();
+      await opts?.beforeGitMutation?.();
       return result;
     });
   };
