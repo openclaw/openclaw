@@ -83,6 +83,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function readObjectEntries(value: Record<string, unknown>): Array<[string, unknown]> | undefined {
+  try {
+    return Object.entries(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectValues(value: Record<string, unknown>): unknown[] | undefined {
+  try {
+    return Object.values(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectKeys(value: Record<string, unknown>): string[] | undefined {
+  try {
+    return Object.keys(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
 }
@@ -107,17 +131,23 @@ function normalizeSchemaMap(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry)]),
-  );
+  const entries = readObjectEntries(value);
+  if (!entries) {
+    return {};
+  }
+  return Object.fromEntries(entries.map(([key, entry]) => [key, normalizeJsonSchemaNode(entry)]));
 }
 
 function normalizeSchemaDependencies(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
+  const entries = readObjectEntries(value);
+  if (!entries) {
+    return {};
+  }
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
+    entries.map(([key, entry]) => [
       key,
       isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry),
     ]),
@@ -169,8 +199,12 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
     return schema;
   }
   const normalizedSchema = normalizeAdditionalPropertiesSchema(expandJsonSchemaTypeArray(schema));
+  const entries = readObjectEntries(normalizedSchema);
+  if (!entries) {
+    return false;
+  }
   return Object.fromEntries(
-    Object.entries(normalizedSchema).map(([key, value]) => {
+    entries.map(([key, value]) => {
       if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
         return ["$ref", value];
       }
@@ -233,7 +267,7 @@ function resolveLocalAnchor(
     if (!isRecord(value)) {
       continue;
     }
-    for (const entry of Object.values(value)) {
+    for (const entry of readObjectValues(value) ?? []) {
       const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
       if (resolved !== undefined) {
         return resolved;
@@ -241,7 +275,7 @@ function resolveLocalAnchor(
     }
   }
   if (isRecord(schema.dependencies)) {
-    for (const entry of Object.values(schema.dependencies)) {
+    for (const entry of readObjectValues(schema.dependencies) ?? []) {
       if (isStringArray(entry)) {
         continue;
       }
@@ -392,7 +426,7 @@ function resolveSchemaResourceRef(
       if (!isRecord(value)) {
         continue;
       }
-      for (const entry of Object.values(value)) {
+      for (const entry of readObjectValues(value) ?? []) {
         const resolved = visit(entry as JsonSchemaValue, currentBaseId);
         if (resolved.found) {
           return resolved;
@@ -400,7 +434,7 @@ function resolveSchemaResourceRef(
       }
     }
     if (isRecord(current.dependencies)) {
-      for (const entry of Object.values(current.dependencies)) {
+      for (const entry of readObjectValues(current.dependencies) ?? []) {
         if (isStringArray(entry)) {
           continue;
         }
@@ -458,7 +492,11 @@ function resolveSchemaRef(
 
 /** Normalize JSON Schema constructs into the TypeBox compiler subset used by plugin validators. */
 export function normalizeJsonSchemaForTypeBox(schema: JsonSchemaValue): JsonSchemaValue {
-  return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
+  try {
+    return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
+  } catch {
+    return false;
+  }
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -541,7 +579,11 @@ function validateSchemaKeywordShapes(
     if (!isRecord(schema.dependentRequired)) {
       return `${path}.dependentRequired: expected string array map`;
     }
-    for (const [key, value] of Object.entries(schema.dependentRequired)) {
+    const entries = readObjectEntries(schema.dependentRequired);
+    if (!entries) {
+      return `${path}.dependentRequired: unreadable string array map`;
+    }
+    for (const [key, value] of entries) {
       if (!isStringArray(value)) {
         return `${path}.dependentRequired.${key}: expected string array`;
       }
@@ -551,7 +593,11 @@ function validateSchemaKeywordShapes(
     if (!isRecord(schema.dependencies)) {
       return `${path}.dependencies: expected schema or string array map`;
     }
-    for (const [key, value] of Object.entries(schema.dependencies)) {
+    const entries = readObjectEntries(schema.dependencies);
+    if (!entries) {
+      return `${path}.dependencies: unreadable schema or string array map`;
+    }
+    for (const [key, value] of entries) {
       if (!isStringArray(value) && typeof value !== "boolean" && !isRecord(value)) {
         return `${path}.dependencies.${key}: expected schema or string array`;
       }
@@ -614,7 +660,11 @@ function findJsonSchemaNodeError(
     if (!isRecord(value)) {
       return `${path}.${key}: expected schema map`;
     }
-    for (const [entryKey, entry] of Object.entries(value)) {
+    const entries = readObjectEntries(value);
+    if (!entries) {
+      return `${path}.${key}: unreadable schema map`;
+    }
+    for (const [entryKey, entry] of entries) {
       const error = findJsonSchemaNodeError(
         entry,
         `${path}.${key}.${entryKey}`,
@@ -628,7 +678,11 @@ function findJsonSchemaNodeError(
     }
   }
   if (isRecord(schema.dependencies)) {
-    for (const [key, value] of Object.entries(schema.dependencies)) {
+    const entries = readObjectEntries(schema.dependencies);
+    if (!entries) {
+      return `${path}.dependencies: unreadable schema or string array map`;
+    }
+    for (const [key, value] of entries) {
       if (isStringArray(value)) {
         continue;
       }
@@ -704,7 +758,11 @@ function findJsonSchemaNodeError(
 
 /** Return the first structural JSON Schema error that would make validation/defaulting unsafe. */
 export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | undefined {
-  return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
+  try {
+    return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
+  } catch {
+    return "<schema>: unreadable schema";
+  }
 }
 
 function cloneDefault<T>(value: T): T {
@@ -778,7 +836,7 @@ function inlineLocalRefsForMatch(
         resolvingRefs,
       );
       resolvingRefs.delete(refKey);
-      if (Object.keys(siblingSchema).length === 0) {
+      if ((readObjectKeys(siblingSchema) ?? []).length === 0) {
         return inlinedTarget;
       }
       return {
@@ -795,42 +853,52 @@ function inlineLocalRefsForMatch(
       };
     }
   }
+  const entries = readObjectEntries(schema);
+  if (!entries) {
+    return false;
+  }
   return Object.fromEntries(
-    Object.entries(schema).map(([key, value]) => {
+    entries.map(([key, value]) => {
       if (schemaMapKeywords.has(key) && isRecord(value)) {
+        const mapEntries = readObjectEntries(value);
         return [
           key,
-          Object.fromEntries(
-            Object.entries(value).map(([entryKey, entry]) => [
-              entryKey,
-              inlineLocalRefsForMatch(
-                entry as JsonSchemaValue,
-                root,
-                currentResourceRoot,
-                currentResourceBaseId,
-                resolvingRefs,
-              ),
-            ]),
-          ),
-        ];
-      }
-      if (key === "dependencies" && isRecord(value)) {
-        return [
-          key,
-          Object.fromEntries(
-            Object.entries(value).map(([entryKey, entry]) => [
-              entryKey,
-              isStringArray(entry)
-                ? entry
-                : inlineLocalRefsForMatch(
+          mapEntries
+            ? Object.fromEntries(
+                mapEntries.map(([entryKey, entry]) => [
+                  entryKey,
+                  inlineLocalRefsForMatch(
                     entry as JsonSchemaValue,
                     root,
                     currentResourceRoot,
                     currentResourceBaseId,
                     resolvingRefs,
                   ),
-            ]),
-          ),
+                ]),
+              )
+            : {},
+        ];
+      }
+      if (key === "dependencies" && isRecord(value)) {
+        const dependencyEntries = readObjectEntries(value);
+        return [
+          key,
+          dependencyEntries
+            ? Object.fromEntries(
+                dependencyEntries.map(([entryKey, entry]) => [
+                  entryKey,
+                  isStringArray(entry)
+                    ? entry
+                    : inlineLocalRefsForMatch(
+                        entry as JsonSchemaValue,
+                        root,
+                        currentResourceRoot,
+                        currentResourceBaseId,
+                        resolvingRefs,
+                      ),
+                ]),
+              )
+            : {},
         ];
       }
       if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
@@ -876,7 +944,11 @@ function applyObjectPropertyDefaults(
   currentResourceBaseId: string | undefined,
 ): Record<string, unknown> {
   const properties = isRecord(schema.properties) ? schema.properties : {};
-  for (const [key, propertySchema] of Object.entries(properties)) {
+  const propertyEntries = readObjectEntries(properties);
+  if (!propertyEntries) {
+    throw new Error("unreadable schema properties");
+  }
+  for (const [key, propertySchema] of propertyEntries) {
     const currentValue = value[key];
     const defaultedValue = applySchemaDefaults(
       propertySchema as JsonSchemaValue,
@@ -894,14 +966,22 @@ function applyObjectPropertyDefaults(
   }
   const patternMatchedKeys = new Set<string>();
   if (isRecord(schema.patternProperties)) {
-    for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
+    const patternEntries = readObjectEntries(schema.patternProperties);
+    if (!patternEntries) {
+      throw new Error("unreadable schema patternProperties");
+    }
+    for (const [pattern, propertySchema] of patternEntries) {
       let regex: RegExp;
       try {
         regex = new RegExp(pattern);
       } catch {
         continue;
       }
-      for (const key of Object.keys(value)) {
+      const valueKeys = readObjectKeys(value);
+      if (!valueKeys) {
+        throw new Error("unreadable value keys");
+      }
+      for (const key of valueKeys) {
         if (!regex.test(key)) {
           continue;
         }
@@ -919,7 +999,11 @@ function applyObjectPropertyDefaults(
   }
   if (isRecord(schema.additionalProperties)) {
     const additionalSchema = schema.additionalProperties as JsonSchemaValue;
-    for (const key of Object.keys(value)) {
+    const valueKeys = readObjectKeys(value);
+    if (!valueKeys) {
+      throw new Error("unreadable value keys");
+    }
+    for (const key of valueKeys) {
       if (Object.hasOwn(properties, key) || patternMatchedKeys.has(key)) {
         continue;
       }
@@ -946,7 +1030,11 @@ function applyObjectDependencyDefaults(
 ): Record<string, unknown> {
   let nextValue = value;
   if (isRecord(schema.dependencies)) {
-    for (const [key, dependencySchema] of Object.entries(schema.dependencies)) {
+    const dependencyEntries = readObjectEntries(schema.dependencies);
+    if (!dependencyEntries) {
+      throw new Error("unreadable schema dependencies");
+    }
+    for (const [key, dependencySchema] of dependencyEntries) {
       if (!Object.hasOwn(nextValue, key) || isStringArray(dependencySchema)) {
         continue;
       }
@@ -961,7 +1049,11 @@ function applyObjectDependencyDefaults(
     }
   }
   if (isRecord(schema.dependentSchemas)) {
-    for (const [key, dependentSchema] of Object.entries(schema.dependentSchemas)) {
+    const dependentSchemaEntries = readObjectEntries(schema.dependentSchemas);
+    if (!dependentSchemaEntries) {
+      throw new Error("unreadable schema dependentSchemas");
+    }
+    for (const [key, dependentSchema] of dependentSchemaEntries) {
       if (!Object.hasOwn(nextValue, key)) {
         continue;
       }
@@ -1022,12 +1114,12 @@ function countSchemaNodes(schema: JsonSchemaValue, seen = new Set<object>()): nu
     if (!isRecord(value)) {
       continue;
     }
-    for (const entry of Object.values(value)) {
+    for (const entry of readObjectValues(value) ?? []) {
       count += countSchemaNodes(entry as JsonSchemaValue, seen);
     }
   }
   if (isRecord(schema.dependencies)) {
-    for (const entry of Object.values(schema.dependencies)) {
+    for (const entry of readObjectValues(schema.dependencies) ?? []) {
       if (!isStringArray(entry)) {
         count += countSchemaNodes(entry as JsonSchemaValue, seen);
       }
@@ -1266,5 +1358,15 @@ function applySchemaDefaults(
 
 /** Apply schema defaults to a config value while preserving caller-owned value shape. */
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
-  return applySchemaDefaults(schema, value) as T;
+  let target: T;
+  try {
+    target = cloneDefault(value);
+  } catch {
+    return value;
+  }
+  try {
+    return applySchemaDefaults(schema, target) as T;
+  } catch {
+    return value;
+  }
 }
