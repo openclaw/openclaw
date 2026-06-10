@@ -1,14 +1,29 @@
 // Context-engine quarantine health tests cover cross-process status visibility.
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  createCorePluginStateSyncKeyedStore,
+  resetPluginStateStoreForTests,
+} from "../plugin-state/plugin-state-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
 import { clearContextEngineRuntimeQuarantine, listContextEngineQuarantines } from "./registry.js";
+
+const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
+const CONTEXT_ENGINE_QUARANTINE_NAMESPACE = "runtime-quarantines";
+
+type ContextEngineQuarantineTestRecord = {
+  engineId: string;
+  owner?: string;
+  operation: string;
+  reason: string;
+  failedAtMs: number;
+  processId: number;
+  recordedAtMs: number;
+};
 
 async function withLiveSiblingProcess<T>(fn: (pid: number) => Promise<T>): Promise<T> {
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], {
@@ -23,6 +38,20 @@ async function withLiveSiblingProcess<T>(fn: (pid: number) => Promise<T>): Promi
     child.kill();
   }
 }
+
+function seedPersistedContextEngineQuarantineForTest(
+  record: ContextEngineQuarantineTestRecord,
+): void {
+  createCorePluginStateSyncKeyedStore<ContextEngineQuarantineTestRecord>({
+    ownerId: CONTEXT_ENGINE_QUARANTINE_OWNER_ID,
+    namespace: CONTEXT_ENGINE_QUARANTINE_NAMESPACE,
+    maxEntries: 64,
+  }).register(JSON.stringify([record.engineId, record.processId]), record);
+}
+
+afterEach(() => {
+  resetPluginStateStoreForTests();
+});
 
 describe("context engine quarantine health", () => {
   it("lists persisted runtime quarantines when local process state is empty", async () => {
@@ -49,41 +78,26 @@ describe("context engine quarantine health", () => {
   });
 
   it("clears only the current process record while preserving live sibling quarantines", async () => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
       await withLiveSiblingProcess(async (siblingProcessId) => {
-        const filePath = path.join(stateDir, "context-engine", "runtime-quarantines.json");
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(
-          filePath,
-          `${JSON.stringify(
-            {
-              schemaVersion: 1,
-              records: [
-                {
-                  engineId: "lossless-claw",
-                  owner: "plugin:lossless-claw",
-                  operation: "bootstrap",
-                  reason: "current process failure",
-                  failedAtMs: 123,
-                  processId: process.pid,
-                  recordedAtMs: 456,
-                },
-                {
-                  engineId: "lossless-claw",
-                  owner: "plugin:lossless-claw",
-                  operation: "bootstrap",
-                  reason: "sibling process failure",
-                  failedAtMs: 789,
-                  processId: siblingProcessId,
-                  recordedAtMs: 1_000,
-                },
-              ],
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
+        seedPersistedContextEngineQuarantineForTest({
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "bootstrap",
+          reason: "current process failure",
+          failedAtMs: 123,
+          processId: process.pid,
+          recordedAtMs: 456,
+        });
+        seedPersistedContextEngineQuarantineForTest({
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "bootstrap",
+          reason: "sibling process failure",
+          failedAtMs: 789,
+          processId: siblingProcessId,
+          recordedAtMs: 1_000,
+        });
 
         clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
 
@@ -101,48 +115,33 @@ describe("context engine quarantine health", () => {
   });
 
   it("clears all current process records while preserving live sibling quarantines", async () => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
       await withLiveSiblingProcess(async (siblingProcessId) => {
-        const filePath = path.join(stateDir, "context-engine", "runtime-quarantines.json");
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(
-          filePath,
-          `${JSON.stringify(
-            {
-              schemaVersion: 1,
-              records: [
-                {
-                  engineId: "local-a",
-                  operation: "bootstrap",
-                  reason: "current process failure a",
-                  failedAtMs: 123,
-                  processId: process.pid,
-                  recordedAtMs: 456,
-                },
-                {
-                  engineId: "local-b",
-                  operation: "assemble",
-                  reason: "current process failure b",
-                  failedAtMs: 234,
-                  processId: process.pid,
-                  recordedAtMs: 567,
-                },
-                {
-                  engineId: "lossless-claw",
-                  owner: "plugin:lossless-claw",
-                  operation: "bootstrap",
-                  reason: "sibling process failure",
-                  failedAtMs: 789,
-                  processId: siblingProcessId,
-                  recordedAtMs: 1_000,
-                },
-              ],
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
+        seedPersistedContextEngineQuarantineForTest({
+          engineId: "local-a",
+          operation: "bootstrap",
+          reason: "current process failure a",
+          failedAtMs: 123,
+          processId: process.pid,
+          recordedAtMs: 456,
+        });
+        seedPersistedContextEngineQuarantineForTest({
+          engineId: "local-b",
+          operation: "assemble",
+          reason: "current process failure b",
+          failedAtMs: 234,
+          processId: process.pid,
+          recordedAtMs: 567,
+        });
+        seedPersistedContextEngineQuarantineForTest({
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "bootstrap",
+          reason: "sibling process failure",
+          failedAtMs: 789,
+          processId: siblingProcessId,
+          recordedAtMs: 1_000,
+        });
 
         clearContextEngineRuntimeQuarantine();
 

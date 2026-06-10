@@ -103,18 +103,24 @@ function collectChannelPluginFailures(params: {
       includePersistedAuthState: false,
       includeSetupFallbackPlugins: params.includeSetupFallbackPlugins === true,
     });
+    const loadFailures = resolution.loadFailures.map((failure) => ({
+      channelId: failure.channelId,
+      pluginId: failure.pluginId,
+      message: failure.message,
+      ...(failure.source ? { source: failure.source } : {}),
+    }));
+    const failedChannelIds = new Set(
+      [...diagnosticFailures, ...loadFailures].map((failure) => failure.channelId),
+    );
     return [
       ...diagnosticFailures,
-      ...resolution.loadFailures.map((failure) => ({
-        channelId: failure.channelId,
-        pluginId: failure.pluginId,
-        message: failure.message,
-        ...(failure.source ? { source: failure.source } : {}),
-      })),
-      ...resolution.missingConfiguredChannelIds.map((channelId) => ({
-        channelId,
-        message: "configured channel plugin is missing or unavailable",
-      })),
+      ...loadFailures,
+      ...resolution.missingConfiguredChannelIds
+        .filter((channelId) => !failedChannelIds.has(channelId))
+        .map((channelId) => ({
+          channelId,
+          message: "configured channel plugin is missing or unavailable",
+        })),
     ];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

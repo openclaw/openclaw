@@ -1,10 +1,9 @@
 // Persists context-engine runtime quarantines so health surfaces can see
 // failures recorded in sibling runtime processes.
-import fs from "node:fs";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 
-const QUARANTINE_HEALTH_SCHEMA_VERSION = 1;
+const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
+const CONTEXT_ENGINE_QUARANTINE_NAMESPACE = "runtime-quarantines";
 const MAX_QUARANTINE_RECORDS = 64;
 
 export type PersistedContextEngineRuntimeQuarantine = {
@@ -25,13 +24,12 @@ type PersistedContextEngineQuarantineRecord = {
   recordedAtMs: number;
 };
 
-type ContextEngineQuarantineHealthFile = {
-  schemaVersion: typeof QUARANTINE_HEALTH_SCHEMA_VERSION;
-  records: PersistedContextEngineQuarantineRecord[];
-};
-
-function quarantineHealthPath(): string {
-  return path.join(resolveStateDir(), "context-engine", "runtime-quarantines.json");
+function openQuarantineStore() {
+  return createCorePluginStateSyncKeyedStore<PersistedContextEngineQuarantineRecord>({
+    ownerId: CONTEXT_ENGINE_QUARANTINE_OWNER_ID,
+    namespace: CONTEXT_ENGINE_QUARANTINE_NAMESPACE,
+    maxEntries: MAX_QUARANTINE_RECORDS,
+  });
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -80,65 +78,26 @@ function processLooksLive(processId: number): boolean {
   }
 }
 
-function readPersistedRecords(): PersistedContextEngineQuarantineRecord[] {
-  let raw: string;
+function listPersistedRecords(): PersistedContextEngineQuarantineRecord[] {
   try {
-    raw = fs.readFileSync(quarantineHealthPath(), "utf8");
+    return openQuarantineStore()
+      .entries()
+      .map((entry) => normalizeRecord(entry.value))
+      .filter((record): record is PersistedContextEngineQuarantineRecord => Boolean(record))
+      .filter((record) => processLooksLive(record.processId));
   } catch {
     return [];
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    (parsed as Partial<ContextEngineQuarantineHealthFile>).schemaVersion !==
-      QUARANTINE_HEALTH_SCHEMA_VERSION ||
-    !Array.isArray((parsed as Partial<ContextEngineQuarantineHealthFile>).records)
-  ) {
-    return [];
-  }
-
-  return (parsed as ContextEngineQuarantineHealthFile).records
-    .map(normalizeRecord)
-    .filter((record): record is PersistedContextEngineQuarantineRecord => Boolean(record))
-    .filter((record) => processLooksLive(record.processId));
-}
-
-function writePersistedRecords(records: PersistedContextEngineQuarantineRecord[]): void {
-  const filePath = quarantineHealthPath();
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  const payload: ContextEngineQuarantineHealthFile = {
-    schemaVersion: QUARANTINE_HEALTH_SCHEMA_VERSION,
-    records: records
-      .toSorted((left, right) => left.recordedAtMs - right.recordedAtMs)
-      .slice(-MAX_QUARANTINE_RECORDS),
-  };
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  fs.renameSync(tempPath, filePath);
 }
 
 function recordKey(record: Pick<PersistedContextEngineQuarantineRecord, "engineId" | "processId">) {
-  return `${record.engineId}\0${record.processId}`;
+  return JSON.stringify([record.engineId, record.processId]);
 }
 
 export function recordPersistedContextEngineQuarantine(
   quarantine: PersistedContextEngineRuntimeQuarantine,
 ): void {
-  const records = readPersistedRecords();
-  const key = recordKey({ engineId: quarantine.engineId, processId: process.pid });
-  if (records.some((record) => recordKey(record) === key)) {
-    return;
-  }
-  records.push({
+  const record: PersistedContextEngineQuarantineRecord = {
     engineId: quarantine.engineId,
     operation: quarantine.operation,
     reason: quarantine.reason,
@@ -146,13 +105,13 @@ export function recordPersistedContextEngineQuarantine(
     processId: process.pid,
     recordedAtMs: Date.now(),
     ...(quarantine.owner ? { owner: quarantine.owner } : {}),
-  });
-  writePersistedRecords(records);
+  };
+  openQuarantineStore().registerIfAbsent(recordKey(record), record);
 }
 
 export function listPersistedContextEngineQuarantines(): PersistedContextEngineRuntimeQuarantine[] {
   const byEngineId = new Map<string, PersistedContextEngineQuarantineRecord>();
-  for (const record of readPersistedRecords()) {
+  for (const record of listPersistedRecords()) {
     const existing = byEngineId.get(record.engineId);
     if (!existing || record.failedAtMs < existing.failedAtMs) {
       byEngineId.set(record.engineId, record);
@@ -172,27 +131,22 @@ export function listPersistedContextEngineQuarantines(): PersistedContextEngineR
   });
 }
 
-function removePersistedContextEngineQuarantineFile(): void {
-  try {
-    fs.rmSync(quarantineHealthPath(), { force: true });
-  } catch {
-    // Best-effort cleanup; callers still clear in-memory state.
-  }
-}
-
 export function clearPersistedContextEngineQuarantineForProcess(
   engineId: string | undefined,
   processId: number,
 ): void {
-  const records = readPersistedRecords().filter((record) => {
-    if (record.processId !== processId) {
-      return true;
+  try {
+    const store = openQuarantineStore();
+    for (const entry of store.entries()) {
+      const record = normalizeRecord(entry.value);
+      if (
+        record?.processId === processId &&
+        (engineId === undefined || record.engineId === engineId)
+      ) {
+        store.delete(entry.key);
+      }
     }
-    return engineId !== undefined && record.engineId !== engineId;
-  });
-  if (records.length === 0) {
-    removePersistedContextEngineQuarantineFile();
-    return;
+  } catch {
+    // Best-effort cleanup; callers still clear in-memory state.
   }
-  writePersistedRecords(records);
 }

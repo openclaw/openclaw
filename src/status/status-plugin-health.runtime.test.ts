@@ -1,9 +1,10 @@
 // Runtime plugin health tests cover state shared across runtime processes.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearPersistedRuntimeToolSchemaQuarantinesForProcess,
   recordPersistedRuntimeToolSchemaQuarantine,
 } from "../agents/tool-schema-quarantine-health.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
 import { clearContextEngineRuntimeQuarantine } from "../context-engine/registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -11,7 +12,16 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { collectRuntimePluginHealthSnapshot } from "./status-plugin-health.runtime.js";
 
+vi.mock("../channels/plugins/read-only.js", () => ({
+  resolveReadOnlyChannelPluginsForConfig: vi.fn(),
+}));
+
+const resolveReadOnlyChannelPluginsForConfigMock = vi.mocked(
+  resolveReadOnlyChannelPluginsForConfig,
+);
+
 afterEach(() => {
+  resolveReadOnlyChannelPluginsForConfigMock.mockReset();
   resetPluginRuntimeStateForTest();
 });
 
@@ -142,6 +152,36 @@ describe("runtime plugin health snapshot", () => {
         pluginId: "broken-channel",
         message: "failed to load setup entry: boom",
         source: "diagnostic",
+      },
+    ]);
+  });
+
+  it("does not add a generic missing-channel failure when setup load already failed", () => {
+    resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
+      plugins: [],
+      configuredChannelIds: ["broken-channel"],
+      missingConfiguredChannelIds: ["broken-channel"],
+      loadFailures: [
+        {
+          channelId: "broken-channel",
+          pluginId: "broken-channel",
+          message: "failed to load setup entry: boom",
+          source: "setup",
+        },
+      ],
+    });
+
+    const snapshot = collectRuntimePluginHealthSnapshot({
+      config: { channels: {} } as never,
+      workspaceDir: "/tmp/ws",
+    });
+
+    expect(snapshot.channelPluginFailures).toEqual([
+      {
+        channelId: "broken-channel",
+        pluginId: "broken-channel",
+        message: "failed to load setup entry: boom",
+        source: "setup",
       },
     ]);
   });
