@@ -165,7 +165,10 @@ describe("MCP OAuth provider", () => {
         authMock.mockReset();
         authMock
           .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
-          .mockResolvedValueOnce("REDIRECT");
+          .mockImplementationOnce(async (provider) => {
+            await provider.saveCodeVerifier?.("verifier");
+            return "REDIRECT";
+          });
 
         await expect(
           runMcpOAuthLogin({
@@ -178,9 +181,11 @@ describe("MCP OAuth provider", () => {
         const tokenDir = `${home}/.openclaw/mcp-oauth`;
         const entries = await fs.readdir(tokenDir);
         const store = JSON.parse(await fs.readFile(`${tokenDir}/${entries[0]}`, "utf-8")) as {
+          codeVerifier?: string;
           redirectUrl?: string;
         };
         expect(store.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+        expect(store.codeVerifier).toBe("verifier");
 
         authMock.mockReset();
         authMock.mockResolvedValueOnce("AUTHORIZED");
