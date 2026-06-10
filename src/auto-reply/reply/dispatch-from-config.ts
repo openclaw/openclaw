@@ -1281,37 +1281,38 @@ export async function dispatchReplyFromConfig(
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       ...(shouldRecoverStaleVisibleOperation ? { waitTimeoutMs: visibleReplyRecoveryWaitMs } : {}),
     });
-    while (
-      shouldRecoverStaleVisibleOperation &&
-      admission.status === "skipped" &&
-      admission.reason === "active-run" &&
-      admission.activeOperation
-    ) {
-      operationSessionId = admission.activeOperation.sessionId;
-      const recovery = await recoverStaleVisibleOperation(admission.activeOperation);
-      const activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
-      const replyOperationStillActive = Boolean(activeAfterRecovery);
-      if (
-        replyOperationStillActive &&
-        (!recovery ||
-          (!visibleRecoveryClearedActiveWork(recovery) &&
-            !visibleRecoveryShouldKeepWaiting(recovery)))
+    if (shouldRecoverStaleVisibleOperation) {
+      while (
+        admission.status === "skipped" &&
+        admission.reason === "active-run" &&
+        admission.activeOperation
       ) {
-        break;
+        operationSessionId = admission.activeOperation.sessionId;
+        const recovery = await recoverStaleVisibleOperation(admission.activeOperation);
+        const activeAfterRecovery = replyRunRegistry.get(dispatchOperationSessionKey);
+        const replyOperationStillActive = Boolean(activeAfterRecovery);
+        if (
+          replyOperationStillActive &&
+          (!recovery ||
+            (!visibleRecoveryClearedActiveWork(recovery) &&
+              !visibleRecoveryShouldKeepWaiting(recovery)))
+        ) {
+          break;
+        }
+        if (activeAfterRecovery) {
+          operationSessionId = activeAfterRecovery.sessionId;
+        }
+        admission = await admitReplyTurn({
+          sessionKey: dispatchOperationSessionKey,
+          sessionId: operationSessionId,
+          kind: replyTurnKind,
+          resetTriggered: false,
+          routeThreadId,
+          upstreamAbortSignal: params.replyOptions?.abortSignal,
+          waitForActive: replyOperationStillActive,
+          waitTimeoutMs: visibleReplyRecoveryWaitMs,
+        });
       }
-      if (activeAfterRecovery) {
-        operationSessionId = activeAfterRecovery.sessionId;
-      }
-      admission = await admitReplyTurn({
-        sessionKey: dispatchOperationSessionKey,
-        sessionId: operationSessionId,
-        kind: replyTurnKind,
-        resetTriggered: false,
-        routeThreadId,
-        upstreamAbortSignal: params.replyOptions?.abortSignal,
-        waitForActive: replyOperationStillActive,
-        waitTimeoutMs: visibleReplyRecoveryWaitMs,
-      });
     }
     if (admission.status === "skipped") {
       if (allowActivePreDispatch && admission.reason === "active-run") {
