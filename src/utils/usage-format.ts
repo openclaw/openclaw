@@ -709,7 +709,8 @@ function computeTieredCost(
   cacheRead: number,
   cacheWrite: number,
 ): number {
-  const tier = selectPricingTier(tiers, input);
+  const promptTokens = input + cacheRead + cacheWrite;
+  const tier = selectPricingTier(tiers, promptTokens);
   if (!tier) {
     return 0;
   }
