@@ -215,6 +215,14 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual(["src/utils/provider-utils.test.ts"]);
   });
 
+  it("skips deleted direct test files in changed mode", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/deleted-changed-target.test.ts",
+      ]),
+    ).toStrictEqual([]);
+  });
+
   it("records broad fallback paths skipped by focused changed mode", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -490,6 +498,15 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       });
     }
+  });
+
+  it("keeps release-check workflow edits on release workflow regression tests", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-release-checks.yml"])).toEqual(
+      {
+        mode: "targets",
+        targets: ["test/scripts/package-acceptance-workflow.test.ts"],
+      },
+    );
   });
 
   it("keeps workflow sanity script edits on workflow guard tests", () => {

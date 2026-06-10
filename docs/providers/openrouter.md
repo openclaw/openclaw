@@ -14,24 +14,52 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 
 ## Getting started
 
-<Steps>
-  <Step title="Get your API key">
-    Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
-  </Step>
-  <Step title="Run onboarding">
-    ```bash
-    openclaw onboard --auth-choice openrouter-api-key
-    ```
-  </Step>
-  <Step title="(Optional) Switch to a specific model">
-    Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
+<Tabs>
+  <Tab title="OAuth">
+    <Steps>
+      <Step title="Run OAuth onboarding">
+        ```bash
+        openclaw onboard --auth-choice openrouter-oauth
+        ```
 
-    ```bash
-    openclaw models set openrouter/<provider>/<model>
-    ```
+        OpenClaw opens OpenRouter's browser sign-in flow, exchanges the PKCE
+        code for an OpenRouter API key, and stores that key in the default
+        OpenRouter auth profile. On remote/headless hosts, OpenClaw prints the
+        sign-in URL and asks you to paste the redirect URL after signing in.
+      </Step>
+      <Step title="(Optional) Switch to a specific model">
+        Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
 
-  </Step>
-</Steps>
+        ```bash
+        openclaw models set openrouter/<provider>/<model>
+        ```
+
+      </Step>
+    </Steps>
+
+  </Tab>
+  <Tab title="API key">
+    <Steps>
+      <Step title="Get your API key">
+        Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
+      </Step>
+      <Step title="Run API-key onboarding">
+        ```bash
+        openclaw onboard --auth-choice openrouter-api-key
+        ```
+      </Step>
+      <Step title="(Optional) Switch to a specific model">
+        Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
+
+        ```bash
+        openclaw models set openrouter/<provider>/<model>
+        ```
+
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
 
 ## Config example
 
@@ -187,7 +215,20 @@ OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 
 ## Authentication and headers
 
-OpenRouter uses a Bearer token with your API key under the hood.
+OpenRouter uses a Bearer token with your API key under the hood. OpenRouter
+OAuth is a PKCE login flow that issues an OpenRouter API key, so OpenClaw stores
+the result as the same `openrouter:default` API-key auth profile used by the
+manual API-key setup path.
+
+For an existing install, sign in or rotate the stored OpenRouter key without
+rerunning full onboarding:
+
+```bash
+openclaw models auth login --provider openrouter --method oauth
+```
+
+Use `openclaw models auth login --provider openrouter --method api-key` when
+you want to paste a key you created manually at OpenRouter.
 
 On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also adds
 OpenRouter's documented app-attribution headers:

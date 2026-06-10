@@ -34,7 +34,12 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
 import { isGemma4ModelId } from "../shared/google-models.js";
+import {
+  isResponsesTextContentPartType,
+  isResponsesTextDeltaEventType,
+} from "../shared/openai-responses-stream-compat.js";
 import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
@@ -1571,14 +1576,13 @@ async function processResponsesStream(
           partial: output,
         });
       }
-    } else if (type === "response.output_text.delta" || type === "response.refusal.delta") {
+    } else if (isResponsesTextDeltaEventType(type) || type === "response.refusal.delta") {
       if (currentItem?.type === "message" && currentBlock?.type === "text") {
         currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
         stream.push({
           type: "text_delta",
           contentIndex: blockIndex(),
           delta: stringifyUnknown(event.delta),
-          partial: output,
         });
       }
     } else if (type === "response.function_call_arguments.delta") {
@@ -1624,7 +1628,7 @@ async function processResponsesStream(
         currentBlock.text = content
           .map((part) => {
             const contentPart = part as { type?: string; text?: string; refusal?: string };
-            return contentPart.type === "output_text"
+            return isResponsesTextContentPartType(contentPart.type)
               ? (contentPart.text ?? "")
               : (contentPart.refusal ?? "");
           })
@@ -2437,14 +2441,23 @@ function createAzureOpenAIClient(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
 ) {
-  return new AzureOpenAI({
+  const baseURL = normalizeAzureBaseUrl(model.baseUrl);
+  const clientOptions = {
     apiKey,
-    apiVersion: resolveAzureOpenAIApiVersion(),
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
-    baseURL: normalizeAzureBaseUrl(model.baseUrl),
+    baseURL,
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
+  };
+
+  if (isOpenAICompatibleAzureResponsesBaseUrl(baseURL)) {
+    return new OpenAI(clientOptions);
+  }
+
+  return new AzureOpenAI({
+    ...clientOptions,
+    apiVersion: resolveAzureOpenAIApiVersion(),
   });
 }
 
@@ -2740,7 +2753,6 @@ async function processOpenAICompletionsStream(
       type: "text_delta",
       contentIndex: blockIndex(),
       delta: text,
-      partial: output,
     });
   };
   const flushPendingPostToolCallDeltas = () => {
@@ -3438,6 +3450,7 @@ function getCompat(model: OpenAIModeModel): {
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
     requiresReasoningContentOnAssistantMessages:
+      compat.requiresReasoningContentOnAssistantMessages ??
       detected.requiresReasoningContentOnAssistantMessages,
     requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
@@ -4283,6 +4296,7 @@ function mapStopReason(reason: string | null) {
 }
 
 export const testing = {
+  getCompat,
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,

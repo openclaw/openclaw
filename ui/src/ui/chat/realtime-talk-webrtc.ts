@@ -33,6 +33,8 @@ type ToolBuffer = {
   args: string;
 };
 
+const cancelledSetup = Symbol("cancelledSetup");
+
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
@@ -58,27 +60,44 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       throw new Error("Realtime Talk requires browser WebRTC and microphone access");
     }
     this.closed = false;
-    this.peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection();
+    this.peer = peer;
     this.audio = document.createElement("audio");
     this.audio.autoplay = true;
     this.audio.style.display = "none";
     document.body.append(this.audio);
-    this.peer.addEventListener("track", (event) => {
+    peer.addEventListener("track", (event) => {
       if (this.audio) {
         this.audio.srcObject = event.streams[0];
       }
     });
-    this.media = await navigator.mediaDevices.getUserMedia({ audio: true });
-    for (const track of this.media.getAudioTracks()) {
-      this.peer.addTrack(track, this.media);
+    const media = await this.awaitSetupStep(
+      peer,
+      navigator.mediaDevices.getUserMedia({ audio: true }),
+    );
+    if (media === cancelledSetup) {
+      return;
     }
-    this.channel = this.peer.createDataChannel("oai-events");
-    this.channel.addEventListener("open", () => {
+    if (!this.isCurrentPeer(peer)) {
+      media.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.media = media;
+    for (const track of media.getAudioTracks()) {
+      peer.addTrack(track, media);
+    }
+    const channel = peer.createDataChannel("oai-events");
+    if (!this.isCurrentPeer(peer)) {
+      channel.close();
+      return;
+    }
+    this.channel = channel;
+    channel.addEventListener("open", () => {
       this.ctx.callbacks.onStatus?.("listening");
       this.emitTalkEvent({ type: "session.ready" });
     });
-    this.channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
-    this.peer.addEventListener("connectionstatechange", () => {
+    channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
+    peer.addEventListener("connectionstatechange", () => {
       if (this.closed) {
         return;
       }
@@ -87,24 +106,73 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     });
 
-    const offer = await this.peer.createOffer();
-    await this.peer.setLocalDescription(offer);
-    const sdp = await fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
-      method: "POST",
-      body: offer.sdp,
-      headers: {
-        ...this.session.offerHeaders,
-        Authorization: `Bearer ${this.session.clientSecret}`,
-        "Content-Type": "application/sdp",
-      },
-    });
+    const offer = await this.awaitSetupStep(peer, peer.createOffer());
+    if (offer === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    const localDescriptionResult = await this.awaitSetupStep(peer, peer.setLocalDescription(offer));
+    if (localDescriptionResult === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    const sdp = await this.awaitSetupStep(
+      peer,
+      fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
+        method: "POST",
+        body: offer.sdp,
+        headers: {
+          ...this.session.offerHeaders,
+          Authorization: `Bearer ${this.session.clientSecret}`,
+          "Content-Type": "application/sdp",
+        },
+      }),
+    );
+    if (sdp === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
     if (!sdp.ok) {
       throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
     }
-    await this.peer.setRemoteDescription({
-      type: "answer",
-      sdp: await sdp.text(),
-    });
+    const answerSdp = await this.awaitSetupStep(peer, sdp.text());
+    if (answerSdp === cancelledSetup) {
+      return;
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    await this.awaitSetupStep(
+      peer,
+      peer.setRemoteDescription({
+        type: "answer",
+        sdp: answerSdp,
+      }),
+    );
+  }
+
+  private isCurrentPeer(peer: RTCPeerConnection): boolean {
+    return !this.closed && this.peer === peer;
+  }
+
+  private async awaitSetupStep<T>(
+    peer: RTCPeerConnection,
+    promise: Promise<T>,
+  ): Promise<T | typeof cancelledSetup> {
+    try {
+      return await promise;
+    } catch (error) {
+      if (!this.isCurrentPeer(peer)) {
+        return cancelledSetup;
+      }
+      throw error;
+    }
   }
 
   stop(): void {

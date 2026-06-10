@@ -14,6 +14,7 @@ import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.
 const {
   answerCallbackQuerySpy,
   commandSpy,
+  deleteMessageSpy,
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
@@ -2864,6 +2865,7 @@ describe("createTelegramBot", () => {
         data: "codexapp:resume:thread-1",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
+          business_connection_id: "biz-1",
           chat: { id: 1234, type: "private" },
           date: 1736380800,
           message_id: 11,
@@ -2874,7 +2876,132 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 11, "Handled resume:thread-1", undefined);
+    expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 11, "Handled resume:thread-1", {
+      business_connection_id: "biz-1",
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("deletes plugin-owned callback messages through the bot API", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    deleteMessageSpy.mockClear();
+    registerPluginInteractiveHandler("codex-plugin", {
+      channel: "telegram",
+      namespace: "codexapp",
+      handler: (async ({ respond }: TelegramInteractiveHandlerContext) => {
+        await respond.deleteMessage();
+        return { handled: true };
+      }) as never,
+    });
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-codex-delete",
+        data: "codexapp:delete:thread-1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 11,
+          text: "Select a thread",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(deleteMessageSpy).toHaveBeenCalledWith(1234, 11);
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("routes plugin-owned callback replies with Telegram topic params", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    sendMessageSpy.mockClear();
+    registerPluginInteractiveHandler("codex-plugin", {
+      channel: "telegram",
+      namespace: "codexapp",
+      handler: (async ({ respond }: TelegramInteractiveHandlerContext) => {
+        await respond.reply({ text: "Handled in topic" });
+        return { handled: true };
+      }) as never,
+    });
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-codex-topic-reply",
+        data: "codexapp:reply:thread-1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          business_connection_id: "biz-topic-1",
+          chat: { id: -100987654321, type: "supergroup", title: "Forum Group" },
+          date: 1736380800,
+          is_topic_message: true,
+          message_id: 11,
+          message_thread_id: 99,
+          text: "Select a thread",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledWith(-100987654321, "Handled in topic", {
+      business_connection_id: "biz-topic-1",
+      message_thread_id: 99,
+    });
+
+    sendMessageSpy.mockClear();
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-codex-general-reply",
+        data: "codexapp:reply:thread-1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: -100987654322, type: "supergroup", title: "Forum Group" },
+          date: 1736380800,
+          is_topic_message: true,
+          message_id: 12,
+          message_thread_id: 1,
+          text: "Select a thread",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledWith(-100987654322, "Handled in topic", undefined);
     expect(replySpy).not.toHaveBeenCalled();
   });
 
