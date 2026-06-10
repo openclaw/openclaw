@@ -208,6 +208,7 @@ src/a.ts: src/a.ts
 
     await resultPromise;
 
+    expect(path.basename((calls[0] as { command: string }).command)).toBe("pnpm");
     expect(calls[0]).toMatchObject({
       args: [
         "--config.minimum-release-age=0",
@@ -224,7 +225,6 @@ src/a.ts: src/a.ts
         "--files",
         "--no-config-hints",
       ],
-      command: "pnpm",
       options: {
         detached: process.platform !== "win32",
         shell: false,
