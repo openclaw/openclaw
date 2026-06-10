@@ -561,7 +561,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         (key.endsWith(upstreamSha) || key.endsWith(selectedSha))
@@ -1079,6 +1079,191 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(preflightInstallCommands).toEqual(["pnpm install"]);
+  });
+
+  it("continues dev preflight after one candidate is missing its package manager", async () => {
+    await setupGitCheckout({ packageManager: "npm@10.0.0" });
+    await setupUiIndex();
+    const upstreamSha = "bad123";
+    const selectedSha = "good123";
+    const calls: string[] = [];
+    let managerVersionProbeCount = 0;
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+
+    const writeCandidatePackageManager = async (key: string, packageManager: string) => {
+      const match = /^git -C (?<root>\S+) checkout --detach /u.exec(key);
+      const root = match?.groups?.root;
+      if (!root) {
+        throw new Error(`expected preflight checkout root in command: ${key}`);
+      }
+      await writePreflightPackageManagerFixture(root, packageManager);
+    };
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      const responses = {
+        ...buildGitWorktreeProbeResponses(),
+        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+          stdout: "origin/main",
+        },
+        [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
+        [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
+          stdout: `${upstreamSha}\n${selectedSha}\n`,
+        },
+        [`git -C ${tempDir} rebase ${selectedSha}`]: { stdout: "" },
+        [doctorCommand]: { stdout: "" },
+      } satisfies Record<string, CommandResponse>;
+      const response = responses[key];
+      if (response) {
+        return toCommandResult(response);
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${upstreamSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key, "pnpm@8.0.0");
+        return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
+        (key.endsWith(upstreamSha) || key.endsWith(selectedSha))
+      ) {
+        await writeCandidatePackageManager(key, "npm@10.0.0");
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "npm --version" || key === "pnpm --version" || key === "bun --version") {
+        managerVersionProbeCount += 1;
+        if (managerVersionProbeCount <= 3) {
+          return { stdout: "", stderr: "not found", code: 1 };
+        }
+      }
+      if (key === "npm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (key === "npm install" || key === "npm run build" || key === "npm run ui:build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev" });
+
+    expect(result.status).toBe("ok");
+    const firstManagerProbeIndex = calls.indexOf("npm --version");
+    const selectedCheckoutIndex = calls.findIndex(
+      (call) =>
+        call.startsWith("git -C ") &&
+        preflightPrefixPattern.test(call) &&
+        call.endsWith(` checkout --detach ${selectedSha}`),
+    );
+    expect(firstManagerProbeIndex).toBeGreaterThanOrEqual(0);
+    expect(selectedCheckoutIndex).toBeGreaterThan(firstManagerProbeIndex);
+    expect(calls).toContain(`git -C ${tempDir} rebase ${selectedSha}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rebase ${upstreamSha}`);
+  });
+
+  it("does not let an earlier package manager failure mask a later candidate failure", async () => {
+    await setupGitCheckout({ packageManager: "npm@10.0.0" });
+    await setupUiIndex();
+    const upstreamSha = "bad123";
+    const olderSha = "older123";
+    const calls: string[] = [];
+    let managerVersionProbeCount = 0;
+
+    const writeCandidatePackageManager = async (key: string, packageManager: string) => {
+      const match = /^git -C (?<root>\S+) checkout --detach /u.exec(key);
+      const root = match?.groups?.root;
+      if (!root) {
+        throw new Error(`expected preflight checkout root in command: ${key}`);
+      }
+      await writePreflightPackageManagerFixture(root, packageManager);
+    };
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      const responses = {
+        ...buildGitWorktreeProbeResponses(),
+        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+          stdout: "origin/main",
+        },
+        [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
+        [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
+          stdout: `${upstreamSha}\n${olderSha}\n`,
+        },
+      } satisfies Record<string, CommandResponse>;
+      const response = responses[key];
+      if (response) {
+        return toCommandResult(response);
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.endsWith(` ${upstreamSha}`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        await writePreflightPackageManagerFixtureFromWorktreeAdd(key, "pnpm@8.0.0");
+        return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/") &&
+        preflightPrefixPattern.test(key) &&
+        key.includes(" checkout --detach ") &&
+        (key.endsWith(upstreamSha) || key.endsWith(olderSha))
+      ) {
+        await writeCandidatePackageManager(key, "npm@10.0.0");
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "npm --version" || key === "pnpm --version" || key === "bun --version") {
+        managerVersionProbeCount += 1;
+        if (managerVersionProbeCount <= 3) {
+          return { stdout: "", stderr: "not found", code: 1 };
+        }
+      }
+      if (key === "npm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (key === "npm install") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "npm run build") {
+        return { stdout: "", stderr: "build failed", code: 1 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        preflightPrefixPattern.test(key)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev" });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("preflight-no-good-commit");
+    expect(result.steps.some((step) => step.name === "preflight package manager (bad123)")).toBe(
+      true,
+    );
+    expect(result.steps.some((step) => step.name === "preflight build (older123)")).toBe(true);
+    expect(calls).not.toContain(`git -C ${tempDir} rebase ${upstreamSha}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rebase ${olderSha}`);
   });
 
   it("returns error and stops early when build fails", async () => {
@@ -2171,6 +2356,9 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("pnpm-npm-bootstrap-failed");
+    expect(result.steps.some((step) => step.name === "preflight package manager (upstream)")).toBe(
+      true,
+    );
     expect(calls).not.toContain("npm run build");
     expect(calls).not.toContain("npm run lint");
     expect(calls).not.toContain("npm install");

@@ -589,7 +589,7 @@ function isSupersededInstallFailure(
 }
 
 function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:checkout|deps install(?: \(ignore scripts\))?|build|lint) \(.+\)$/u.test(
+  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|lint) \(.+\)$/u.test(
     step.name,
   );
 }
@@ -1175,6 +1175,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       let selectedSha: string | null = null;
+      let preflightManagerFailureReason: NonNullable<UpdateRunResult["reason"]> | null = null;
+      let sawNonManagerPreflightFailure = false;
       try {
         for (const sha of candidatesLocal) {
           const shortSha = sha.slice(0, 8);
@@ -1187,6 +1189,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           );
           steps.push(checkoutStep);
           if (checkoutStep.exitCode !== 0) {
+            sawNonManagerPreflightFailure = true;
             continue;
           }
 
@@ -1198,15 +1201,16 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             "require-preferred",
           );
           if (manager.kind === "missing-required") {
-            return {
-              status: "error",
-              mode: "git",
-              root: gitRoot,
-              reason: mapManagerResolutionFailure(manager.reason),
-              before: { sha: beforeSha, version: beforeVersion },
-              steps,
-              durationMs: Date.now() - startedAt,
-            };
+            preflightManagerFailureReason = mapManagerResolutionFailure(manager.reason);
+            steps.push({
+              name: `preflight package manager (${shortSha})`,
+              command: `resolve ${manager.preferred} package manager`,
+              cwd: worktreeDir,
+              durationMs: 0,
+              exitCode: 1,
+              stderrTail: preflightManagerFailureReason,
+            });
+            continue;
           }
           try {
             const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
@@ -1248,6 +1252,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               }
             }
             if (finalDepsStep.exitCode !== 0) {
+              sawNonManagerPreflightFailure = true;
               continue;
             }
 
@@ -1261,6 +1266,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             );
             steps.push(buildStep);
             if (buildStep.exitCode !== 0) {
+              sawNonManagerPreflightFailure = true;
               continue;
             }
 
@@ -1275,6 +1281,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               );
               steps.push(lintStep);
               if (lintStep.exitCode !== 0) {
+                sawNonManagerPreflightFailure = true;
                 continue;
               }
             }
@@ -1321,7 +1328,10 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: "preflight-no-good-commit",
+          reason:
+            preflightManagerFailureReason && !sawNonManagerPreflightFailure
+              ? preflightManagerFailureReason
+              : "preflight-no-good-commit",
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
