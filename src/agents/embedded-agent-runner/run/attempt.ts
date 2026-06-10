@@ -1698,10 +1698,7 @@ export async function runEmbeddedAttempt(
     });
     const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
     let effectiveTools = uncompactedEffectiveTools;
-    const initialToolHookExternalContent = detectToolHookExternalContentProvenance([
-      params.prompt,
-      activeSession.messages,
-    ]);
+    const initialToolHookExternalContent = detectToolHookExternalContentProvenance([params.prompt]);
     const catalogToolHookContext: HookContext = {
       agentId: sessionAgentId,
       config: params.config,
