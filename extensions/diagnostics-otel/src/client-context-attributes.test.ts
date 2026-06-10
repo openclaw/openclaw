@@ -103,4 +103,17 @@ describe("createClientContextCache", () => {
     cache.clear();
     expect(cache.resolve(["a"])).toBeUndefined();
   });
+
+  it("drops a seeded bag when the same session is reused without context", () => {
+    const cache = createClientContextCache();
+    // Seeded run: lifecycle event carried clientContext for these aliases.
+    cache.remember(["sid-1", "skey-1"], { agentId: "Conductor" });
+    expect(cache.resolve(["skey-1"])).toEqual({ agentId: "Conductor" });
+    // Reused/unseeded run on the same sessionId/sessionKey: lifecycle event now
+    // arrives with no clientContext. The stale bag must be evicted so the next
+    // model.call span is not misattributed to the previous caller.
+    cache.remember(["sid-1", "skey-1"], undefined);
+    expect(cache.resolve(["sid-1"])).toBeUndefined();
+    expect(cache.resolve(["skey-1"])).toBeUndefined();
+  });
 });

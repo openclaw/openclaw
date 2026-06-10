@@ -77,7 +77,18 @@ export function createClientContextCache(
   const byKey = new Map<string, ClientContextBag>();
   return {
     remember(keys, clientContext) {
-      if (!clientContext || keys.length === 0) {
+      if (keys.length === 0) {
+        return;
+      }
+      if (!clientContext) {
+        // Unseeded (or reused-with-invalid) lifecycle event: drop any stale bag for
+        // these aliases so a later model.call on a reused sessionId/sessionKey is
+        // never misattributed to the previous caller. Mirrors the core session-state
+        // clear (diagnostic.ts sets state.clientContext = undefined on reuse), which
+        // is the same event that arrives here with privateData.clientContext absent.
+        for (const key of keys) {
+          byKey.delete(key);
+        }
         return;
       }
       for (const key of keys) {
