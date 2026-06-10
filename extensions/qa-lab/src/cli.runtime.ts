@@ -608,9 +608,6 @@ export async function runQaSuiteCommand(opts: {
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
   }
-  if (channelDriverSelection && runner !== "host") {
-    throw new Error("--channel-driver crabline requires --runner host.");
-  }
   if (
     runner === "host" &&
     (opts.image !== undefined ||
@@ -640,6 +637,8 @@ export async function runQaSuiteCommand(opts: {
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
       ...(runtimePair ? { runtimePair } : {}),
+      ...(channelDriverSelection ? { channelDriverSelection } : {}),
+      ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
       image: opts.image,
       cpus: parseQaPositiveIntegerOption("--cpus", opts.cpus),
       memory: opts.memory,

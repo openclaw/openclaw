@@ -294,18 +294,29 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("keeps Crabline channel-driver independent from the VM runner", async () => {
-    await expect(
-      runQaSuiteCommand({
-        repoRoot: "/tmp/openclaw-repo",
-        providerMode: "mock-openai",
-        channelDriver: "crabline",
-        channel: "telegram",
-        runner: "multipass",
+  it("passes Crabline channel-driver selection through to the multipass runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      channel: "telegram",
+      runner: "multipass",
+      scenarioIds: ["channel-chat-baseline"],
+      allowFailures: true,
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriverSelection: {
+          capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          channelDriverId: "telegram-local-v1",
+          channelLive: false,
+        },
       }),
-    ).rejects.toThrow("--channel-driver crabline requires --runner host.");
+    );
     expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
-    expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
   it("passes explicit suite plugin enablements into the host gateway run", async () => {
@@ -1522,6 +1533,24 @@ describe("qa cli runtime", () => {
         runtimePair: ["openclaw", "codex"],
       }),
     );
+  });
+
+  it("passes explicit suite plugin enablements through to the multipass runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runner: "multipass",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+      enabledPluginIds: ["browser", "memory-core"],
+      allowFailures: true,
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabledPluginIds: ["browser", "memory-core"],
+      }),
+    );
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
   it("passes live suite selection through to the multipass runner", async () => {
