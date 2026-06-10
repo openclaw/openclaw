@@ -199,8 +199,8 @@ health checks complete. During the handoff, the sentinel can carry
 restarted Gateway keeps polling it and only fires the continuation after the CLI
 has verified service health and rewritten the sentinel with the final `ok`
 result. `openclaw status` and `openclaw status --all` show an `Update restart`
-row while that sentinel is pending or failed, and `update.status` returns the
-latest cached sentinel.
+row while that sentinel is pending or failed, and `update.status` refreshes and
+returns the latest sentinel.
 
 ## Git checkout flow
 

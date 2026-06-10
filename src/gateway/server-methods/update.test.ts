@@ -16,6 +16,9 @@ const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface
   packageRoot: "/tmp/openclaw",
 }));
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
+const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
+  async () => null,
+);
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
@@ -114,6 +117,7 @@ vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
 vi.mock("../server-restart-sentinel.js", () => ({
   getLatestUpdateRestartSentinel: getLatestUpdateRestartSentinelMock,
   recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
+  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
 }));
 
 vi.mock("./restart-request.js", () => ({
@@ -166,6 +170,8 @@ beforeEach(() => {
     packageRoot: "/tmp/openclaw",
   });
   getLatestUpdateRestartSentinelMock.mockClear();
+  refreshLatestUpdateRestartSentinelMock.mockClear();
+  refreshLatestUpdateRestartSentinelMock.mockResolvedValue(null);
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockClear();
@@ -598,11 +604,19 @@ describe("update.run restart scheduling", () => {
 });
 
 describe("update.status", () => {
-  it("returns the latest cached update sentinel", async () => {
+  it("refreshes the latest update sentinel before responding", async () => {
     getLatestUpdateRestartSentinelMock.mockReturnValueOnce({
       kind: "update",
-      status: "ok",
+      status: "skipped",
       ts: 1,
+      stats: {
+        reason: "restart-health-pending",
+      },
+    });
+    refreshLatestUpdateRestartSentinelMock.mockResolvedValueOnce({
+      kind: "update",
+      status: "ok",
+      ts: 2,
       stats: {
         after: { version: "2.0.0" },
       },
@@ -621,7 +635,37 @@ describe("update.status", () => {
       { sentinel?: { kind?: string; status?: string } } | undefined,
     ];
     expect(ok).toBe(true);
+    expect(refreshLatestUpdateRestartSentinelMock).toHaveBeenCalledTimes(1);
     expect(response?.sentinel?.kind).toBe("update");
     expect(response?.sentinel?.status).toBe("ok");
+  });
+
+  it("falls back to the cached update sentinel when refresh fails", async () => {
+    refreshLatestUpdateRestartSentinelMock.mockRejectedValueOnce(new Error("read failed"));
+    getLatestUpdateRestartSentinelMock.mockReturnValueOnce({
+      kind: "update",
+      status: "skipped",
+      ts: 1,
+      stats: {
+        reason: "restart-health-pending",
+      },
+    });
+    const warn = vi.fn();
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+
+    await updateHandlers["update.status"]({
+      params: {},
+      respond,
+      context: { logGateway: { warn } },
+    } as never);
+
+    expect(warn).toHaveBeenCalledWith("update.status sentinel refresh failed: read failed");
+    const [, response] = firstMockCall(respond, "update status response") as [
+      boolean,
+      { sentinel?: { kind?: string; status?: string } } | undefined,
+    ];
+    expect(response?.sentinel?.kind).toBe("update");
+    expect(response?.sentinel?.status).toBe("skipped");
   });
 });

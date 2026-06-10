@@ -30,6 +30,7 @@ import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-pl
 import {
   getLatestUpdateRestartSentinel,
   recordLatestUpdateRestartSentinel,
+  refreshLatestUpdateRestartSentinel,
 } from "../server-restart-sentinel.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -98,12 +99,21 @@ function hasManagedServiceHandoffContext(
 }
 
 export const updateHandlers: GatewayRequestHandlers = {
-  "update.status": async ({ params, respond }) => {
+  "update.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
+    let sentinel: RestartSentinelPayload | null;
+    try {
+      sentinel = await refreshLatestUpdateRestartSentinel();
+    } catch (err) {
+      context?.logGateway?.warn(
+        `update.status sentinel refresh failed: ${formatUpdateRunErrorMessage(err)}`,
+      );
+      sentinel = getLatestUpdateRestartSentinel();
+    }
     respond(true, {
-      sentinel: getLatestUpdateRestartSentinel(),
+      sentinel,
     });
   },
   "update.run": async ({ params, respond, client, context }) => {
