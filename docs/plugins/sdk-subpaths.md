@@ -90,7 +90,7 @@ by package contract guardrails.
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility facade. Use `plugin-sdk/channel-inbound` for inbound runners and dispatch predicates, and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
-    | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
+    | `plugin-sdk/outbound-media` | Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
@@ -151,6 +151,7 @@ and pairing-path families.
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
+    | `plugin-sdk/provider-catalog-live-runtime` | Live provider model catalog helpers for guarded `/models`-style discovery: `buildLiveModelProviderConfig`, `fetchLiveProviderModelRows`, `getCachedLiveProviderModelRows`, `fetchLiveProviderModelIds`, `LiveModelCatalogHttpError`, `clearLiveCatalogCacheForTests`, model-id filtering, TTL cache, and static fallback |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
@@ -245,7 +246,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
+    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), target discovery, legacy session store path/session-key helpers, updated-at reads, and deprecated whole-store mutation helpers |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
     | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types |

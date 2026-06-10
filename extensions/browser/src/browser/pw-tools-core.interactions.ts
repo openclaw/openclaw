@@ -16,6 +16,7 @@ import {
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -998,6 +999,10 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  const fnSource = normalizeBrowserEvaluateFunctionSource(
+    fnText,
+    opts.ref ? { argumentName: "el" } : undefined,
+  );
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
@@ -1047,10 +1052,13 @@ export async function evaluateViaPlaywright(opts: {
         "args",
         `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate(el) : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate(el);
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -1064,9 +1072,9 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
         `,
-      ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
+      ) as (el: Element, args: { fnSource: string; timeoutMs: number }) => unknown;
       const evalPromise = locator.evaluate(elementEvaluator, {
-        fnBody: fnText,
+        fnSource,
         timeoutMs: evaluateTimeout,
       });
       const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
@@ -1086,10 +1094,13 @@ export async function evaluateViaPlaywright(opts: {
       "args",
       `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate() : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate();
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -1103,9 +1114,9 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
       `,
-    ) as (args: { fnBody: string; timeoutMs: number }) => unknown;
+    ) as (args: { fnSource: string; timeoutMs: number }) => unknown;
     const evalPromise = page.evaluate(browserEvaluator, {
-      fnBody: fnText,
+      fnSource,
       timeoutMs: evaluateTimeout,
     });
     const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);

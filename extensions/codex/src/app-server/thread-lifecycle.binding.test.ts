@@ -187,7 +187,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const appServer = createThreadLifecycleAppServerOptions();
     const abortController = new AbortController();
     let resolveStart: ((value: ReturnType<typeof threadStartResult>) => void) | undefined;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
         return await new Promise<ReturnType<typeof threadStartResult>>((resolve) => {
           resolveStart = resolve;
@@ -221,7 +221,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
         return threadStartResult("thread-existing");
       }
@@ -252,6 +252,140 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(binding.threadId).toBe("thread-existing");
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "codex";
+    params.modelId = "local-model-2";
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/resume") {
+        throw new Error("stale thread");
+      }
+      if (method === "thread/start") {
+        const response = threadStartResult("thread-new");
+        response.model = "local-model-2";
+        response.modelProvider = "lmstudio";
+        response.thread.modelProvider = "lmstudio";
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume", "thread/start"]);
+    expect(startParams?.model).toBe("local-model-2");
+    expect(startParams?.modelProvider).toBe("lmstudio");
+    expect(binding.threadId).toBe("thread-new");
+    expect(binding.modelProvider).toBe("lmstudio");
+  });
+
+  it("keeps the bound local provider when stale fingerprints force a fresh thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      dynamicToolsFingerprint: "stale-fingerprint",
+      dynamicToolsContainDeferred: false,
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "codex";
+    params.modelId = "local-model-2";
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/start") {
+        const response = threadStartResult("thread-new");
+        response.model = "local-model-2";
+        response.modelProvider = "lmstudio";
+        response.thread.modelProvider = "lmstudio";
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("web_search")],
+      appServer,
+    });
+
+    const startParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(startParams?.model).toBe("local-model-2");
+    expect(startParams?.modelProvider).toBe("lmstudio");
+    expect(binding.threadId).toBe("thread-new");
+    expect(binding.modelProvider).toBe("lmstudio");
+  });
+
+  it("keeps the bound local provider when the bound model id contains a slash", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "openai/gpt-oss-20b",
+      modelProvider: "lmstudio",
+      dynamicToolsFingerprint: "[]",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "codex";
+    params.modelId = "openai/gpt-oss-20b";
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/resume") {
+        const response = threadStartResult("thread-existing");
+        response.model = "openai/gpt-oss-20b";
+        response.modelProvider = "lmstudio";
+        response.thread.modelProvider = "lmstudio";
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(resumeParams?.model).toBe("openai/gpt-oss-20b");
+    expect(resumeParams?.modelProvider).toBe("lmstudio");
+    expect(binding.threadId).toBe("thread-existing");
+    expect(binding.modelProvider).toBe("lmstudio");
   });
 
   it("starts a fresh Codex thread when dynamic tools switch from deferred to direct", async () => {

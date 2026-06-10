@@ -804,7 +804,7 @@ export class OpenClawApp extends LitElement {
     this.onSlashAction = async (action: string) => {
       switch (action) {
         case "new-session":
-          await createChatSessionInternal(this as unknown as AppViewState);
+          await createChatSessionInternal(this as unknown as AppViewState, { source: "user" });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);

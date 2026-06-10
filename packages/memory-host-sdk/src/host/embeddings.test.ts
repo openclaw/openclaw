@@ -114,6 +114,24 @@ describe("local embedding provider", () => {
     );
   });
 
+  it("imports node-llama-cpp from an explicit module URL when provided", async () => {
+    mockLocalEmbeddingRuntime();
+
+    await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: {
+        nodeLlamaCppImportUrl: "file:///plugins/llama-cpp/node-llama-cpp.js",
+      } as never,
+    });
+
+    expect(nodeLlamaMock.importNodeLlamaCpp).toHaveBeenCalledWith(
+      "file:///plugins/llama-cpp/node-llama-cpp.js",
+    );
+  });
+
   it("passes configured contextSize to createEmbeddingContext", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
@@ -341,6 +359,10 @@ describe("local embedding provider", () => {
       `
 process.on("message", (message) => {
   if (message.type === "initialize") {
+    if (message.options.local?.nodeLlamaCppImportUrl !== "file:///plugin/node-llama-cpp.js") {
+      process.send({ id: message.id, ok: false, error: "missing nodeLlamaCppImportUrl" });
+      return;
+    }
     process.send({ id: message.id, ok: true });
     return;
   }
@@ -364,7 +386,10 @@ process.on("message", (message) => {
         model: "",
         fallback: "none",
       },
-      { workerScriptPath: workerScript },
+      {
+        workerScriptPath: workerScript,
+        nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js",
+      },
     );
 
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
