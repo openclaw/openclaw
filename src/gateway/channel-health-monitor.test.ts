@@ -12,6 +12,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     stopChannel: vi.fn(async () => {}),
     markChannelLoggedOut: vi.fn(),
     isManuallyStopped: vi.fn(() => false),
+    isTerminallyErrored: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
     ...overrides,
   };
@@ -150,6 +151,20 @@ describe("channel-health-monitor", () => {
         },
       },
       { isManuallyStopped: vi.fn(() => true) },
+    );
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("skips terminally-errored channels (paused on e.g. invalid bot token)", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: { running: false, enabled: true, configured: true },
+        },
+      },
+      { isTerminallyErrored: vi.fn(() => true) },
     );
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).not.toHaveBeenCalled();

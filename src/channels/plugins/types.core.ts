@@ -116,6 +116,8 @@ export type ChannelAccountSnapshot = {
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
   lastError?: string | null;
+  /** Set while auto-restart is paused on a terminal error (e.g. invalid bot token). */
+  terminalError?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;

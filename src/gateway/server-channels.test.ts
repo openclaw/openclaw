@@ -136,6 +136,57 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(11);
   });
 
+  it("pauses auto-restart on a terminal error after the first exit", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new Error("Call to 'getMe' failed! (401: Unauthorized)");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+
+    // one start, no retry storm — the 401 is terminal
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(manager.isTerminallyErrored("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.terminalError).toContain("401");
+    expect(account?.running).toBe(false);
+  });
+
+  it("clears the terminal-error pause on an explicit start", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new Error("Call to 'getMe' failed! (401: Unauthorized)");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    // operator action (e.g. token fixed + channel restart) retries immediately
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires the terminal-error pause after the retry window", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new Error("Call to 'getMe' failed! (401: Unauthorized)");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(manager.isTerminallyErrored("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+
+    // after the window the pause lifts so the health monitor's next check re-probes
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(manager.isTerminallyErrored("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+  });
+
   it("does not auto-restart after manual stop during backoff", async () => {
     const startAccount = vi.fn(async () => {});
     installTestRegistry(

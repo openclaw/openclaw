@@ -101,6 +101,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+          if (channelManager.isTerminallyErrored(channelId as ChannelId, accountId)) {
+            // Paused on a terminal error (e.g. invalid bot token). The pause
+            // expires after an hour, at which point this monitor performs the
+            // single re-probe restart — restarting sooner just hammers the API.
+            continue;
+          }
           if (isChannelHealthy(status)) {
             continue;
           }

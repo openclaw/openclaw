@@ -3,6 +3,7 @@ import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channel
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { TERMINAL_ERROR_RETRY_MS, isTerminalChannelError } from "./channel-terminal-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -73,6 +74,8 @@ export type ChannelManager = {
   stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  /** True while the account's auto-restart is paused on a terminal error (expires after TERMINAL_ERROR_RETRY_MS). */
+  isTerminallyErrored: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
 };
 
@@ -85,8 +88,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const restartAttempts = new Map<string, number>();
   // Tracks accounts that were manually stopped so we don't auto-restart them.
   const manuallyStopped = new Set<string>();
+  // Accounts paused on a terminal error (e.g. invalid bot token) — auto-restart
+  // skips them until the entry expires (= the hourly re-probe) or an explicit
+  // start clears it. Without this, the channel runner's give-up and the health
+  // monitor's revive combine into an infinite 401-hammering loop (OB-8).
+  const terminalErrors = new Map<string, { reason: string; at: number }>();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
+
+  const activeTerminalError = (key: string): { reason: string; at: number } | null => {
+    const entry = terminalErrors.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (Date.now() - entry.at >= TERMINAL_ERROR_RETRY_MS) {
+      terminalErrors.delete(key);
+      return null;
+    }
+    return entry;
+  };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
     const existing = channelStores.get(channelId);
@@ -173,6 +193,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (!preserveManualStop) {
           manuallyStopped.delete(rKey);
         }
+        if (!preserveRestartAttempts) {
+          // Explicit (re)start — operator intent overrides a terminal-error pause.
+          terminalErrors.delete(rKey);
+        }
 
         const abort = new AbortController();
         store.aborts.set(id, abort);
@@ -186,6 +210,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           running: true,
           lastStartAt: Date.now(),
           lastError: null,
+          terminalError: null,
           reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
         });
 
@@ -205,6 +230,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
             log.error?.(`[${id}] channel exited: ${message}`);
+            if (isTerminalChannelError(message)) {
+              terminalErrors.set(rKey, { reason: message, at: Date.now() });
+              setRuntime(channelId, id, { accountId: id, terminalError: message });
+              log.error?.(
+                `[${id}] terminal channel error — pausing auto-restart for ` +
+                  `${Math.round(TERMINAL_ERROR_RETRY_MS / 60_000)} min (fix the credential and ` +
+                  `restart the channel to resume immediately): ${message}`,
+              );
+            }
           })
           .finally(() => {
             setRuntime(channelId, id, {
@@ -215,6 +249,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           })
           .then(async () => {
             if (manuallyStopped.has(rKey)) {
+              return;
+            }
+            if (activeTerminalError(rKey)) {
+              // Paused on a terminal error — the loud log was emitted on exit.
               return;
             }
             const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
@@ -402,6 +440,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     restartAttempts.delete(restartKey(channelId, accountId));
   };
 
+  const isTerminallyErrored_ = (channelId: ChannelId, accountId: string): boolean => {
+    return activeTerminalError(restartKey(channelId, accountId)) !== null;
+  };
+
   return {
     getRuntimeSnapshot,
     startChannels,
@@ -409,6 +451,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     stopChannel,
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStopped_,
+    isTerminallyErrored: isTerminallyErrored_,
     resetRestartAttempts: resetRestartAttempts_,
   };
 }
