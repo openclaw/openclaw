@@ -206,6 +206,7 @@ export {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
   createOpenAITextVerbosityWrapper,
+  createOpenAIThinkingLevelWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
