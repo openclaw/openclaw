@@ -75,7 +75,7 @@ import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js"
 import { checkContextPressure } from "../continuation/context-pressure.js";
 import { extractContinuationSignal } from "../continuation/signal.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
-import type { ChainState } from "../continuation/types.js";
+import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
 import {
   buildFallbackClearedNotice,
   buildFallbackNotice,
@@ -1876,17 +1876,20 @@ export async function runReplyAgent(replyParams: {
     // --- Continuation signal extraction (docs/design/continue-work-signal-v2.md §3.1) ---
     // Tool-based `continue_work` flows via the closure `requestContinuation`
     // callback in agent-runner-execution.ts and is surfaced on the run outcome
-    // as `runOutcome.continueWorkRequest`. Bracket signals (CONTINUE_WORK,
-    // CONTINUE_DELEGATE) live in the payload text and are parsed here.
-    const continueWorkRequest = runOutcome.continueWorkRequest;
+    // as `runOutcome.continueWorkRequests` (one entry per tool call this turn).
+    // Bracket signals (CONTINUE_WORK, CONTINUE_DELEGATE) live in the payload
+    // text and are parsed here. The merged signal only needs the first request
+    // to decide kind/delay; the full array fans out at the work-schedule site.
+    const continueWorkRequests = runOutcome.continueWorkRequests ?? [];
+    const firstWorkRequest = continueWorkRequests[0];
     const continuationExtraction = extractContinuationSignal({
       payloads: payloadArray,
-      continueWorkRequest: continueWorkRequest
+      continueWorkRequest: firstWorkRequest
         ? {
-            reason: continueWorkRequest.reason,
-            delaySeconds: continueWorkRequest.delaySeconds,
-            ...(continueWorkRequest.traceparent
-              ? { traceparent: continueWorkRequest.traceparent }
+            reason: firstWorkRequest.reason,
+            delaySeconds: firstWorkRequest.delaySeconds,
+            ...(firstWorkRequest.traceparent
+              ? { traceparent: firstWorkRequest.traceparent }
               : {}),
           }
         : undefined,
@@ -2907,11 +2910,28 @@ export async function runReplyAgent(replyParams: {
               });
             }
           } else {
-            const requestedDelaySeconds =
-              (effectiveContinuationSignal.delayMs ?? defaultDelayMs) / 1000;
+            // Fan out every continue_work tool election captured this turn
+            // (#982). A single model response can fire N continue_work calls;
+            // each is its own flow with its own delay/reason. Bracket-sourced
+            // work has no per-tool array, so it schedules one election from the
+            // merged signal.
+            const workRequests: ContinueWorkRequest[] =
+              !continuationExtraction.fromBracket && continueWorkRequests.length > 0
+                ? continueWorkRequests
+                : [
+                    {
+                      reason: continuationWorkReason ?? "",
+                      delaySeconds: (effectiveContinuationSignal.delayMs ?? defaultDelayMs) / 1000,
+                      ...(effectiveContinuationSignal.traceparent
+                        ? { traceparent: effectiveContinuationSignal.traceparent }
+                        : {}),
+                    },
+                  ];
             const workChainId = activeSessionEntry?.continuationChainId ?? generateChainId();
-            const { scheduleContinuationWork } = await import("../continuation/lazy.runtime.js");
-            const scheduleResult = await scheduleContinuationWork({
+            const { scheduleContinuationWorkBatch } = await import(
+              "../continuation/lazy.runtime.js"
+            );
+            const batchResult = await scheduleContinuationWorkBatch({
               sessionKey,
               chainState: {
                 currentChainCount,
@@ -2919,26 +2939,29 @@ export async function runReplyAgent(replyParams: {
                 accumulatedChainTokens,
                 chainId: workChainId,
               },
-              request: {
-                delaySeconds: requestedDelaySeconds,
-                reason: continuationWorkReason ?? "",
-                ...(effectiveContinuationSignal.traceparent
-                  ? { traceparent: effectiveContinuationSignal.traceparent }
-                  : {}),
-              },
+              requests: workRequests,
               config: resolveLiveContinuationRuntimeConfig(cfg),
               parentRunId: runId,
               log: (message) => defaultRuntime.log(message),
             });
-            if (scheduleResult.scheduled) {
+            if (batchResult.scheduledCount > 0) {
               await persistContinuationChainState({
-                count: scheduleResult.chainState.currentChainCount,
-                startedAt: scheduleResult.chainState.chainStartedAt,
-                tokens: scheduleResult.chainState.accumulatedChainTokens,
-                ...(scheduleResult.chainState.chainId
-                  ? { chainId: scheduleResult.chainState.chainId }
+                count: batchResult.chainState.currentChainCount,
+                startedAt: batchResult.chainState.chainStartedAt,
+                tokens: batchResult.chainState.accumulatedChainTokens,
+                ...(batchResult.chainState.chainId
+                  ? { chainId: batchResult.chainState.chainId }
                   : {}),
               });
+            }
+            // Surface cap-dropped elections so a partial fan-out is not silent:
+            // the tool already told the model each call was "scheduled". Only
+            // emit for multi-election turns to keep single-work behavior intact.
+            if (batchResult.cappedCount > 0 && workRequests.length > 1) {
+              enqueueSystemEvent(
+                `[continuation] ${batchResult.cappedCount} of ${workRequests.length} continue_work elections were not scheduled (chain/cost cap).`,
+                { sessionKey, trusted: true },
+              );
             }
           }
         }

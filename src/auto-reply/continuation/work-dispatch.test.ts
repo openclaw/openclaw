@@ -231,6 +231,7 @@ import {
   recoverPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
+  scheduleContinuationWorkBatch,
 } from "./work-dispatch.js";
 import { enqueuePendingWork, hasLiveOrRecentlyDispatchedContinuationWork } from "./work-store.js";
 
@@ -698,6 +699,97 @@ describe("durable continuation_work dispatch", () => {
     expect(systemEvents).toEqual([
       expect.objectContaining({ text: expect.stringContaining("was not granted") }),
     ]);
+  });
+
+  it("delivers a distinct wake for every continue_work election scheduled in one turn (#982)", async () => {
+    // Regression for #982: N continue_work() calls in one model turn must each
+    // deliver their own wake at their own offset. The single-variable capture
+    // dropped all but the last; the batch helper fans out all N, and the
+    // wake-timer re-arms for the soonest pending after each fire.
+    const sessionKey = "agent:main:multi-fanout";
+    mockSessionStore[sessionKey] = { sessionKey };
+
+    const batch = await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-multi",
+      },
+      requests: [
+        { reason: "work-A", delaySeconds: 1 },
+        { reason: "work-B", delaySeconds: 2 },
+        { reason: "work-C", delaySeconds: 3 },
+      ],
+      config,
+      parentRunId: "run-multi",
+    });
+
+    expect(batch).toMatchObject({ scheduledCount: 3, cappedCount: 0, capped: false });
+    expect(turnGrants).toHaveLength(0);
+
+    // Advance one offset at a time. Each fire delivers exactly one wake and
+    // re-arms for the next pending dueAt — proving distinct delivery, not the
+    // single collapsed wake of the regression. `advanceTimersByTimeAsync` only
+    // runs timers due within the window (unlike `flushTimers`, which drains the
+    // re-armed future timers too).
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(1);
+    expect(turnGrants[0]).toMatchObject({
+      context: expect.objectContaining({ Body: expect.stringContaining("work-A") }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(2);
+    expect(turnGrants[1]).toMatchObject({
+      context: expect.objectContaining({ Body: expect.stringContaining("work-B") }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(3);
+    expect(turnGrants[2]).toMatchObject({
+      context: expect.objectContaining({ Body: expect.stringContaining("work-C") }),
+    });
+  });
+
+  it("schedules the valid elections and caps the overflow without dropping the earlier ones", async () => {
+    // Partial-success is load-bearing: when the cumulative chain cap rejects a
+    // later election, the earlier valid ones must still schedule and deliver.
+    const sessionKey = "agent:main:partial-cap";
+    mockSessionStore[sessionKey] = { sessionKey };
+    const cappedConfig = { ...config, maxChainLength: 2 } satisfies ContinuationRuntimeConfig;
+
+    const batch = await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-partial",
+      },
+      requests: [
+        { reason: "fit-1", delaySeconds: 1 },
+        { reason: "fit-2", delaySeconds: 1 },
+        { reason: "over-cap", delaySeconds: 1 },
+      ],
+      config: cappedConfig,
+      parentRunId: "run-partial",
+    });
+
+    expect(batch).toMatchObject({ scheduledCount: 2, cappedCount: 1, capped: true });
+    expect(batch.chainState.currentChainCount).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTimers();
+
+    const deliveredReasons = turnGrants.map((grant) =>
+      String((grant as { context: { Body: string } }).context.Body),
+    );
+    expect(deliveredReasons).toHaveLength(2);
+    expect(deliveredReasons.some((body) => body.includes("fit-1"))).toBe(true);
+    expect(deliveredReasons.some((body) => body.includes("fit-2"))).toBe(true);
+    expect(deliveredReasons.some((body) => body.includes("over-cap"))).toBe(false);
   });
 
   it("does not let a hedge reclaim freshly running continuation work", async () => {
