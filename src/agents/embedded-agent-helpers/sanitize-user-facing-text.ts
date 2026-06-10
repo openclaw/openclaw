@@ -7,7 +7,6 @@ import {
 } from "../../../packages/normalization-core/src/string-coerce.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
