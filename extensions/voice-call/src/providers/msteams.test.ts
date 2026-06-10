@@ -971,11 +971,11 @@ describe("MsteamsProvider (audio loop wiring)", () => {
   });
 
   it("getCallStatus reports in-progress for an active realtime call (no streaming `calls` state)", async () => {
-    const { port } = await setup();
+    const { port, provider: msProvider } = await setup();
     // Realtime calls live only in `realtimeCalls`; without the realtime check getCallStatus would
     // report them terminal and the manager would reap an active outbound callback on restore.
     const realtime = createMockRealtimeProvider();
-    provider.setRealtimeRuntime({
+    msProvider.setRealtimeRuntime({
       provider: realtime.plugin,
       providerConfig: {} as never,
       inboundPolicy: "open",
@@ -994,7 +994,7 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     );
     await waitFor(() => realtime.created());
 
-    const status = await provider.getCallStatus({ providerCallId: callId });
+    const status = await msProvider.getCallStatus({ providerCallId: callId });
     expect(status.status).toBe("in-progress");
     expect(status.isTerminal).toBe(false);
 
