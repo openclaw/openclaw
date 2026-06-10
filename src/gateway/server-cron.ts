@@ -22,6 +22,7 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
+import { resolveJobPayloadTextForMain } from "../cron/service/jobs.js";
 import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
@@ -41,6 +42,7 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   normalizeAgentId,
   resolveEventSessionKey,
@@ -48,6 +50,7 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { createCronExitWatchers } from "./cron-exit-watchers.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -57,6 +60,10 @@ export type GatewayCronState = {
   cron: CronServiceContract;
   storePath: string;
   cronEnabled: boolean;
+  /** Arm/cancel on-exit watchers against the current persisted job set. */
+  reconcileExitWatchers?: () => Promise<void>;
+  /** Cancel all on-exit watchers (gateway shutdown). */
+  stopExitWatchers?: () => void;
 };
 
 /** Pick only the keys whose values are not `undefined` from an object. */
@@ -309,6 +316,27 @@ export function buildGatewayCronService(params: {
         "cron_changed hook failed",
       );
     });
+  };
+
+  // Gateway-owned watchers for `on-exit` schedule jobs. The watcher process
+  // runs under the ProcessSupervisor (outside any agent turn's process tree) so
+  // it survives per-turn CLI teardown; on exit it fires the origin-aware wake.
+  // Held in a ref so reconcile/stop can close over it before it is built (the
+  // watcher needs `cron`, which is constructed below).
+  const exitWatchersRef: { current: ReturnType<typeof createCronExitWatchers> | undefined } = {
+    current: undefined,
+  };
+  const reconcileExitWatchers = async () => {
+    if (!exitWatchersRef.current) {
+      return;
+    }
+    try {
+      const result = await cron.list({ includeDisabled: true });
+      const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
+      exitWatchersRef.current.reconcile(jobs);
+    } catch (err) {
+      cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
+    }
   };
 
   const cron = new CronService({
@@ -585,6 +613,10 @@ export function buildGatewayCronService(params: {
         ]),
       };
       runCronChangedHook(hookEvt);
+      // Re-arm / cancel on-exit watchers when the job set changes.
+      if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
+        void reconcileExitWatchers();
+      }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
@@ -633,5 +665,37 @@ export function buildGatewayCronService(params: {
     },
   });
 
-  return { cron, storePath, cronEnabled };
+  exitWatchersRef.current = createCronExitWatchers({
+    getProcessSupervisor,
+    // Disable the one-shot job in the store before firing, so a gateway restart
+    // after the command exits cannot re-arm the watcher and re-run the command.
+    persistCompletion: async (jobId) => {
+      await cron.update(jobId, { enabled: false });
+    },
+    // On exit, fire the origin-aware wake on the job's captured session so the
+    // woken turn continues the originating conversation/thread (not a throwaway
+    // cron-run child session). Reuses the same wake path as the cron wake tool.
+    fireOnExit: (job, exit) => {
+      const baseText = resolveJobPayloadTextForMain(job) ?? "A watched process exited.";
+      const exitNote =
+        exit.exitCode === null
+          ? " (watched command terminated by signal)"
+          : ` (watched command exited with code ${exit.exitCode})`;
+      cron.wake({
+        mode: "now",
+        text: `${baseText}${exitNote}`,
+        ...(job.sessionKey ? { sessionKey: job.sessionKey } : {}),
+        ...(job.agentId ? { agentId: job.agentId } : {}),
+      });
+    },
+    logger: cronLogger,
+  });
+
+  return {
+    cron,
+    storePath,
+    cronEnabled,
+    reconcileExitWatchers,
+    stopExitWatchers: () => exitWatchersRef.current?.cancelAll(),
+  };
 }

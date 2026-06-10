@@ -82,8 +82,13 @@ function normalizeCommandArgv(value: unknown): string[] | undefined {
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
-  const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
+  const kind =
+    rawKind === "at" || rawKind === "every" || rawKind === "cron" || rawKind === "on-exit"
+      ? rawKind
+      : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const commandRaw = normalizeOptionalString(schedule.command) ?? "";
+  const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
   const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
   const atString = normalizeOptionalString(schedule.at) ?? "";
@@ -112,6 +117,16 @@ function coerceSchedule(schedule: UnknownRecord) {
   if (anchorMs !== undefined && anchorMs >= 0) {
     next.anchorMs = Math.floor(anchorMs);
   }
+  if (commandRaw) {
+    next.command = commandRaw;
+  } else if ("command" in next) {
+    delete next.command;
+  }
+  if (cwdRaw) {
+    next.cwd = cwdRaw;
+  } else if ("cwd" in next) {
+    delete next.cwd;
+  }
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
@@ -136,6 +151,20 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
+    delete next.command;
+    delete next.cwd;
+  } else if (next.kind === "on-exit") {
+    delete next.at;
+    delete next.everyMs;
+    delete next.anchorMs;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
+  }
+
+  if (next.kind !== "on-exit") {
+    delete next.command;
+    delete next.cwd;
   }
 
   return next;

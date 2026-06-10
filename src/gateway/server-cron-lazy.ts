@@ -53,11 +53,15 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       }
       resolved.started = true;
       await resolved.state.cron.start();
+      // Arm on-exit watchers for jobs loaded from the store at startup (no
+      // change event fires for already-persisted jobs).
+      await resolved.state.reconcileExitWatchers?.();
       // If stop raced the lazy import/start path, immediately stop the loaded
       // scheduler so shutdown does not leave a background loop alive.
       if (stopped && resolved.started) {
         resolved.started = false;
         resolved.state.cron.stop();
+        resolved.state.stopExitWatchers?.();
       }
     },
     stop() {
@@ -65,6 +69,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       if (loaded) {
         loaded.started = false;
         loaded.state.cron.stop();
+        loaded.state.stopExitWatchers?.();
         return;
       }
       if (loading) {
@@ -77,6 +82,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             }
             resolved.started = false;
             resolved.state.cron.stop();
+            resolved.state.stopExitWatchers?.();
           })
           .catch(() => {});
       }
