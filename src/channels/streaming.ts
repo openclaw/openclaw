@@ -553,6 +553,12 @@ export function createChannelProgressDraftGate(params: {
   onStart: () => void | Promise<void>;
   /** Delay before first work event starts a draft; second work event starts immediately. */
   initialDelayMs?: number;
+  /**
+   * Observes a timer-fired startup rejection. The explicit start/noteWork/startNow
+   * paths re-throw to their awaiting caller, but the timer path has no awaiter, so
+   * without this the failure would be silently dropped.
+   */
+  onStartError?: (error: unknown) => void;
   /** Timer implementation, injectable for tests. */
   setTimeoutFn?: typeof setTimeout;
   /** Timer clearer, injectable for tests. */
@@ -612,7 +618,11 @@ export function createChannelProgressDraftGate(params: {
     }
     timer = setTimeoutFn(() => {
       timer = undefined;
-      void start().catch(() => {});
+      // Timer start has no awaiter; route the rejection to onStartError so it is
+      // observed rather than silently dropped.
+      void start().catch((error: unknown) => {
+        params.onStartError?.(error);
+      });
     }, initialDelayMs);
   };
 
