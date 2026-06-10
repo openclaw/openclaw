@@ -16,9 +16,33 @@ type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
-function isCommandLocalProfileOption(out: string[]): boolean {
-  const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
-  return primary === "qa" && (secondary === "matrix" || secondary === "run");
+const QA_RUN_COMMAND_LOCAL_PROFILE_IDS = new Set(["smoke-ci", "release"]);
+
+function isQaRunCommandLocalProfileValue(value: string | undefined): boolean {
+  return value ? QA_RUN_COMMAND_LOCAL_PROFILE_IDS.has(value.trim()) : false;
+}
+
+function isCommandLocalProfileOption(params: {
+  arg: string;
+  args: readonly string[];
+  index: number;
+  out: string[];
+}): boolean {
+  const [primary, secondary] = resolveCliArgvInvocation(params.out).commandPath;
+  if (primary !== "qa") {
+    return false;
+  }
+  if (secondary === "matrix") {
+    return true;
+  }
+  if (secondary !== "run") {
+    return false;
+  }
+  if (params.arg.startsWith("--profile=")) {
+    return isQaRunCommandLocalProfileValue(params.arg.slice("--profile=".length));
+  }
+  const next = params.args[params.index + 1];
+  return !isValueToken(next) || isQaRunCommandLocalProfileValue(next);
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
@@ -41,7 +65,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
-      if (isCommandLocalProfileOption(out)) {
+      if (isCommandLocalProfileOption({ arg, args, index, out })) {
         out.push(arg);
         if (arg === "--profile" && isValueToken(args[index + 1])) {
           out.push(args[index + 1]);

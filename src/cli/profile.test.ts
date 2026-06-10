@@ -138,6 +138,66 @@ describe("parseCliProfileArgs", () => {
     ]);
   });
 
+  it("preserves qa run --profile=release for the command parser", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile=release",
+      "--surface",
+      "agent-runtime-and-provider-execution",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile=release",
+      "--surface",
+      "agent-runtime-and-provider-execution",
+    ]);
+  });
+
+  it("keeps non-mapped qa run --profile values as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile",
+      "work",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
+  it("keeps non-mapped qa run --profile= values as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile=work",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
   it("still parses root --profile before Matrix QA", () => {
     const res = parseCliProfileArgs([
       "node",

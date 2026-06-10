@@ -16,7 +16,7 @@ Scope: `qa/**`.
 ## QA Scenarios
 
 - Scenario files live under `qa/scenarios/**` and are consumed by QA Lab.
-- Keep coverage metadata stable. Use `coverage.primary` for the scorecard category's main coverage IDs and `coverage.secondary` for supporting proof.
+- Keep coverage metadata stable. Use `coverage.primary` for the mapped category's main coverage IDs and `coverage.secondary` for supporting proof.
 - `docsRefs`, `codeRefs`, and `scenarioRefs` are repo-root relative paths.
 - When adding a scenario for maturity proof, update `taxonomy-mappings.yaml` in the same change or leave the scorecard gap explicit.
 - Do not put secrets, raw credentials, phone numbers, or unredacted transcripts in scenarios or evidence artifacts.
@@ -33,7 +33,9 @@ Scope: `qa/**`.
 
 - `qa suite` writes `qa-suite-summary.json`; mapped `qa run` dispatches through `qa suite`.
 - Normalized summaries include an `evidence` block with `kind`, `schemaVersion`, `generatedAt`, and `entries`.
-- Evidence entries carry scenario IDs, coverage IDs, source/docs/code refs, scorecard surface/category IDs, profile, provider/model live state, channel/driver live state, runner, package source, environment, artifact paths, status, failure, and timing.
+- Evidence entries are grouped as `test`, `mapping`, `execution`, and `result`.
+- `mapping.coverage[]` carries coverage IDs, surface/category IDs, relation role, and ref IDs; `mapping.refs[]` carries docs/code paths once.
+- `execution` carries provider/model, channel, runner, package source, environment, and artifacts; `result` carries status, failure, and timing.
 - Evidence summaries do not copy taxonomy provenance. Join evidence to maturity state through `taxonomy-mappings.yaml` and `taxonomy.yaml`.
 
 ## Validation
