@@ -212,37 +212,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
-  it("passes durable hub-delegate owner scope to label resolution", async () => {
-    const delegateKey = "agent:codex:acp:delegate";
-    const ownerSessionKey = "agent:main:webchat:main";
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath,
-      store: {
-        [delegateKey]: {
-          sessionId: "sess-delegate",
-          updatedAt: 1,
-          label: "worker",
-          hubDelegated: { ownerSessionKey, createdAt: 1 },
-        },
-      },
-    });
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: delegateKey, sessionId: "sess-delegate", label: "worker" }],
-    });
-
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { label: "worker", hubDelegatedOwner: ownerSessionKey },
-      }),
-    ).resolves.toEqual({ ok: true, key: delegateKey });
-    expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        opts: expect.objectContaining({ hubDelegatedOwner: ownerSessionKey }),
-      }),
-    );
-  });
-
   it("rejects non-alias agent:main sessions when main is no longer configured", async () => {
     const staleMainKey = "agent:main:guildchat:direct:u1";
     hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({

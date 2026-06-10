@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { writeSessionStoreForTest } from "../../src/config/sessions/test-helpers.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 
 export const HUB_OWNER_A = "agent:main:webchat:main";
@@ -44,4 +47,13 @@ export function hubDelegatedStoreRow(
   entry: SessionEntry,
 ): Record<string, SessionEntry> {
   return { [sessionKey]: entry };
+}
+
+export function writeDelegateStore(
+  storePath: string,
+  sessionKey: string,
+  entry: SessionEntry,
+): void {
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  writeSessionStoreForTest(storePath, { [sessionKey]: entry });
 }

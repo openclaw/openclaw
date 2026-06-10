@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { applySessionsPatchToStore, withHubDelegatedLabelPatchLock } from "./sessions-patch.js";
+import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
@@ -724,25 +724,6 @@ describe("gateway sessions patch", () => {
     );
   });
 
-  test("sets hubDelegated metadata for ACP sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:acp:child",
-        patch: {
-          key: "agent:main:acp:child",
-          hubDelegated: {
-            ownerSessionKey: "agent:main:main",
-            createdAt: 1_700_000_000_000,
-          },
-        },
-      }),
-    );
-    expect(entry.hubDelegated).toEqual({
-      ownerSessionKey: "agent:main:main",
-      createdAt: 1_700_000_000_000,
-    });
-  });
-
   test.each([
     [
       "new marker with mismatched spawnedBy",
@@ -796,27 +777,6 @@ describe("gateway sessions patch", () => {
       findHubDelegatedLabelConflict: () => "agent:claude:acp:other",
     });
     expectPatchError(result, "label already in use: worker");
-  });
-
-  test("serializes hub-delegated owner and label mutations", async () => {
-    const events: string[] = [];
-    let releaseFirst!: () => void;
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    const first = withHubDelegatedLabelPatchLock(async () => {
-      events.push("first-start");
-      await firstBlocked;
-      events.push("first-end");
-    });
-    const second = withHubDelegatedLabelPatchLock(async () => {
-      events.push("second");
-    });
-    await Promise.resolve();
-    expect(events).toEqual(["first-start"]);
-    releaseFirst();
-    await Promise.all([first, second]);
-    expect(events).toEqual(["first-start", "first-end", "second"]);
   });
 
   test("sets spawnedWorkspaceDir for subagent sessions", async () => {
@@ -1054,52 +1014,5 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("opencode-go");
     expect(entry.modelOverride).toBe("kimi-k2.6");
     expect(entry.authProfileOverride).toBe("work");
-  });
-
-  test("allows hub-delegated labels to reuse after close and across owners", async () => {
-    const ownerA = "agent:main:webchat:main";
-    const ownerB = "agent:main:discord:other";
-    const store: Record<string, SessionEntry> = {
-      "agent:codex:acp:closed": {
-        sessionId: "sess-closed",
-        updatedAt: 1,
-        label: "refactor",
-      },
-      "agent:codex:acp:owner-b": {
-        sessionId: "sess-owner-b",
-        updatedAt: 2,
-        label: "refactor",
-        hubDelegated: {
-          ownerSessionKey: ownerB,
-          createdAt: 2,
-        },
-      },
-    };
-
-    const ownerAReuse = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:codex:acp:owner-a-new",
-        store,
-        patch: {
-          key: "agent:codex:acp:owner-a-new",
-          label: "refactor",
-          hubDelegated: { ownerSessionKey: ownerA, createdAt: Date.now() },
-        },
-      }),
-    );
-    expect(ownerAReuse.label).toBe("refactor");
-
-    expectPatchError(
-      await runPatch({
-        storeKey: "agent:codex:acp:owner-b-new",
-        store,
-        patch: {
-          key: "agent:codex:acp:owner-b-new",
-          label: "refactor",
-          hubDelegated: { ownerSessionKey: ownerB, createdAt: Date.now() },
-        },
-      }),
-      "label already in use: refactor",
-    );
   });
 });

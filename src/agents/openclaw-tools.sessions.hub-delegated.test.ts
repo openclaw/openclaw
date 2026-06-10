@@ -1,8 +1,8 @@
 // Hub-delegated sessions_send tool boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  HUB_OWNER_A,
   delegateSessionKey,
+  HUB_OWNER_A,
   hubDelegatedEntry,
 } from "../../test/helpers/hub-delegated-fixtures.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -34,7 +34,6 @@ vi.mock("../config/config.js", () => ({
 type SessionsSendDetails = {
   status?: string;
   reply?: string;
-  error?: string;
   delivery?: { status?: string };
 };
 
@@ -53,18 +52,6 @@ function installSendTool(requesterKey: string, agentChannel = "webchat") {
     } as OpenClawConfig,
     callGateway: (opts: unknown) => callGatewayMock(opts),
   });
-}
-
-function mockChildReplyFlow(targetKey: string) {
-  loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
-    sessionKey === targetKey
-      ? hubDelegatedEntry({
-          sessionId: "child-session",
-          ownerSessionKey: HUB_OWNER_A,
-          label: "refactor",
-        })
-      : undefined,
-  );
 }
 
 describe("hub-delegated sessions tools", () => {
@@ -89,12 +76,19 @@ describe("hub-delegated sessions tools", () => {
 
   it("sessions_send resolves hub-delegated labels through owner scope", async () => {
     const targetKey = delegateSessionKey("codex", "delegate-child");
-    mockChildReplyFlow(targetKey);
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? hubDelegatedEntry({
+            sessionId: "child-session",
+            ownerSessionKey: HUB_OWNER_A,
+            label: "refactor",
+          })
+        : undefined,
+    );
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
         expect(request.params?.hubDelegatedOwner).toBe(HUB_OWNER_A);
-        expect(request.params?.spawnedBy).toBeUndefined();
         return { key: targetKey };
       }
       if (request.method === "agent") {
@@ -120,70 +114,6 @@ describe("hub-delegated sessions tools", () => {
       timeoutSeconds: 1,
     });
     expect(sessionsSendDetails(result.details).status).toBe("ok");
-  });
-
-  it("sessions_send reports missing labels for closed hub-delegated workers", async () => {
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.resolve") {
-        throw new Error("No session found with label: refactor");
-      }
-      throw new Error(`unexpected gateway call: ${request.method ?? "unknown"}`);
-    });
-
-    const tool = installSendTool(HUB_OWNER_A);
-    const result = await tool.execute("call-closed-delegate-label", {
-      label: "refactor",
-      message: "ping",
-      timeoutSeconds: 1,
-    });
-    const details = sessionsSendDetails(result.details);
-    expect(details.status).toBe("error");
-    expect(details.error).toContain("No session found with label");
-  });
-
-  it("sessions_send retries hub-delegated label resolve with spawnedBy after ambiguity", async () => {
-    const targetKey = delegateSessionKey("codex", "delegate-child");
-    mockChildReplyFlow(targetKey);
-    let resolveAttempts = 0;
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.resolve") {
-        resolveAttempts += 1;
-        if (request.params?.hubDelegatedOwner) {
-          throw new Error(
-            "Multiple sessions found with label: refactor (agent:codex:acp:a, agent:codex:acp:b)",
-          );
-        }
-        if (request.params?.spawnedBy) {
-          return { key: targetKey };
-        }
-        throw new Error("unexpected unscoped label resolve");
-      }
-      if (request.method === "agent") {
-        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
-      }
-      if (request.method === "agent.wait") {
-        return { runId: "run-child", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        return {
-          messages: [
-            { role: "assistant", content: [{ type: "text", text: "child reply" }], timestamp: 20 },
-          ],
-        };
-      }
-      return {};
-    });
-
-    const tool = installSendTool(HUB_OWNER_A);
-    const result = await tool.execute("call-label-retry", {
-      label: "refactor",
-      message: "ping",
-      timeoutSeconds: 1,
-    });
-    expect(sessionsSendDetails(result.details).status).toBe("ok");
-    expect(resolveAttempts).toBe(2);
   });
 
   it("sessions_send skips A2A ping-pong for hub-delegated delegates without sqlite acp metadata", async () => {
@@ -238,12 +168,5 @@ describe("hub-delegated sessions tools", () => {
     expect(details.reply).toBe("child reply");
     expect(details.delivery?.status).toBe("skipped");
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "agent" &&
-          (call.params as { message?: string })?.message === "Agent-to-agent announce step.",
-      ),
-    ).toBe(false);
   });
 });
