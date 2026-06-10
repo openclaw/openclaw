@@ -316,6 +316,7 @@ type DelegateDirectiveParse = { status: "applied" } | { status: "unknown" } | { 
 type DelegateDirectiveState = {
   silent?: boolean;
   silentWake?: boolean;
+  postCompaction?: boolean;
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
@@ -351,6 +352,21 @@ function parseDelegateDirective(
   }
   if (normalized === "silent") {
     state.silent = true;
+    return { status: "applied" };
+  }
+  // Post-compaction stages the delegate for release after the next compaction
+  // seam instead of dispatching now or on a timer. Mirrors the tool-form
+  // mode="post-compaction" branch (see continue-delegate-tool.ts) and is
+  // exclusive with silent/silent-wake — staging applies silentAnnounce +
+  // wakeOnReturn at release time.
+  if (
+    normalized === "post-compaction" ||
+    normalized === "postcompaction" ||
+    normalized === "post compaction"
+  ) {
+    state.postCompaction = true;
+    state.silent = undefined;
+    state.silentWake = undefined;
     return { status: "applied" };
   }
 
@@ -481,8 +497,15 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
       return null;
     }
     taskBody = parsedBody.taskBody;
-    const { silent, silentWake, targetSessionKey, targetSessionKeys, fanoutMode, traceparent } =
-      parsedBody.directives;
+    const {
+      silent,
+      silentWake,
+      postCompaction,
+      targetSessionKey,
+      targetSessionKeys,
+      fanoutMode,
+      traceparent,
+    } = parsedBody.directives;
 
     // Parse optional +Ns delay suffix (e.g. "+30s", "+5s")
     let delayMs: number | undefined;
@@ -503,6 +526,7 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
         delayMs,
         silent,
         silentWake,
+        ...(postCompaction ? { postCompaction } : {}),
         ...(targetSessionKey ? { targetSessionKey } : {}),
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode } : {}),

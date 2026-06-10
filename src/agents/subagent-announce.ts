@@ -8,6 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   consumePendingDelegates,
   markPendingDelegateFailed,
+  stagePostCompactionDelegate,
 } from "../auto-reply/continuation-delegate-store.js";
 import {
   isSilentReplyText,
@@ -985,153 +986,179 @@ export async function runSubagentAnnounceFlow(params: {
         const chainWake =
           chainSignal.silentWake || (parentWasSilent && params.wakeOnReturn === true);
 
-        const { maxChainLength, costCapTokens, minDelayMs, maxDelayMs, crossSessionTargeting } =
-          subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
-
-        const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
-        const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
-        const nextChainHop = childChainHop + 1;
-
-        let chainGuardResult:
-          | { allowed: false; reason: "chain-length"; chainCount: number; maxChainLength: number }
-          | { allowed: false; reason: "cost-cap"; chainTokens: number; costCapTokens: number }
-          | { allowed: true; nextChainHop: number };
-
-        if (childChainHop >= maxChainLength) {
-          chainGuardResult = {
-            allowed: false,
-            reason: "chain-length",
-            chainCount: nextChainHop,
-            maxChainLength,
-          };
+        // Mirror agent-runner.ts post-compaction routing: a post-compaction bracket
+        // delegate stages at the compaction seam instead of spawning now. Without this
+        // branch the light-context-leaf / completion path drops post-compaction mode and
+        // dispatches the delegate as a normal immediate chain hop (the lifeboat-drop bug).
+        // Mutually exclusive with the normal chain-spawn below; chain/cost caps are
+        // re-applied at release time inside dispatchPostCompactionDelegates.
+        if (chainSignal.postCompaction) {
+          stagePostCompactionDelegate(targetRequesterSessionKey, {
+            task: chainTask,
+            createdAt: Date.now(),
+            ...(chainSignal.targetSessionKey
+              ? { targetSessionKey: chainSignal.targetSessionKey }
+              : {}),
+            ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
+              ? { targetSessionKeys: chainSignal.targetSessionKeys }
+              : {}),
+            ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
+            ...(chainSignal.traceparent ? { traceparent: chainSignal.traceparent } : {}),
+          });
+          const { enqueueSystemEvent } = await import("../infra/system-events.js");
+          enqueueSystemEvent(
+            `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${chainTask}`,
+            { sessionKey: targetRequesterSessionKey, trusted: true },
+          );
         } else {
-          const parentEntry = readSessionEntryByKey(targetRequesterSessionKey);
-          const storedChainTokens = parentEntry?.continuationChainTokens ?? 0;
-          const parentChainTokens =
-            storedChainTokens >= accumulatedChildTokens
-              ? storedChainTokens
-              : storedChainTokens + accumulatedChildTokens;
-          if (costCapTokens > 0 && parentChainTokens > costCapTokens) {
+          const { maxChainLength, costCapTokens, minDelayMs, maxDelayMs, crossSessionTargeting } =
+            subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
+
+          const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
+          const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
+          const nextChainHop = childChainHop + 1;
+
+          let chainGuardResult:
+            | { allowed: false; reason: "chain-length"; chainCount: number; maxChainLength: number }
+            | { allowed: false; reason: "cost-cap"; chainTokens: number; costCapTokens: number }
+            | { allowed: true; nextChainHop: number };
+
+          if (childChainHop >= maxChainLength) {
             chainGuardResult = {
               allowed: false,
-              reason: "cost-cap",
-              chainTokens: parentChainTokens,
-              costCapTokens,
+              reason: "chain-length",
+              chainCount: nextChainHop,
+              maxChainLength,
             };
           } else {
-            chainGuardResult = { allowed: true, nextChainHop };
+            const parentEntry = readSessionEntryByKey(targetRequesterSessionKey);
+            const storedChainTokens = parentEntry?.continuationChainTokens ?? 0;
+            const parentChainTokens =
+              storedChainTokens >= accumulatedChildTokens
+                ? storedChainTokens
+                : storedChainTokens + accumulatedChildTokens;
+            if (costCapTokens > 0 && parentChainTokens > costCapTokens) {
+              chainGuardResult = {
+                allowed: false,
+                reason: "cost-cap",
+                chainTokens: parentChainTokens,
+                costCapTokens,
+              };
+            } else {
+              chainGuardResult = { allowed: true, nextChainHop };
+            }
           }
-        }
 
-        if (!chainGuardResult.allowed) {
-          if (chainGuardResult.reason === "chain-length") {
-            defaultRuntime.log(
-              `[subagent-chain-hop] Chain length ${chainGuardResult.chainCount} > ${chainGuardResult.maxChainLength}, rejecting hop from ${params.childSessionKey}`,
-            );
-          } else {
-            defaultRuntime.log(
-              `[subagent-chain-hop] Cost cap exceeded (${chainGuardResult.chainTokens} > ${chainGuardResult.costCapTokens}), rejecting hop from ${params.childSessionKey}`,
-            );
-          }
-        } else {
-          const continuationStateRuntime = await loadContinuationStateRuntime();
-
-          const doChainSpawn = async (timerTriggered = false) => {
-            try {
-              const rejectedByTargetingPolicy =
-                await rejectCrossSessionTargetingForSubagentDispatch({
-                  crossSessionTargeting,
-                  dispatchingSessionKey: params.childSessionKey,
-                  eventSessionKey: targetRequesterSessionKey,
-                  source: "bracket",
-                  targeting: {
-                    ...(chainSignal.targetSessionKey
-                      ? { targetSessionKey: chainSignal.targetSessionKey }
-                      : {}),
-                    ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
-                      ? { targetSessionKeys: chainSignal.targetSessionKeys }
-                      : {}),
-                    ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
-                  },
-                  task: chainTask,
-                });
-              if (rejectedByTargetingPolicy) {
-                return;
-              }
-              const childDepth = getSubagentDepthFromSessionStore(params.childSessionKey);
-              const { spawnSubagentDirect } = await loadSubagentSpawnRuntime();
-              const spawnResult = await spawnSubagentDirect(
-                {
-                  task: `[continuation:chain-hop:${nextChainHop}] Delegated from sub-agent (depth ${childDepth}): ${chainTask}`,
-                  ...(chainSilent ? { silentAnnounce: true } : {}),
-                  ...(chainWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
-                  ...(chainSignal.targetSessionKey
-                    ? { continuationTargetSessionKey: chainSignal.targetSessionKey }
-                    : {}),
-                  ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
-                    ? { continuationTargetSessionKeys: chainSignal.targetSessionKeys }
-                    : {}),
-                  ...(chainSignal.fanoutMode
-                    ? { continuationFanoutMode: chainSignal.fanoutMode }
-                    : {}),
-                  drainsContinuationDelegateQueue: true,
-                },
-                {
-                  agentSessionKey: targetRequesterSessionKey,
-                  agentChannel: targetRequesterOrigin?.channel ?? undefined,
-                  agentAccountId: targetRequesterOrigin?.accountId ?? undefined,
-                  agentTo: targetRequesterOrigin?.to ?? undefined,
-                  agentThreadId: targetRequesterOrigin?.threadId ?? undefined,
-                },
-              );
-              if (spawnResult.status === "accepted") {
-                defaultRuntime.log(
-                  timerTriggered
-                    ? `[subagent-chain-hop] Timer fired and spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`
-                    : `[subagent-chain-hop] Spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`,
-                );
-              } else {
-                const reasonText = spawnResult.error ?? "no reason given";
-                defaultRuntime.log(
-                  `[subagent-chain-hop] Spawn rejected (${spawnResult.status}) from ${params.childSessionKey} reason=${reasonText}: ${chainTask.slice(0, 80)}`,
-                );
-              }
-            } catch (err) {
+          if (!chainGuardResult.allowed) {
+            if (chainGuardResult.reason === "chain-length") {
               defaultRuntime.log(
-                `[subagent-chain-hop] Spawn failed from ${params.childSessionKey}: ${String(err)}`,
+                `[subagent-chain-hop] Chain length ${chainGuardResult.chainCount} > ${chainGuardResult.maxChainLength}, rejecting hop from ${params.childSessionKey}`,
+              );
+            } else {
+              defaultRuntime.log(
+                `[subagent-chain-hop] Cost cap exceeded (${chainGuardResult.chainTokens} > ${chainGuardResult.costCapTokens}), rejecting hop from ${params.childSessionKey}`,
               );
             }
-          };
+          } else {
+            const continuationStateRuntime = await loadContinuationStateRuntime();
 
-          if (chainDelayMs && chainDelayMs > 0) {
-            const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
-            continuationStateRuntime.retainContinuationTimerRef(targetRequesterSessionKey);
-            const timerHandle = setTimeout(() => {
+            const doChainSpawn = async (timerTriggered = false) => {
               try {
-                doChainSpawn(true).catch((err: unknown) => {
+                const rejectedByTargetingPolicy =
+                  await rejectCrossSessionTargetingForSubagentDispatch({
+                    crossSessionTargeting,
+                    dispatchingSessionKey: params.childSessionKey,
+                    eventSessionKey: targetRequesterSessionKey,
+                    source: "bracket",
+                    targeting: {
+                      ...(chainSignal.targetSessionKey
+                        ? { targetSessionKey: chainSignal.targetSessionKey }
+                        : {}),
+                      ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
+                        ? { targetSessionKeys: chainSignal.targetSessionKeys }
+                        : {}),
+                      ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
+                    },
+                    task: chainTask,
+                  });
+                if (rejectedByTargetingPolicy) {
+                  return;
+                }
+                const childDepth = getSubagentDepthFromSessionStore(params.childSessionKey);
+                const { spawnSubagentDirect } = await loadSubagentSpawnRuntime();
+                const spawnResult = await spawnSubagentDirect(
+                  {
+                    task: `[continuation:chain-hop:${nextChainHop}] Delegated from sub-agent (depth ${childDepth}): ${chainTask}`,
+                    ...(chainSilent ? { silentAnnounce: true } : {}),
+                    ...(chainWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
+                    ...(chainSignal.targetSessionKey
+                      ? { continuationTargetSessionKey: chainSignal.targetSessionKey }
+                      : {}),
+                    ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
+                      ? { continuationTargetSessionKeys: chainSignal.targetSessionKeys }
+                      : {}),
+                    ...(chainSignal.fanoutMode
+                      ? { continuationFanoutMode: chainSignal.fanoutMode }
+                      : {}),
+                    drainsContinuationDelegateQueue: true,
+                  },
+                  {
+                    agentSessionKey: targetRequesterSessionKey,
+                    agentChannel: targetRequesterOrigin?.channel ?? undefined,
+                    agentAccountId: targetRequesterOrigin?.accountId ?? undefined,
+                    agentTo: targetRequesterOrigin?.to ?? undefined,
+                    agentThreadId: targetRequesterOrigin?.threadId ?? undefined,
+                  },
+                );
+                if (spawnResult.status === "accepted") {
                   defaultRuntime.log(
-                    `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
+                    timerTriggered
+                      ? `[subagent-chain-hop] Timer fired and spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`
+                      : `[subagent-chain-hop] Spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`,
                   );
-                });
-              } finally {
-                continuationStateRuntime.unregisterContinuationTimerHandle(
-                  targetRequesterSessionKey,
-                  timerHandle,
+                } else {
+                  const reasonText = spawnResult.error ?? "no reason given";
+                  defaultRuntime.log(
+                    `[subagent-chain-hop] Spawn rejected (${spawnResult.status}) from ${params.childSessionKey} reason=${reasonText}: ${chainTask.slice(0, 80)}`,
+                  );
+                }
+              } catch (err) {
+                defaultRuntime.log(
+                  `[subagent-chain-hop] Spawn failed from ${params.childSessionKey}: ${String(err)}`,
                 );
               }
-            }, clampedDelay);
-            continuationStateRuntime.registerContinuationTimerHandle(
-              targetRequesterSessionKey,
-              timerHandle,
-            );
-            timerHandle.unref();
-          } else {
-            // Fire-and-forget — don't block the announce flow
-            doChainSpawn().catch((err: unknown) => {
-              defaultRuntime.log(
-                `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
+            };
+
+            if (chainDelayMs && chainDelayMs > 0) {
+              const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
+              continuationStateRuntime.retainContinuationTimerRef(targetRequesterSessionKey);
+              const timerHandle = setTimeout(() => {
+                try {
+                  doChainSpawn(true).catch((err: unknown) => {
+                    defaultRuntime.log(
+                      `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
+                    );
+                  });
+                } finally {
+                  continuationStateRuntime.unregisterContinuationTimerHandle(
+                    targetRequesterSessionKey,
+                    timerHandle,
+                  );
+                }
+              }, clampedDelay);
+              continuationStateRuntime.registerContinuationTimerHandle(
+                targetRequesterSessionKey,
+                timerHandle,
               );
-            });
+              timerHandle.unref();
+            } else {
+              // Fire-and-forget — don't block the announce flow
+              doChainSpawn().catch((err: unknown) => {
+                defaultRuntime.log(
+                  `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
+                );
+              });
+            }
           }
         }
       }

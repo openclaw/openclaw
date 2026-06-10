@@ -70,6 +70,92 @@ describe("parseContinuationSignal", () => {
     });
   });
 
+  it("parses delegate with post-compaction mode", () => {
+    const signal = parseContinuationSignal("[[CONTINUE_DELEGATE: task | post-compaction]]");
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "task",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+      postCompaction: true,
+    });
+  });
+
+  it("accepts post-compaction directive spelling variants", () => {
+    const variants = ["post-compaction", "postcompaction", "post compaction"] as const;
+    for (const variant of variants) {
+      const signal = parseContinuationSignal(`[[CONTINUE_DELEGATE: task | ${variant}]]`);
+      expect(signal).toMatchObject({
+        kind: "delegate",
+        task: "task",
+        postCompaction: true,
+      });
+    }
+  });
+
+  it("post-compaction directive clears prior silent/silent-wake state", () => {
+    // Directives are parsed right-to-left in parseDelegateBodyDirectives,
+    // so post-compaction at the END of the directive chain wins by being
+    // applied last and explicitly clearing silent/silentWake.
+    expect(
+      parseContinuationSignal("[[CONTINUE_DELEGATE: task | post-compaction | silent]]"),
+    ).toEqual({
+      kind: "delegate",
+      task: "task",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+      postCompaction: true,
+    });
+    expect(
+      parseContinuationSignal("[[CONTINUE_DELEGATE: task | post-compaction | silent-wake]]"),
+    ).toEqual({
+      kind: "delegate",
+      task: "task",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+      postCompaction: true,
+    });
+  });
+
+  it("token-form delegate mode parity covers normal / silent / silent-wake / post-compaction", () => {
+    // Parity check: every continue_delegate mode the tool form accepts
+    // (see DELEGATE_MODES in agents/tools/continue-delegate-tool.ts) must
+    // round-trip through the token form. If the tool grows a new mode and
+    // the token form does not, this assertion fails.
+    expect(parseContinuationSignal("[[CONTINUE_DELEGATE: task | normal]]")).toEqual({
+      kind: "delegate",
+      task: "task",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+    });
+    expect(parseContinuationSignal("[[CONTINUE_DELEGATE: task | silent]]")).toEqual({
+      kind: "delegate",
+      task: "task",
+      delayMs: undefined,
+      silent: true,
+      silentWake: undefined,
+    });
+    expect(parseContinuationSignal("[[CONTINUE_DELEGATE: task | silent-wake]]")).toEqual({
+      kind: "delegate",
+      task: "task",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: true,
+    });
+    expect(parseContinuationSignal("[[CONTINUE_DELEGATE: task | post-compaction]]")).toEqual({
+      kind: "delegate",
+      task: "task",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+      postCompaction: true,
+    });
+  });
+
   it("parses delegate with delay + silent-wake", () => {
     const signal = parseContinuationSignal(
       "Reply text\n[[CONTINUE_DELEGATE: delayed task +10s | silent-wake]]",
