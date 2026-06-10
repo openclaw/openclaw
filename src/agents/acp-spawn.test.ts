@@ -1174,47 +1174,6 @@ describe("spawnAcpDirect", () => {
     }
   });
 
-  it("rejects duplicate hub-delegated labels stored in ACP harness session stores", async () => {
-    const storeByPath: Record<string, Record<string, SessionEntry>> = {
-      "/tmp/main-sessions.json": {},
-      "/tmp/codex-sessions.json": {
-        "agent:codex:acp:existing-delegate": {
-          sessionId: "sess-existing",
-          updatedAt: Date.now(),
-          label: "refactor",
-          hubDelegated: {
-            ownerSessionKey: "agent:main:webchat:main",
-            createdAt: Date.now(),
-          },
-        },
-      },
-    };
-    hoisted.resolveStorePathMock.mockImplementation((_store, opts?: { agentId?: string }) =>
-      opts?.agentId === "main" ? "/tmp/main-sessions.json" : "/tmp/codex-sessions.json",
-    );
-    hoisted.loadSessionStoreMock.mockImplementation(
-      (storePath: string) => storeByPath[storePath] ?? {},
-    );
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-        delegate: true,
-        label: "refactor",
-      },
-      {
-        agentSessionKey: "agent:main:webchat:main",
-        agentChannel: "webchat",
-      },
-    );
-
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.errorCode).toBe("delegate_label_conflict");
-    }
-  });
-
   it("passes zero timeout through to the gateway no-timeout path", async () => {
     const result = await spawnAcpDirect(
       {

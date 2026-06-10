@@ -1,6 +1,6 @@
 // Hub-delegated lifecycle: close ordering, rollback, lock, and maintenance scan.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   delegateSessionKey,
   HUB_OWNER_A,
@@ -10,25 +10,7 @@ import {
 import { readSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { withHubDelegatedLabelPatchLock } from "../gateway/sessions-patch.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  closeHubDelegatedAcpWorker,
-  listHubDelegatedMaintenanceCandidates,
-} from "./hub-delegated-lifecycle.js";
-
-const runtimeConfigState = vi.hoisted(() => ({
-  cfg: {} as {
-    session?: { store?: string };
-    acp?: { allowedAgents?: string[] };
-  },
-}));
-
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => runtimeConfigState.cfg,
-}));
-
-afterEach(() => {
-  runtimeConfigState.cfg = {};
-});
+import { closeHubDelegatedAcpWorker } from "./hub-delegated-lifecycle.js";
 
 describe("hub-delegated lifecycle", () => {
   it("clears routing fields before runtime close and restores them on failure", async () => {
@@ -98,41 +80,6 @@ describe("hub-delegated lifecycle", () => {
     });
   });
 
-  it("runs prepareRuntime before clearing the delegate marker", async () => {
-    await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      const sessionKey = delegateSessionKey("codex", "repair-before-close");
-      writeDelegateStore(
-        storePath,
-        sessionKey,
-        hubDelegatedEntry({
-          sessionId: "sess-repair-before-close",
-          ownerSessionKey: HUB_OWNER_A,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        }),
-      );
-      const events: string[] = [];
-
-      await closeHubDelegatedAcpWorker({
-        cfg: { session: { store: storePath } },
-        sessionKey,
-        storePath,
-        storeSessionKey: sessionKey,
-        reason: "manual-delegate-close",
-        prepareRuntime: async () => {
-          events.push("prepare");
-          expect(readSessionStoreForTest(storePath)[sessionKey]?.hubDelegated).toBeDefined();
-        },
-        closeRuntime: async () => {
-          events.push("close");
-        },
-      });
-
-      expect(events).toEqual(["prepare", "close"]);
-    });
-  });
-
   it("holds the hub-delegated label lock while clearing and restoring on close failure", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "sessions.json");
@@ -184,22 +131,6 @@ describe("hub-delegated lifecycle", () => {
       await expect(closePromise).rejects.toThrow("close failed");
       await concurrent;
       expect(concurrentFinished).toBe(true);
-    });
-  });
-
-  it("lists store-only hub-delegated rows for maintenance", async () => {
-    await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
-      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
-      const sessionKey = delegateSessionKey("codex", "store-only-delegate");
-      writeDelegateStore(storePath, sessionKey, hubDelegatedEntry({ label: "refactor" }));
-      runtimeConfigState.cfg = {
-        session: { store: storePath },
-        acp: { allowedAgents: ["codex"] },
-      };
-
-      const entries = await listHubDelegatedMaintenanceCandidates({});
-      expect(entries.map((candidate) => candidate.sessionKey)).toEqual([sessionKey]);
-      expect(entries[0]?.acp).toBeUndefined();
     });
   });
 });

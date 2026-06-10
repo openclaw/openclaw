@@ -7,6 +7,7 @@ import {
   readSessionStoreForTest,
   writeSessionStoreForTest,
 } from "../config/sessions/test-helpers.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
@@ -31,6 +32,62 @@ afterEach(() => {
   runtimeConfigState.cfg = {};
 });
 
+function installHubDelegatedMaintenanceRuntime(params: {
+  home: string;
+  storePath: string;
+  sessionKey: string;
+  closeAcpSession: ReturnType<typeof vi.fn>;
+  hasActiveAcpTurn?: (sessionKey: string) => boolean;
+  readAcpSessionEntry?: () => {
+    cfg: typeof runtimeConfigState.cfg;
+    storePath: string;
+    sessionKey: string;
+    storeSessionKey: string;
+    entry?: SessionEntry;
+    acp?: SessionEntry["acp"];
+    storeReadFailed: boolean;
+  };
+}) {
+  runtimeConfigState.cfg = {
+    session: { store: params.storePath },
+    acp: { allowedAgents: ["codex"], delegate: { idleHours: 72, maxAgeHours: 168 } },
+  };
+  setTaskRegistryMaintenanceRuntimeForTests({
+    listAcpSessionEntries: async () => [],
+    readAcpSessionEntry:
+      params.readAcpSessionEntry ??
+      (() => ({
+        cfg: runtimeConfigState.cfg as never,
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        storeSessionKey: params.sessionKey,
+        entry: undefined,
+        storeReadFailed: false,
+      })),
+    closeAcpSession: params.closeAcpSession,
+    loadSessionStore,
+    resolveStorePath: () => params.storePath,
+    parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
+    isCronJobActive: () => false,
+    getAgentRunContext: () => undefined,
+    hasActiveAcpTurn: params.hasActiveAcpTurn ?? (() => false),
+    hasActiveTaskForChildSessionKey: () => false,
+    deleteTaskRecordById: () => true,
+    ensureTaskRegistryReady: () => {},
+    getTaskById: () => undefined,
+    listTaskRecords: () => [],
+    markTaskLostById: () => null,
+    markTaskTerminalById: () => null,
+    maybeDeliverTaskTerminalUpdate: async () => null,
+    resolveTaskForLookupToken: () => undefined,
+    setTaskCleanupAfterById: () => null,
+    isRuntimeAuthoritative: () => true,
+    resolveCronJobsStorePath: () => path.join(params.home, "cron/jobs.json"),
+    loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
+    readCronRunLogEntriesSync: () => [],
+  });
+}
+
 describe("task-registry maintenance hub-delegated cleanup", () => {
   it("clears hubDelegated after closing expired delegate sessions", async () => {
     const home = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "openclaw-hub-delegate-maint-"));
@@ -50,43 +107,12 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           },
         },
       });
-      runtimeConfigState.cfg = {
-        session: { store: storePath },
-        acp: { allowedAgents: ["codex"], delegate: { idleHours: 72, maxAgeHours: 168 } },
-      };
-
       const closeAcpSession = vi.fn(async () => {});
-      setTaskRegistryMaintenanceRuntimeForTests({
-        listAcpSessionEntries: async () => [],
-        readAcpSessionEntry: () => ({
-          cfg: runtimeConfigState.cfg as never,
-          storePath,
-          sessionKey,
-          storeSessionKey: sessionKey,
-          entry: undefined,
-          storeReadFailed: false,
-        }),
+      installHubDelegatedMaintenanceRuntime({
+        home,
+        storePath,
+        sessionKey,
         closeAcpSession,
-        loadSessionStore,
-        resolveStorePath: () => storePath,
-        parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
-        isCronJobActive: () => false,
-        getAgentRunContext: () => undefined,
-        hasActiveAcpTurn: () => false,
-        hasActiveTaskForChildSessionKey: () => false,
-        deleteTaskRecordById: () => true,
-        ensureTaskRegistryReady: () => {},
-        getTaskById: () => undefined,
-        listTaskRecords: () => [],
-        markTaskLostById: () => null,
-        markTaskTerminalById: () => null,
-        maybeDeliverTaskTerminalUpdate: async () => null,
-        resolveTaskForLookupToken: () => undefined,
-        setTaskCleanupAfterById: () => null,
-        isRuntimeAuthoritative: () => true,
-        resolveCronJobsStorePath: () => path.join(home, "cron/jobs.json"),
-        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
-        readCronRunLogEntriesSync: () => [],
       });
 
       await runTaskRegistryMaintenance();
@@ -97,8 +123,7 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           reason: "delegate-max-age-expired",
         }),
       );
-      const persisted = readSessionStoreForTest(storePath);
-      expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
+      expect(readSessionStoreForTest(storePath)[sessionKey]?.hubDelegated).toBeUndefined();
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -132,14 +157,13 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           acp: persistentAcpMeta,
         },
       });
-      runtimeConfigState.cfg = {
-        session: { store: storePath },
-        acp: { allowedAgents: ["codex"], delegate: { idleHours: 72, maxAgeHours: 168 } },
-      };
-
       const closeAcpSession = vi.fn(async () => {});
-      setTaskRegistryMaintenanceRuntimeForTests({
-        listAcpSessionEntries: async () => [],
+      installHubDelegatedMaintenanceRuntime({
+        home,
+        storePath,
+        sessionKey,
+        closeAcpSession,
+        hasActiveAcpTurn: (activeSessionKey) => activeSessionKey === sessionKey,
         readAcpSessionEntry: () => ({
           cfg: runtimeConfigState.cfg as never,
           storePath,
@@ -149,27 +173,6 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           acp: persistentAcpMeta,
           storeReadFailed: false,
         }),
-        closeAcpSession,
-        loadSessionStore,
-        resolveStorePath: () => storePath,
-        parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
-        isCronJobActive: () => false,
-        getAgentRunContext: () => undefined,
-        hasActiveAcpTurn: (activeSessionKey) => activeSessionKey === sessionKey,
-        hasActiveTaskForChildSessionKey: () => false,
-        deleteTaskRecordById: () => true,
-        ensureTaskRegistryReady: () => {},
-        getTaskById: () => undefined,
-        listTaskRecords: () => [],
-        markTaskLostById: () => null,
-        markTaskTerminalById: () => null,
-        maybeDeliverTaskTerminalUpdate: async () => null,
-        resolveTaskForLookupToken: () => undefined,
-        setTaskCleanupAfterById: () => null,
-        isRuntimeAuthoritative: () => true,
-        resolveCronJobsStorePath: () => path.join(home, "cron/jobs.json"),
-        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
-        readCronRunLogEntriesSync: () => [],
       });
 
       await runTaskRegistryMaintenance();

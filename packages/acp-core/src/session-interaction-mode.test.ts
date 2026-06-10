@@ -68,29 +68,31 @@ describe("isParentOwnedBackgroundAcpSession", () => {
 });
 
 describe("requiresInternalAcpSessionEffects", () => {
-  it("returns true for hub-delegated ACP child sessions", () => {
-    expect(
-      requiresInternalAcpSessionEffects({
+  it.each([
+    [
+      "hub-delegated child sessions",
+      {
         hubDelegated: { ownerSessionKey: parentKey, createdAt: 1 },
-      }),
-    ).toBe(true);
-  });
-
-  it("returns true for parent-owned background ACP sessions", () => {
-    expect(
-      requiresInternalAcpSessionEffects({
+      },
+      true,
+    ],
+    [
+      "parent-owned background ACP sessions",
+      {
         acp: { mode: "oneshot" },
         spawnedBy: parentKey,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for interactive ACP sessions", () => {
-    expect(
-      requiresInternalAcpSessionEffects({
+      },
+      true,
+    ],
+    [
+      "interactive ACP sessions",
+      {
         acp: { mode: "persistent" },
-      }),
-    ).toBe(false);
+      },
+      false,
+    ],
+  ] as const)("$0 returns $2", (_label, entry, expected) => {
+    expect(requiresInternalAcpSessionEffects(entry)).toBe(expected);
   });
 });
 
