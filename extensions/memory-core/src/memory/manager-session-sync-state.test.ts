@@ -17,6 +17,7 @@ describe("memory session sync state", () => {
         { path: "sessions/b.jsonl", hash: "hash-b" },
       ],
       sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      scanOk: true,
     });
 
     expect(plan.indexAll).toBe(true);
@@ -84,6 +85,7 @@ describe("memory session sync state", () => {
         { path: "sessions/targeted-second.jsonl", hash: "hash-second" },
       ],
       sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      scanOk: true,
     });
 
     expect(plan.indexAll).toBe(true);
@@ -102,6 +104,7 @@ describe("memory session sync state", () => {
       sessionsDirtyFiles: new Set(["/tmp/incremental.jsonl"]),
       existingRows: [],
       sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      scanOk: true,
     });
 
     expect(plan.indexAll).toBe(false);

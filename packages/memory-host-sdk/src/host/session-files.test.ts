@@ -116,9 +116,22 @@ describe("scanSessionFilesForAgent", () => {
     expect(scan).toEqual({ ok: false, files: [] });
   });
 
-  it("reports not-ok when the sessions directory is absent", async () => {
+  it("treats an absent sessions directory as authoritatively empty when the agent dir exists", async () => {
+    fsSync.mkdirSync(path.join(tmpDir, "agents", "main"), { recursive: true });
+
     const scan = await scanSessionFilesForAgent("main");
 
+    // The sessions dir only exists once a transcript is written, so ENOENT
+    // with a present agent dir genuinely means "no sessions" (fresh agent)
+    // and must not block orphan pruning or warn on every full sync.
+    expect(scan).toEqual({ ok: true, files: [] });
+  });
+
+  it("reports not-ok when the whole agent state tree is unreachable", async () => {
+    const scan = await scanSessionFilesForAgent("main");
+
+    // Missing parent agent dir means the state tree itself is gone (e.g. an
+    // unmounted volume), not "no sessions"; pruning here would wipe the index.
     expect(scan).toEqual({ ok: false, files: [] });
   });
 

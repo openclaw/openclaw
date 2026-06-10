@@ -40,11 +40,12 @@ export function resolveMemorySessionSyncPlan(params: {
   sessionsDirtyFiles: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForFile: (file: string) => string;
-  // Whether the full directory enumeration that produced `files` actually read
-  // the sessions dir. Targeted syncs pass no scan and default to authoritative.
-  // A failed scan (false) surfaces an empty `files` array that must not drive
-  // the destructive stale-row prune. See `pruneStaleRows`.
-  scanOk?: boolean;
+  // Whether the enumeration that produced `files` was authoritative (the
+  // sessions dir was read or does not exist). Required so a new caller cannot
+  // silently default a failed scan to authoritative: an empty `files` array
+  // from a failed scan must not drive the destructive stale-row prune. See
+  // `pruneStaleRows`. Targeted syncs pass true (no scan involved).
+  scanOk: boolean;
 }): {
   activePaths: Set<string> | null;
   existingRows: MemorySourceFileStateRow[] | null;
@@ -59,7 +60,6 @@ export function resolveMemorySessionSyncPlan(params: {
   // the last archive) do not leave orphaned rows.
   pruneStaleRows: boolean;
 } {
-  const scanOk = params.scanOk ?? true;
   const activePaths = params.targetSessionFiles
     ? null
     : new Set(params.files.map((file) => params.sessionPathForFile(file)));
@@ -72,6 +72,6 @@ export function resolveMemorySessionSyncPlan(params: {
       params.needsFullReindex ||
       Boolean(params.targetSessionFiles) ||
       params.sessionsDirtyFiles.size === 0,
-    pruneStaleRows: activePaths !== null && scanOk,
+    pruneStaleRows: activePaths !== null && params.scanOk,
   };
 }

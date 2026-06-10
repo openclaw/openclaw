@@ -28,11 +28,11 @@ import {
   buildFileEntry,
   ensureMemoryIndexSchema,
   isFileMissingError,
-  listMemoryFiles,
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
   retryTransientMemoryRead,
   runWithConcurrency,
+  scanMemoryFiles,
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -117,6 +117,10 @@ export type MemoryIndexWorkItem = {
 type MemorySourceSyncPlan = {
   indexItems: MemoryIndexWorkItem[];
   finalize: () => Promise<void> | void;
+  // False when the source enumeration failed (non-authoritative listing).
+  // runSync then keeps the source's dirty state so the next eligible sync
+  // retries, instead of reporting a clean sync that indexed nothing.
+  scanOk: boolean;
 };
 
 const META_KEY = "memory_index_meta_v1";
@@ -308,7 +312,20 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private emptySourceSyncPlan(): MemorySourceSyncPlan {
-    return { indexItems: [], finalize: () => {} };
+    return { indexItems: [], finalize: () => {}, scanOk: true };
+  }
+
+  // A full reindex builds a fresh index from the enumeration alone, so a
+  // failed scan would persist an empty index over existing rows. Abort: the
+  // safe path restores the original DB on throw, and the unsafe path skips
+  // writeMeta so the next sync retries the full rebuild.
+  private assertReindexScanOk(source: MemorySource, scanOk: boolean): void {
+    if (scanOk) {
+      return;
+    }
+    throw new Error(
+      `Memory reindex aborted: ${source} enumeration failed; keeping the existing index.`,
+    );
   }
 
   private shouldDeferSourceWideBatch(): boolean {
@@ -370,7 +387,7 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
-  }): Promise<void> {
+  }): Promise<{ memoryScanOk: boolean; sessionsScanOk: boolean }> {
     const memoryPlan = params.shouldSyncMemory
       ? await this.syncMemoryFiles({
           needsFullReindex: params.needsFullReindex,
@@ -379,7 +396,7 @@ export abstract class MemoryManagerSyncOps {
         })
       : this.emptySourceSyncPlan();
     if (params.shouldSyncSessions) {
-      await this.syncSessionFiles({
+      const sessionPlan = await this.syncSessionFiles({
         needsFullReindex: params.needsFullReindex,
         targetSessionFiles: params.targetSessionFiles,
         progress: params.progress,
@@ -387,9 +404,10 @@ export abstract class MemoryManagerSyncOps {
         prefixIndexItems: memoryPlan.indexItems,
       });
       await memoryPlan.finalize();
-      return;
+      return { memoryScanOk: memoryPlan.scanOk, sessionsScanOk: sessionPlan.scanOk };
     }
     await this.executeSourceSyncPlans([memoryPlan], params.progress);
+    return { memoryScanOk: memoryPlan.scanOk, sessionsScanOk: true };
   }
 
   protected hasIndexedChunks(): boolean {
@@ -1629,11 +1647,15 @@ export abstract class MemoryManagerSyncOps {
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
-    const files = await listMemoryFiles(
+    // Track whether the enumeration actually read every root, so a transient
+    // failure cannot surface an empty/partial listing that the stale-row prune
+    // below would treat as mass deletion.
+    const scan = await scanMemoryFiles(
       this.workspaceDir,
       this.settings.extraPaths,
       this.settings.multimodal,
     );
+    const files = scan.files;
     const fileEntries = (
       await runWithConcurrency(
         files.map(
@@ -1666,6 +1688,15 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const deleteStaleRows = async () => {
+      if (!scan.ok) {
+        // A failed enumeration is non-authoritative: pruning against it would
+        // delete index rows for files that still exist on disk. Keep the rows
+        // until the next successful scan reconciles.
+        log.warn(
+          `memory sync: skipping memory-file prune after a failed enumeration; retaining ${existingRows.length} indexed rows until the next successful scan`,
+        );
+        return;
+      }
       for (const stale of existingRows) {
         if (activePaths.has(stale.path)) {
           continue;
@@ -1704,7 +1735,7 @@ export abstract class MemoryManagerSyncOps {
         (entry): MemoryIndexWorkItem => ({ entry, source: "memory" }),
       );
       if (params.deferIndex) {
-        return { indexItems, finalize: deleteStaleRows };
+        return { indexItems, finalize: deleteStaleRows, scanOk: scan.ok };
       }
       await this.indexQueuedFiles(indexItems, params.progress);
     } else {
@@ -1732,7 +1763,7 @@ export abstract class MemoryManagerSyncOps {
     }
 
     await deleteStaleRows();
-    return this.emptySourceSyncPlan();
+    return { ...this.emptySourceSyncPlan(), scanOk: scan.ok };
   }
 
   private async syncSessionFiles(params: {
@@ -1932,7 +1963,7 @@ export abstract class MemoryManagerSyncOps {
 
       await flushPendingIndexItems();
       await deleteStaleRows();
-      return this.emptySourceSyncPlan();
+      return { ...this.emptySourceSyncPlan(), scanOk: scan.ok };
     }
     if ((params.prefixIndexItems?.length ?? 0) > 0) {
       throw new Error("Memory session sync prefix requires deferred source-wide indexing.");
@@ -1994,7 +2025,7 @@ export abstract class MemoryManagerSyncOps {
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
     await deleteStaleRows();
-    return this.emptySourceSyncPlan();
+    return { ...this.emptySourceSyncPlan(), scanOk: scan.ok };
   }
 
   private createSyncProgress(
@@ -2162,20 +2193,25 @@ export abstract class MemoryManagerSyncOps {
         ((!hasTargetSessionFiles && params?.force) || needsFullReindex || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
+      // A sync whose enumeration failed indexed nothing for that source; keep
+      // its dirty state so the next eligible sync retries instead of treating
+      // the source as clean until something marks it dirty again.
       if (this.shouldDeferSourceWideBatch()) {
-        await this.executeSourceWideSync({
+        const outcome = await this.executeSourceWideSync({
           shouldSyncMemory,
           shouldSyncSessions,
           needsFullReindex,
           targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
           progress: progress ?? undefined,
         });
-        if (shouldSyncMemory) {
+        if (shouldSyncMemory && outcome.memoryScanOk) {
           this.dirty = false;
         }
         if (shouldSyncSessions) {
-          this.sessionsDirty = false;
-          this.sessionsDirtyFiles.clear();
+          if (outcome.sessionsScanOk) {
+            this.sessionsDirty = false;
+            this.sessionsDirtyFiles.clear();
+          }
         } else if (this.sessionsDirtyFiles.size > 0) {
           this.sessionsDirty = true;
         } else {
@@ -2183,18 +2219,25 @@ export abstract class MemoryManagerSyncOps {
         }
       } else {
         if (shouldSyncMemory) {
-          await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-          this.dirty = false;
+          const memoryPlan = await this.syncMemoryFiles({
+            needsFullReindex,
+            progress: progress ?? undefined,
+          });
+          if (memoryPlan.scanOk) {
+            this.dirty = false;
+          }
         }
 
         if (shouldSyncSessions) {
-          await this.syncSessionFiles({
+          const sessionPlan = await this.syncSessionFiles({
             needsFullReindex,
             targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
             progress: progress ?? undefined,
           });
-          this.sessionsDirty = false;
-          this.sessionsDirtyFiles.clear();
+          if (sessionPlan.scanOk) {
+            this.sessionsDirty = false;
+            this.sessionsDirtyFiles.clear();
+          }
         } else if (this.sessionsDirtyFiles.size > 0) {
           this.sessionsDirty = true;
         } else {
@@ -2362,12 +2405,14 @@ export abstract class MemoryManagerSyncOps {
           );
 
           if (this.shouldDeferSourceWideBatch()) {
-            await this.executeSourceWideSync({
+            const outcome = await this.executeSourceWideSync({
               shouldSyncMemory,
               shouldSyncSessions,
               needsFullReindex: true,
               progress: params.progress,
             });
+            this.assertReindexScanOk("memory", outcome.memoryScanOk);
+            this.assertReindexScanOk("sessions", outcome.sessionsScanOk);
             if (shouldSyncMemory) {
               this.dirty = false;
             }
@@ -2381,12 +2426,20 @@ export abstract class MemoryManagerSyncOps {
             }
           } else {
             if (shouldSyncMemory) {
-              await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+              const memoryPlan = await this.syncMemoryFiles({
+                needsFullReindex: true,
+                progress: params.progress,
+              });
+              this.assertReindexScanOk("memory", memoryPlan.scanOk);
               this.dirty = false;
             }
 
             if (shouldSyncSessions) {
-              await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+              const sessionPlan = await this.syncSessionFiles({
+                needsFullReindex: true,
+                progress: params.progress,
+              });
+              this.assertReindexScanOk("sessions", sessionPlan.scanOk);
               this.sessionsDirty = false;
               this.sessionsDirtyFiles.clear();
             } else if (this.sessionsDirtyFiles.size > 0) {
@@ -2465,12 +2518,14 @@ export abstract class MemoryManagerSyncOps {
     );
 
     if (this.shouldDeferSourceWideBatch()) {
-      await this.executeSourceWideSync({
+      const outcome = await this.executeSourceWideSync({
         shouldSyncMemory,
         shouldSyncSessions,
         needsFullReindex: true,
         progress: params.progress,
       });
+      this.assertReindexScanOk("memory", outcome.memoryScanOk);
+      this.assertReindexScanOk("sessions", outcome.sessionsScanOk);
       if (shouldSyncMemory) {
         this.dirty = false;
       }
@@ -2484,12 +2539,20 @@ export abstract class MemoryManagerSyncOps {
       }
     } else {
       if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+        const memoryPlan = await this.syncMemoryFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
+        this.assertReindexScanOk("memory", memoryPlan.scanOk);
         this.dirty = false;
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        const sessionPlan = await this.syncSessionFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+        });
+        this.assertReindexScanOk("sessions", sessionPlan.scanOk);
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {

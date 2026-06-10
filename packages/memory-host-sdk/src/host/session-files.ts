@@ -1,7 +1,7 @@
 // Memory Host SDK module implements session files behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readRegularFile, statRegularFile } from "./fs-utils.js";
+import { isFileMissingError, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
 import {
@@ -299,12 +299,13 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
   };
 }
 
-// Result of scanning an agent's sessions directory. `ok` distinguishes a real
-// enumeration (the directory was read, even if it held no session files) from a
-// failed scan (e.g. a transient NFS EIO/ESTALE or a missing directory). Callers
-// that prune indexed state from this listing must only treat `ok: true` as
-// authoritative: a failed scan surfaces an empty `files` array but must not be
-// read as "no sessions exist", or one blip would wipe the session index.
+// Result of scanning an agent's sessions directory. `ok` distinguishes an
+// authoritative enumeration (the directory was read, or it does not exist —
+// it is only created when the first transcript is written) from a failed scan
+// (e.g. a transient NFS EIO/ESTALE or a permission error). Callers that prune
+// indexed state from this listing must only treat `ok: true` as authoritative:
+// a failed scan surfaces an empty `files` array but must not be read as "no
+// sessions exist", or one blip would wipe the session index.
 export type SessionFilesScanResult = { ok: boolean; files: string[] };
 
 export async function scanSessionFilesForAgent(agentId: string): Promise<SessionFilesScanResult> {
@@ -317,9 +318,21 @@ export async function scanSessionFilesForAgent(agentId: string): Promise<Session
       .filter((name) => isUsageCountedSessionTranscriptFileName(name))
       .map((name) => path.join(dir, name));
     return { ok: true, files };
-  } catch {
-    // Any failure (missing dir, transient NFS error, permission) is non-
-    // authoritative for destructive callers; surface empty but flag not-ok.
+  } catch (err) {
+    // A missing sessions dir is authoritative only when its parent agent dir
+    // exists: the dir appears on first transcript write, so ENOENT then means
+    // "no sessions" (fresh agent, or removed wholesale). A missing parent
+    // means the whole state tree is unreachable (e.g. unmounted volume), so
+    // treat the scan as failed rather than prune against it.
+    if (isFileMissingError(err)) {
+      const parentExists = await fs
+        .lstat(path.dirname(dir))
+        .then(() => true)
+        .catch(() => false);
+      return { ok: parentExists, files: [] };
+    }
+    // Anything else (transient NFS error, permission) is non-authoritative
+    // for destructive callers; surface empty but flag not-ok.
     return { ok: false, files: [] };
   }
 }
