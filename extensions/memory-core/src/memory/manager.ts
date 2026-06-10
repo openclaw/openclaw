@@ -471,7 +471,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       // Clear the cached rejected promise so subsequent calls can retry
       // initialization instead of being permanently stuck with a stale failure.
       this.providerInitPromise = null;
-      throw err;
+      const message = formatErrorMessage(err);
+      const isUnknownProvider = message.startsWith("Unknown memory embedding provider:");
+      if (isUnknownProvider) {
+        // Gracefully degrade: the configured embedding provider plugin is not
+        // installed or not registered. Set FTS-only mode so the CLI and
+        // memory status still work instead of crashing.
+        this.applyProviderResult({
+          provider: null,
+          requestedProvider: this.requestedProvider,
+          providerUnavailableReason: message,
+        });
+        this.providerKey = this.computeProviderKey();
+        this.batch = this.resolveBatchConfig();
+      } else {
+        throw err;
+      }
     } finally {
       if (this.providerInitialized) {
         this.providerInitPromise = null;
