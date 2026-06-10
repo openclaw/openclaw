@@ -649,6 +649,12 @@ export function createSessionActions(context: SessionActionContext) {
           chatLog.dropPendingUser(pendingRunId);
           state.pendingSubmitDraft = null;
         }
+      } else if (state.pendingOptimisticUserMessage) {
+        // Clear a stale optimistic flag that outlived its pending run id.
+        // When the active-only run was aborted but pendingChatRunId was
+        // already null, the flag would otherwise survive and block the
+        // next normal prompt with "agent is busy" (issue #86199).
+        state.pendingOptimisticUserMessage = false;
       }
       setActivityStatus("aborted");
     } catch (err) {

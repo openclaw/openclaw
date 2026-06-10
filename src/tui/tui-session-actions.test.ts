@@ -1026,6 +1026,29 @@ describe("tui session actions", () => {
     });
   });
 
+  it("clears stale optimistic flag after aborting an active-only run with no pending run id (#86199)", async () => {
+    // When pendingChatRunId is already null but pendingOptimisticUserMessage
+    // survived from a previous prompt, aborting only the active run should
+    // still clear the stale flag. Otherwise the next normal prompt is
+    // blocked with "agent is busy".
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const state = createBaseState({
+      activeChatRunId: "run-active",
+      pendingChatRunId: null,
+      pendingOptimisticUserMessage: true,
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as import("../tui-backend.js").TuiBackend,
+      state,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledOnce();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+  });
+
   it("does not abort local post-turn maintenance while finishing context", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const addSystem = vi.fn();
