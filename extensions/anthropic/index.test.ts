@@ -651,6 +651,7 @@ describe("anthropic provider replay hooks", () => {
       name: "Production Claude",
       provider: "anthropic",
       api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
