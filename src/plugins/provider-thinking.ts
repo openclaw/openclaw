@@ -86,9 +86,10 @@ export function resolveProviderThinkingProfile(
   if (activeProfile !== undefined) {
     return activeProfile;
   }
-  return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(
-    params.context,
-  );
+  return resolveBundledProviderPolicySurface(
+    params.provider,
+    params.context.api ? { providerRefs: [params.context.api] } : undefined,
+  )?.resolveThinkingProfile?.(params.context);
 }
 
 /** Resolves the provider default thinking level from the active plugin registry. */

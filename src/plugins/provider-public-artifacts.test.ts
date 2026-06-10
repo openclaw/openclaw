@@ -270,6 +270,67 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
+  it("resolves bundled policy artifacts through manifest model catalog API refs", async () => {
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "anthropic") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: ({ api }: { api?: string }) => ({
+          levels: [{ id: api }],
+        }),
+      };
+    });
+
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-api-ref");
+
+    const surface = resolvePolicySurface("jdcloud-anthropic", {
+      providerRefs: ["anthropic-messages"],
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "anthropic",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/anthropic/openclaw.plugin.json",
+            providers: ["anthropic"],
+            modelCatalog: {
+              providers: {
+                anthropic: {
+                  api: "anthropic-messages",
+                  models: [],
+                },
+              },
+            },
+            rootDir: "/tmp/anthropic",
+            skills: [],
+            source: "/tmp/anthropic/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "jdcloud-anthropic",
+        api: "anthropic-messages",
+        modelId: "claude-opus-4-6",
+      })?.levels,
+    ).toEqual([{ id: "anthropic-messages" }]);
+    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "anthropic",
+      artifactBasename: "provider-policy-api.js",
+    });
+  });
+
   it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),

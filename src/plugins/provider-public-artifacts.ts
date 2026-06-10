@@ -101,6 +101,20 @@ function resolveBundledProviderPolicyPluginId(
   return null;
 }
 
+function normalizeProviderPolicyRefs(
+  providerId: string,
+  providerRefs?: readonly string[],
+): string[] {
+  const refs: string[] = [];
+  for (const rawRef of [providerId, ...(providerRefs ?? [])]) {
+    const ref = normalizeProviderId(rawRef);
+    if (ref && !refs.includes(ref)) {
+      refs.push(ref);
+    }
+  }
+  return refs;
+}
+
 function pluginOwnsProviderPolicyRef(
   plugin: PluginManifestRegistry["plugins"][number],
   normalizedProviderId: string,
@@ -122,25 +136,50 @@ function pluginOwnsProviderPolicyRef(
     }
   }
 
+  for (const [rawProvider, catalogProvider] of Object.entries(
+    plugin.modelCatalog?.providers ?? {},
+  )) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider || !ownedProviders.has(provider)) {
+      continue;
+    }
+    const providerApi = catalogProvider.api ? normalizeProviderId(catalogProvider.api) : "";
+    if (providerApi === normalizedProviderId) {
+      return true;
+    }
+    if (
+      catalogProvider.models.some(
+        (model) => (model.api ? normalizeProviderId(model.api) : "") === normalizedProviderId,
+      )
+    ) {
+      return true;
+    }
+  }
+
   return false;
 }
 
 /** Resolves provider policy hooks for a bundled provider or its owning plugin. */
 export function resolveBundledProviderPolicySurface(
   providerId: string,
-  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+  options: {
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    providerRefs?: readonly string[];
+  } = {},
 ): BundledProviderPolicySurface | null {
-  const normalizedProviderId = normalizeProviderId(providerId);
-  if (!normalizedProviderId) {
-    return null;
+  for (const providerRef of normalizeProviderPolicyRefs(providerId, options.providerRefs)) {
+    const directSurface = tryLoadBundledProviderPolicySurface(providerRef);
+    if (directSurface) {
+      return directSurface;
+    }
+    const ownerPluginId = resolveBundledProviderPolicyPluginId(providerRef, options);
+    if (!ownerPluginId || ownerPluginId === providerRef) {
+      continue;
+    }
+    const ownerSurface = tryLoadBundledProviderPolicySurface(ownerPluginId);
+    if (ownerSurface) {
+      return ownerSurface;
+    }
   }
-  const directSurface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
-  if (directSurface) {
-    return directSurface;
-  }
-  const ownerPluginId = resolveBundledProviderPolicyPluginId(normalizedProviderId, options);
-  if (!ownerPluginId || ownerPluginId === normalizedProviderId) {
-    return null;
-  }
-  return tryLoadBundledProviderPolicySurface(ownerPluginId);
+  return null;
 }

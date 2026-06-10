@@ -284,8 +284,9 @@ describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./provider-public-artifacts.js", () => ({
-      resolveBundledProviderPolicySurface: (provider: string) =>
-        resolveBundledProviderPolicySurfaceMock(provider),
+      resolveBundledProviderPolicySurface: (
+        ...params: Parameters<ResolveBundledProviderPolicySurface>
+      ) => resolveBundledProviderPolicySurfaceMock(...params),
     }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -1466,6 +1467,170 @@ describe("provider-runtime", () => {
 
     expect(resolveThinkingProfile).toHaveBeenCalledTimes(1);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("passes custom provider API refs to bundled thinking policy lookup", () => {
+    const resolveThinkingProfile = vi.fn(() => ({
+      levels: [{ id: "adaptive" as const }],
+      defaultLevel: "adaptive" as const,
+    }));
+    resolveBundledProviderPolicySurfaceMock.mockImplementation((_, options) => {
+      return options?.providerRefs?.includes("anthropic-messages")
+        ? { resolveThinkingProfile }
+        : null;
+    });
+
+    expect(
+      resolveProviderThinkingProfile({
+        provider: "jdcloud-anthropic",
+        config: {
+          models: {
+            providers: {
+              "jdcloud-anthropic": {
+                api: "openai-responses",
+                baseUrl: "https://example.com/anthropic",
+                models: [
+                  {
+                    id: "claude-opus-4-6",
+                    name: "Claude Opus 4.6",
+                    api: "anthropic-messages",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200_000,
+                    maxTokens: 64_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        context: {
+          provider: "jdcloud-anthropic",
+          modelId: "claude-opus-4-6",
+          reasoning: true,
+        },
+      }),
+    ).toEqual({ levels: [{ id: "adaptive" }], defaultLevel: "adaptive" });
+
+    expect(resolveBundledProviderPolicySurfaceMock).toHaveBeenCalledWith("jdcloud-anthropic", {
+      providerRefs: ["jdcloud-anthropic", "anthropic-messages"],
+    });
+    expect(resolveThinkingProfile).toHaveBeenCalledWith({
+      provider: "jdcloud-anthropic",
+      api: "anthropic-messages",
+      modelId: "claude-opus-4-6",
+      reasoning: true,
+    });
+    expect(resolvePluginProvidersMock).toHaveBeenCalled();
+  });
+
+  it("falls back to runtime plugins when an API-ref bundled thinking policy declines", () => {
+    const resolveBundledThinkingProfile = vi.fn(() => null);
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      resolveThinkingProfile: resolveBundledThinkingProfile,
+    });
+    const resolveRuntimeThinkingProfile = vi.fn(() => ({
+      levels: [{ id: "max" as const }],
+      defaultLevel: "max" as const,
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "custom-openai",
+        label: "Custom OpenAI",
+        auth: [],
+        resolveThinkingProfile: resolveRuntimeThinkingProfile,
+      },
+    ]);
+
+    expect(
+      resolveProviderThinkingProfile({
+        provider: "custom-openai",
+        config: {
+          models: {
+            providers: {
+              "custom-openai": {
+                api: "openai-responses",
+                baseUrl: "https://api.example.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        context: {
+          provider: "custom-openai",
+          modelId: "gpt-5.5",
+          reasoning: true,
+        },
+      }),
+    ).toEqual({ levels: [{ id: "max" }], defaultLevel: "max" });
+
+    expect(resolveBundledThinkingProfile).toHaveBeenCalledWith({
+      provider: "custom-openai",
+      api: "openai-responses",
+      modelId: "gpt-5.5",
+      reasoning: true,
+    });
+    expect(resolveRuntimeThinkingProfile).toHaveBeenCalledWith({
+      provider: "custom-openai",
+      api: "openai-responses",
+      modelId: "gpt-5.5",
+      reasoning: true,
+    });
+  });
+
+  it("keeps runtime thinking hooks ahead of API-ref bundled policy fallback", () => {
+    const resolveThinkingProfile = vi.fn(() => ({
+      levels: [{ id: "adaptive" as const }],
+      defaultLevel: "adaptive" as const,
+    }));
+    resolveBundledProviderPolicySurfaceMock.mockImplementation((_, options) => {
+      return options?.providerRefs?.includes("anthropic-messages")
+        ? { resolveThinkingProfile }
+        : null;
+    });
+    const resolveRuntimeThinkingProfile = vi.fn(() => ({
+      levels: [{ id: "off" as const }, { id: "low" as const }],
+      defaultLevel: "off" as const,
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "custom-anthropic",
+        label: "Custom Anthropic",
+        auth: [],
+        resolveThinkingProfile: resolveRuntimeThinkingProfile,
+      },
+    ]);
+
+    expect(
+      resolveProviderThinkingProfile({
+        provider: "custom-anthropic",
+        config: {
+          models: {
+            providers: {
+              "custom-anthropic": {
+                api: "anthropic-messages",
+                baseUrl: "https://api.example.com/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+        context: {
+          provider: "custom-anthropic",
+          modelId: "claude-opus-4-6",
+          reasoning: true,
+        },
+      }),
+    ).toEqual({ levels: [{ id: "off" }, { id: "low" }], defaultLevel: "off" });
+
+    expect(resolveRuntimeThinkingProfile).toHaveBeenCalledWith({
+      provider: "custom-anthropic",
+      api: "anthropic-messages",
+      modelId: "claude-opus-4-6",
+      reasoning: true,
+    });
+    expect(resolveThinkingProfile).not.toHaveBeenCalled();
   });
 
   it("resolves provider config defaults through owner plugins", () => {
