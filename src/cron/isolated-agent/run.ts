@@ -986,12 +986,15 @@ async function finalizeCronRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const sessionTotalUsage = hasNonzeroUsage(lastCallUsage) ? lastCallUsage : usage;
-    const totalTokens = deriveSessionTotalTokens({
-      usage: sessionTotalUsage,
+    const lastCallTotalTokens = deriveSessionTotalTokens({
+      usage: lastCallUsage,
       contextTokens,
       promptTokens,
     });
+    const totalTokens =
+      typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
+        ? lastCallTotalTokens
+        : deriveSessionTotalTokens({ usage, contextTokens, promptTokens });
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
         usage,

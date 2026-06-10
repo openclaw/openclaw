@@ -65,7 +65,7 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     const cronSession = makeCronSession();
     resolveCronSessionMock.mockReturnValue(cronSession);
     mockRunCronFallbackPassthrough();
-    deriveSessionTotalTokensMock.mockReturnValueOnce(77000);
+    deriveSessionTotalTokensMock.mockReturnValueOnce(undefined).mockReturnValueOnce(77000);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done" }],
       meta: {
@@ -91,13 +91,55 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.totalTokens).toBe(77000);
     expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
-    expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
+    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(1, {
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextTokens: 128000,
+      promptTokens: undefined,
+    });
+    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(2, {
       usage: {
         input: 75000,
         output: 2000,
         cacheRead: 5000,
         cacheWrite: 0,
       },
+      contextTokens: 128000,
+      promptTokens: undefined,
+    });
+  });
+
+  it("falls back to aggregate usage when final-call usage is output-only", async () => {
+    const cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    mockRunCronFallbackPassthrough();
+    deriveSessionTotalTokensMock.mockReturnValueOnce(undefined).mockReturnValueOnce(77000);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 75000, output: 2000 },
+          lastCallUsage: { output: 125 },
+        },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.totalTokens).toBe(77000);
+    expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
+    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(1, {
+      usage: { output: 125 },
+      contextTokens: 128000,
+      promptTokens: undefined,
+    });
+    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(2, {
+      usage: { input: 75000, output: 2000 },
       contextTokens: 128000,
       promptTokens: undefined,
     });
