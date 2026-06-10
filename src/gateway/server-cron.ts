@@ -667,6 +667,11 @@ export function buildGatewayCronService(params: {
 
   exitWatchersRef.current = createCronExitWatchers({
     getProcessSupervisor,
+    // Disable the one-shot job in the store before firing, so a gateway restart
+    // after the command exits cannot re-arm the watcher and re-run the command.
+    persistCompletion: async (jobId) => {
+      await cron.update(jobId, { enabled: false });
+    },
     // On exit, fire the origin-aware wake on the job's captured session so the
     // woken turn continues the originating conversation/thread (not a throwaway
     // cron-run child session). Reuses the same wake path as the cron wake tool.

@@ -70,9 +70,16 @@ const flush = async () => {
 describe("createCronExitWatchers", () => {
   it("arms a watcher for an enabled on-exit job and fires the job on exit", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    const fireOnExit = vi.fn(async (_job: CronJob, _exit: { exitCode: number | null }) => {});
+    const order: string[] = [];
+    const persistCompletion = vi.fn(async () => {
+      order.push("persist");
+    });
+    const fireOnExit = vi.fn(async (_job: CronJob, _exit: { exitCode: number | null }) => {
+      order.push("fire");
+    });
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
+      persistCompletion,
       fireOnExit,
       logger: noopLogger,
     });
@@ -89,12 +96,44 @@ describe("createCronExitWatchers", () => {
     expect(fireOnExit).toHaveBeenCalledTimes(1);
     expect(fireOnExit.mock.calls[0]?.[0].id).toBe("job-a");
     expect(fireOnExit.mock.calls[0]?.[1]).toEqual({ exitCode: 0 });
+    // One-shot terminal state is persisted BEFORE firing (restart-safe).
+    expect(persistCompletion).toHaveBeenCalledWith("job-a");
+    expect(order).toEqual(["persist", "fire"]);
+  });
+
+  it("a fired job stays unarmed across a simulated restart (disabled in store → not re-run)", async () => {
+    // persistCompletion disables the job; after a restart the reconcile sees a
+    // disabled job and must NOT re-arm (which would re-run the command).
+    const { supervisor, runs } = makeFakeSupervisor();
+    const w = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
+      logger: noopLogger,
+    });
+    w.reconcile([onExitJob("job-a")]);
+    await flush();
+    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(1);
+    // Simulate restart: a fresh manager reconciling the now-disabled persisted job.
+    const restarted = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
+      logger: noopLogger,
+    });
+    restarted.reconcile([onExitJob("job-a", "sleep 1", false)]); // enabled=false after completion
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(1); // no re-spawn → command not re-run
+    expect(restarted.activeJobIds()).toEqual([]);
   });
 
   it("does not arm a watcher for time-based or disabled jobs", async () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -112,6 +151,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -126,6 +166,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor, cancelled } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
@@ -141,6 +182,7 @@ describe("createCronExitWatchers", () => {
     const fireOnExit = vi.fn(async () => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
       fireOnExit,
       logger: noopLogger,
     });
@@ -156,6 +198,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
       fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });

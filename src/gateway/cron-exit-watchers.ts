@@ -43,6 +43,12 @@ function isWatchableExitJob(job: CronJob): boolean {
 export function createCronExitWatchers(params: {
   getProcessSupervisor: () => ProcessSupervisor;
   /**
+   * Persist the one-shot job's terminal state (disable it) BEFORE firing, so a
+   * gateway restart after the command exits cannot re-arm the watcher and
+   * re-run the watched command (replaying arbitrary side effects).
+   */
+  persistCompletion: (jobId: string) => Promise<void>;
+  /**
    * Fire the job when its watched command exits. The caller routes this to the
    * origin-aware cron wake (continuing the originating session/thread), with the
    * exit code available to compose the woken turn's text.
@@ -107,6 +113,16 @@ export function createCronExitWatchers(params: {
           { jobId: job.id, exitCode: exit.exitCode, reason: exit.reason },
           "cron-exit: watched command exited; firing job",
         );
+        // Persist the terminal one-shot state BEFORE firing the wake so a
+        // gateway restart cannot re-arm this job and re-run the command.
+        try {
+          await params.persistCompletion(job.id);
+        } catch (err) {
+          params.logger.warn(
+            { err: String(err), jobId: job.id },
+            "cron-exit: persistCompletion failed; firing anyway (restart may replay)",
+          );
+        }
         try {
           await params.fireOnExit(job, { exitCode: exit.exitCode });
         } catch (err) {
