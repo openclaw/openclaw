@@ -53,6 +53,27 @@ export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T
   return CLI_RUN_QUEUE.enqueue(key, task);
 }
 
+export function buildClaudeOwnerKey(input: {
+  agentAccountId?: string;
+  agentId?: string;
+  authProfileId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        agentAccountId: input.agentAccountId,
+        agentId: input.agentId,
+        authProfileId: input.authProfileId,
+        sessionId: input.sessionId,
+        sessionKey: input.sessionKey,
+      }),
+    )
+    .digest("hex");
+}
+
 /** Resolves the serialization key for a CLI backend run. */
 export function resolveCliRunQueueKey(params: {
   backendId: string;
@@ -60,6 +81,7 @@ export function resolveCliRunQueueKey(params: {
   runId: string;
   workspaceDir: string;
   cliSessionId?: string;
+  ownerKey?: string;
 }): string {
   if (params.serialize === false) {
     return `${params.backendId}:${params.runId}`;
@@ -68,6 +90,10 @@ export function resolveCliRunQueueKey(params: {
     const sessionId = params.cliSessionId?.trim();
     if (sessionId) {
       return `${params.backendId}:session:${sessionId}`;
+    }
+    const ownerKey = params.ownerKey?.trim();
+    if (ownerKey) {
+      return `${params.backendId}:owner:${ownerKey}`;
     }
     const workspaceDir = params.workspaceDir.trim();
     if (workspaceDir) {
