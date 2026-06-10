@@ -12,14 +12,20 @@ const MAX_CLIENT_CONTEXT_ATTRIBUTE_CHARS = 4096;
  * event families expose `sessionId` and/or `sessionKey`; we return every present
  * candidate so the cache can store/resolve under all of them and never miss the
  * join when the two event types populate different identity fields.
+ *
+ * Each candidate is namespaced by identity type (`id:` for `sessionId`, `key:` for
+ * `sessionKey`) so the two independent identity spaces never share a cache slot. A
+ * run whose `sessionId` happens to equal another run's `sessionKey` must not be able
+ * to resolve, overwrite, or clear the other run's attribution. The same function
+ * keys both `remember` and `resolve`, so the namespacing stays symmetric.
  */
 export function clientContextKeys(evt: { sessionId?: string; sessionKey?: string }): string[] {
   const keys: string[] = [];
   if (evt.sessionId) {
-    keys.push(evt.sessionId);
+    keys.push(`id:${evt.sessionId}`);
   }
   if (evt.sessionKey) {
-    keys.push(evt.sessionKey);
+    keys.push(`key:${evt.sessionKey}`);
   }
   return keys;
 }

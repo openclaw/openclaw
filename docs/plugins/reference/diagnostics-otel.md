@@ -38,6 +38,26 @@ Attribution is scoped to the seeding run: when a session id or key is later
 `model.call` span carries no `openclaw.client.*` attributes rather than the
 previous caller's identity.
 
+### What to put in `clientContext`
+
+Every key in the bag becomes a span attribute that is exported verbatim to your
+collector and stored in your tracing backend. The exporter does not filter,
+redact, or hash anything, so the caller is responsible for what goes in:
+
+- **No secrets or credentials.** Do not include API keys, tokens, passwords, or
+  signed URLs — span attributes are not a secret store and are typically
+  readable by anyone with trace access.
+- **No personal data.** Keep end-user PII (names, emails, phone numbers, raw
+  prompts) out of the bag unless your backend is cleared to hold it; prefer
+  opaque ids you can resolve elsewhere.
+- **Bounded cardinality.** Use stable, low-cardinality identifiers (agent id,
+  task label, parent run id). Per-request unique values (timestamps, UUIDs,
+  full request bodies) explode attribute cardinality and can degrade backend
+  indexing and cost.
+
+Treat `clientContext` as a small set of attribution dimensions, not a general
+metadata dump.
+
 ## Surface
 
 plugin

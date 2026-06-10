@@ -56,10 +56,22 @@ describe("assignClientContextAttributes", () => {
 });
 
 describe("clientContextKeys", () => {
-  it("returns sessionId then sessionKey, dropping absent fields", () => {
-    expect(clientContextKeys({ sessionId: "sid", sessionKey: "skey" })).toEqual(["sid", "skey"]);
-    expect(clientContextKeys({ sessionKey: "skey" })).toEqual(["skey"]);
+  it("namespaces sessionId as id: and sessionKey as key:, dropping absent fields", () => {
+    expect(clientContextKeys({ sessionId: "sid", sessionKey: "skey" })).toEqual([
+      "id:sid",
+      "key:skey",
+    ]);
+    expect(clientContextKeys({ sessionKey: "skey" })).toEqual(["key:skey"]);
     expect(clientContextKeys({})).toEqual([]);
+  });
+
+  it("keeps the two identity spaces disjoint when an id equals a key", () => {
+    // A run whose sessionId == another run's sessionKey must not share a cache slot.
+    const asId = clientContextKeys({ sessionId: "shared" });
+    const asKey = clientContextKeys({ sessionKey: "shared" });
+    expect(asId).toEqual(["id:shared"]);
+    expect(asKey).toEqual(["key:shared"]);
+    expect(asId[0]).not.toBe(asKey[0]);
   });
 });
 
@@ -102,6 +114,30 @@ describe("createClientContextCache", () => {
     cache.remember(["a"], { n: 1 });
     cache.clear();
     expect(cache.resolve(["a"])).toBeUndefined();
+  });
+
+  it("does not let one run's sessionId collide with another run's sessionKey", () => {
+    const cache = createClientContextCache();
+    // Run A is keyed by its sessionId; run B by its sessionKey — same raw string.
+    const runAKeys = clientContextKeys({ sessionId: "shared" });
+    const runBKeys = clientContextKeys({ sessionKey: "shared" });
+    cache.remember(runAKeys, { agentId: "RunA" });
+    cache.remember(runBKeys, { agentId: "RunB" });
+    // Each run resolves to its own bag; the shared raw string does not cross over.
+    expect(cache.resolve(runAKeys)).toEqual({ agentId: "RunA" });
+    expect(cache.resolve(runBKeys)).toEqual({ agentId: "RunB" });
+  });
+
+  it("clearing one run's identity space leaves the colliding run intact", () => {
+    const cache = createClientContextCache();
+    const runAKeys = clientContextKeys({ sessionId: "shared" });
+    const runBKeys = clientContextKeys({ sessionKey: "shared" });
+    cache.remember(runAKeys, { agentId: "RunA" });
+    cache.remember(runBKeys, { agentId: "RunB" });
+    // Run B is reused unseeded: its bag is dropped, run A (same raw string) survives.
+    cache.remember(runBKeys, undefined);
+    expect(cache.resolve(runBKeys)).toBeUndefined();
+    expect(cache.resolve(runAKeys)).toEqual({ agentId: "RunA" });
   });
 
   it("drops a seeded bag when the same session is reused without context", () => {
