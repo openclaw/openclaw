@@ -223,7 +223,9 @@ export function resolveRunFastModeForFallbackCandidate(params: {
   });
   return {
     fastMode: state.mode,
-    fastModeAutoOnSeconds: state.fastAutoOnSeconds,
+    fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
+      ? params.run.fastModeAutoOnSeconds
+      : state.fastAutoOnSeconds,
   };
 }
 

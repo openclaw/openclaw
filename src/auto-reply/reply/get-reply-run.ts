@@ -411,6 +411,7 @@ type RunPreparedReplyParams = {
   resolvedFastMode?: FastMode;
   resolvedFastModeAutoOnSeconds?: number;
   resolvedFastModeOverride?: boolean;
+  resolvedFastModeAutoOnSecondsOverride?: boolean;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -1338,6 +1339,9 @@ export async function runPreparedReply(
           fastModeAutoOnSeconds:
             params.resolvedFastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds,
           ...(params.resolvedFastModeOverride ? { fastModeOverride: true } : {}),
+          ...(params.resolvedFastModeAutoOnSecondsOverride
+            ? { fastModeAutoOnSecondsOverride: true }
+            : {}),
         };
       })(),
       verboseLevel: resolvedVerboseLevel,
