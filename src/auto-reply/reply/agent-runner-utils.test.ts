@@ -191,6 +191,34 @@ describe("agent-runner-utils", () => {
     expect(resolved).toEqual({ fastMode: "auto", fastModeAutoOnSeconds: 30 });
   });
 
+  it("recomputes fallback fast mode while preserving explicit auto cutoff", () => {
+    const run = makeRun({
+      fastMode: "auto",
+      fastModeAutoOnSeconds: 30,
+      fastModeAutoOnSecondsOverride: true,
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                params: { fastMode: false, fastAutoOnSeconds: 45 },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveRunFastModeForFallbackCandidate({
+      run,
+      config: run.config,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+
+    expect(resolved).toEqual({ fastMode: false, fastModeAutoOnSeconds: 30 });
+  });
+
   it("builds embedded run base params with auth profile and run metadata", () => {
     const run = makeRun({
       enforceFinalTag: true,

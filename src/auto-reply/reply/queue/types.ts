@@ -118,6 +118,7 @@ export type FollowupRun = {
     fastMode?: FastMode;
     fastModeAutoOnSeconds?: number;
     fastModeOverride?: boolean;
+    fastModeAutoOnSecondsOverride?: boolean;
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
