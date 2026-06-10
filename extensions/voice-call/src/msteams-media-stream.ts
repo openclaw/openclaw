@@ -138,8 +138,12 @@ export interface MsteamsSession {
   recordingStatus?: MsteamsRecordingStatus;
   /** "inbound" (default) or "outbound" (the bot placed this call). */
   direction?: "inbound" | "outbound";
-  /** Push a JSON-serializable message back to the worker. No-op if the socket has closed. */
-  send: (message: unknown) => void;
+  /**
+   * Push a JSON-serializable message to the worker. Returns false if the socket is closed/missing
+   * (the message was dropped) so delivery-sensitive callers (audio frames) can observe the drop;
+   * best-effort control frames can ignore the result.
+   */
+  send: (message: unknown) => boolean;
   /** Close the WebSocket gracefully with the given reason text. */
   close: (reason: string) => void;
 }
@@ -544,11 +548,16 @@ export class MsteamsMediaStream {
     }
   }
 
-  private sendTo(callId: string, message: unknown): void {
+  // Returns whether the message was actually sent. A closed/missing socket drops it (false) rather
+  // than throwing, so best-effort control frames stay no-ops while delivery-sensitive callers (audio
+  // frames) can observe the drop and abort.
+  private sendTo(callId: string, message: unknown): boolean {
     const ws = this.sessions.get(callId);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
+      return true;
     }
+    return false;
   }
 
   private closeSession(callId: string, reason: string): void {
