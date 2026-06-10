@@ -87,12 +87,10 @@ describe("resolveFinalAssistantVisibleText", () => {
 });
 
 describe("resolveSameModelRateLimitBackoffMs", () => {
-  it("waits 20s before the first same-model retry", () => {
-    expect(resolveSameModelRateLimitBackoffMs(0)).toBe(20_000);
-  });
-
-  it("waits 40s before the second same-model retry", () => {
-    expect(resolveSameModelRateLimitBackoffMs(1)).toBe(40_000);
+  it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
+    expect(resolveSameModelRateLimitBackoffMs(0)).toBe(10_000);
+    expect(resolveSameModelRateLimitBackoffMs(1)).toBe(20_000);
+    expect(resolveSameModelRateLimitBackoffMs(2)).toBe(30_000);
   });
 
   it("caps at 60s if the retry count is ever raised further", () => {
@@ -100,7 +98,7 @@ describe("resolveSameModelRateLimitBackoffMs", () => {
   });
 
   it("is deterministic so RPM windows clear predictably", () => {
-    expect(resolveSameModelRateLimitBackoffMs(1)).toBe(resolveSameModelRateLimitBackoffMs(1));
+    expect(resolveSameModelRateLimitBackoffMs(2)).toBe(resolveSameModelRateLimitBackoffMs(2));
   });
 });
 

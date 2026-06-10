@@ -40,9 +40,10 @@ const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 // Same-model in-place rate_limit retry: provider RPM caps reset on a
 // minute scale, so wait out the current provider/model window before spending
 // a profile rotation or model failover.
-export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 2;
-const SAME_MODEL_RATE_LIMIT_INITIAL_BACKOFF_MS = 20_000;
-const SAME_MODEL_RATE_LIMIT_BACKOFF_FACTOR = 2;
+export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 3;
+// Linear step: retriesSoFar=0 -> 10s, 1 -> 20s, 2 -> 30s. Total wait across the
+// 3-retry budget is 60s, roughly one RPM window.
+const SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS = 10_000;
 const SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS = 60_000;
 
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
@@ -61,13 +62,11 @@ export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): numb
 
 /**
  * Backoff before the next same-model rate_limit retry, given how many such
- * retries already happened. No jitter: the wait must be deterministic so RPM
+ * retries already happened. Linear and deterministic (no jitter) so RPM
  * windows clear predictably and tests can assert exact values.
  */
 export function resolveSameModelRateLimitBackoffMs(retriesSoFar: number): number {
-  const attempt = Math.max(0, retriesSoFar);
-  const delay =
-    SAME_MODEL_RATE_LIMIT_INITIAL_BACKOFF_MS * SAME_MODEL_RATE_LIMIT_BACKOFF_FACTOR ** attempt;
+  const delay = SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS * (Math.max(0, retriesSoFar) + 1);
   return Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, delay);
 }
 
