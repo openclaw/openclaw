@@ -207,6 +207,7 @@ export const PROMPT_INJECTION_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
   "heartbeat_prompt_contribution",
+  "llm_input",
 ] as const satisfies readonly PluginHookName[];
 
 export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
@@ -282,6 +283,17 @@ export type PluginHookLlmInputEvent = {
   tools?: unknown[];
 };
 
+export type PluginHookLlmInputResult = {
+  /** Block the entire LLM call. */
+  block?: boolean;
+  /** Reason for blocking (shown to user). */
+  blockReason?: string;
+  /** Override the prompt text sent to the model. */
+  prompt?: string;
+  /** Override the system prompt sent to the model. */
+  systemPrompt?: string;
+};
+
 export type PluginHookModelCallBaseEvent = {
   runId: string;
   callId: string;
@@ -347,6 +359,11 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+};
+
+export type PluginHookLlmOutputResult = {
+  /** Replace the assistant response texts. */
+  assistantTexts?: string[];
 };
 
 export type PluginHookAgentEndEvent = {
@@ -1009,11 +1026,14 @@ export type PluginHookHandlerMap = {
     event: PluginHookModelCallEndedEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_input: (
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookLlmInputResult | void> | PluginHookLlmInputResult | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookLlmOutputResult | void> | PluginHookLlmOutputResult | void;
   before_agent_finalize: (
     event: PluginHookBeforeAgentFinalizeEvent,
     ctx: PluginHookAgentContext,

@@ -134,6 +134,7 @@ import {
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./run/attempt-stage-timing.js";
+import { PluginBlockedError } from "./run/attempt.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
@@ -2441,6 +2442,30 @@ export async function runEmbeddedAgent(
                 replayInvalid,
                 livenessState: "blocked",
                 error: { kind: "hook_block", message: errorText },
+              },
+            };
+          }
+
+          // Handle plugin-blocked LLM calls (from llm_input hook).
+          // Skip failover/retry — plugin blocks are intentional, not transient.
+          if (promptError instanceof PluginBlockedError) {
+            return {
+              payloads: [{ text: promptError.message, isError: true }],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: sessionIdUsed,
+                  sessionFile: activeSessionFile,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant: sessionLastAssistant,
+                  lastTurnTotal,
+                }),
+                systemPromptReport: attempt.systemPromptReport,
+                error: { kind: "hook_block", message: promptError.message },
               },
             };
           }

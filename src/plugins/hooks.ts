@@ -48,7 +48,9 @@ import type {
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -118,7 +120,9 @@ export type {
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookAgentEndEvent,
@@ -239,6 +243,11 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
     registration: PluginHookRegistration<K>,
   ) => TResult;
   mergeNullResults?: boolean;
+  /** Evolve the event between handlers so later hooks see prior modifications. */
+  evolveEvent?: (
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    result: TResult,
+  ) => Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0];
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
@@ -640,7 +649,7 @@ export function createHookRunner(
    */
   async function runModifyingHook<K extends PluginHookName, TResult>(
     hookName: K,
-    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    initialEvent: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     policy: ModifyingHookPolicy<K, TResult> = {},
   ): Promise<TResult | undefined> {
@@ -652,6 +661,7 @@ export function createHookRunner(
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
 
     let result: TResult | undefined;
+    let event = initialEvent;
 
     for (const hook of hooks) {
       try {
@@ -667,6 +677,10 @@ export function createHookRunner(
             result = policy.mergeResults(result, handlerResult, hook);
           } else {
             result = handlerResult;
+          }
+          // Evolve event so later handlers see prior modifications.
+          if (policy.evolveEvent) {
+            event = policy.evolveEvent(event, handlerResult);
           }
           if (result && policy.shouldStop?.(result)) {
             const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
@@ -943,20 +957,61 @@ export function createHookRunner(
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe, modify, or block the LLM call before it is made.
+   * Runs sequentially so plugins can inspect and alter the prompt or block the call.
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmInputResult | undefined> {
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>("llm_input", event, ctx, {
+      mergeResults: (acc, next) => ({
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+        // Higher-priority (earlier) overrides are authoritative — only apply
+        // lower-priority prompt/systemPrompt if no earlier handler set them.
+        prompt: acc?.prompt ?? next.prompt,
+        systemPrompt: acc?.systemPrompt ?? next.systemPrompt,
+      }),
+      // Evolve the event so lower-priority handlers see the effective prompt
+      // after higher-priority overrides, enabling accurate policy evaluation.
+      // Reset imagesCount when prompt changes so downstream hooks don't make
+      // stale allow/block decisions. The caller re-detects images after all hooks.
+      evolveEvent: (ev, result) => {
+        let evolved = ev;
+        if (result.prompt !== undefined) {
+          evolved = { ...evolved, prompt: result.prompt, imagesCount: 0 };
+        }
+        if (result.systemPrompt !== undefined) {
+          evolved = { ...evolved, systemPrompt: result.systemPrompt };
+        }
+        return evolved;
+      },
+      shouldStop: (result) => result.block === true,
+    });
   }
 
   /**
    * Run llm_output hook.
-   * Allows plugins to observe the exact output payload returned by the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe or modify the LLM response (e.g. redact sensitive content).
+   * Runs sequentially so plugins can alter the assistant response.
    */
-  async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_output", event, ctx);
+  async function runLlmOutput(
+    event: PluginHookLlmOutputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmOutputResult | undefined> {
+    return runModifyingHook<"llm_output", PluginHookLlmOutputResult>("llm_output", event, ctx, {
+      mergeResults: (acc, next) => ({
+        assistantTexts: next.assistantTexts ?? acc?.assistantTexts,
+      }),
+      // Evolve the event so later hooks see prior assistantTexts modifications
+      // instead of the original model output — prevents a lower-priority hook
+      // from silently overwriting a higher-priority redaction.
+      evolveEvent: (ev, result) =>
+        result.assistantTexts !== undefined
+          ? { ...ev, assistantTexts: [...result.assistantTexts] }
+          : ev,
+    });
   }
 
   /**

@@ -635,6 +635,15 @@ function shouldPreservePromptErrorAfterCleanupError(params: {
   );
 }
 
+export class PluginBlockedError extends Error {
+  readonly blockReason: string;
+  constructor(reason: string) {
+    super(`LLM call blocked by plugin: ${reason}`);
+    this.name = "PluginBlockedError";
+    this.blockReason = reason;
+  }
+}
+
 class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
   readonly promptError: unknown;
   readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
@@ -3897,7 +3906,7 @@ export async function runEmbeddedAttempt(
             context: params.currentInboundContext,
             prompt: promptSubmission.prompt,
           });
-          const promptForModel = buildCurrentInboundPrompt({
+          let promptForModel = buildCurrentInboundPrompt({
             context: params.currentInboundContext,
             prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
           });
@@ -3944,7 +3953,7 @@ export async function runEmbeddedAttempt(
                 : (runtimeContextForHook?.length ?? 0),
             };
           }
-          const systemPromptForHook = systemPromptText;
+          let systemPromptForHook = systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {
             message: string;
@@ -4216,8 +4225,8 @@ export async function runEmbeddedAttempt(
           });
 
           if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
+            try {
+              const llmInputResult = await hookRunner.runLlmInput(
                 {
                   runId: params.runId,
                   sessionId: params.sessionId,
@@ -4239,10 +4248,26 @@ export async function runEmbeddedAttempt(
                   trigger: params.trigger,
                   ...buildAgentHookContextChannelFields(params),
                 },
-              )
-              .catch((err: unknown) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
+              );
+
+              if (llmInputResult?.block) {
+                const reason = llmInputResult.blockReason ?? "Blocked by llm_input plugin hook";
+                log.warn(`llm_input hook blocked LLM call: ${reason}`);
+                throw new PluginBlockedError(reason);
+              }
+
+              if (llmInputResult?.prompt !== undefined) {
+                promptForModel = llmInputResult.prompt;
+              }
+              if (llmInputResult?.systemPrompt !== undefined) {
+                systemPromptForHook = llmInputResult.systemPrompt;
+              }
+            } catch (err) {
+              if (err instanceof PluginBlockedError) {
+                throw err;
+              }
+              log.warn(`llm_input hook failed: ${String(err)}`);
+            }
           }
 
           const llmBoundaryOptionsForPrecheck = boundaryTimezone
@@ -5005,12 +5030,13 @@ export async function runEmbeddedAttempt(
         }
       }
 
+      let llmOutputAssistantTextsOverride: string[] | undefined;
       if (
         hookRunner?.hasHooks("llm_output") &&
         shouldRunLlmOutputHooksForAttempt({ promptErrorSource })
       ) {
-        hookRunner
-          .runLlmOutput(
+        try {
+          const llmOutputResult = await hookRunner.runLlmOutput(
             {
               runId: params.runId,
               sessionId: params.sessionId,
@@ -5032,7 +5058,7 @@ export async function runEmbeddedAttempt(
                 ? { harnessId: params.runtimePlan.observability.harnessId }
                 : {}),
               assistantTexts,
-              lastAssistant,
+              lastAssistant: lastAssistant ? structuredClone(lastAssistant) : lastAssistant,
               usage: attemptUsage,
             },
             {
@@ -5054,10 +5080,14 @@ export async function runEmbeddedAttempt(
                 : {}),
               ...buildAgentHookContextChannelFields(params),
             },
-          )
-          .catch((err: unknown) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
+          );
+
+          if (llmOutputResult?.assistantTexts !== undefined) {
+            llmOutputAssistantTextsOverride = llmOutputResult.assistantTexts;
+          }
+        } catch (err) {
+          log.warn(`llm_output hook failed: ${String(err)}`);
+        }
       }
 
       const acceptedSessionSpawns = getAcceptedSessionSpawns();
@@ -5245,7 +5275,7 @@ export async function runEmbeddedAttempt(
         finalPromptText,
         messagesSnapshot,
         ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
-        assistantTexts,
+        assistantTexts: llmOutputAssistantTextsOverride ?? assistantTexts,
         toolMetas: toolMetasNormalized,
         acceptedSessionSpawns,
         lastAssistant,
