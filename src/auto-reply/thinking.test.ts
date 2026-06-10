@@ -312,6 +312,87 @@ describe("listThinkingLevels", () => {
     ).toBe("high");
   });
 
+  it("exposes Claude Opus xhigh on custom anthropic-messages providers without a plugin profile", () => {
+    // Regression for openclaw#91975: a renamed provider serving Claude Opus over
+    // anthropic-messages used to fall back to a base profile (no xhigh) and silently
+    // clamp `--thinking xhigh` to `off`.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "adaptive",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("xhigh");
+  });
+
+  it("does not invent xhigh for non-Claude models on anthropic-messages routes", () => {
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("does not infer the Claude profile without an anthropic-messages catalog row", () => {
+    // Same provider id, but the catalog row says openai-completions — must NOT
+    // grant Claude levels to a non-Anthropic transport.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "openai-completions",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
   it("preserves provider-specific profiles for Fable Messages routes", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low" }],
