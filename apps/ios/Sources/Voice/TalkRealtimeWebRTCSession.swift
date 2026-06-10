@@ -61,7 +61,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
         let runId: String?
         let status: String?
         let startedAt: Double?
-        let endedAt: Double?
         let error: String?
         let stopReason: String?
         let timeoutPhase: String?
@@ -194,11 +193,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private func trace(_ message: String) {
         GatewayDiagnostics.log("talk.timeline realtime +\(self.elapsedMs())ms \(message)")
         Self.logger.info("timeline +\(self.elapsedMs(), privacy: .public)ms \(message, privacy: .public)")
-    }
-
-    func cancelResponse() {
-        self.sendRealtimeEvent(["type": "response.cancel"])
-        self.cancelActiveToolCalls()
     }
 
     private func cancelActiveToolCalls() {
