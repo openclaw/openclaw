@@ -41,9 +41,28 @@ describe("detectRespawnSupervisor", () => {
     );
   });
 
-  it("detects systemd only from non-blank platform-specific hints", () => {
+  it("detects systemd from non-blank platform-specific hints", () => {
     expect(detectRespawnSupervisor({ INVOCATION_ID: "abc123" }, "linux")).toBe("systemd");
     expect(detectRespawnSupervisor({ JOURNAL_STREAM: "" }, "linux")).toBeNull();
+    expect(
+      detectRespawnSupervisor(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        "linux",
+        { includeLinuxOpenClawServiceMarker: true },
+      ),
+    ).toBe("systemd");
+    expect(
+      detectRespawnSupervisor(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "worker",
+        },
+        "linux",
+      ),
+    ).toBeNull();
   });
 
   it("detects scheduled-task supervision on Windows from either hint family", () => {
@@ -70,7 +89,7 @@ describe("detectRespawnSupervisor", () => {
     ).toBeNull();
   });
 
-  it("ignores service markers on non-Windows platforms and unknown platforms", () => {
+  it("ignores service markers on unknown platforms", () => {
     expect(
       detectRespawnSupervisor(
         {

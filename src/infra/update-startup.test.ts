@@ -608,6 +608,41 @@ describe("update-startup", () => {
     });
   });
 
+  it("uses a systemd managed-service handoff instead of spawning the updater under the gateway", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(detectRespawnSupervisorMock).toHaveBeenCalledWith(process.env, process.platform, {
+      includeLinuxOpenClawServiceMarker: true,
+    });
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/opt/openclaw",
+        timeoutMs: 45 * 60 * 1000,
+        channel: "beta",
+        restartDelayMs: 2000,
+        supervisor: "systemd",
+      }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
+      delayMs: 2000,
+      reason: "update.auto",
+      skipCooldown: true,
+      skipDeferral: true,
+    });
+  });
+
   it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 

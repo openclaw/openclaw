@@ -22,6 +22,10 @@ export const SUPERVISOR_HINT_ENV_VARS = [
 /** Supported supervisor families that can respawn the gateway after update/restart handoff. */
 export type RespawnSupervisor = "launchd" | "systemd" | "schtasks";
 
+type DetectRespawnSupervisorOptions = {
+  includeLinuxOpenClawServiceMarker?: boolean;
+};
+
 function hasAnyHint(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
   return keys.some((key) => {
     const value = env[key];
@@ -43,22 +47,27 @@ function isCurrentGatewayLaunchdJob(env: NodeJS.ProcessEnv): boolean {
 export function detectRespawnSupervisor(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  options: DetectRespawnSupervisorOptions = {},
 ): RespawnSupervisor | null {
+  const isOpenClawGatewayServiceMarker =
+    env.OPENCLAW_SERVICE_MARKER?.trim() === "openclaw" &&
+    env.OPENCLAW_SERVICE_KIND?.trim() === "gateway";
   if (platform === "darwin") {
     return hasAnyHint(env, SUPERVISOR_HINTS.launchd) || isCurrentGatewayLaunchdJob(env)
       ? "launchd"
       : null;
   }
   if (platform === "linux") {
-    return hasAnyHint(env, SUPERVISOR_HINTS.systemd) ? "systemd" : null;
+    return hasAnyHint(env, SUPERVISOR_HINTS.systemd) ||
+      (options.includeLinuxOpenClawServiceMarker === true && isOpenClawGatewayServiceMarker)
+      ? "systemd"
+      : null;
   }
   if (platform === "win32") {
     if (hasAnyHint(env, SUPERVISOR_HINTS.schtasks)) {
       return "schtasks";
     }
-    const marker = env.OPENCLAW_SERVICE_MARKER?.trim();
-    const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
-    return marker && serviceKind === "gateway" ? "schtasks" : null;
+    return isOpenClawGatewayServiceMarker ? "schtasks" : null;
   }
   return null;
 }
