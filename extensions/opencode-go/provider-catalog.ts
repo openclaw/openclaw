@@ -327,23 +327,6 @@ const OPENCODE_GO_MODELS = (
         output: 1.6,
         cacheRead: 0.04,
         cacheWrite: 0.5,
-        tieredPricing: [
-          {
-            input: 0.4,
-            output: 1.6,
-            cacheRead: 0.04,
-            cacheWrite: 0.5,
-            range: [0, 256_001],
-          },
-          {
-            input: 1.2,
-            output: 4.8,
-            cacheRead: 0.12,
-            cacheWrite: 1.5,
-            range: [256_001],
-          },
-        ],
-        tieredPricingBasis: "prompt",
       },
       contextWindow: 1_000_000,
       maxTokens: 65_536,

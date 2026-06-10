@@ -20,7 +20,6 @@ export type CachedModelPricing = {
   cacheWrite: number;
   /** Optional tiered pricing tiers sourced from LiteLLM or local config. */
   tieredPricing?: CachedPricingTier[];
-  tieredPricingBasis?: "input" | "prompt";
 };
 
 export type GatewayModelPricingHealthSource = "openrouter" | "litellm" | "bootstrap" | "refresh";

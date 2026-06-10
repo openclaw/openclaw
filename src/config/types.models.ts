@@ -180,7 +180,6 @@ export type ModelDefinitionConfig = {
       /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
       range: [number, number] | [number];
     }>;
-    tieredPricingBasis?: "input" | "prompt";
   };
   /** Provider/native maximum context window in tokens. */
   contextWindow: number;

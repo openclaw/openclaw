@@ -355,36 +355,6 @@ describe("usage-format", () => {
     ).toBe(9);
   });
 
-  it("observes in-place tier basis changes after a cached lookup", () => {
-    const cost = {
-      input: 1,
-      output: 2,
-      cacheRead: 0.5,
-      cacheWrite: 0,
-      tieredPricing: [
-        { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0, range: [0, 32_000] },
-        { input: 3, output: 6, cacheRead: 1.5, cacheWrite: 0, range: [32_000] },
-      ],
-    } satisfies NonNullable<ModelProviderConfig["models"]>[number]["cost"];
-    const config = {
-      models: {
-        providers: {
-          "demo-basis": {
-            baseUrl: "https://example.test",
-            models: [{ id: "model", name: "Model", cost }],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const inputBasis = resolveModelCostConfig({ config, provider: "demo-basis", model: "model" });
-    cost.tieredPricingBasis = "prompt";
-    const promptBasis = resolveModelCostConfig({ config, provider: "demo-basis", model: "model" });
-
-    expect(inputBasis?.tieredPricingBasis).toBeUndefined();
-    expect(promptBasis?.tieredPricingBasis).toBe("prompt");
-  });
-
   it("observes structural config pricing changes after a cached lookup", () => {
     const models = [
       {
@@ -716,40 +686,6 @@ describe("usage-format", () => {
       cost,
     });
     expect(total).toBeCloseTo(0.045, 4);
-  });
-
-  it("selects OpenCode Go Qwen3.7 Plus rates from total prompt tokens", () => {
-    const tiers: PricingTier[] = [
-      { input: 0.4, output: 1.6, cacheRead: 0.04, cacheWrite: 0.5, range: [0, 256_001] },
-      { input: 1.2, output: 4.8, cacheRead: 0.12, cacheWrite: 1.5, range: [256_001, Infinity] },
-    ];
-    const cost = {
-      input: 0.4,
-      output: 1.6,
-      cacheRead: 0.04,
-      cacheWrite: 0.5,
-      tieredPricing: tiers,
-      tieredPricingBasis: "prompt" as const,
-    };
-
-    expect(
-      estimateUsageCost({
-        usage: { input: 244_000, output: 1_000, cacheRead: 10_000, cacheWrite: 2_000 },
-        cost,
-      }),
-    ).toBeCloseTo(0.1006, 6);
-    expect(
-      estimateUsageCost({
-        usage: { input: 244_001, output: 1_000, cacheRead: 10_000, cacheWrite: 2_000 },
-        cost,
-      }),
-    ).toBeCloseTo(0.3018012, 8);
-    expect(
-      estimateUsageCost({
-        usage: { input: 300_000, output: 1_000, cacheRead: 10_000, cacheWrite: 2_000 },
-        cost,
-      }),
-    ).toBeCloseTo(0.369, 6);
   });
 
   it("estimates cost with three tiers — volcengine-style pricing", () => {

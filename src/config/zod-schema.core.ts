@@ -394,7 +394,6 @@ const ModelDefinitionSchema = z
               .strict(),
           )
           .optional(),
-        tieredPricingBasis: z.enum(["input", "prompt"]).optional(),
       })
       .strict()
       .optional(),

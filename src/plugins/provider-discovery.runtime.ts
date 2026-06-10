@@ -157,9 +157,6 @@ function modelDefinitionCostFromManifestRow(
     cacheRead: row.cost.cacheRead,
     cacheWrite: row.cost.cacheWrite,
     ...(row.cost.tieredPricing ? { tieredPricing: row.cost.tieredPricing } : {}),
-    ...(row.cost.tieredPricingBasis
-      ? { tieredPricingBasis: row.cost.tieredPricingBasis }
-      : {}),
   };
 }
 

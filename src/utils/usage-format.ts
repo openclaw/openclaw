@@ -49,7 +49,6 @@ export type ModelCostConfig = {
    *  serve as the "default / first-tier" fallback for callers that are
    *  unaware of tiered pricing. */
   tieredPricing?: PricingTier[];
-  tieredPricingBasis?: "input" | "prompt";
 };
 
 export type UsageTotals = {
@@ -244,7 +243,6 @@ function normalizeModelCostConfig(cost: RawModelCostConfig): ModelCostConfig {
     cacheRead: cost.cacheRead,
     cacheWrite: cost.cacheWrite,
     ...(normalizedTiers ? { tieredPricing: normalizedTiers } : {}),
-    ...(cost.tieredPricingBasis === "prompt" ? { tieredPricingBasis: "prompt" } : {}),
   };
 }
 
@@ -442,14 +440,7 @@ function buildModelCostFingerprint(cost: RawModelCostConfig): string {
         return [tier.input, tier.output, tier.cacheRead, tier.cacheWrite, ...range];
       })
     : [];
-  return [
-    cost.input,
-    cost.output,
-    cost.cacheRead,
-    cost.cacheWrite,
-    cost.tieredPricingBasis ?? "input",
-    ...tierFingerprint,
-  ].join("|");
+  return [cost.input, cost.output, cost.cacheRead, cost.cacheWrite, ...tierFingerprint].join("|");
 }
 
 function isProviderCostSourceCurrent(
@@ -717,10 +708,8 @@ function computeTieredCost(
   output: number,
   cacheRead: number,
   cacheWrite: number,
-  basis: "input" | "prompt",
 ): number {
-  const tierInput = basis === "prompt" ? input + cacheRead + cacheWrite : input;
-  const tier = selectPricingTier(tiers, tierInput);
+  const tier = selectPricingTier(tiers, input);
   if (!tier) {
     return 0;
   }
@@ -753,14 +742,7 @@ export function estimateUsageCost(params: {
 
   let total: number;
   if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    total = computeTieredCost(
-      cost.tieredPricing,
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      cost.tieredPricingBasis ?? "input",
-    );
+    total = computeTieredCost(cost.tieredPricing, input, output, cacheRead, cacheWrite);
   } else {
     total =
       input * cost.input +
