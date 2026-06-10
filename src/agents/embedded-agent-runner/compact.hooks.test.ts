@@ -2190,8 +2190,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         sessionId: successorSessionId,
         sessionFile: successorSessionFile,
         trigger: "budget",
-        nativeCompactionRequest: "after_context_engine",
       }),
+      { nativeCompactionRequest: "after_context_engine" },
     );
     expect(contextEngineCompactMock.mock.invocationCallOrder[0]).toBeLessThan(
       maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0],
@@ -2247,8 +2247,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: "budget",
-        nativeCompactionRequest: "after_context_engine",
       }),
+      { nativeCompactionRequest: "after_context_engine" },
     );
     const details = result.result?.details as
       | { codexNativeCompaction?: Record<string, unknown> }

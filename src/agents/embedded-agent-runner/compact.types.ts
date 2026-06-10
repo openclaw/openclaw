@@ -79,11 +79,6 @@ export type CompactEmbeddedAgentSessionParams = {
   preflightCompactionTrigger?: "tokens" | "transcript_bytes";
   trigger?: "budget" | "overflow" | "manual";
   /**
-   * Internal harness hint for follow-up native compaction after an owning
-   * context engine already compacted the OpenClaw transcript.
-   */
-  nativeCompactionRequest?: "after_context_engine";
-  /**
    * Preflight callers can allow native/current-session harness compaction but
    * move plugin-owned budget compaction onto background turn maintenance.
    */

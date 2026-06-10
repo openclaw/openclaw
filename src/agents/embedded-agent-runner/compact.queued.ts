@@ -533,16 +533,18 @@ export async function compactEmbeddedAgentSession(
           try {
             secondaryNativeHarnessCompaction = await compactWithSafetyTimeout(
               (compactAbortSignal) =>
-                maybeCompactAgentHarnessSession({
-                  ...params,
-                  sessionId: postCompactionSessionId,
-                  sessionFile: postCompactionSessionFile,
-                  contextEngine,
-                  contextTokenBudget,
-                  contextEngineRuntimeContext,
-                  nativeCompactionRequest: "after_context_engine",
-                  abortSignal: compactAbortSignal,
-                }),
+                maybeCompactAgentHarnessSession(
+                  {
+                    ...params,
+                    sessionId: postCompactionSessionId,
+                    sessionFile: postCompactionSessionFile,
+                    contextEngine,
+                    contextTokenBudget,
+                    contextEngineRuntimeContext,
+                    abortSignal: compactAbortSignal,
+                  },
+                  { nativeCompactionRequest: "after_context_engine" },
+                ),
               resolveCompactionTimeoutMs(params.config),
               params.abortSignal ? { abortSignal: params.abortSignal } : undefined,
             );
