@@ -100,6 +100,7 @@ type DiagnosticWorkSnapshot = {
   activeCount: number;
   waitingCount: number;
   queuedCount: number;
+  zombieEmbeddedRunCount: number;
   activeLabels: string[];
   waitingLabels: string[];
   queuedLabels: string[];
@@ -229,6 +230,7 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
   let activeCount = 0;
   let waitingCount = 0;
   let queuedCount = 0;
+  let zombieEmbeddedRunCount = 0;
   const activeLabels: string[] = [];
   const waitingLabels: string[] = [];
   const queuedLabels: string[] = [];
@@ -249,13 +251,38 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
       pushLimitedDiagnosticLabel(queuedLabels, formatDiagnosticWorkLabel(state, now));
     }
     queuedCount += queuedBacklog;
+    // Count idle sessions with stale embedded-run activity so the heartbeat scan
+    // keeps running until the zombie is eligible for recovery (stuckSessionAbortMs),
+    // preventing the activity gate from suppressing isIdleZombieEmbeddedRunStall.
+    if (state.state === "idle" && queuedBacklog <= 0) {
+      const activity = getDiagnosticSessionActivitySnapshot(
+        { sessionId: state.sessionId, sessionKey: state.sessionKey },
+        now,
+      );
+      if (activity.hasActiveEmbeddedRun === true) {
+        zombieEmbeddedRunCount += 1;
+      }
+    }
   }
 
-  return { activeCount, waitingCount, queuedCount, activeLabels, waitingLabels, queuedLabels };
+  return {
+    activeCount,
+    waitingCount,
+    queuedCount,
+    zombieEmbeddedRunCount,
+    activeLabels,
+    waitingLabels,
+    queuedLabels,
+  };
 }
 
 function hasOpenDiagnosticWork(snapshot: DiagnosticWorkSnapshot): boolean {
-  return snapshot.activeCount > 0 || snapshot.waitingCount > 0 || snapshot.queuedCount > 0;
+  return (
+    snapshot.activeCount > 0 ||
+    snapshot.waitingCount > 0 ||
+    snapshot.queuedCount > 0 ||
+    snapshot.zombieEmbeddedRunCount > 0
+  );
 }
 
 function hasRecentDiagnosticActivity(now: number): boolean {
@@ -580,6 +607,25 @@ function isIdleQueuedRecoverableSessionStall(params: {
     params.state.state === "idle" &&
     params.state.queueDepth > 0 &&
     (hasEmbeddedOwner || hasOrphanedActivity) &&
+    (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
+  );
+}
+
+// Detects a zombie embedded-run counter: session is idle with no queue, but diagnostic
+// activity still shows an active embedded run past the abort threshold. Without this,
+// handle-mismatch zombies are invisible to the processing-state and queued-idle paths.
+function isIdleZombieEmbeddedRunStall(params: {
+  state: {
+    state: SessionStateValue;
+    queueDepth: number;
+  };
+  activity: DiagnosticSessionActivitySnapshot;
+  staleMs: number;
+}): boolean {
+  return (
+    params.state.state === "idle" &&
+    params.state.queueDepth <= 0 &&
+    params.activity.hasActiveEmbeddedRun === true &&
     (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
   );
 }
@@ -1271,13 +1317,20 @@ export function startDiagnosticHeartbeat(
         activity,
         staleMs: stuckSessionWarnMs,
       });
+      const idleZombieStall = isIdleZombieEmbeddedRunStall({
+        state,
+        activity,
+        staleMs: stuckSessionAbortMs,
+      });
       if (
         (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
-        idleQueuedRecoverableStall
+        idleQueuedRecoverableStall ||
+        idleZombieStall
       ) {
-        const attentionAgeMs = idleQueuedRecoverableStall
-          ? (activity.lastProgressAgeMs ?? ageMs)
-          : ageMs;
+        const attentionAgeMs =
+          idleQueuedRecoverableStall || idleZombieStall
+            ? (activity.lastProgressAgeMs ?? ageMs)
+            : ageMs;
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,

@@ -4,6 +4,7 @@ import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lane
 import {
   testing as embeddedRunTesting,
   clearActiveEmbeddedRun,
+  isEmbeddedAgentRunHandleActive,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import {
@@ -16,10 +17,12 @@ import {
   resetCommandLane,
   resetCommandQueueStateForTest,
 } from "../process/command-queue.js";
+import { markDiagnosticEmbeddedRunStarted } from "./diagnostic-run-activity.js";
 import {
   testing as recoveryTesting,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
+import { logSessionStateChange, resetDiagnosticStateForTest } from "./diagnostic.js";
 
 function delay(ms: number): Promise<"blocked"> {
   return new Promise((resolve) => {
@@ -31,6 +34,7 @@ describe("stuck session recovery integration", () => {
   afterEach(() => {
     recoveryTesting.resetRecoveriesInFlight();
     embeddedRunTesting.resetActiveEmbeddedRuns();
+    resetDiagnosticStateForTest();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
   });
@@ -159,6 +163,44 @@ describe("stuck session recovery integration", () => {
     await expect(queued).resolves.toBe("drained");
     expect(outcome.status).toBe("aborted");
     expect(getQueueSize(lane)).toBe(0);
+  });
+
+  it("force-clears a zombie ACTIVE_EMBEDDED_RUNS entry when recovery runs with allowActiveAbort on an idle session", async () => {
+    const sessionKey = "agent:main:zombie-idle";
+    const sessionId = "zombie-idle-session";
+    let selfCleared = false;
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => false,
+      isCompacting: () => false,
+      abort: () => {
+        // Simulate the run's abort handler completing and self-clearing
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        selfCleared = true;
+      },
+    };
+
+    // Zombie: run registered but never cleared (handle mismatch scenario)
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    // Dispatcher marks the session idle (clearActiveEmbeddedRun was skipped)
+    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "message_completed" });
+
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 420_000,
+      queueDepth: 0,
+      allowActiveAbort: true,
+      expectedState: "idle",
+    });
+
+    expect(outcome.status).toBe("aborted");
+    expect(selfCleared).toBe(true);
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
   });
 
   it("does not reset a blocked lane while unregistered lane work is still active", async () => {

@@ -820,6 +820,106 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("recovers a zombie embedded-run counter when the session is idle with no queued work", () => {
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs,
+          stuckSessionAbortMs,
+        },
+      },
+      { recoverStuckSession },
+    );
+    // Embedded run starts and the session processes normally...
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    // Dispatcher calls markIdle() — session goes idle — but the embedded-run
+    // counter leaks (clearActiveEmbeddedRun was skipped via handle mismatch).
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+    vi.advanceTimersByTime(stuckSessionAbortMs + 30_000);
+
+    expectRecoveryCall(
+      recoverStuckSession,
+      {
+        sessionId: "s1",
+        sessionKey: "main",
+        queueDepth: 0,
+        allowActiveAbort: true,
+        expectedState: "idle",
+      },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("does not trigger zombie-counter recovery when the embedded run ended cleanly", () => {
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs,
+          stuckSessionAbortMs,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+    vi.advanceTimersByTime(stuckSessionAbortMs + 30_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("recovers a zombie embedded-run counter even after RECENT_DIAGNOSTIC_ACTIVITY_MS with no other session activity", () => {
+    // Regression for the default-threshold gap: stuckSessionAbortMs (≥5 min) exceeds
+    // RECENT_DIAGNOSTIC_ACTIVITY_MS (2 min). Without zombieEmbeddedRunCount in the work
+    // snapshot the heartbeat would return early after 2 min and never reach the idle
+    // zombie scan — recovery would not fire until a manual restart.
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 120_000;
+    const stuckSessionAbortMs = 360_000; // > RECENT_DIAGNOSTIC_ACTIVITY_MS (120_000)
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs,
+          stuckSessionAbortMs,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+    vi.advanceTimersByTime(stuckSessionAbortMs + 30_000);
+
+    expectRecoveryCall(
+      recoverStuckSession,
+      {
+        sessionId: "s1",
+        sessionKey: "main",
+        queueDepth: 0,
+        allowActiveAbort: true,
+        expectedState: "idle",
+      },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
   it("does not recover stale model calls without active embedded-run ownership", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
