@@ -1,29 +1,49 @@
+// Gateway HTTP session kill handler.
+// Allows local admins or owning parent sessions to stop subagent runs.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   killControlledSubagentRun,
   killSubagentRunAdmin,
   resolveSubagentController,
 } from "../agents/subagent-control.js";
 import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
-import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import {
+  sendInvalidRequest,
+  sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} from "./http-common.js";
+import {
+  authorizeGatewayHttpRequestOrReply,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const REQUESTER_SESSION_KEY_HEADER = "x-openclaw-requester-session-key";
 
-function resolveSessionKeyFromPath(pathname: string): string | null {
+type SessionKeyPathResolution =
+  | { matched: false }
+  | { matched: true; sessionKey: string }
+  | { error: "invalid-session-key"; matched: true };
+
+function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
   if (!match) {
-    return null;
+    return { matched: false };
   }
   try {
     const decoded = decodeURIComponent(match[1] ?? "").trim();
-    return decoded || null;
+    if (!decoded) {
+      return { error: "invalid-session-key", matched: true };
+    }
+    return { matched: true, sessionKey: decoded };
   } catch {
-    return null;
+    return { error: "invalid-session-key", matched: true };
   }
 }
 
@@ -37,19 +57,24 @@ export async function handleSessionKillHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const cfg = loadConfig();
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  const sessionKey = resolveSessionKeyFromPath(url.pathname);
-  if (!sessionKey) {
+  const cfg = getRuntimeConfig();
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
+  if (!sessionKeyResolution.matched) {
     return false;
   }
+  if ("error" in sessionKeyResolution) {
+    sendInvalidRequest(res, "invalid session key");
+    return true;
+  }
+  const { sessionKey } = sessionKeyResolution;
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res, "POST");
     return true;
   }
 
-  const ok = await authorizeGatewayBearerRequestOrReply({
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -57,7 +82,36 @@ export async function handleSessionKillHttpRequest(
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!ok) {
+  if (!requestAuth) {
+    return true;
+  }
+
+  const trustedProxies = opts.trustedProxies ?? cfg.gateway?.trustedProxies;
+  const allowRealIpFallback = opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback;
+  const requesterSessionKey = normalizeOptionalString(
+    req.headers[REQUESTER_SESSION_KEY_HEADER]?.toString(),
+  );
+  const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+
+  // Remote browser requests must prove parent-session ownership; local direct
+  // operator requests can perform the stronger admin kill path.
+  if (!requesterSessionKey && !allowLocalAdminKill) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "Session kills require a local admin request or requester session ownership.",
+      },
+    });
+    return true;
+  }
+
+  const requiredOperatorMethod =
+    requesterSessionKey && !allowLocalAdminKill ? "sessions.abort" : "sessions.delete";
+  const scopeAuth = authorizeOperatorScopesForMethod(requiredOperatorMethod, requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return true;
   }
 
@@ -68,22 +122,6 @@ export async function handleSessionKillHttpRequest(
       error: {
         type: "not_found",
         message: `Session not found: ${sessionKey}`,
-      },
-    });
-    return true;
-  }
-
-  const trustedProxies = opts.trustedProxies ?? cfg.gateway?.trustedProxies;
-  const allowRealIpFallback = opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback;
-  const requesterSessionKey = req.headers[REQUESTER_SESSION_KEY_HEADER]?.toString().trim();
-  const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
-
-  if (!requesterSessionKey && !allowLocalAdminKill) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "Session kills require a local admin request or requester session ownership.",
       },
     });
     return true;

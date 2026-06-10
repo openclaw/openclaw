@@ -1,8 +1,34 @@
 {
   "id": "vllm",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
   "providers": ["vllm"],
-  "providerAuthEnvVars": {
-    "vllm": ["VLLM_API_KEY"]
+  "providerRequest": {
+    "providers": {
+      "vllm": {
+        "family": "vllm",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "vllm": {
+        "external": false
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "vllm",
+        "envVars": ["VLLM_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -1,5 +1,8 @@
 {
   "id": "duckduckgo",
+  "activation": {
+    "onStartup": false
+  },
   "uiHints": {
     "webSearch.region": {
       "label": "DuckDuckGo Region",
@@ -9,6 +12,9 @@
       "label": "DuckDuckGo SafeSearch",
       "help": "SafeSearch level for DuckDuckGo results."
     }
+  },
+  "contracts": {
+    "webSearchProviders": ["duckduckgo"]
   },
   "configSchema": {
     "type": "object",

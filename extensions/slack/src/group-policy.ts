@@ -1,3 +1,4 @@
+// Slack plugin module implements group policy behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -5,7 +6,7 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import { normalizeHyphenSlug } from "openclaw/plugin-sdk/core";
+import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
 
 type SlackChannelPolicyEntry = {

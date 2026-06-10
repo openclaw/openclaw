@@ -1,22 +1,26 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+// Doctor scanner for empty allowlist policies across configured channels and accounts.
+import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
 import { asObjectRecord } from "./object.js";
 
-export type EmptyAllowlistAccountScanParams = {
-  account: DoctorAccountRecord;
-  channelName: string;
-  dmPolicy?: string;
-  effectiveAllowFrom?: DoctorAllowFromList;
-  parent?: DoctorAccountRecord;
-  prefix: string;
-};
-
 type ScanEmptyAllowlistPolicyWarningsParams = {
   doctorFixCommand: string;
-  extraWarningsForAccount?: (params: EmptyAllowlistAccountScanParams) => string[];
+  extraWarningsForAccount?: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
+  shouldSkipDefaultEmptyGroupAllowlistWarning?: (
+    params: ChannelDoctorEmptyAllowlistAccountContext,
+  ) => boolean;
 };
 
+function isDisabledRecord(value: unknown): boolean {
+  return (
+    Boolean(value && typeof value === "object" && !Array.isArray(value)) &&
+    (value as { enabled?: unknown }).enabled === false
+  );
+}
+
+/** Scan all configured channels/accounts for empty allowlist policy warnings. */
 export function scanEmptyAllowlistPolicyWarnings(
   cfg: OpenClawConfig,
   params: ScanEmptyAllowlistPolicyWarningsParams,
@@ -53,9 +57,12 @@ export function scanEmptyAllowlistPolicyWarnings(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
         account,
         channelName,
+        cfg,
         doctorFixCommand: params.doctorFixCommand,
         parent,
         prefix,
+        shouldSkipDefaultEmptyGroupAllowlistWarning:
+          params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
     );
     if (params.extraWarningsForAccount) {
@@ -78,6 +85,9 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
+    if (isDisabledRecord(channelConfig)) {
+      continue;
+    }
     checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
     const accounts = asObjectRecord(channelConfig.accounts);
@@ -86,6 +96,9 @@ export function scanEmptyAllowlistPolicyWarnings(
     }
     for (const [accountId, account] of Object.entries(accounts)) {
       if (!account || typeof account !== "object") {
+        continue;
+      }
+      if (isDisabledRecord(account)) {
         continue;
       }
       checkAccount(

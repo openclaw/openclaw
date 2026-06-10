@@ -1,27 +1,30 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  ensureConfiguredBindingRouteReady,
-  resolveConfiguredBindingRoute,
-} from "openclaw/plugin-sdk/conversation-runtime";
+// Discord plugin module implements native command route behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveDiscordBoundConversationRoute,
   resolveDiscordEffectiveRoute,
 } from "./route-resolution.js";
 import type { ThreadBindingRecord } from "./thread-bindings.js";
 
-type ResolvedConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
+type ResolvedConfiguredBindingRoute = ReturnType<
+  typeof conversationRuntime.resolveConfiguredBindingRoute
+>;
 type ConfiguredBindingResolution = NonNullable<
   NonNullable<ResolvedConfiguredBindingRoute>["bindingResolution"]
 >;
 
-export type DiscordNativeInteractionRouteState = {
+type DiscordNativeInteractionRouteState = {
   route: ResolvedAgentRoute;
   effectiveRoute: ResolvedAgentRoute;
   boundSessionKey?: string;
   configuredRoute: ResolvedConfiguredBindingRoute | null;
   configuredBinding: ConfiguredBindingResolution | null;
-  bindingReadiness: Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>> | null;
+  bindingReadiness: Awaited<
+    ReturnType<typeof conversationRuntime.ensureConfiguredBindingRouteReady>
+  > | null;
 };
 
 export async function resolveDiscordNativeInteractionRouteState(params: {
@@ -50,7 +53,7 @@ export async function resolveDiscordNativeInteractionRouteState(params: {
   });
   const configuredRoute =
     params.threadBinding == null
-      ? resolveConfiguredBindingRoute({
+      ? conversationRuntime.resolveConfiguredBindingRoute({
           cfg: params.cfg,
           route,
           conversation: {
@@ -62,9 +65,9 @@ export async function resolveDiscordNativeInteractionRouteState(params: {
         })
       : null;
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
-  const configuredBoundSessionKey = configuredRoute?.boundSessionKey?.trim() || undefined;
+  const configuredBoundSessionKey = normalizeOptionalString(configuredRoute?.boundSessionKey);
   const boundSessionKey =
-    params.threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
+    normalizeOptionalString(params.threadBinding?.targetSessionKey) ?? configuredBoundSessionKey;
   const effectiveRoute = resolveDiscordEffectiveRoute({
     route,
     boundSessionKey,
@@ -73,7 +76,7 @@ export async function resolveDiscordNativeInteractionRouteState(params: {
   });
   const bindingReadiness =
     params.enforceConfiguredBindingReadiness && configuredBinding
-      ? await ensureConfiguredBindingRouteReady({
+      ? await conversationRuntime.ensureConfiguredBindingRouteReady({
           cfg: params.cfg,
           bindingResolution: configuredBinding,
         })

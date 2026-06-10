@@ -1,20 +1,34 @@
+// Github Copilot plugin module implements login behavior.
 import { intro, note, outro, spinner } from "@clack/prompts";
-import { ensureAuthProfileStore, upsertAuthProfile } from "openclaw/plugin-sdk/agent-runtime";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
-import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-runtime";
-import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth";
+import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  nonNegativeSecondsToSafeMilliseconds,
+  positiveSecondsToSafeMilliseconds,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
+  applyAuthProfileConfig,
+  ensureAuthProfileStore,
+  upsertAuthProfileWithLock,
+} from "openclaw/plugin-sdk/provider-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const GITHUB_DEVICE_VERIFICATION_URL = "https://github.com/login/device";
+const GITHUB_AUTH_SSRF_POLICY: SsrFPolicy = { hostnameAllowlist: ["github.com"] };
 
 type DeviceCodeResponse = {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresInMs: number;
+  expiresAt: number;
+  intervalMs: number;
 };
 
 type DeviceTokenResponse =
@@ -29,11 +43,114 @@ type DeviceTokenResponse =
       error_uri?: string;
     };
 
-function parseJsonResponse<T>(value: unknown): T {
+const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
+const GITHUB_DEVICE_EXPIRED = Symbol("github-device-expired");
+
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+class GitHubDeviceFlowError extends Error {
+  readonly kind: symbol;
+  constructor(kind: symbol, message: string) {
+    super(message);
+    this.kind = kind;
+    this.name = "GitHubDeviceFlowError";
+  }
+}
+
+let githubDeviceFlowFetchGuard = fetchWithSsrFGuard;
+
+export function setGitHubCopilotDeviceFlowFetchGuardForTesting(
+  impl: typeof fetchWithSsrFGuard | null,
+): void {
+  githubDeviceFlowFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
+
+function isGitHubDeviceAccessDeniedError(err: unknown): boolean {
+  return err instanceof GitHubDeviceFlowError && err.kind === GITHUB_DEVICE_ACCESS_DENIED;
+}
+
+function isGitHubDeviceExpiredError(err: unknown): boolean {
+  return err instanceof GitHubDeviceFlowError && err.kind === GITHUB_DEVICE_EXPIRED;
+}
+
+function parseJsonResponse(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error("Unexpected response from GitHub");
   }
-  return value as T;
+  return value as Record<string, unknown>;
+}
+
+function parseDeviceCodeResponse(
+  value: Record<string, unknown>,
+  issuedAt: number,
+): DeviceCodeResponse {
+  const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
+  const intervalMs = nonNegativeSecondsToSafeMilliseconds(value.interval);
+  const expiresAt =
+    expiresInMs === undefined
+      ? undefined
+      : resolveExpiresAtMsFromDurationMs(expiresInMs, { nowMs: issuedAt });
+
+  if (
+    typeof value.device_code !== "string" ||
+    !value.device_code ||
+    typeof value.user_code !== "string" ||
+    !value.user_code ||
+    typeof value.verification_uri !== "string" ||
+    !value.verification_uri ||
+    expiresInMs === undefined ||
+    expiresAt === undefined ||
+    intervalMs === undefined
+  ) {
+    throw new Error("GitHub device code response missing fields");
+  }
+
+  return {
+    deviceCode: value.device_code,
+    userCode: value.user_code,
+    verificationUri: value.verification_uri,
+    expiresInMs,
+    expiresAt,
+    intervalMs,
+  };
+}
+
+async function postGitHubDeviceFlowForm(params: {
+  url: string;
+  body: URLSearchParams;
+  failureLabel: string;
+}): Promise<Record<string, unknown>> {
+  const { response, release } = await githubDeviceFlowFetchGuard({
+    url: params.url,
+    init: {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.body,
+    },
+    requireHttps: true,
+    policy: GITHUB_AUTH_SSRF_POLICY,
+    auditContext: "github-copilot-device-flow",
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
+    }
+    return parseJsonResponse(await response.json());
+  } finally {
+    await release();
+  }
 }
 
 async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeResponse> {
@@ -42,24 +159,13 @@ async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeR
     scope: params.scope,
   });
 
-  const res = await fetch(DEVICE_CODE_URL, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+  const json = await postGitHubDeviceFlowForm({
+    url: DEVICE_CODE_URL,
     body,
+    failureLabel: "GitHub device code failed",
   });
-
-  if (!res.ok) {
-    throw new Error(`GitHub device code failed: HTTP ${res.status}`);
-  }
-
-  const json = parseJsonResponse<DeviceCodeResponse>(await res.json());
-  if (!json.device_code || !json.user_code || !json.verification_uri) {
-    throw new Error("GitHub device code response missing fields");
-  }
-  return json;
+  // Anchor expiry to when GitHub issued the code, before UI prompts or browser launch.
+  return parseDeviceCodeResponse(json, Date.now());
 }
 
 async function pollForAccessToken(params: {
@@ -74,47 +180,131 @@ async function pollForAccessToken(params: {
   });
 
   while (Date.now() < params.expiresAt) {
-    const res = await fetch(ACCESS_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
+    const json = (await postGitHubDeviceFlowForm({
+      url: ACCESS_TOKEN_URL,
       body: bodyBase,
-    });
-
-    if (!res.ok) {
-      throw new Error(`GitHub device token failed: HTTP ${res.status}`);
-    }
-
-    const json = parseJsonResponse<DeviceTokenResponse>(await res.json());
+      failureLabel: "GitHub device token failed",
+    })) as DeviceTokenResponse;
     if ("access_token" in json && typeof json.access_token === "string") {
       return json.access_token;
     }
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
-      await new Promise((r) => setTimeout(r, params.intervalMs));
+      await sleepGitHubDevicePollDelay(params.intervalMs, params.expiresAt);
       continue;
     }
     if (err === "slow_down") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
+      await sleepGitHubDevicePollDelay(params.intervalMs + 2000, params.expiresAt);
       continue;
     }
     if (err === "expired_token") {
-      throw new Error("GitHub device code expired; run login again");
+      throw new GitHubDeviceFlowError(
+        GITHUB_DEVICE_EXPIRED,
+        "GitHub device code expired; run login again",
+      );
     }
     if (err === "access_denied") {
-      throw new Error("GitHub login cancelled");
+      throw new GitHubDeviceFlowError(GITHUB_DEVICE_ACCESS_DENIED, "GitHub login cancelled");
     }
     throw new Error(`GitHub device flow error: ${err}`);
   }
 
-  throw new Error("GitHub device code expired; run login again");
+  throw new GitHubDeviceFlowError(
+    GITHUB_DEVICE_EXPIRED,
+    "GitHub device code expired; run login again",
+  );
+}
+
+async function sleepGitHubDevicePollDelay(delayMs: number, expiresAt: number): Promise<void> {
+  const requestedDelayMs = Math.max(1, Math.floor(delayMs));
+  const targetAt = Math.min(Date.now() + requestedDelayMs, expiresAt);
+  while (Date.now() < targetAt) {
+    const remainingMs = Math.max(1, targetAt - Date.now());
+    const safeDelayMs = resolveTimerTimeoutMs(remainingMs, 1);
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(safeDelayMs, remainingMs));
+    });
+  }
+}
+
+function normalizeGitHubDeviceVerificationUrl(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("GitHub device flow returned an invalid verification URL");
+  }
+
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "github.com" ||
+    parsed.pathname !== "/login/device" ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error("GitHub device flow returned an unexpected verification URL");
+  }
+
+  return GITHUB_DEVICE_VERIFICATION_URL;
+}
+
+function normalizeGitHubDeviceUserCode(raw: string): string {
+  const userCode = raw.trim();
+  if (!userCode || userCode.length > 64) {
+    throw new Error("GitHub device flow returned an invalid user code");
+  }
+  return userCode;
+}
+
+export type GitHubCopilotDeviceFlowResult =
+  | { status: "authorized"; accessToken: string }
+  | { status: "access_denied" }
+  | { status: "expired" };
+
+export type GitHubCopilotDeviceFlowIO = {
+  showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
+  openUrl?: (url: string) => Promise<void>;
+};
+
+export async function runGitHubCopilotDeviceFlow(
+  io: GitHubCopilotDeviceFlowIO,
+): Promise<GitHubCopilotDeviceFlowResult> {
+  const device = await requestDeviceCode({ scope: "read:user" });
+  const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verificationUri);
+  const userCode = normalizeGitHubDeviceUserCode(device.userCode);
+  await io.showCode({
+    verificationUrl,
+    userCode,
+    expiresInMs: device.expiresInMs,
+  });
+
+  try {
+    await io.openUrl?.(verificationUrl);
+  } catch {
+    // The code and URL have already been shown. Browser launch is best-effort.
+  }
+
+  try {
+    const accessToken = await pollForAccessToken({
+      deviceCode: device.deviceCode,
+      intervalMs: Math.max(1000, device.intervalMs),
+      expiresAt: device.expiresAt,
+    });
+    return { status: "authorized", accessToken };
+  } catch (err) {
+    if (isGitHubDeviceAccessDeniedError(err)) {
+      return { status: "access_denied" };
+    }
+    if (isGitHubDeviceExpiredError(err)) {
+      return { status: "expired" };
+    }
+    throw err;
+  }
 }
 
 export async function githubCopilotLoginCommand(
-  opts: { profileId?: string; yes?: boolean },
+  opts: { profileId?: string; yes?: boolean; agentDir?: string },
   runtime: RuntimeEnv,
 ) {
   if (!process.stdin.isTTY) {
@@ -124,7 +314,7 @@ export async function githubCopilotLoginCommand(
   intro(stylePromptTitle("GitHub Copilot login"));
 
   const profileId = opts.profileId?.trim() || "github-copilot:github";
-  const store = ensureAuthProfileStore(undefined, {
+  const store = ensureAuthProfileStore(opts.agentDir, {
     allowKeychainPrompt: false,
   });
 
@@ -141,31 +331,29 @@ export async function githubCopilotLoginCommand(
   spin.stop("Device code ready");
 
   note(
-    [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
+    [`Visit: ${device.verificationUri}`, `Code: ${device.userCode}`].join("\n"),
     stylePromptTitle("Authorize"),
   );
 
-  const expiresAt = Date.now() + device.expires_in * 1000;
-  const intervalMs = Math.max(1000, device.interval * 1000);
+  const intervalMs = Math.max(1000, device.intervalMs);
 
   const polling = spinner();
   polling.start("Waiting for GitHub authorization...");
   const accessToken = await pollForAccessToken({
-    deviceCode: device.device_code,
+    deviceCode: device.deviceCode,
     intervalMs,
-    expiresAt,
+    expiresAt: device.expiresAt,
   });
   polling.stop("GitHub access token acquired");
 
-  upsertAuthProfile({
+  await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential: {
       type: "token",
       provider: "github-copilot",
       token: accessToken,
-      // GitHub device flow token doesn't reliably include expiry here.
-      // Leave expires unset; we'll exchange into Copilot token plus expiry later.
     },
+    agentDir: opts.agentDir,
   });
 
   await updateConfig((cfg) =>

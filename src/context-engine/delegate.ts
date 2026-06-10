@@ -1,4 +1,22 @@
+// Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
+import type { CompactEmbeddedAgentSessionDirect } from "../agents/embedded-agent-runner/compact.runtime.types.js";
+import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
+
+type CompactRuntimeModule = {
+  compactEmbeddedAgentSessionDirect: CompactEmbeddedAgentSessionDirect;
+};
+
+let compactRuntimePromise: Promise<CompactRuntimeModule> | null = null;
+
+function loadCompactRuntime(): Promise<CompactRuntimeModule> {
+  // Use a literal specifier so the bundler rewrites the runtime chunk path
+  // instead of resolving a source-tree path at runtime.
+  compactRuntimePromise ??= import("../agents/embedded-agent-runner/compact.runtime.js");
+  return compactRuntimePromise;
+}
 
 /**
  * Delegate a context-engine compaction request to OpenClaw's built-in runtime compaction path.
@@ -16,14 +34,16 @@ import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "
 export async function delegateCompactionToRuntime(
   params: Parameters<ContextEngine["compact"]>[0],
 ): Promise<CompactResult> {
-  // Import through a dedicated runtime boundary so the lazy edge remains effective.
-  const { compactEmbeddedPiSessionDirect } =
-    await import("../agents/pi-embedded-runner/compact.runtime.js");
+  // Load through the dedicated runtime boundary without introducing another
+  // source-level static edge into the embedded runner graph.
+  const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
+  type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
 
-  // runtimeContext carries the full CompactEmbeddedPiSessionParams fields set
+  // runtimeContext carries the full CompactEmbeddedAgentSessionParams fields set
   // by runtime callers. We spread them and override the fields that come from
   // the public ContextEngine compact() signature directly.
-  const runtimeContext: ContextEngineRuntimeContext = params.runtimeContext ?? {};
+  const runtimeContext = (params.runtimeContext ?? {}) as ContextEngineRuntimeContext &
+    Partial<RuntimeCompactionParams>;
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -32,8 +52,7 @@ export async function delegateCompactionToRuntime(
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bridge runtimeContext matches CompactEmbeddedPiSessionParams
-  const result = await compactEmbeddedPiSessionDirect({
+  const result = await compactEmbeddedAgentSessionDirect({
     ...runtimeContext,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
@@ -41,8 +60,9 @@ export async function delegateCompactionToRuntime(
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
     customInstructions: params.customInstructions,
-    workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
-  } as Parameters<typeof compactEmbeddedPiSessionDirect>[0]);
+    workspaceDir:
+      typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
+  });
 
   return {
     ok: result.ok,
@@ -55,7 +75,30 @@ export async function delegateCompactionToRuntime(
           tokensBefore: result.result.tokensBefore,
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
+          sessionId: result.result.sessionId,
+          sessionFile: result.result.sessionFile,
         }
       : undefined,
   };
+}
+
+/**
+ * Build a context-engine-ready systemPromptAddition from the active memory
+ * plugin prompt path. This lets non-legacy engines explicitly opt into the
+ * same memory/wiki guidance that the legacy engine gets via system prompt
+ * assembly, without reimplementing memory prompt formatting.
+ */
+export function buildMemorySystemPromptAddition(params: {
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+}): string | undefined {
+  const lines = buildMemoryPromptSection({
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode,
+  });
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const normalized = normalizeStructuredPromptSection(lines.join("\n"));
+  return normalized || undefined;
 }

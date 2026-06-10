@@ -1,3 +1,4 @@
+// Binding target tests cover channel binding target extraction and validation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureConfiguredBindingTargetReady,
@@ -14,17 +15,17 @@ import {
 function createBindingResolution(driverId: string): ConfiguredBindingResolution {
   return {
     conversation: {
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       conversationId: "123",
     },
     compiledBinding: {
-      channel: "discord",
+      channel: "demo-binding",
       binding: {
         type: "acp" as const,
         agentId: "codex",
         match: {
-          channel: "discord",
+          channel: "demo-binding",
           peer: {
             kind: "channel" as const,
             id: "123",
@@ -55,7 +56,7 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
             targetSessionKey: `agent:codex:${driverId}`,
             targetKind: "session",
             conversation: {
-              channel: "discord",
+              channel: "demo-binding",
               accountId: "default",
               conversationId: "123",
             },
@@ -79,7 +80,7 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
       targetSessionKey: `agent:codex:${driverId}`,
       targetKind: "session",
       conversation: {
-        channel: "discord",
+        channel: "demo-binding",
         accountId: "default",
         conversationId: "123",
       },
@@ -166,6 +167,7 @@ describe("binding target drivers", () => {
         cfg: {} as never,
         sessionKey: "agent:codex:test-driver",
         reason: "reset",
+        commandSource: "discord:native",
       }),
     ).resolves.toEqual({ ok: true });
 
@@ -174,6 +176,7 @@ describe("binding target drivers", () => {
       cfg: {} as never,
       sessionKey: "agent:codex:test-driver",
       reason: "reset",
+      commandSource: "discord:native",
       bindingTarget: {
         kind: "stateful",
         driverId: "test-driver",

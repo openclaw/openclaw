@@ -1,9 +1,46 @@
+// Covers channel API retry policy behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTelegramRetryRunner } from "./retry-policy.js";
+import { createChannelApiRetryRunner } from "./retry-policy.js";
 
 const ZERO_DELAY_RETRY = { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
 
-describe("createTelegramRetryRunner", () => {
+async function runRetryCase(params: {
+  runnerOptions: Parameters<typeof createChannelApiRetryRunner>[0];
+  fnSteps: Array<{ type: "reject" | "resolve"; value: unknown }>;
+  expectedCalls: number;
+  expectedValue?: unknown;
+  expectedError?: string;
+}): Promise<void> {
+  vi.useFakeTimers();
+  const runner = createChannelApiRetryRunner(params.runnerOptions);
+  const fn = vi.fn();
+  const allRejects =
+    params.fnSteps.length > 0 && params.fnSteps.every((step) => step.type === "reject");
+  if (allRejects) {
+    fn.mockRejectedValue(params.fnSteps[0]?.value);
+  }
+  for (const [index, step] of params.fnSteps.entries()) {
+    if (allRejects && index > 0) {
+      break;
+    }
+    if (step.type === "reject") {
+      fn.mockRejectedValueOnce(step.value);
+    } else {
+      fn.mockResolvedValueOnce(step.value);
+    }
+  }
+
+  const promise = runner(fn, "test");
+  const assertion = params.expectedError
+    ? expect(promise).rejects.toThrow(params.expectedError)
+    : expect(promise).resolves.toBe(params.expectedValue);
+
+  await vi.runAllTimersAsync();
+  await assertion;
+  expect(fn).toHaveBeenCalledTimes(params.expectedCalls);
+}
+
+describe("createChannelApiRetryRunner", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -82,6 +119,22 @@ describe("createTelegramRetryRunner", () => {
         expectedError: "permission denied",
       },
       {
+        name: "retries grammY HttpError wrapping network error via .cause traversal",
+        runnerOptions: {
+          retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
+        },
+        fnSteps: [
+          {
+            type: "reject" as const,
+            value: Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+              cause: new Error("ECONNRESET"),
+            }),
+          },
+        ],
+        expectedCalls: 2,
+        expectedError: "Network request",
+      },
+      {
         name: "keeps retrying retriable errors until attempts are exhausted",
         runnerOptions: {
           retry: ZERO_DELAY_RETRY,
@@ -98,39 +151,38 @@ describe("createTelegramRetryRunner", () => {
         expectedError: "connection timeout",
       },
     ])("$name", async ({ runnerOptions, fnSteps, expectedCalls, expectedValue, expectedError }) => {
-      vi.useFakeTimers();
-      const runner = createTelegramRetryRunner(runnerOptions);
-      const fn = vi.fn();
-      const allRejects = fnSteps.length > 0 && fnSteps.every((step) => step.type === "reject");
-      if (allRejects) {
-        fn.mockRejectedValue(fnSteps[0]?.value);
-      }
-      for (const [index, step] of fnSteps.entries()) {
-        if (allRejects && index > 0) {
-          break;
-        }
-        if (step.type === "reject") {
-          fn.mockRejectedValueOnce(step.value);
-        } else {
-          fn.mockResolvedValueOnce(step.value);
-        }
-      }
+      await runRetryCase({
+        runnerOptions,
+        fnSteps,
+        expectedCalls,
+        expectedValue,
+        expectedError,
+      });
+    });
+  });
 
-      const promise = runner(fn, "test");
-      const assertion = expectedError
-        ? expect(promise).rejects.toThrow(expectedError)
-        : expect(promise).resolves.toBe(expectedValue);
-
-      await vi.runAllTimersAsync();
-      await assertion;
-      expect(fn).toHaveBeenCalledTimes(expectedCalls);
+  describe("default retry behavior", () => {
+    it("retries misdirected request errors from Telegram edge nodes", async () => {
+      await runRetryCase({
+        runnerOptions: { retry: ZERO_DELAY_RETRY },
+        fnSteps: [
+          {
+            type: "reject" as const,
+            value: Object.assign(new Error("421 Misdirected Request"), {
+              status: 421,
+            }),
+          },
+        ],
+        expectedCalls: 3,
+        expectedError: "421 Misdirected Request",
+      });
     });
   });
 
   it("honors nested retry_after hints before retrying", async () => {
     vi.useFakeTimers();
 
-    const runner = createTelegramRetryRunner({
+    const runner = createChannelApiRetryRunner({
       retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1_000, jitter: 0 },
     });
     const fn = vi

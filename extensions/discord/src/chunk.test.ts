@@ -1,8 +1,6 @@
+// Discord tests cover chunk plugin behavior.
+import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import {
-  countLines,
-  hasBalancedFences,
-} from "../../../test/helpers/extensions/chunk-test-helpers.js";
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 
 describe("chunkDiscordText", () => {
@@ -15,6 +13,18 @@ describe("chunkDiscordText", () => {
     for (const chunk of chunks) {
       expect(countLines(chunk)).toBeLessThanOrEqual(20);
     }
+  });
+
+  it("uses default chunk limits for non-finite options", () => {
+    const text = "x".repeat(2500);
+    const chunks = chunkDiscordText(text, {
+      maxChars: Number.NaN,
+      maxLines: Number.POSITIVE_INFINITY,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
+    expect(chunks.join("")).toBe(text);
   });
 
   it("keeps fenced code blocks balanced across chunks", () => {
@@ -41,6 +51,19 @@ describe("chunkDiscordText", () => {
       chunkMode: "newline",
     });
     expect(chunks).toEqual([text]);
+  });
+
+  it("uses default newline chunk limits for non-finite max chars", () => {
+    const text = "x".repeat(2500);
+    const chunks = chunkDiscordTextWithMode(text, {
+      maxChars: Number.NaN,
+      maxLines: 50,
+      chunkMode: "newline",
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
+    expect(chunks.join("")).toBe(text);
   });
 
   it("reserves space for closing fences when chunking", () => {
@@ -76,6 +99,30 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
+  it("uses CJK punctuation as a safe long-line split point", () => {
+    const text = "一二三四五。六七八九十。甲乙丙丁戊。";
+    const chunks = chunkDiscordText(text, { maxChars: 10, maxLines: 50 });
+
+    expect(chunks).toEqual(["一二三四五。", "六七八九十。", "甲乙丙丁戊。"]);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("still prefers whitespace before CJK punctuation", () => {
+    const text = "alpha beta。gamma delta";
+    const chunks = chunkDiscordText(text, { maxChars: 13, maxLines: 50 });
+
+    expect(chunks[0]).toBe("alpha");
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("does not split surrogate pairs at hard fallback boundaries", () => {
+    const text = "ab😀cd😀ef";
+    const chunks = chunkDiscordText(text, { maxChars: 3, maxLines: 50 });
+
+    expect(chunks).toEqual(["ab", "😀c", "d😀", "ef"]);
+    expect(chunks.join("")).toBe(text);
+  });
+
   it("keeps reasoning italics balanced across chunks", () => {
     const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
     const text = `Reasoning:\n_${body}_`;
@@ -101,6 +148,19 @@ describe("chunkDiscordText", () => {
     const text = `Reasoning:\n_${body}_`;
 
     const chunks = chunkDiscordText(text, { maxChars: 80, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const chunk of chunks) {
+      const underscoreCount = (chunk.match(/_/g) || []).length;
+      expect(underscoreCount % 2).toBe(0);
+    }
+  });
+
+  it("keeps thinking-prefixed reasoning italics balanced across chunks", () => {
+    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
+    const text = `Thinking\n\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
     for (const chunk of chunks) {

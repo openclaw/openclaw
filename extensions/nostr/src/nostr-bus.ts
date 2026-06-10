@@ -1,16 +1,10 @@
-import {
-  SimplePool,
-  finalizeEvent,
-  getPublicKey,
-  verifyEvent,
-  nip19,
-  type Event,
-} from "nostr-tools";
+// Nostr plugin module implements nostr bus behavior.
+import { SimplePool, finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
 import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/direct-dm-guard-policy";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
@@ -20,6 +14,7 @@ import {
   type MetricsSnapshot,
   type MetricEvent,
 } from "./metrics.js";
+import { validatePrivateKey } from "./nostr-key-utils.js";
 import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
 import {
   readNostrBusState,
@@ -50,7 +45,7 @@ const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
 // Types
 // ============================================================================
 
-export interface NostrBusOptions {
+interface NostrBusOptions {
   /** Private key in hex or nsec format */
   privateKey: string;
   /** WebSocket relay URLs (defaults to damus + nos.lol) */
@@ -64,7 +59,7 @@ export interface NostrBusOptions {
     reply: (text: string) => Promise<void>,
     meta: { eventId: string; createdAt: number },
   ) => Promise<void>;
-  /** Called before expensive crypto to allow sender policy checks (optional) */
+  /** Called after signature verification and before decrypt to allow sender policy checks (optional) */
   authorizeSender?: (params: {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
@@ -144,7 +139,7 @@ function createFixedWindowRateLimiter(params: {
 }
 
 export interface NostrBusHandle {
-  /** Stop the bus and close connections */
+  /** Stop the bus and close relay connections */
   close: () => void;
   /** Get the bot's public key */
   publicKey: string;
@@ -340,46 +335,6 @@ function createRelayHealthTracker(): RelayHealthTracker {
 }
 
 // ============================================================================
-// Key Validation
-// ============================================================================
-
-/**
- * Validate and normalize a private key (accepts hex or nsec format)
- */
-export function validatePrivateKey(key: string): Uint8Array {
-  const trimmed = key.trim();
-
-  // Handle nsec (bech32) format
-  if (trimmed.startsWith("nsec1")) {
-    const decoded = nip19.decode(trimmed);
-    if (decoded.type !== "nsec") {
-      throw new Error("Invalid nsec key: wrong type");
-    }
-    return decoded.data;
-  }
-
-  // Handle hex format
-  if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    throw new Error("Private key must be 64 hex characters or nsec bech32 format");
-  }
-
-  // Convert hex string to Uint8Array
-  const bytes = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) {
-    bytes[i] = parseInt(trimmed.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-/**
- * Get public key from private key (hex or nsec format)
- */
-export function getPublicKeyFromPrivate(privateKey: string): string {
-  const sk = validatePrivateKey(privateKey);
-  return getPublicKey(sk);
-}
-
-// ============================================================================
 // Main Bus
 // ============================================================================
 
@@ -469,7 +424,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         lastProcessedAt,
         gatewayStartedAt,
         recentEventIds,
-      }).catch((err) => onError?.(err as Error, "persist state"));
+      }).catch((err: unknown) => onError?.(err as Error, "persist state"));
     }, STATE_PERSIST_DEBOUNCE_MS);
   }
 
@@ -504,15 +459,24 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       inflight.add(event.id);
 
+      const markSeen = () => {
+        seen.add(event.id);
+        metrics.emit("memory.seen_tracker_size", seen.size());
+      };
+      const rejectAndMarkSeen = (metric: Parameters<typeof metrics.emit>[0]) => {
+        markSeen();
+        metrics.emit(metric);
+      };
+
       // Self-message loop prevention: skip our own messages
       if (event.pubkey === pk) {
-        metrics.emit("event.rejected.self_message");
+        rejectAndMarkSeen("event.rejected.self_message");
         return;
       }
 
       // Skip events older than our `since` (relay may ignore filter)
       if (event.created_at < since) {
-        metrics.emit("event.rejected.stale");
+        rejectAndMarkSeen("event.rejected.stale");
         return;
       }
 
@@ -522,7 +486,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       if (!guardPolicy.allowedKinds.includes(event.kind)) {
-        metrics.emit("event.rejected.wrong_kind");
+        rejectAndMarkSeen("event.rejected.wrong_kind");
         return;
       }
 
@@ -535,7 +499,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
       }
       if (!targetsUs) {
-        metrics.emit("event.rejected.wrong_kind");
+        rejectAndMarkSeen("event.rejected.wrong_kind");
         return;
       }
 
@@ -553,46 +517,63 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
+      const rejectIfGlobalRateLimited = (): boolean => {
+        updateRateLimiterSizeMetric();
+        if (globalRateLimiter.isRateLimited("global")) {
+          metrics.emit("rate_limit.global");
+          metrics.emit("event.rejected.rate_limited");
+          updateRateLimiterSizeMetric();
+          return true;
+        }
+        updateRateLimiterSizeMetric();
+        return false;
+      };
+
+      const rejectIfVerifiedSenderRateLimited = (): boolean => {
+        updateRateLimiterSizeMetric();
+        if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
+          metrics.emit("rate_limit.per_sender");
+          metrics.emit("event.rejected.rate_limited");
+          updateRateLimiterSizeMetric();
+          return true;
+        }
+        updateRateLimiterSizeMetric();
+        return false;
+      };
+
+      if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
+        if (rejectIfGlobalRateLimited()) {
+          return;
+        }
+        rejectAndMarkSeen("event.rejected.oversized_ciphertext");
+        return;
+      }
+
+      if (rejectIfGlobalRateLimited()) {
+        return;
+      }
+
+      // Verify signature (must pass before we trust the event)
+      if (!verifyEvent(event)) {
+        rejectAndMarkSeen("event.rejected.invalid_signature");
+        onError?.(new Error("Invalid signature"), `event ${event.id}`);
+        return;
+      }
+
+      if (rejectIfVerifiedSenderRateLimited()) {
+        return;
+      }
+
       if (authorizeSender) {
         const decision = await authorizeSender({
           senderPubkey: event.pubkey,
           reply: replyTo,
         });
         if (decision !== "allow") {
+          markSeen();
           return;
         }
       }
-
-      updateRateLimiterSizeMetric();
-      if (globalRateLimiter.isRateLimited("global")) {
-        metrics.emit("rate_limit.global");
-        metrics.emit("event.rejected.rate_limited");
-        updateRateLimiterSizeMetric();
-        return;
-      }
-      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
-        metrics.emit("rate_limit.per_sender");
-        metrics.emit("event.rejected.rate_limited");
-        updateRateLimiterSizeMetric();
-        return;
-      }
-      updateRateLimiterSizeMetric();
-
-      if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
-        metrics.emit("event.rejected.oversized_ciphertext");
-        return;
-      }
-
-      // Verify signature (must pass before we trust the event)
-      if (!verifyEvent(event)) {
-        metrics.emit("event.rejected.invalid_signature");
-        onError?.(new Error("Invalid signature"), `event ${event.id}`);
-        return;
-      }
-
-      // Mark seen AFTER verify (don't cache invalid IDs)
-      seen.add(event.id);
-      metrics.emit("memory.seen_tracker_size", seen.size());
 
       // Decrypt the message
       let plaintext: string;
@@ -600,6 +581,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         plaintext = decrypt(sk, event.pubkey, event.content);
         metrics.emit("decrypt.success");
       } catch (err) {
+        markSeen();
         metrics.emit("decrypt.failure");
         metrics.emit("event.rejected.decrypt_failed");
         onError?.(err as Error, `decrypt from ${event.pubkey}`);
@@ -607,6 +589,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       if (Buffer.byteLength(plaintext, "utf8") > guardPolicy.maxPlaintextBytes) {
+        markSeen();
         metrics.emit("event.rejected.oversized_plaintext");
         return;
       }
@@ -616,6 +599,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         eventId: event.id,
         createdAt: event.created_at,
       });
+
+      // Only cache successful deliveries so handler failures can retry.
+      markSeen();
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -629,28 +615,31 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
   }
 
-  const sub = pool.subscribeMany(
-    relays,
-    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
-    {
-      onevent: handleEvent,
-      oneose: () => {
-        // EOSE handler - called when all stored events have been received
-        for (const relay of relays) {
-          metrics.emit("relay.message.eose", 1, { relay });
-        }
-        onEose?.(relays.join(", "));
-      },
-      onclose: (reason) => {
-        // Handle subscription close
-        for (const relay of relays) {
-          metrics.emit("relay.message.closed", 1, { relay });
-          options.onDisconnect?.(relay);
-        }
-        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
-      },
+  const dmFilter = { kinds: [4], "#p": [pk], since } satisfies Parameters<
+    typeof pool.subscribeMany
+  >[1];
+  const relayAbort = new AbortController();
+  const sub = pool.subscribeMany(relays, dmFilter, {
+    onevent: (event) => {
+      void handleEvent(event);
     },
-  );
+    oneose: () => {
+      // EOSE handler - called when all stored events have been received
+      for (const relay of relays) {
+        metrics.emit("relay.message.eose", 1, { relay });
+      }
+      onEose?.(relays.join(", "));
+    },
+    onclose: (reason) => {
+      // Handle subscription close
+      for (const relay of relays) {
+        metrics.emit("relay.message.closed", 1, { relay });
+        options.onDisconnect?.(relay);
+      }
+      onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
+    },
+    abort: relayAbort.signal,
+  });
 
   // Public sendDm function
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
@@ -698,17 +687,22 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   // Get profile state function
   const getProfileState = async () => {
-    const state = await readNostrProfileState({ accountId });
+    const stateLocal = await readNostrProfileState({ accountId });
     return {
-      lastPublishedAt: state?.lastPublishedAt ?? null,
-      lastPublishedEventId: state?.lastPublishedEventId ?? null,
-      lastPublishResults: state?.lastPublishResults ?? null,
+      lastPublishedAt: stateLocal?.lastPublishedAt ?? null,
+      lastPublishedEventId: stateLocal?.lastPublishedEventId ?? null,
+      lastPublishResults: stateLocal?.lastPublishResults ?? null,
     };
   };
 
   return {
     close: () => {
-      sub.close();
+      relayAbort.abort("closed by caller");
+      void Promise.resolve(sub.close("closed by caller"))
+        .catch((err: unknown) => onError?.(err as Error, "close subscription"))
+        .finally(() => {
+          pool.close(relays);
+        });
       seen.stop();
       perSenderRateLimiter.clear();
       globalRateLimiter.clear();
@@ -720,7 +714,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           lastProcessedAt,
           gatewayStartedAt,
           recentEventIds,
-        }).catch((err) => onError?.(err as Error, "persist state on close"));
+        }).catch((err: unknown) => onError?.(err as Error, "persist state on close"));
       }
     },
     publicKey: pk,
@@ -775,8 +769,12 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      // oxlint-disable-next-line typescript/await-thenable typesciript/no-floating-promises
-      await pool.publish([relay], reply);
+      const publishPromises = pool.publish([relay], reply);
+      if (publishPromises.length === 0) {
+        throw new Error(`Failed to create publish promise for relay ${relay}`);
+      }
+      const publishPromise = publishPromises[0];
+      await publishPromise;
       const latency = Date.now() - startTime;
 
       // Record success
@@ -798,65 +796,4 @@ async function sendEncryptedDm(
   }
 
   throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
-}
-
-// ============================================================================
-// Pubkey Utilities
-// ============================================================================
-
-/**
- * Check if a string looks like a valid Nostr pubkey (hex or npub)
- */
-export function isValidPubkey(input: string): boolean {
-  if (typeof input !== "string") {
-    return false;
-  }
-  const trimmed = input.trim();
-
-  // npub format
-  if (trimmed.startsWith("npub1")) {
-    try {
-      const decoded = nip19.decode(trimmed);
-      return decoded.type === "npub";
-    } catch {
-      return false;
-    }
-  }
-
-  // Hex format
-  return /^[0-9a-fA-F]{64}$/.test(trimmed);
-}
-
-/**
- * Normalize a pubkey to hex format (accepts npub or hex)
- */
-export function normalizePubkey(input: string): string {
-  const trimmed = input.trim();
-
-  // npub format - decode to hex
-  if (trimmed.startsWith("npub1")) {
-    const decoded = nip19.decode(trimmed);
-    if (decoded.type !== "npub") {
-      throw new Error("Invalid npub key");
-    }
-    // Convert Uint8Array to hex string
-    return Array.from(decoded.data as unknown as Uint8Array)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
-  // Already hex - validate and return lowercase
-  if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    throw new Error("Pubkey must be 64 hex characters or npub format");
-  }
-  return trimmed.toLowerCase();
-}
-
-/**
- * Convert a hex pubkey to npub format
- */
-export function pubkeyToNpub(hexPubkey: string): string {
-  const normalized = normalizePubkey(hexPubkey);
-  // npubEncode expects a hex string, not Uint8Array
-  return nip19.npubEncode(normalized);
 }

@@ -1,18 +1,29 @@
-import { type ModelRef, normalizeProviderId } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+// Builds model picker choices and endpoint labels for model directives.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  findNormalizedProviderValue,
+  type ModelRef,
+  normalizeProviderId,
+} from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/** Catalog entry shown by the model picker directive UI. */
 export type ModelPickerCatalogEntry = {
   provider: string;
   id: string;
   name?: string;
 };
 
+/** Normalized model reference emitted by the model picker. */
 export type ModelPickerItem = ModelRef;
 
 const MODEL_PICK_PROVIDER_PREFERENCE = [
   "anthropic",
   "openai",
-  "openai-codex",
+  "openai",
   "minimax",
   "synthetic",
   "google",
@@ -47,13 +58,14 @@ function compareProvidersForPicker(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
+/** Builds de-duped picker items from provider catalogs in display order. */
 export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): ModelPickerItem[] {
   const seen = new Set<string>();
   const out: ModelPickerItem[] = [];
 
   for (const entry of catalog) {
     const provider = normalizeProviderId(entry.provider);
-    const model = entry.id?.trim();
+    const model = normalizeOptionalString(entry.id);
     if (!provider || !model) {
       continue;
     }
@@ -73,12 +85,15 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
     if (providerOrder !== 0) {
       return providerOrder;
     }
-    return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
+    return normalizeLowercaseStringOrEmpty(a.model).localeCompare(
+      normalizeLowercaseStringOrEmpty(b.model),
+    );
   });
 
   return out;
 }
 
+/** Resolves optional endpoint/API labels for a provider in picker details. */
 export function resolveProviderEndpointLabel(
   provider: string,
   cfg: OpenClawConfig,
@@ -88,9 +103,9 @@ export function resolveProviderEndpointLabel(
     string,
     { baseUrl?: string; api?: string } | undefined
   >;
-  const entry = providers[normalized];
-  const endpoint = entry?.baseUrl?.trim();
-  const api = entry?.api?.trim();
+  const entry = findNormalizedProviderValue(providers, normalized);
+  const endpoint = normalizeOptionalString(entry?.baseUrl);
+  const api = normalizeOptionalString(entry?.api);
   return {
     endpoint: endpoint || undefined,
     api: api || undefined,

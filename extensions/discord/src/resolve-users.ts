@@ -1,3 +1,8 @@
+// Discord plugin module implements resolve users behavior.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchDiscord } from "./api.js";
 import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import {
@@ -60,10 +65,13 @@ function parseDiscordUserInput(raw: string): {
 }
 
 function scoreDiscordMember(member: DiscordMember, query: string): number {
-  const q = query.toLowerCase();
+  const q = normalizeLowercaseStringOrEmpty(query);
   const user = member.user;
   const candidates = [user.username, user.global_name, member.nick ?? undefined]
-    .map((value) => value?.toLowerCase())
+    .map((value) => {
+      const normalized = normalizeOptionalString(value);
+      return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
+    })
     .filter(Boolean) as string[];
   let score = 0;
   if (candidates.some((value) => value === q)) {
@@ -156,7 +164,9 @@ export async function resolveDiscordUserAllowlist(params: {
     if (best) {
       const user = best.member.user;
       const name =
-        best.member.nick?.trim() || user.global_name?.trim() || user.username?.trim() || undefined;
+        normalizeOptionalString(best.member.nick) ??
+        normalizeOptionalString(user.global_name) ??
+        normalizeOptionalString(user.username);
       results.push({
         input,
         resolved: true,

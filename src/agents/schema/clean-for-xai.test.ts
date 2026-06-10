@@ -1,5 +1,20 @@
+// xAI schema cleaner tests cover provider-specific keyword stripping for tool
+// schemas before they are sent to Grok/xAI endpoints.
 import { describe, expect, it } from "vitest";
-import { stripXaiUnsupportedKeywords } from "./clean-for-xai.js";
+import { stripUnsupportedSchemaKeywords } from "../../plugin-sdk/provider-tools.js";
+
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minContains",
+  "maxContains",
+]);
+
+function stripXaiUnsupportedKeywords(schema: unknown): unknown {
+  return stripUnsupportedSchemaKeywords(schema, XAI_UNSUPPORTED_SCHEMA_KEYWORDS);
+}
 
 describe("stripXaiUnsupportedKeywords", () => {
   it("strips minLength and maxLength from string properties", () => {
@@ -43,10 +58,12 @@ describe("stripXaiUnsupportedKeywords", () => {
     const result = stripXaiUnsupportedKeywords(schema) as Record<string, unknown>;
     expect(result.minContains).toBeUndefined();
     expect(result.maxContains).toBeUndefined();
-    expect(result.contains).toBeDefined();
+    expect(result.contains).toEqual({ type: "string" });
   });
 
   it("strips keywords recursively inside nested objects", () => {
+    // Attachment schemas can contain large string bounds deep in nested objects;
+    // xAI rejects those bounds unless the cleaner recurses.
     const schema = {
       type: "object",
       properties: {

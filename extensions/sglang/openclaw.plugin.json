@@ -1,8 +1,34 @@
 {
   "id": "sglang",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
   "providers": ["sglang"],
-  "providerAuthEnvVars": {
-    "sglang": ["SGLANG_API_KEY"]
+  "providerRequest": {
+    "providers": {
+      "sglang": {
+        "family": "sglang",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "sglang": {
+        "external": false
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "sglang",
+        "envVars": ["SGLANG_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

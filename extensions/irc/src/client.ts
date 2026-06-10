@@ -1,5 +1,8 @@
+// Irc plugin module implements client behavior.
 import net from "node:net";
 import tls from "node:tls";
+import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -10,7 +13,7 @@ import {
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 
-export type IrcPrivmsgEvent = {
+type IrcPrivmsgEvent = {
   senderNick: string;
   senderUser?: string;
   senderHost?: string;
@@ -38,7 +41,7 @@ export type IrcClientOptions = {
   onLine?: (line: string) => void;
 };
 
-export type IrcNickServOptions = {
+type IrcNickServOptions = {
   enabled?: boolean;
   service?: string;
   password?: string;
@@ -63,27 +66,9 @@ function toError(err: unknown): Error {
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
-    promise
-      .then((result) => {
-        clearTimeout(timer);
-        resolve(result);
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
-}
-
 function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
-  const safe = normalized.replace(/[^A-Za-z0-9_\-\[\]\\`^{}|]/g, "");
+  const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
   const suffix = "_";
   const maxNickLen = 30;
@@ -91,6 +76,10 @@ function buildFallbackNick(nick: string): string {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
   }
   return `${base}${suffix}`;
+}
+
+function normalizeIrcNick(value: string): string {
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
@@ -131,6 +120,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let closed = false;
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
+  let removeAbortListener: (() => void) | null = null;
 
   const socket = options.tls
     ? tls.connect({
@@ -161,6 +151,11 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     }
   };
 
+  const failAndClose = (err: unknown) => {
+    fail(err);
+    close();
+  };
+
   const sendRaw = (line: string) => {
     const cleaned = line.replace(/[\r\n]+/g, "").trim();
     if (!cleaned) {
@@ -187,7 +182,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     if (!fallbackNickAttempted) {
       fallbackNickAttempted = true;
       const fallbackNick = buildFallbackNick(desiredNick);
-      if (fallbackNick.toLowerCase() !== currentNick.toLowerCase()) {
+      if (normalizeIrcNick(fallbackNick) !== normalizeIrcNick(currentNick)) {
         try {
           sendRaw(`NICK ${fallbackNick}`);
           currentNick = fallbackNick;
@@ -237,6 +232,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return;
     }
     closed = true;
+    removeAbortListener?.();
+    removeAbortListener = null;
     const safeReason = sanitizeIrcOutboundText(reason != null ? reason : "bye");
     try {
       if (safeReason) {
@@ -255,6 +252,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return;
     }
     closed = true;
+    removeAbortListener?.();
+    removeAbortListener = null;
     socket.destroy();
   };
 
@@ -288,14 +287,14 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
       if (line.command === "NICK") {
         const prefix = parseIrcPrefix(line.prefix);
-        if (prefix.nick && prefix.nick.toLowerCase() === currentNick.toLowerCase()) {
+        if (prefix.nick && normalizeIrcNick(prefix.nick) === normalizeIrcNick(currentNick)) {
           const next =
             line.trailing != null
               ? line.trailing
               : line.params[0] != null
                 ? line.params[0]
                 : currentNick;
-          currentNick = String(next).trim();
+          currentNick = next.trim();
         }
         continue;
       }
@@ -378,7 +377,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               text,
               rawLine,
             }),
-          ).catch((error) => {
+          ).catch((error: unknown) => {
             fail(error);
           });
         }
@@ -414,12 +413,17 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   if (options.abortSignal) {
     const abort = () => {
+      if (!ready) {
+        failAndClose(new Error("IRC connect aborted"));
+        return;
+      }
       quit("shutdown");
     };
     if (options.abortSignal.aborted) {
       abort();
     } else {
       options.abortSignal.addEventListener("abort", abort, { once: true });
+      removeAbortListener = () => options.abortSignal?.removeEventListener("abort", abort);
     }
   }
 

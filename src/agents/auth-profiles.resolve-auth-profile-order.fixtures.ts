@@ -1,4 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+/**
+ * Shared auth profile ordering fixtures.
+ * Keeps provider/profile config fixtures aligned across ordering regression
+ * tests without coupling them to production store loading.
+ */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 
 export const ANTHROPIC_STORE: AuthProfileStore = {

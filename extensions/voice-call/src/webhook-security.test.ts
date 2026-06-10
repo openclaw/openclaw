@@ -1,5 +1,7 @@
+// Voice Call tests cover webhook security plugin behavior.
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   verifyPlivoWebhook,
   verifyTelnyxWebhook,
@@ -91,7 +93,7 @@ function expectReplayResultPair(
   second: { ok: boolean; isReplay?: boolean; verifiedRequestKey?: string },
 ) {
   expect(first.ok).toBe(true);
-  expect(first.isReplay).toBeFalsy();
+  expect(first.isReplay).not.toBe(true);
   if (!first.verifiedRequestKey) {
     throw new Error("verified webhook request did not produce a request key");
   }
@@ -104,7 +106,8 @@ function expectAcceptedWebhookVersion(
   result: { ok: boolean; version?: string },
   version: "v2" | "v3",
 ) {
-  expect(result).toMatchObject({ ok: true, version });
+  expect(result.ok).toBe(true);
+  expect(result.version).toBe(version);
 }
 
 function verifyTwilioNgrokLoopback(signature: string) {
@@ -144,6 +147,181 @@ function verifyTwilioSignedRequest(params: {
     { publicUrl: params.publicUrl },
   );
 }
+
+function createSignedTelnyxWebhookRequest() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const pemPublicKey = publicKey.export({ format: "pem", type: "spki" });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const rawBody = JSON.stringify({
+    data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
+    nonce: crypto.randomUUID(),
+  });
+  const signedPayload = `${timestamp}|${rawBody}`;
+  const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
+
+  return {
+    pemPublicKey,
+    timestamp,
+    rawBody,
+    signature,
+    makeCtx(signatureValue = signature) {
+      return {
+        headers: {
+          "telnyx-signature-ed25519": signatureValue,
+          "telnyx-timestamp": timestamp,
+        },
+        rawBody,
+        url: "https://example.com/voice/webhook",
+        method: "POST" as const,
+      };
+    },
+  };
+}
+
+const skipVerificationRequestKeyCases: Array<{
+  name: string;
+  prefix: RegExp;
+  verify: () => { ok: boolean; isReplay?: boolean; verifiedRequestKey?: string };
+}> = [
+  {
+    name: "Plivo",
+    prefix: /^plivo:skip:/,
+    verify: () =>
+      verifyPlivoWebhook(
+        {
+          headers: {},
+          rawBody: "CallUUID=uuid&CallStatus=in-progress",
+          url: "https://example.com/voice/webhook",
+          method: "POST" as const,
+        },
+        "token",
+        { skipVerification: true },
+      ),
+  },
+  {
+    name: "Telnyx",
+    prefix: /^telnyx:skip:/,
+    verify: () =>
+      verifyTelnyxWebhook(
+        {
+          headers: {},
+          rawBody: JSON.stringify({ data: { event_type: "call.initiated" } }),
+          url: "https://example.com/voice/webhook",
+          method: "POST" as const,
+        },
+        undefined,
+        { skipVerification: true },
+      ),
+  },
+  {
+    name: "Twilio",
+    prefix: /^twilio:skip:/,
+    verify: () =>
+      verifyTwilioWebhook(
+        {
+          headers: {},
+          rawBody: "CallSid=CS123&CallStatus=completed",
+          url: "https://example.com/voice/webhook",
+          method: "POST" as const,
+        },
+        "token",
+        { skipVerification: true },
+      ),
+  },
+];
+
+describe("skip verification request keys", () => {
+  it.each(skipVerificationRequestKeyCases)(
+    "$name returns a stable request key when verification is skipped",
+    ({ prefix, verify }) => {
+      const first = verify();
+      const second = verify();
+
+      expect(first.ok).toBe(true);
+      expect(first.verifiedRequestKey).toMatch(prefix);
+      expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+      expect(second.isReplay).toBe(true);
+    },
+  );
+
+  it("does not keep replay keys whose expiry would exceed the Date range", () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    const verify = () =>
+      verifyTwilioWebhook(
+        {
+          headers: {},
+          rawBody: "CallSid=CS-overflow&CallStatus=completed",
+          url: "https://example.com/voice/webhook",
+          method: "POST" as const,
+        },
+        "token",
+        { skipVerification: true },
+      );
+
+    try {
+      const first = verify();
+      expect(first.ok).toBe(true);
+      expect(first.isReplay).not.toBe(true);
+
+      dateNow.mockReturnValue(Date.parse("2026-05-29T12:00:00.000Z"));
+      const second = verify();
+      expect(second.ok).toBe(true);
+      expect(second.isReplay).not.toBe(true);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+});
+
+const verifiedReplayRequestCases: Array<{
+  name: string;
+  verifyPair: () => [
+    { ok: boolean; isReplay?: boolean; verifiedRequestKey?: string },
+    { ok: boolean; isReplay?: boolean; verifiedRequestKey?: string },
+  ];
+}> = [
+  {
+    name: "Telnyx",
+    verifyPair: () => {
+      const request = createSignedTelnyxWebhookRequest();
+      return [
+        verifyTelnyxWebhook(request.makeCtx(), request.pemPublicKey),
+        verifyTelnyxWebhook(request.makeCtx(), request.pemPublicKey),
+      ];
+    },
+  },
+  {
+    name: "Twilio",
+    verifyPair: () => {
+      const authToken = "test-auth-token";
+      const publicUrl = "https://example.com/voice/webhook";
+      const urlWithQuery = `${publicUrl}?callId=abc`;
+      const postBody = "CallSid=CS777&CallStatus=completed&From=%2B15550000000";
+      const signature = twilioSignature({ authToken, url: urlWithQuery, postBody });
+      const headers = {
+        host: "example.com",
+        "x-forwarded-proto": "https",
+        "x-twilio-signature": signature,
+        "i-twilio-idempotency-token": "idem-replay-1",
+      };
+
+      return [
+        verifyTwilioSignedRequest({ headers, rawBody: postBody, authToken, publicUrl }),
+        verifyTwilioSignedRequest({ headers, rawBody: postBody, authToken, publicUrl }),
+      ];
+    },
+  },
+];
+
+describe("verified webhook replay detection", () => {
+  it.each(verifiedReplayRequestCases)(
+    "$name marks replayed valid requests as replay without failing auth",
+    ({ verifyPair }) => {
+      const [first, second] = verifyPair();
+      expectReplayResultPair(first, second);
+    },
+  );
+});
 
 describe("verifyPlivoWebhook", () => {
   it("accepts valid V2 signature", () => {
@@ -296,70 +474,72 @@ describe("verifyPlivoWebhook", () => {
     );
 
     expect(first.ok).toBe(true);
-    expect(first.verifiedRequestKey).toBeDefined();
+    expect(first.verifiedRequestKey).toBeTypeOf("string");
+    expect(first.verifiedRequestKey).not.toBe("");
     expect(second.ok).toBe(true);
     expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
     expect(second.isReplay).toBe(true);
   });
 
-  it("returns a stable request key when verification is skipped", () => {
-    const ctx = {
-      headers: {},
-      rawBody: "CallUUID=uuid&CallStatus=in-progress",
-      url: "https://example.com/voice/webhook",
-      method: "POST" as const,
-    };
-    const first = verifyPlivoWebhook(ctx, "token", { skipVerification: true });
-    const second = verifyPlivoWebhook(ctx, "token", { skipVerification: true });
+  it("detects V3 replay when query parameters are reordered", () => {
+    const authToken = "test-auth-token";
+    const nonce = "nonce-v3-reorder";
+    const postBody = "CallUUID=uuid&CallStatus=in-progress";
 
-    expect(first.ok).toBe(true);
-    expect(first.verifiedRequestKey).toMatch(/^plivo:skip:/);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
-    expect(second.isReplay).toBe(true);
+    const urlA = "https://example.com/voice/webhook?flow=answer&callId=abc";
+    const urlB = "https://example.com/voice/webhook?callId=abc&flow=answer";
+
+    const signatureA = plivoV3Signature({ authToken, urlWithQuery: urlA, postBody, nonce });
+    const signatureB = plivoV3Signature({ authToken, urlWithQuery: urlB, postBody, nonce });
+    expect(signatureA).toBe(signatureB);
+
+    const first = verifyPlivoWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-plivo-signature-v3": signatureA,
+          "x-plivo-signature-v3-nonce": nonce,
+        },
+        rawBody: postBody,
+        url: urlA,
+        method: "POST",
+        query: { flow: "answer", callId: "abc" },
+      },
+      authToken,
+    );
+
+    const second = verifyPlivoWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-plivo-signature-v3": signatureB,
+          "x-plivo-signature-v3-nonce": nonce,
+        },
+        rawBody: postBody,
+        url: urlB,
+        method: "POST",
+        query: { callId: "abc", flow: "answer" },
+      },
+      authToken,
+    );
+
+    expectReplayResultPair(first, second);
   });
 });
 
 describe("verifyTelnyxWebhook", () => {
-  it("marks replayed valid requests as replay without failing auth", () => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const rawBody = JSON.stringify({
-      data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
-      nonce: crypto.randomUUID(),
-    });
-    const signedPayload = `${timestamp}|${rawBody}`;
-    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
-    const ctx = {
-      headers: {
-        "telnyx-signature-ed25519": signature,
-        "telnyx-timestamp": timestamp,
-      },
-      rawBody,
-      url: "https://example.com/voice/webhook",
-      method: "POST" as const,
-    };
-
-    const first = verifyTelnyxWebhook(ctx, pemPublicKey);
-    const second = verifyTelnyxWebhook(ctx, pemPublicKey);
+  it("treats Base64 and Base64URL signatures as the same replayed request", () => {
+    const request = createSignedTelnyxWebhookRequest();
+    const urlSafeSignature = request.signature
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+    const first = verifyTelnyxWebhook(request.makeCtx(), request.pemPublicKey);
+    const second = verifyTelnyxWebhook(request.makeCtx(urlSafeSignature), request.pemPublicKey);
 
     expectReplayResultPair(first, second);
-  });
-
-  it("returns a stable request key when verification is skipped", () => {
-    const ctx = {
-      headers: {},
-      rawBody: JSON.stringify({ data: { event_type: "call.initiated" } }),
-      url: "https://example.com/voice/webhook",
-      method: "POST" as const,
-    };
-    const first = verifyTelnyxWebhook(ctx, undefined, { skipVerification: true });
-    const second = verifyTelnyxWebhook(ctx, undefined, { skipVerification: true });
-
-    expect(first.ok).toBe(true);
-    expect(first.verifiedRequestKey).toMatch(/^telnyx:skip:/);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
-    expect(second.isReplay).toBe(true);
   });
 });
 
@@ -393,25 +573,6 @@ describe("verifyTwilioWebhook", () => {
     );
 
     expect(result.ok).toBe(true);
-  });
-
-  it("marks replayed valid requests as replay without failing auth", () => {
-    const authToken = "test-auth-token";
-    const publicUrl = "https://example.com/voice/webhook";
-    const urlWithQuery = `${publicUrl}?callId=abc`;
-    const postBody = "CallSid=CS777&CallStatus=completed&From=%2B15550000000";
-    const signature = twilioSignature({ authToken, url: urlWithQuery, postBody });
-    const headers = {
-      host: "example.com",
-      "x-forwarded-proto": "https",
-      "x-twilio-signature": signature,
-      "i-twilio-idempotency-token": "idem-replay-1",
-    };
-
-    const first = verifyTwilioSignedRequest({ headers, rawBody: postBody, authToken, publicUrl });
-    const second = verifyTwilioSignedRequest({ headers, rawBody: postBody, authToken, publicUrl });
-
-    expectReplayResultPair(first, second);
   });
 
   it("treats changed idempotency header as replay for identical signed requests", () => {
@@ -546,6 +707,37 @@ describe("verifyTwilioWebhook", () => {
     expect(result.verificationUrl).toBe(webhookUrl);
   });
 
+  it("verifies Twilio signatures for Cloudflare Tunnel publicUrl requests", () => {
+    const authToken = "test-auth-token";
+    const postBody = "CallSid=CA123&CallStatus=ringing&Direction=inbound&From=%2B15550000000";
+    const webhookUrl = "https://oc1.example.com/voice/webhook";
+    const signature = twilioSignature({ authToken, url: webhookUrl, postBody });
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "localhost:8765",
+          "cf-connecting-ip": "203.0.113.42",
+          "x-forwarded-proto": "https",
+          "x-twilio-signature": signature,
+        },
+        rawBody: postBody,
+        url: "http://localhost:8765/voice/webhook",
+        method: "POST",
+        remoteAddress: "127.0.0.1",
+      },
+      authToken,
+      {
+        publicUrl: webhookUrl,
+        allowedHosts: ["oc1.example.com"],
+        trustForwardingHeaders: true,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.verificationUrl).toBe(webhookUrl);
+  });
+
   it("rejects X-Forwarded-Host not in allowedHosts whitelist", () => {
     const authToken = "test-auth-token";
     const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
@@ -621,22 +813,6 @@ describe("verifyTwilioWebhook", () => {
     expect(result.ok).toBe(false);
     expect(result.verificationUrl).toBe("https://legitimate.example.com/voice/webhook");
   });
-  it("returns a stable request key when verification is skipped", () => {
-    const ctx = {
-      headers: {},
-      rawBody: "CallSid=CS123&CallStatus=completed",
-      url: "https://example.com/voice/webhook",
-      method: "POST" as const,
-    };
-    const first = verifyTwilioWebhook(ctx, "token", { skipVerification: true });
-    const second = verifyTwilioWebhook(ctx, "token", { skipVerification: true });
-
-    expect(first.ok).toBe(true);
-    expect(first.verifiedRequestKey).toMatch(/^twilio:skip:/);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
-    expect(second.isReplay).toBe(true);
-  });
-
   it("succeeds when Twilio signs URL without port but server URL has port", () => {
     const authToken = "test-auth-token";
     const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";

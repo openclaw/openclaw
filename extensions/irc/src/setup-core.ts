@@ -1,8 +1,11 @@
+// Irc plugin module implements setup core behavior.
 import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
+  createSetupInputPresenceValidator,
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicySetter,
   patchScopedAccountConfig,
@@ -15,6 +18,12 @@ const setIrcTopLevelDmPolicy = createTopLevelChannelDmPolicySetter({
 });
 const setIrcTopLevelAllowFrom = createTopLevelChannelAllowFromSetter({
   channel,
+});
+const validateIrcRequiredSetupInput = createSetupInputPresenceValidator({
+  whenNotUseEnv: [
+    { someOf: ["host"], message: "IRC requires host." },
+    { someOf: ["nick"], message: "IRC requires nick." },
+  ],
 });
 
 type IrcSetupInput = ChannelSetupInput & {
@@ -33,11 +42,20 @@ export function parsePort(raw: string, fallback: number): number {
   if (!trimmed) {
     return fallback;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+  const parsed = parseStrictPositiveInteger(trimmed);
+  if (parsed === undefined || parsed > 65535) {
     return fallback;
   }
   return parsed;
+}
+
+function validateIrcPortInput(input: ChannelSetupInput): string | null {
+  const raw = (input as IrcSetupInput).port;
+  if (raw === undefined || raw === null || raw === "") {
+    return null;
+  }
+  const parsed = parseStrictPositiveInteger(String(raw));
+  return parsed !== undefined && parsed <= 65535 ? null : "IRC port must be between 1 and 65535.";
 }
 
 export function updateIrcAccountConfig(
@@ -82,7 +100,7 @@ export function setIrcGroupAccess(
     return updateIrcAccountConfig(cfg, accountId, { enabled: true, groupPolicy: policy });
   }
   const normalizedEntries = [
-    ...new Set(entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean)),
+    ...new Set(entries.flatMap((entry) => normalizeGroupEntry(entry) ?? [])),
   ];
   const groups = Object.fromEntries(normalizedEntries.map((entry) => [entry, {}]));
   return updateIrcAccountConfig(cfg, accountId, {
@@ -101,16 +119,8 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ input }) => {
-    const setupInput = input as IrcSetupInput;
-    if (!setupInput.host?.trim()) {
-      return "IRC requires host.";
-    }
-    if (!setupInput.nick?.trim()) {
-      return "IRC requires nick.";
-    }
-    return null;
-  },
+  validateInput: (params) =>
+    validateIrcRequiredSetupInput(params) ?? validateIrcPortInput(params.input),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const setupInput = input as IrcSetupInput;
     const namedConfig = applyAccountNameToChannelSection({
@@ -120,7 +130,7 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
       name: setupInput.name,
     });
     const portInput =
-      typeof setupInput.port === "number" ? String(setupInput.port) : String(setupInput.port ?? "");
+      typeof setupInput.port === "number" ? String(setupInput.port) : (setupInput.port ?? "");
     const patch: Partial<IrcAccountConfig> = {
       enabled: true,
       host: setupInput.host?.trim(),

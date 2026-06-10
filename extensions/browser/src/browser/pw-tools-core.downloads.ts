@@ -1,0 +1,308 @@
+/**
+ * File chooser, dialog, and download helpers for Playwright-backed browser
+ * tools.
+ */
+import crypto from "node:crypto";
+import path from "node:path";
+import type { Page } from "playwright-core";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { writeExternalFileWithinOutputRoot } from "./output-files.js";
+import { resolveStrictExistingUploadPaths } from "./paths.js";
+import {
+  armObservedDialogResponseOnPage,
+  ensurePageState,
+  getPageForTargetId,
+  refLocator,
+  respondToObservedDialogOnPage,
+  restoreRoleRefsForTarget,
+} from "./pw-session.js";
+import {
+  bumpDownloadArmId,
+  bumpUploadArmId,
+  normalizeTimeoutMs,
+  requireRef,
+  toAIFriendlyError,
+} from "./pw-tools-core.shared.js";
+import { sanitizeUntrustedFileName } from "./safe-filename.js";
+
+function buildTempDownloadPath(fileName: string): string {
+  const id = crypto.randomUUID();
+  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
+  return path.join(resolvePreferredOpenClawTmpDir(), "downloads", `${id}-${safeName}`);
+}
+
+function createPageDownloadWaiter(page: Page, timeoutMs: number) {
+  const state = ensurePageState(page);
+  // Depth tracks active download waiters so page teardown can distinguish an
+  // expected download transition from an unobserved lost event.
+  state.downloadWaiterDepth += 1;
+  let done = false;
+  let timer: NodeJS.Timeout | undefined;
+  let handler: ((download: unknown) => void) | undefined;
+  let depthReleased = false;
+
+  const cleanup = () => {
+    if (!depthReleased) {
+      depthReleased = true;
+      state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
+    }
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = undefined;
+    if (handler) {
+      page.off("download", handler as never);
+      handler = undefined;
+    }
+  };
+
+  const promise = new Promise<unknown>((resolve, reject) => {
+    handler = (download: unknown) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+      resolve(download);
+    };
+
+    page.on("download", handler as never);
+    timer = setTimeout(() => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+      reject(new Error("Timeout waiting for download"));
+    }, timeoutMs);
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+    },
+  };
+}
+
+type DownloadPayload = {
+  url?: () => string;
+  suggestedFilename?: () => string;
+  saveAs?: (outPath: string) => Promise<void>;
+};
+
+async function saveDownloadPayload(download: DownloadPayload, outPath: string, rootDir?: string) {
+  const suggested = download.suggestedFilename?.() || "download.bin";
+  const requestedPath = outPath?.trim();
+  const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
+  const finalPath = await writeExternalFileWithinOutputRoot({
+    rootDir,
+    path: resolvedOutPath,
+    write: async (tempPath) => {
+      await download.saveAs?.(tempPath);
+    },
+  });
+
+  return {
+    url: download.url?.() || "",
+    suggestedFilename: suggested,
+    path: finalPath,
+  };
+}
+
+async function awaitDownloadPayload(params: {
+  waiter: ReturnType<typeof createPageDownloadWaiter>;
+  state: ReturnType<typeof ensurePageState>;
+  armId: number;
+  outPath?: string;
+  rootDir?: string;
+}) {
+  try {
+    const download = (await params.waiter.promise) as DownloadPayload;
+    if (params.state.armIdDownload !== params.armId) {
+      throw new Error("Download was superseded by another waiter");
+    }
+    return await saveDownloadPayload(download, params.outPath ?? "", params.rootDir);
+  } catch (err) {
+    params.waiter.cancel();
+    throw err;
+  }
+}
+
+/** Arms the next page file chooser and fills it with strict existing paths. */
+export async function armFileUploadViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  paths?: string[];
+  timeoutMs?: number;
+}): Promise<void> {
+  const page = await getPageForTargetId(opts);
+  const state = ensurePageState(page);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+
+  state.armIdUpload = bumpUploadArmId();
+  const armId = state.armIdUpload;
+
+  // The waiter is intentionally detached: the tool call arms future browser UI,
+  // while the later user click opens the chooser.
+  void page
+    .waitForEvent("filechooser", { timeout })
+    .then(async (fileChooser) => {
+      if (state.armIdUpload !== armId) {
+        return;
+      }
+      if (!opts.paths?.length) {
+        // Playwright removed `FileChooser.cancel()`; best-effort close the chooser instead.
+        try {
+          await page.keyboard.press("Escape");
+        } catch {
+          // Best-effort.
+        }
+        return;
+      }
+      const uploadPathsResult = await resolveStrictExistingUploadPaths({
+        requestedPaths: opts.paths,
+      });
+      if (!uploadPathsResult.ok) {
+        try {
+          await page.keyboard.press("Escape");
+        } catch {
+          // Best-effort.
+        }
+        return;
+      }
+      await fileChooser.setFiles(uploadPathsResult.paths);
+      try {
+        const input =
+          typeof fileChooser.element === "function"
+            ? await Promise.resolve(fileChooser.element())
+            : null;
+        if (input) {
+          await input.evaluate((el) => {
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+        }
+      } catch {
+        // Best-effort for sites that don't react to setFiles alone.
+      }
+    })
+    .catch(() => {
+      // Ignore timeouts; the chooser may never appear.
+    });
+}
+
+/** Accepts or dismisses a pending dialog, or arms the next matching dialog response. */
+export async function armDialogViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  dialogId?: string;
+  accept: boolean;
+  promptText?: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const page = await getPageForTargetId(opts);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+  try {
+    await respondToObservedDialogOnPage({
+      page,
+      accept: opts.accept,
+      closedBy: "agent",
+      ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
+      ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+    });
+    return;
+  } catch (err) {
+    if (opts.dialogId || (err instanceof Error && !err.message.includes("No dialog is pending"))) {
+      throw err;
+    }
+  }
+
+  armObservedDialogResponseOnPage({
+    page,
+    accept: opts.accept,
+    timeoutMs: timeout,
+    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+  });
+}
+
+/** Waits for the next page download and writes it under the configured output root. */
+export async function waitForDownloadViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  path?: string;
+  rootDir?: string;
+  timeoutMs?: number;
+}): Promise<{
+  url: string;
+  suggestedFilename: string;
+  path: string;
+}> {
+  const page = await getPageForTargetId(opts);
+  const state = ensurePageState(page);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+
+  state.armIdDownload = bumpDownloadArmId();
+  const armId = state.armIdDownload;
+
+  const waiter = createPageDownloadWaiter(page, timeout);
+  return await awaitDownloadPayload({
+    waiter,
+    state,
+    armId,
+    outPath: opts.path,
+    rootDir: opts.rootDir,
+  });
+}
+
+/** Clicks an element ref and saves the download triggered by that click. */
+export async function downloadViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ref: string;
+  path: string;
+  rootDir?: string;
+  timeoutMs?: number;
+}): Promise<{
+  url: string;
+  suggestedFilename: string;
+  path: string;
+}> {
+  const page = await getPageForTargetId(opts);
+  const state = ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+
+  const ref = requireRef(opts.ref);
+  const outPath = opts.path?.trim() ?? "";
+  if (!outPath) {
+    throw new Error("path is required");
+  }
+
+  state.armIdDownload = bumpDownloadArmId();
+  const armId = state.armIdDownload;
+
+  const waiter = createPageDownloadWaiter(page, timeout);
+  try {
+    const locator = refLocator(page, ref);
+    try {
+      await locator.click({ timeout });
+    } catch (err) {
+      throw toAIFriendlyError(err, ref);
+    }
+    return await awaitDownloadPayload({
+      waiter,
+      state,
+      armId,
+      outPath,
+      rootDir: opts.rootDir,
+    });
+  } catch (err) {
+    waiter.cancel();
+    throw err;
+  }
+}

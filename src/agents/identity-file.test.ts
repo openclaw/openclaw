@@ -1,5 +1,9 @@
+/**
+ * Regression coverage for IDENTITY.md parsing and merging.
+ * Ensures placeholders are ignored and rich identity fields stay stable.
+ */
 import { describe, expect, it } from "vitest";
-import { parseIdentityMarkdown } from "./identity-file.js";
+import { mergeIdentityMarkdownContent, parseIdentityMarkdown } from "./identity-file.js";
 
 describe("parseIdentityMarkdown", () => {
   it("ignores identity template placeholders", () => {
@@ -11,9 +15,9 @@ describe("parseIdentityMarkdown", () => {
 - **Vibe:** *(how do you come across? sharp? warm? chaotic? calm?)*
 - **Emoji:** *(your signature - pick one that feels right)*
 - **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*
-`;
+    `;
     const parsed = parseIdentityMarkdown(content);
-    expect(parsed).toEqual({});
+    expect(parsed).toStrictEqual({});
   });
 
   it("parses explicit identity values", () => {
@@ -32,5 +36,79 @@ describe("parseIdentityMarkdown", () => {
       emoji: ":robot:",
       avatar: "avatars/openclaw.png",
     });
+  });
+
+  it("strips markdown code spans from values and labels", () => {
+    const content = [
+      "- **Name:** `Samantha`",
+      "- `Creature`: Robot",
+      "- **`Avatar`**: `avatars/openclaw.png`",
+    ].join("\n");
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toEqual({
+      name: "Samantha",
+      creature: "Robot",
+      avatar: "avatars/openclaw.png",
+    });
+  });
+
+  it("still treats code-span-wrapped template placeholders as placeholders", () => {
+    const content = "- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`";
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toStrictEqual({});
+  });
+});
+
+describe("mergeIdentityMarkdownContent", () => {
+  it("updates writable fields without clobbering richer identity sections", () => {
+    const content = `
+# IDENTITY.md - Agent Identity
+
+- **Name:** C-3PO
+- **Creature:** Flustered Protocol Droid
+- **Vibe:** Anxious, detail-obsessed
+- **Emoji:** 🤖
+
+## Role
+
+Fluent in over six million error messages.
+`;
+
+    const merged = mergeIdentityMarkdownContent(content, {
+      name: "Patch Agent",
+      emoji: "🦀",
+      avatar: "avatars/patch.png",
+    });
+
+    expect(merged).toContain("- Name: Patch Agent");
+    expect(merged).toContain("- **Creature:** Flustered Protocol Droid");
+    expect(merged).toContain("- **Vibe:** Anxious, detail-obsessed");
+    expect(merged).toContain("- Emoji: 🦀");
+    expect(merged).toContain("- Avatar: avatars/patch.png");
+    expect(merged).toContain("## Role");
+    expect(merged).toContain("Fluent in over six million error messages.");
+  });
+
+  it("replaces duplicate writable lines with one normalized entry", () => {
+    const merged = mergeIdentityMarkdownContent(
+      `
+- Name: Old Name
+- Name: Older Name
+- Emoji: 🙂
+`,
+      { name: "New Name", emoji: "🦀" },
+    );
+
+    expect(merged.match(/Name:/g)).toHaveLength(1);
+    expect(merged).toContain("- Name: New Name");
+    expect(merged).toContain("- Emoji: 🦀");
+  });
+
+  it("updates code-span-wrapped writable labels instead of inserting duplicates", () => {
+    const merged = mergeIdentityMarkdownContent("- **`Name`**: Old Name\n", {
+      name: "New Name",
+    });
+
+    expect(merged).toBe("- Name: New Name\n");
   });
 });

@@ -1,4 +1,6 @@
-import { danger, info, logVerboseConsole, success, warn } from "./globals.js";
+// Provides root logger helpers and themed terminal output.
+import { theme } from "../packages/terminal-core/src/theme.js";
+import { isVerbose } from "./global-state.js";
 import { getLogger } from "./logging/logger.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
@@ -33,6 +35,11 @@ function logWithSubsystem(params: {
   params.runtime[params.runtimeMethod](params.runtimeFormatter(params.message));
   getLogger()[params.loggerMethod](params.message);
 }
+
+const info = theme.info;
+const warn = theme.warn;
+const success = theme.success;
+const danger = theme.error;
 
 export function logInfo(message: string, runtime: RuntimeEnv = defaultRuntime) {
   logWithSubsystem({
@@ -81,5 +88,7 @@ export function logError(message: string, runtime: RuntimeEnv = defaultRuntime) 
 export function logDebug(message: string) {
   // Always emit to file logger (level-filtered); console only when verbose.
   getLogger().debug(message);
-  logVerboseConsole(message);
+  if (isVerbose()) {
+    console.log(theme.muted(message));
+  }
 }

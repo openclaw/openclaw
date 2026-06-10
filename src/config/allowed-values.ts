@@ -1,7 +1,10 @@
+// Defines allowed-value metadata for config validation and docs.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 const MAX_ALLOWED_VALUES_HINT = 12;
 const MAX_ALLOWED_VALUE_CHARS = 160;
 
-export type AllowedValuesSummary = {
+type AllowedValuesSummary = {
   values: string[];
   hiddenCount: number;
   formatted: string;
@@ -45,12 +48,14 @@ function toAllowedValueDedupKey(value: unknown): string {
     return "null:null";
   }
   const kind = typeof value;
+  // Preserve schema distinctions such as numeric 1 vs string "1" even when labels match.
   if (kind === "string") {
     return `string:${value as string}`;
   }
   return `${kind}:${safeStringify(value)}`;
 }
 
+/** Summarizes enum/allowed-value candidates for compact validation error hints. */
 export function summarizeAllowedValues(
   values: ReadonlyArray<unknown>,
 ): AllowedValuesSummary | null {
@@ -86,10 +91,11 @@ export function summarizeAllowedValues(
 }
 
 function messageAlreadyIncludesAllowedValues(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   return lower.includes("(allowed:") || lower.includes("expected one of");
 }
 
+/** Appends an allowed-values hint unless the validation message already includes one. */
 export function appendAllowedValuesHint(message: string, summary: AllowedValuesSummary): string {
   if (messageAlreadyIncludesAllowedValues(message)) {
     return message;

@@ -1,3 +1,4 @@
+// Matrix tests cover tool actions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleMatrixAction } from "./tool-actions.js";
 import type { CoreConfig } from "./types.js";
@@ -14,10 +15,8 @@ const mocks = vi.hoisted(() => ({
   applyMatrixProfileUpdate: vi.fn(),
 }));
 
-vi.mock("./matrix/actions.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/actions.js")>("./matrix/actions.js");
+vi.mock("./matrix/actions.js", () => {
   return {
-    ...actual,
     getMatrixMemberInfo: mocks.getMatrixMemberInfo,
     getMatrixRoomInfo: mocks.getMatrixRoomInfo,
     listMatrixReactions: mocks.listMatrixReactions,
@@ -28,10 +27,8 @@ vi.mock("./matrix/actions.js", async () => {
   };
 });
 
-vi.mock("./matrix/send.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/send.js")>("./matrix/send.js");
+vi.mock("./matrix/send.js", () => {
   return {
-    ...actual,
     reactMatrixMessage: mocks.reactMatrixMessage,
   };
 });
@@ -97,11 +94,15 @@ describe("handleMatrixAction pollVote", () => {
       optionIds: ["a2", "a1"],
       optionIndexes: [1, 2],
     });
-    expect(result.details).toMatchObject({
+    expect(result.details).toEqual({
       ok: true,
       result: {
         eventId: "evt-poll-vote",
+        roomId: "!room:example",
+        pollId: "$poll",
         answerIds: ["a1", "a2"],
+        labels: ["Pizza", "Sushi"],
+        maxSelections: 2,
       },
     });
   });
@@ -117,6 +118,32 @@ describe("handleMatrixAction pollVote", () => {
         {} as CoreConfig,
       ),
     ).rejects.toThrow("pollId required");
+  });
+
+  it("rejects fractional poll option indexes before voting", async () => {
+    await expect(
+      handleMatrixAction(
+        {
+          action: "pollVote",
+          roomId: "!room:example",
+          pollId: "$poll",
+          pollOptionIndex: 1.5,
+        },
+        {} as CoreConfig,
+      ),
+    ).rejects.toThrow("pollOptionIndex must be a positive integer.");
+    await expect(
+      handleMatrixAction(
+        {
+          action: "pollVote",
+          roomId: "!room:example",
+          pollId: "$poll",
+          pollOptionIndexes: [1, 2.5],
+        },
+        {} as CoreConfig,
+      ),
+    ).rejects.toThrow("pollOptionIndexes must contain positive integers.");
+    expect(mocks.voteMatrixPoll).not.toHaveBeenCalled();
   });
 
   it("accepts messageId as a pollId alias for poll votes", async () => {
@@ -196,10 +223,26 @@ describe("handleMatrixAction pollVote", () => {
       accountId: "ops",
       limit: 5,
     });
-    expect(result.details).toMatchObject({
+    expect(result.details).toEqual({
       ok: true,
-      reactions: [{ key: "👍", count: 1 }],
+      reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
     });
+  });
+
+  it("rejects fractional reaction limits before listing reactions", async () => {
+    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    await expect(
+      handleMatrixAction(
+        {
+          action: "reactions",
+          roomId: "!room:example",
+          messageId: "$msg",
+          limit: 5.5,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
   });
 
   it("passes account-scoped opts to message sends", async () => {
@@ -286,14 +329,14 @@ describe("handleMatrixAction pollVote", () => {
       { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
     );
 
-    expect(mocks.applyMatrixProfileUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg,
-        account: "ops",
-        avatarPath: "/tmp/avatar.jpg",
-        mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
-      }),
-    );
+    expect(mocks.applyMatrixProfileUpdate).toHaveBeenCalledWith({
+      cfg,
+      account: "ops",
+      displayName: undefined,
+      avatarUrl: undefined,
+      avatarPath: "/tmp/avatar.jpg",
+      mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+    });
   });
 
   it("passes account-scoped opts to pin listing", async () => {
@@ -365,13 +408,19 @@ describe("handleMatrixAction pollVote", () => {
       displayName: "Ops Bot",
       avatarUrl: "mxc://example/avatar",
     });
-    expect(result.details).toMatchObject({
+    expect(result.details).toEqual({
       ok: true,
       accountId: "ops",
+      displayName: "Ops Bot",
+      avatarUrl: "mxc://example/avatar",
       profile: {
         displayNameUpdated: true,
         avatarUpdated: true,
+        resolvedAvatarUrl: "mxc://example/avatar",
+        uploadedAvatarSource: null,
+        convertedAvatarFromHttp: false,
       },
+      configPath: "channels.matrix.accounts.ops",
     });
   });
 

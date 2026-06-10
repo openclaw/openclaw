@@ -1,5 +1,9 @@
+// Discord tests cover shared interactive plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
+import {
+  buildDiscordInteractiveComponents,
+  buildDiscordPresentationComponents,
+} from "./shared-interactive.js";
 
 describe("buildDiscordInteractiveComponents", () => {
   it("maps shared buttons and selects into Discord component blocks", () => {
@@ -65,6 +69,26 @@ describe("buildDiscordInteractiveComponents", () => {
     });
   });
 
+  it("preserves URL-only buttons as Discord link buttons", () => {
+    expect(
+      buildDiscordInteractiveComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Docs", url: "https://example.com/docs" }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Docs", style: "link", url: "https://example.com/docs" }],
+        },
+      ],
+    });
+  });
+
   it("splits long shared button rows to stay within Discord action limits", () => {
     expect(
       buildDiscordInteractiveComponents({
@@ -100,5 +124,217 @@ describe("buildDiscordInteractiveComponents", () => {
         },
       ],
     });
+  });
+
+  it("does not duplicate presentation text when appending controls", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        title: "Status",
+        blocks: [
+          { type: "text", text: "Build completed" },
+          { type: "context", text: "main branch" },
+          {
+            type: "buttons",
+            buttons: [{ label: "Open", action: { type: "command", command: "/codex open" } }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        { type: "text", text: "Status" },
+        { type: "text", text: "Build completed" },
+        { type: "text", text: "-# main branch" },
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Open",
+              style: "secondary",
+              callbackData: "/codex open",
+              callbackDataKind: "command",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("marks typed callback actions as opaque callback data", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Opaque",
+                action: { type: "callback", value: "/codex permissions yolo" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Opaque",
+              style: "secondary",
+              callbackData: "/codex permissions yolo",
+              callbackDataKind: "callback",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves disabled presentation buttons for Discord components", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Already handled", value: "done", disabled: true },
+              { label: "Open docs", url: "https://example.com/docs", disabled: true },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Already handled",
+              style: "secondary",
+              callbackData: "done",
+              disabled: true,
+            },
+            {
+              label: "Open docs",
+              style: "link",
+              url: "https://example.com/docs",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves reusable presentation buttons for Discord action entries", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Refresh", value: "refresh", reusable: true }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            { label: "Refresh", style: "secondary", callbackData: "refresh", reusable: true },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves typed command actions for command-only select options", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Pick",
+            options: [
+              {
+                label: "Run",
+                action: { type: "command", command: "/codex permissions yolo" },
+                value: "/codex permissions yolo",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          select: {
+            type: "string",
+            placeholder: "Pick",
+            callbackDataKind: "command",
+            options: [{ label: "Run", value: "/codex permissions yolo" }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("marks typed callback actions for callback-only select options", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Pick",
+            options: [
+              {
+                label: "Inspect",
+                action: { type: "callback", value: "inspect:123" },
+                value: "inspect:123",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          select: {
+            type: "string",
+            placeholder: "Pick",
+            callbackDataKind: "callback",
+            options: [{ label: "Inspect", value: "inspect:123" }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("does not render mixed command and callback select actions", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Pick",
+            options: [
+              {
+                label: "Run",
+                action: { type: "command", command: "/codex run" },
+                value: "/codex run",
+              },
+              {
+                label: "Inspect",
+                action: { type: "callback", value: "inspect:123" },
+                value: "inspect:123",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 });

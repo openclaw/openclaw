@@ -1,7 +1,8 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
-import { resolveProviderWizardOptions } from "../plugins/provider-wizard.js";
+// Builds provider-aware auth-choice options and grouped onboarding menus.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
 import {
   CORE_AUTH_CHOICE_OPTIONS,
   type AuthChoiceGroup,
@@ -10,63 +11,73 @@ import {
 } from "./auth-choice-options.static.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
-const DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE = "text-inference" as const;
-
-function includesOnboardingScope(
-  onboardingScopes: readonly ("text-inference" | "image-generation")[] | undefined,
-  scope: "text-inference" | "image-generation",
-): boolean {
-  return onboardingScopes
-    ? onboardingScopes.includes(scope)
-    : scope === DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE;
-}
-
 function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
   return a.label.localeCompare(b.label);
 }
 
-function compareGroupLabels(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
-  return a.label.localeCompare(b.label);
+const FEATURED_AUTH_GROUP_ORDER = new Map<string, number>([
+  ["openai", 0],
+  ["anthropic", 1],
+  ["xai", 2],
+  ["google", 3],
+  ["openrouter", 4],
+]);
+
+function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  const priorityA = a.assistantPriority ?? 0;
+  const priorityB = b.assistantPriority ?? 0;
+  return priorityA - priorityB || compareOptionLabels(a, b);
 }
 
-function resolveManifestProviderChoiceOptions(params?: {
+function compareLabelsCaseInsensitive(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: "base" });
+}
+
+/** Sort auth-choice groups with featured providers first, then stable labels. */
+export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
+  const priorityA = FEATURED_AUTH_GROUP_ORDER.get(a.value) ?? Number.POSITIVE_INFINITY;
+  const priorityB = FEATURED_AUTH_GROUP_ORDER.get(b.value) ?? Number.POSITIVE_INFINITY;
+  return (
+    priorityA - priorityB ||
+    compareLabelsCaseInsensitive(a.label, b.label) ||
+    compareLabelsCaseInsensitive(a.value, b.value)
+  );
+}
+
+function resolveProviderChoiceOptions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  return resolveManifestProviderAuthChoices(params ?? {})
-    .filter((choice) =>
-      includesOnboardingScope(choice.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
-    )
-    .map((choice) => ({
-      value: choice.choiceId as AuthChoice,
-      label: choice.choiceLabel,
-      ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
-      ...(choice.groupId ? { groupId: choice.groupId as AuthChoiceGroupId } : {}),
-      ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-      ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-    }));
+  return resolveProviderSetupFlowContributions({
+    ...params,
+    scope: "text-inference",
+  }).map((contribution) =>
+    Object.assign(
+      {},
+      { value: contribution.option.value as AuthChoice, label: contribution.option.label },
+      contribution.option.hint ? { hint: contribution.option.hint } : {},
+      contribution.option.assistantPriority !== undefined
+        ? { assistantPriority: contribution.option.assistantPriority }
+        : {},
+      contribution.option.assistantVisibility
+        ? { assistantVisibility: contribution.option.assistantVisibility }
+        : {},
+      contribution.option.group
+        ? {
+            groupId: contribution.option.group.id as AuthChoiceGroupId,
+            groupLabel: contribution.option.group.label,
+            ...(contribution.option.group.hint
+              ? { groupHint: contribution.option.group.hint }
+              : {}),
+          }
+        : {},
+      contribution.option.onboardingFeatured ? { onboardingFeatured: true } : {},
+    ),
+  );
 }
 
-function resolveRuntimeFallbackProviderChoiceOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): AuthChoiceOption[] {
-  return resolveProviderWizardOptions(params ?? {})
-    .filter((option) =>
-      includesOnboardingScope(option.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
-    )
-    .map((option) => ({
-      value: option.value as AuthChoice,
-      label: option.label,
-      ...(option.hint ? { hint: option.hint } : {}),
-      groupId: option.groupId as AuthChoiceGroupId,
-      groupLabel: option.groupLabel,
-      ...(option.groupHint ? { groupHint: option.groupHint } : {}),
-    }));
-}
-
+/** Format all currently available auth-choice values for CLI help/validation. */
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;
@@ -76,15 +87,20 @@ export function formatAuthChoiceChoicesForCli(params?: {
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveManifestProviderChoiceOptions(params).map((option) => option.value),
+    ...resolveProviderSetupFlowContributions({
+      ...params,
+      scope: "text-inference",
+    }).map((contribution) => contribution.option.value),
   ];
 
-  return [...new Set(values)].join("|");
+  return uniqueStrings(values).join("|");
 }
 
+/** Build flat auth-choice options from core choices plus provider setup flows. */
 export function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
+  assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -94,26 +110,19 @@ export function buildAuthChoiceOptions(params: {
   for (const option of CORE_AUTH_CHOICE_OPTIONS) {
     optionByValue.set(option.value, option);
   }
-  for (const option of resolveManifestProviderChoiceOptions({
+  for (const option of resolveProviderChoiceOptions({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   })) {
     optionByValue.set(option.value, option);
   }
-  for (const option of resolveRuntimeFallbackProviderChoiceOptions({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })) {
-    if (!optionByValue.has(option.value)) {
-      optionByValue.set(option.value, option);
-    }
-  }
 
-  const options: AuthChoiceOption[] = Array.from(optionByValue.values()).toSorted(
-    compareOptionLabels,
-  );
+  const options: AuthChoiceOption[] = Array.from(optionByValue.values())
+    .toSorted(compareOptionLabels)
+    .filter((option) =>
+      params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
+    );
 
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
@@ -122,6 +131,7 @@ export function buildAuthChoiceOptions(params: {
   return options;
 }
 
+/** Build grouped assistant-visible auth choices for the onboarding prompt. */
 export function buildAuthChoiceGroups(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
@@ -135,6 +145,7 @@ export function buildAuthChoiceGroups(params: {
   const options = buildAuthChoiceOptions({
     ...params,
     includeSkip: false,
+    assistantVisibleOnly: true,
   });
   const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
@@ -155,11 +166,10 @@ export function buildAuthChoiceGroups(params: {
     });
   }
   const groups = Array.from(groupsById.values())
-    .map((group) => ({
-      ...group,
-      options: [...group.options].toSorted(compareOptionLabels),
-    }))
-    .toSorted(compareGroupLabels);
+    .map((group) =>
+      Object.assign({}, group, { options: [...group.options].toSorted(compareAssistantOptions) }),
+    )
+    .toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

@@ -1,16 +1,72 @@
 /**
  * Direct SDK/HTTP calls for providers that support native PDF document input.
- * This bypasses pi-ai's content type system which does not have a "document" type.
+ * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { resolveGoogleGenerativeAiApiOrigin } from "../google-generative-ai.js";
+import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
 
 type PdfInput = {
   base64: string;
   filename?: string;
 };
+
+const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
+const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
+
+async function readErrorBodySnippet(res: Response): Promise<string> {
+  try {
+    const body = res.body;
+    if (!body || typeof body.getReader !== "function") {
+      return (await res.text()).slice(0, NATIVE_PDF_ERROR_BODY_MAX_CHARS);
+    }
+
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let truncated = false;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done || !value?.byteLength) {
+          break;
+        }
+        const remaining = NATIVE_PDF_ERROR_BODY_MAX_BYTES - total;
+        if (remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        if (value.byteLength > remaining) {
+          chunks.push(value.subarray(0, remaining));
+          total += remaining;
+          truncated = true;
+          break;
+        }
+        chunks.push(value);
+        total += value.byteLength;
+        if (total >= NATIVE_PDF_ERROR_BODY_MAX_BYTES) {
+          truncated = true;
+          break;
+        }
+      }
+    } finally {
+      if (truncated) {
+        await reader.cancel().catch(() => undefined);
+      }
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+    return new TextDecoder()
+      .decode(Buffer.concat(chunks, total))
+      .slice(0, NATIVE_PDF_ERROR_BODY_MAX_CHARS);
+  } catch {
+    return "";
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Anthropic – native PDF via Messages API
@@ -60,8 +116,7 @@ export async function anthropicAnalyzePdf(params: {
   }
   content.push({ type: "text", text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
-  const res = await fetch(`${baseUrl}/v1/messages`, {
+  const res = await fetch(resolveAnthropicMessagesUrl(params.baseUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -74,12 +129,13 @@ export async function anthropicAnalyzePdf(params: {
       max_tokens: params.maxTokens ?? 4096,
       messages: [{ role: "user", content }],
     }),
+    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await readErrorBodySnippet(res);
     throw new Error(
-      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
     );
   }
 
@@ -138,21 +194,33 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = resolveGoogleGenerativeAiApiOrigin(params.baseUrl);
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const transport = normalizeProviderTransportWithPlugin({
+    provider: "google",
+    context: {
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: params.baseUrl,
+    },
+  }) ?? { baseUrl: params.baseUrl };
+  const baseUrl = (transport.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(
+    /\/v1beta$/i,
+    "",
+  );
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify({
       contents: [{ role: "user", parts }],
     }),
+    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await readErrorBodySnippet(res);
     throw new Error(
-      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
     );
   }
 

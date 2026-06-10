@@ -1,7 +1,14 @@
-import type { BaseProbeResult } from "../runtime-api.js";
+// Mattermost plugin module implements probe behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
+import type { BaseProbeResult } from "./runtime-api.js";
 
-export type MattermostProbe = BaseProbeResult & {
+type MattermostProbe = BaseProbeResult & {
   status?: number | null;
   elapsedMs?: number | null;
   bot?: MattermostUser;
@@ -11,6 +18,7 @@ export async function probeMattermost(
   baseUrl: string,
   botToken: string,
   timeoutMs = 2500,
+  allowPrivateNetwork = false,
 ): Promise<MattermostProbe> {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -18,35 +26,45 @@ export async function probeMattermost(
   }
   const url = `${normalized}/api/v4/users/me`;
   const start = Date.now();
-  const controller = timeoutMs > 0 ? new AbortController() : undefined;
+  const resolvedTimeoutMs = timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 2500) : 0;
+  const controller = resolvedTimeoutMs > 0 ? new AbortController() : undefined;
   let timer: NodeJS.Timeout | null = null;
   if (controller) {
-    timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   }
   try {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${botToken}` },
-      signal: controller?.signal,
+    const { response: res, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        headers: { Authorization: `Bearer ${botToken}` },
+        signal: controller?.signal,
+      },
+      auditContext: "mattermost-probe",
+      policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
     });
-    const elapsedMs = Date.now() - start;
-    if (!res.ok) {
-      const detail = await readMattermostError(res);
+    try {
+      const elapsedMs = Date.now() - start;
+      if (!res.ok) {
+        const detail = await readMattermostError(res);
+        return {
+          ok: false,
+          status: res.status,
+          error: detail || res.statusText,
+          elapsedMs,
+        };
+      }
+      const bot = (await res.json()) as MattermostUser;
       return {
-        ok: false,
+        ok: true,
         status: res.status,
-        error: detail || res.statusText,
         elapsedMs,
+        bot,
       };
+    } finally {
+      await release();
     }
-    const bot = (await res.json()) as MattermostUser;
-    return {
-      ok: true,
-      status: res.status,
-      elapsedMs,
-      bot,
-    };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       status: null,

@@ -1,15 +1,20 @@
-import type {
-  AudioMessage,
-  ImageMessage,
-  LocationMessage,
-  StickerMessage,
-  TextMessage,
-  VideoMessage,
-  WebhookEvent,
-} from "@line/bot-sdk";
+// Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
+
+interface LineThreadBindingsConfig {
+  enabled?: boolean;
+  idleHours?: number;
+  maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
+  spawnSubagentSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
+  spawnAcpSessions?: boolean;
+}
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
@@ -25,6 +30,7 @@ interface LineAccountBaseConfig {
   responsePrefix?: string;
   mediaMaxMb?: number;
   webhookPath?: string;
+  threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;
 }
 
@@ -53,25 +59,10 @@ export interface ResolvedLineAccount {
   config: LineConfig & LineAccountConfig;
 }
 
-export type LineMessageType =
-  | TextMessage
-  | ImageMessage
-  | VideoMessage
-  | AudioMessage
-  | StickerMessage
-  | LocationMessage;
-
-export interface LineWebhookContext {
-  event: WebhookEvent;
-  replyToken?: string;
-  userId?: string;
-  groupId?: string;
-  roomId?: string;
-}
-
 export interface LineSendResult {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 }
 
 export type LineProbeResult = BaseProbeResult<string> & {
@@ -83,7 +74,7 @@ export type LineProbeResult = BaseProbeResult<string> & {
   };
 };
 
-export type LineFlexMessagePayload = {
+type LineFlexMessagePayload = {
   altText: string;
   contents: unknown;
 };

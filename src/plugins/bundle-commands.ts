@@ -1,16 +1,25 @@
+// Bundles plugin command metadata for package output.
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  hasExplicitPluginConfig,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "./config-state.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
 export type ClaudeBundleCommandSpec = {
   pluginId: string;
@@ -21,10 +30,10 @@ export type ClaudeBundleCommandSpec = {
 };
 
 function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return fallback;
   }
-  const normalized = value.trim().toLowerCase();
   if (normalized === "true" || normalized === "yes" || normalized === "1") {
     return true;
   }
@@ -47,26 +56,13 @@ function stripFrontmatter(content: string): string {
 }
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
-  const manifestPath = path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH);
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir,
+    relativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (!opened.ok) {
-    return {};
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  return result.ok ? result.value : {};
 }
 
 function resolveClaudeCommandRootDirs(rootDir: string): string[] {
@@ -99,7 +95,7 @@ function listMarkdownFilesRecursive(rootDir: string): string[] {
         pending.push(fullPath);
         continue;
       }
-      if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+      if (entry.isFile() && normalizeOptionalLowercaseString(entry.name)?.endsWith(".md")) {
         files.push(fullPath);
       }
     }
@@ -141,14 +137,15 @@ function loadBundleCommandsFromRoot(params: {
     if (!promptTemplate) {
       continue;
     }
-    const rawName = (
-      frontmatter.name?.trim() || toDefaultCommandName(params.commandRoot, filePath)
-    ).trim();
+    const rawName =
+      normalizeOptionalString(frontmatter.name) ||
+      toDefaultCommandName(params.commandRoot, filePath);
     if (!rawName) {
       continue;
     }
     const description =
-      frontmatter.description?.trim() || toDefaultDescription(rawName, promptTemplate);
+      normalizeOptionalString(frontmatter.description) ||
+      toDefaultDescription(rawName, promptTemplate);
     entries.push({
       pluginId: params.pluginId,
       rawName,
@@ -164,9 +161,13 @@ export function loadEnabledClaudeBundleCommands(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
 }): ClaudeBundleCommandSpec[] {
-  const registry = loadPluginManifestRegistry({
+  if (!hasExplicitPluginConfig(params.cfg?.plugins)) {
+    return [];
+  }
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    includeDisabled: true,
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const commands: ClaudeBundleCommandSpec[] = [];
@@ -179,13 +180,13 @@ export function loadEnabledClaudeBundleCommands(params: {
     ) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
     for (const relativeRoot of resolveClaudeCommandRootDirs(record.rootDir)) {

@@ -1,0 +1,749 @@
+// Github Copilot tests cover index plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  OpenClawConfig,
+  OpenClawPluginApi,
+  ProviderAuthResult,
+  ProviderCatalogResult,
+  UnifiedModelCatalogEntry,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  runGitHubCopilotDeviceFlow,
+  setGitHubCopilotDeviceFlowFetchGuardForTesting,
+} from "./login.js";
+
+const mocks = vi.hoisted(() => ({
+  githubCopilotLoginCommand: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: vi.fn(async () => {}),
+  })),
+  resolveCopilotApiToken: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
+
+vi.mock("./register.runtime.js", () => ({
+  DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
+  resolveCopilotApiToken: mocks.resolveCopilotApiToken,
+  githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
+  fetchCopilotUsage: vi.fn(),
+}));
+
+import plugin from "./index.js";
+
+const tempDirs: string[] = [];
+type RegisteredMemoryEmbeddingProvider = Parameters<
+  OpenClawPluginApi["registerMemoryEmbeddingProvider"]
+>[0];
+type RegisteredProvider = Parameters<OpenClawPluginApi["registerProvider"]>[0];
+type GithubCopilotTestProvider = RegisteredProvider & {
+  auth: Array<{
+    run: (ctx: unknown) => Promise<ProviderAuthResult | null>;
+    runNonInteractive: (ctx: unknown) => Promise<OpenClawConfig | null>;
+  }>;
+  catalog: {
+    run: (ctx: unknown) => Promise<ProviderCatalogResult>;
+  };
+  resolveThinkingProfile: NonNullable<RegisteredProvider["resolveThinkingProfile"]>;
+};
+type GithubCopilotTestModelCatalogProvider = {
+  liveCatalog: (ctx: unknown) => Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>;
+};
+
+afterEach(async () => {
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
+  setGitHubCopilotDeviceFlowFetchGuardForTesting(null);
+  clearRuntimeAuthProfileStoreSnapshots();
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+afterAll(() => {
+  vi.doUnmock("./register.runtime.js");
+  vi.resetModules();
+});
+
+async function createAgentDir() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-copilot-test-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writeExistingCopilotTokenProfile(agentDir: string) {
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "github-copilot:github": {
+          type: "token",
+          provider: "github-copilot",
+          token: "existing-token",
+        },
+      },
+    },
+    agentDir,
+    { filterExternalAuthProfiles: false, syncExternalCli: false },
+  );
+}
+
+function requireFirstMockArg<T>(
+  mock: { mock: { calls: Array<[T, ...unknown[]]> } },
+  label: string,
+) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
+function registerProviderAndCatalogWithPluginConfig(pluginConfig: Record<string, unknown>) {
+  const registerProviderMock = vi.fn<OpenClawPluginApi["registerProvider"]>();
+  const registerModelCatalogProviderMock =
+    vi.fn<OpenClawPluginApi["registerModelCatalogProvider"]>();
+
+  plugin.register(
+    createTestPluginApi({
+      id: "github-copilot",
+      name: "GitHub Copilot",
+      source: "test",
+      config: {},
+      pluginConfig,
+      runtime: {} as never,
+      registerProvider: registerProviderMock,
+      registerModelCatalogProvider: registerModelCatalogProviderMock,
+    }),
+  );
+
+  expect(registerProviderMock).toHaveBeenCalledTimes(1);
+  expect(registerModelCatalogProviderMock).toHaveBeenCalledTimes(1);
+  return {
+    provider: requireFirstMockArg(
+      registerProviderMock,
+      "provider registration",
+    ) as GithubCopilotTestProvider,
+    modelCatalogProvider: requireFirstMockArg(
+      registerModelCatalogProviderMock,
+      "model catalog provider registration",
+    ) as GithubCopilotTestModelCatalogProvider,
+  };
+}
+
+function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
+  return registerProviderAndCatalogWithPluginConfig(pluginConfig).provider;
+}
+
+describe("github-copilot plugin", () => {
+  it("registers embedding provider", () => {
+    const registerMemoryEmbeddingProviderMock =
+      vi.fn<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerProvider: vi.fn(),
+        registerMemoryEmbeddingProvider: registerMemoryEmbeddingProviderMock,
+      }),
+    );
+
+    expect(registerMemoryEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    const adapter = requireFirstMockArg<RegisteredMemoryEmbeddingProvider>(
+      registerMemoryEmbeddingProviderMock,
+      "memory embedding provider registration",
+    );
+    expect(adapter.id).toBe("github-copilot");
+  });
+
+  it("skips catalog discovery when plugin discovery is disabled", async () => {
+    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+
+    const result = await provider.catalog.run({
+      config: {
+        plugins: {
+          entries: {
+            "github-copilot": {
+              config: {
+                discovery: { enabled: false },
+              },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(mocks.resolveCopilotApiToken).not.toHaveBeenCalled();
+  });
+
+  it("exposes xhigh thinking for catalog-supported Copilot reasoning efforts", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-opus-4.7-1m-internal",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
+  });
+
+  it("uses live plugin config to re-enable discovery after startup disable", async () => {
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+
+    const result = await provider.catalog.run({
+      config: {
+        plugins: {
+          entries: {
+            "github-copilot": {
+              config: {
+                discovery: { enabled: true },
+              },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
+      githubToken: "gh_test_token",
+      env: { GH_TOKEN: "gh_test_token" },
+    });
+    expect(result).toEqual({
+      provider: {
+        baseUrl: "https://api.githubcopilot.live",
+        models: [],
+      },
+    });
+  });
+
+  it("dual-publishes unified live catalog rows with existing discovery semantics", async () => {
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const { modelCatalogProvider } = registerProviderAndCatalogWithPluginConfig({
+      discovery: { enabled: false },
+    });
+
+    const result = await modelCatalogProvider.liveCatalog({
+      config: {
+        plugins: {
+          entries: {
+            "github-copilot": {
+              config: {
+                discovery: { enabled: true },
+              },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+      resolveProviderAuth: () => ({
+        apiKey: "gh_test_token",
+        mode: "token",
+        source: "env",
+      }),
+    } as never);
+
+    expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
+      githubToken: "gh_test_token",
+      env: { GH_TOKEN: "gh_test_token" },
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("offers to reuse an existing token profile during interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    writeExistingCopilotTokenProfile(agentDir);
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      note: vi.fn(),
+    };
+
+    const result = await method.run({
+      config: {},
+      env: {},
+      agentDir,
+      workspaceDir: "/tmp/workspace",
+      prompter,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      opts: {},
+      secretInputMode: "plaintext",
+      allowSecretRefPrompt: false,
+      isRemote: false,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as never);
+
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "GitHub Copilot auth already exists. Re-run login?",
+      initialValue: false,
+    });
+    expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: {
+            type: "token",
+            provider: "github-copilot",
+            token: "existing-token",
+          },
+        },
+      ],
+      defaultModel: "github-copilot/claude-opus-4.7",
+    });
+  });
+
+  it("can refresh an existing token profile during interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    writeExistingCopilotTokenProfile(agentDir);
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+      const target =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : String(input);
+      if (target === "https://github.com/login/device/code") {
+        return new Response(
+          JSON.stringify({
+            device_code: "device-code-stub",
+            user_code: "ABCD-1234",
+            verification_uri: "https://github.com/login/device",
+            expires_in: 900,
+            interval: 0,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (target === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({ access_token: "refreshed-token", token_type: "bearer" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+      response: await fetchMock(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => {},
+    }));
+    const prompter = {
+      confirm: vi.fn(async () => true),
+      note: vi.fn(),
+    };
+    const isTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+
+    try {
+      const result = await method.run({
+        config: {},
+        env: {},
+        agentDir,
+        workspaceDir: "/tmp/workspace",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        opts: {},
+        secretInputMode: "plaintext",
+        allowSecretRefPrompt: false,
+        isRemote: false,
+        openUrl: vi.fn(),
+        oauth: { createVpsAwareHandlers: vi.fn() },
+      } as never);
+
+      expect(prompter.confirm).toHaveBeenCalledWith({
+        message: "GitHub Copilot auth already exists. Re-run login?",
+        initialValue: false,
+      });
+      expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
+      if (!result) {
+        throw new Error("Expected GitHub Copilot auth result");
+      }
+      expect(result.profiles[0]?.credential).toEqual({
+        type: "token",
+        provider: "github-copilot",
+        token: "refreshed-token",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (isTtyDescriptor) {
+        Object.defineProperty(process.stdin, "isTTY", isTtyDescriptor);
+      } else {
+        delete (process.stdin as { isTTY?: boolean }).isTTY;
+      }
+    }
+  });
+
+  it("rejects unsafe GitHub device code lifetimes before polling", async () => {
+    const release = vi.fn(async () => {});
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+      response: new Response(
+        '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":1e309,"interval":0}',
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl: "https://github.com/login/device/code",
+      release,
+    }));
+
+    const showCode = vi.fn();
+    await expect(runGitHubCopilotDeviceFlow({ showCode })).rejects.toThrow(
+      "GitHub device code response missing fields",
+    );
+    expect(showCode).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects GitHub device code expiries outside the Date timestamp range before polling", async () => {
+    const release = vi.fn(async () => {});
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+      response: new Response(
+        '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":1,"interval":0}',
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl: "https://github.com/login/device/code",
+      release,
+    }));
+
+    const showCode = vi.fn();
+    try {
+      await expect(runGitHubCopilotDeviceFlow({ showCode })).rejects.toThrow(
+        "GitHub device code response missing fields",
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(showCode).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized GitHub device polling intervals before waiting", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      let accessTokenPolls = 0;
+      setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+        if (params.url === "https://github.com/login/device/code") {
+          return {
+            response: new Response(
+              '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":3000010,"interval":3000000}',
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+            finalUrl: params.url,
+            release,
+          };
+        }
+        accessTokenPolls += 1;
+        return {
+          response: new Response(
+            JSON.stringify(
+              accessTokenPolls === 1
+                ? { error: "authorization_pending" }
+                : { access_token: "refreshed-token", token_type: "bearer" },
+            ),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+          finalUrl: params.url,
+          release,
+        };
+      });
+
+      const flow = runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) });
+      await vi.waitFor(() =>
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS),
+      );
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      expect(accessTokenPolls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(3_000_000_000 - MAX_TIMER_TIMEOUT_MS);
+      await expect(flow).resolves.toEqual({
+        status: "authorized",
+        accessToken: "refreshed-token",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stores GitHub Copilot token from non-interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {},
+      baseConfig: {},
+      opts: { githubCopilotToken: "ghu_test\r\n123" },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => ({
+        key: "ghu_test123",
+        source: "flag" as const,
+      })),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.auth?.profiles?.["github-copilot:github"]).toEqual({
+      provider: "github-copilot",
+      mode: "token",
+    });
+    expect(result?.agents?.defaults?.model).toEqual({
+      primary: "github-copilot/claude-opus-4.7",
+    });
+    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-4.7"]).toStrictEqual({});
+
+    const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
+    expect(profile).toEqual({
+      type: "token",
+      provider: "github-copilot",
+      token: "ghu_test123",
+    });
+  });
+
+  it("stores env-backed token refs for non-interactive onboarding ref mode", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: { agents: { defaults: { model: { fallbacks: ["openai/gpt-5.4"] } } } },
+      baseConfig: {},
+      opts: { secretInputMode: "ref" },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => ({
+        key: "ghu_from_env",
+        source: "env" as const,
+        envVarName: "COPILOT_GITHUB_TOKEN",
+      })),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.agents?.defaults?.model).toEqual({
+      fallbacks: ["openai/gpt-5.4"],
+      primary: "github-copilot/claude-opus-4.7",
+    });
+
+    const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
+    expect(profile).toEqual({
+      type: "token",
+      provider: "github-copilot",
+      tokenRef: {
+        source: "env",
+        provider: "default",
+        id: "COPILOT_GITHUB_TOKEN",
+      },
+    });
+  });
+
+  it("falls back to GH_TOKEN during non-interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    const resolveApiKey = vi.fn(async ({ envVar }: { envVar?: string }) =>
+      envVar === "GH_TOKEN"
+        ? {
+            key: "ghu_from_gh_token",
+            source: "env" as const,
+            envVarName: "GH_TOKEN",
+          }
+        : null,
+    );
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {},
+      baseConfig: {},
+      opts: {},
+      runtime,
+      agentDir,
+      resolveApiKey,
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(resolveApiKey).toHaveBeenCalledTimes(2);
+    expect(resolveApiKey.mock.calls.map(([params]) => params)).toEqual([
+      {
+        provider: "github-copilot",
+        flagName: "--github-copilot-token",
+        envVar: "COPILOT_GITHUB_TOKEN",
+        envVarName: "COPILOT_GITHUB_TOKEN",
+        allowProfile: false,
+        required: false,
+      },
+      {
+        provider: "github-copilot",
+        flagName: "--github-copilot-token",
+        envVar: "GH_TOKEN",
+        envVarName: "GH_TOKEN",
+        allowProfile: false,
+        required: false,
+      },
+    ]);
+    expect(result?.auth?.profiles?.["github-copilot:github"]).toEqual({
+      provider: "github-copilot",
+      mode: "token",
+    });
+
+    const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
+    expect(profile).toEqual({
+      type: "token",
+      provider: "github-copilot",
+      token: "ghu_from_gh_token",
+    });
+  });
+
+  it("preserves an existing primary model during non-interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "github-copilot/gpt-5.4",
+              fallbacks: ["openai/gpt-5.4"],
+            },
+            models: {
+              "github-copilot/gpt-5.4": { label: "Existing" },
+            },
+          },
+        },
+      },
+      baseConfig: {},
+      opts: { githubCopilotToken: "ghu_test" },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => ({
+        key: "ghu_test",
+        source: "flag" as const,
+      })),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.agents?.defaults?.model).toEqual({
+      primary: "github-copilot/gpt-5.4",
+      fallbacks: ["openai/gpt-5.4"],
+    });
+    expect(result?.agents?.defaults?.models).toEqual({
+      "github-copilot/gpt-5.4": { label: "Existing" },
+    });
+  });
+
+  it("reuses an existing token profile during non-interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    writeExistingCopilotTokenProfile(agentDir);
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {},
+      baseConfig: {},
+      opts: {},
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => null),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.auth?.profiles?.["github-copilot:github"]).toEqual({
+      provider: "github-copilot",
+      mode: "token",
+    });
+  });
+
+  it("does not emit a second missing-token error after ref-mode flag validation fails", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {},
+      baseConfig: {},
+      opts: {
+        githubCopilotToken: "ghu_secret",
+        secretInputMode: "ref",
+      },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => null),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      [
+        "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN is set in env.",
+        "Set one of those env vars and omit --github-copilot-token, or use --secret-input-mode plaintext.",
+      ].join("\n"),
+    );
+  });
+});

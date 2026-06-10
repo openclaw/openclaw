@@ -1,0 +1,134 @@
+/**
+ * Anthropic Messages stream adapter for Bedrock Mantle. It rewrites Mantle
+ * endpoints to Anthropic-compatible URLs and adjusts thinking-token budgets.
+ */
+import Anthropic from "@anthropic-ai/sdk";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
+
+const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
+type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
+type MantleAnthropicStream = typeof stream;
+type AnthropicStreamClient = Anthropic;
+
+/** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
+export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  if (trimmed.endsWith("/anthropic")) {
+    return trimmed;
+  }
+  if (trimmed.endsWith("/v1")) {
+    return `${trimmed.slice(0, -"/v1".length)}/anthropic`;
+  }
+  return `${trimmed}/anthropic`;
+}
+
+function requiresDefaultSampling(modelId: string): boolean {
+  return modelId.includes("claude-opus-4-7");
+}
+
+function mergeHeaders(
+  ...headerSources: Array<Record<string, string> | undefined>
+): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const headers of headerSources) {
+    if (headers) {
+      Object.assign(merged, headers);
+    }
+  }
+  return merged;
+}
+
+function buildMantleAnthropicBaseOptions(
+  model: Model,
+  options: SimpleStreamOptions | undefined,
+  apiKey: string,
+) {
+  return {
+    temperature: requiresDefaultSampling(model.id) ? undefined : options?.temperature,
+    maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32_000),
+    signal: options?.signal,
+    apiKey,
+    cacheRetention: options?.cacheRetention,
+    sessionId: options?.sessionId,
+    onPayload: options?.onPayload,
+    maxRetryDelayMs: options?.maxRetryDelayMs,
+    metadata: options?.metadata,
+  };
+}
+
+function adjustMaxTokensForThinking(
+  baseMaxTokens: number,
+  modelMaxTokens: number,
+  reasoningLevel: NonNullable<SimpleStreamOptions["reasoning"]>,
+  customBudgets?: SimpleStreamOptions["thinkingBudgets"],
+): { maxTokens: number; thinkingBudget: number } {
+  const defaultBudgets = {
+    minimal: 1024,
+    low: 2048,
+    medium: 8192,
+    high: 16384,
+    xhigh: 16384,
+    max: 16384,
+  } as const;
+  const budgets = { ...defaultBudgets, ...customBudgets };
+  const minOutputTokens = 1024;
+  let thinkingBudget = budgets[reasoningLevel];
+  const maxTokens = Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens);
+  if (maxTokens <= thinkingBudget) {
+    thinkingBudget = Math.max(0, maxTokens - minOutputTokens);
+  }
+  return { maxTokens, thinkingBudget };
+}
+
+/** Create the Mantle Anthropic Messages stream function. */
+export function createMantleAnthropicStreamFn(deps?: {
+  createClient?: (options: AnthropicOptions) => Anthropic;
+  stream?: MantleAnthropicStream;
+}): StreamFn {
+  return (model, context, options) => {
+    const apiKey = options?.apiKey ?? "";
+    const createClient = deps?.createClient ?? ((clientOptions) => new Anthropic(clientOptions));
+    const streamFn = deps?.stream ?? stream;
+    const client = createClient({
+      apiKey: null,
+      authToken: apiKey,
+      baseURL: resolveMantleAnthropicBaseUrl(model.baseUrl),
+      dangerouslyAllowBrowser: true,
+      defaultHeaders: mergeHeaders(
+        {
+          accept: "application/json",
+          "anthropic-dangerous-direct-browser-access": "true",
+          "anthropic-beta": MANTLE_ANTHROPIC_BETA,
+        },
+        model.headers,
+        options?.headers,
+      ),
+    });
+    const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
+    // Plugin package deps can give this plugin a distinct physical SDK copy.
+    // The client API is the same, but the SDK class private field makes types nominal.
+    const streamClient = client as unknown as AnthropicStreamClient;
+    if (!options?.reasoning || requiresDefaultSampling(model.id)) {
+      return streamFn(model as Model<"anthropic-messages">, context, {
+        ...base,
+        client: streamClient,
+        thinkingEnabled: false,
+      });
+    }
+
+    const adjusted = adjustMaxTokensForThinking(
+      base.maxTokens || 0,
+      model.maxTokens,
+      options.reasoning,
+      options.thinkingBudgets,
+    );
+    return streamFn(model as Model<"anthropic-messages">, context, {
+      ...base,
+      client: streamClient,
+      maxTokens: adjusted.maxTokens,
+      thinkingEnabled: true,
+      thinkingBudgetTokens: adjusted.thinkingBudget,
+    });
+  };
+}

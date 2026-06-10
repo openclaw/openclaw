@@ -1,6 +1,8 @@
+// Daemon service env tests cover environment variable assembly for services.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -13,10 +15,14 @@ import {
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
+  const allExist = (): boolean => true;
+  const noneExist = (): boolean => false;
+
   it("includes user bin directories when HOME is set on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: allExist,
     });
 
     // Should include all common user bin directories
@@ -24,6 +30,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
     expect(result).toContain("/home/testuser/.nvm/current/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
+    expect(result).toContain("/home/testuser/.fnm/aliases/default/bin");
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
@@ -39,17 +48,13 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Should only include system directories
     expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
-
-    // Should not include any user-specific paths
-    expect(result.some((p) => p.includes(".local"))).toBe(false);
-    expect(result.some((p) => p.includes(".npm-global"))).toBe(false);
-    expect(result.some((p) => p.includes(".nvm"))).toBe(false);
   });
 
   it("places user directories before system directories on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
+      existsSync: allExist,
     });
 
     const userDirIndex = result.indexOf("/home/testuser/.local/bin");
@@ -65,6 +70,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       platform: "linux",
       home: "/home/testuser",
       extraDirs: ["/custom/bin"],
+      existsSync: allExist,
     });
 
     const extraDirIndex = result.indexOf("/custom/bin");
@@ -88,6 +94,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
         NVM_DIR: "/opt/nvm",
         FNM_DIR: "/opt/fnm",
       },
+      existsSync: allExist,
     });
 
     expect(result).toContain("/opt/pnpm");
@@ -96,44 +103,41 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/asdf/shims");
     expect(result).toContain("/opt/nvm/current/bin");
+    expect(result).toContain("/opt/fnm/aliases/default/bin");
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
-  it("includes version manager directories on macOS when HOME is set", () => {
+  it("uses only canonical system directories on macOS by default", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: allExist,
     });
 
-    // Should include common user bin directories
-    expect(result).toContain("/Users/testuser/.local/bin");
-    expect(result).toContain("/Users/testuser/.npm-global/bin");
-    expect(result).toContain("/Users/testuser/bin");
-
-    // Should include version manager paths (macOS specific)
-    // Note: nvm has no stable default path, relies on user's shell config
-    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin"); // fnm default on macOS
-    expect(result).toContain("/Users/testuser/.fnm/aliases/default/bin"); // fnm if customized to ~/.fnm
-    expect(result).toContain("/Users/testuser/.volta/bin");
-    expect(result).toContain("/Users/testuser/.asdf/shims");
-    expect(result).toContain("/Users/testuser/Library/pnpm"); // pnpm default on macOS
-    expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
-    expect(result).toContain("/Users/testuser/.bun/bin");
-
-    // Should also include macOS system directories
-    expect(result).toContain("/opt/homebrew/bin");
-    expect(result).toContain("/usr/local/bin");
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+    const userPathEntries = result.filter((entry) => entry.startsWith("/Users/testuser/"));
+    expect(userPathEntries).toStrictEqual([]);
   });
 
-  it("includes env-configured version manager dirs on macOS", () => {
+  it("can include env-configured version manager dirs on macOS when requested", () => {
     const result = getMinimalServicePathPartsFromEnv({
       platform: "darwin",
+      includeUserDirs: true,
       env: {
         HOME: "/Users/testuser",
         FNM_DIR: "/Users/testuser/Library/Application Support/fnm",
         NVM_DIR: "/Users/testuser/.nvm",
         PNPM_HOME: "/Users/testuser/Library/pnpm",
       },
+      existsSync: allExist,
     });
 
     // fnm uses aliases/default/bin (not current)
@@ -144,31 +148,331 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/Users/testuser/Library/pnpm");
   });
 
-  it("places version manager dirs before system dirs on macOS", () => {
+  it("does not let version manager dirs precede system dirs on macOS by default", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
+      existsSync: allExist,
     });
 
-    // fnm on macOS defaults to ~/Library/Application Support/fnm
-    const fnmIndex = result.indexOf(
-      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
-    );
-    const homebrewIndex = result.indexOf("/opt/homebrew/bin");
+    const fnmIndex = result.indexOf("/Users/testuser/.fnm/aliases/default/bin");
+    const systemIndex = result.indexOf("/opt/homebrew/bin");
 
-    expect(fnmIndex).toBeGreaterThan(-1);
-    expect(homebrewIndex).toBeGreaterThan(-1);
-    expect(fnmIndex).toBeLessThan(homebrewIndex);
+    expect(fnmIndex).toBe(-1);
+    expect(systemIndex).toBe(0);
   });
 
   it("does not include Linux user directories on Windows", () => {
     const result = getMinimalServicePathParts({
       platform: "win32",
       home: "C:\\Users\\testuser",
+      existsSync: allExist,
     });
 
     // Windows returns empty array (uses existing PATH)
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
+  });
+
+  it("omits hard-coded version-manager fallbacks on Linux when missing", () => {
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/home/testuser/.local/bin");
+    expect(result).toContain("/home/testuser/.npm-global/bin");
+    expect(result).toContain("/home/testuser/bin");
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+    expect(result).not.toContain("/home/testuser/.volta/bin");
+    expect(result).not.toContain("/home/testuser/.asdf/shims");
+    expect(result).not.toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.nvm/current/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/fnm/current/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/current/bin");
+    expect(result).not.toContain("/home/testuser/.local/share/pnpm");
+  });
+
+  it("omits all user PATH fallbacks on macOS even when HOME is set", () => {
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+      existsSync: noneExist,
+    });
+
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+    expect(result).not.toContain("/Users/testuser/.local/bin");
+    expect(result).not.toContain("/Users/testuser/.npm-global/bin");
+    expect(result).not.toContain("/Users/testuser/bin");
+    expect(result).not.toContain("/Users/testuser/.nix-profile/bin");
+    expect(result).not.toContain("/Users/testuser/.volta/bin");
+    expect(result).not.toContain("/Users/testuser/.asdf/shims");
+    expect(result).not.toContain("/Users/testuser/.bun/bin");
+    expect(result).not.toContain(
+      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
+    );
+    expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/Users/testuser/Library/pnpm");
+    expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
+  });
+
+  it("can omit missing stable user-bin defaults for service PATH audits", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: { HOME: "/home/testuser" },
+      existsSync: (candidate) => candidate === "/home/testuser/.local/bin",
+      includeMissingUserBinDefaults: false,
+    });
+
+    expect(result).toContain("/home/testuser/.local/bin");
+    expect(result).not.toContain("/home/testuser/.npm-global/bin");
+    expect(result).not.toContain("/home/testuser/bin");
+    expect(result).not.toContain("/home/testuser/.nix-profile/bin");
+  });
+
+  it("keeps env-configured roots when fallback directories are missing", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/opt/pnpm",
+        VOLTA_HOME: "/opt/volta",
+        BUN_INSTALL: "/opt/bun",
+        ASDF_DATA_DIR: "/opt/asdf",
+        NVM_DIR: "/opt/nvm",
+        FNM_DIR: "/opt/fnm",
+      },
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/opt/pnpm");
+    expect(result).toContain("/opt/volta/bin");
+    expect(result).toContain("/opt/bun/bin");
+    expect(result).toContain("/opt/asdf/shims");
+    expect(result).toContain("/opt/nvm/current/bin");
+    expect(result).toContain("/opt/fnm/aliases/default/bin");
+    expect(result).toContain("/opt/fnm/current/bin");
+  });
+
+  it("excludes env-configured bin roots derived from the install workspace", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      cwd: "/home/testuser/workspace",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/home/testuser/workspace/evil-pnpm-home",
+        NPM_CONFIG_PREFIX: "/proc/thread-self/cwd/evil-npm-prefix",
+        BUN_INSTALL: "/proc/12345/cwd/evil-bun",
+        VOLTA_HOME: "/opt/volta",
+        ASDF_DATA_DIR: "relative-asdf",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/workspace/evil-nix-profile",
+      },
+      existsSync: noneExist,
+    });
+
+    expect(result).not.toContain("/home/testuser/workspace/evil-pnpm-home");
+    expect(result).not.toContain("/proc/thread-self/cwd/evil-npm-prefix/bin");
+    expect(result).not.toContain("/proc/12345/cwd/evil-bun/bin");
+    expect(result).not.toContain("relative-asdf/shims");
+    expect(result).not.toContain("/home/testuser/workspace/evil-nix-profile/bin");
+    expect(result).toContain("/opt/volta/bin");
+    expect(result).toContain("/nix/var/nix/profiles/default/bin");
+  });
+
+  it("excludes env-configured bin roots whose existing parent resolves into the workspace", () => {
+    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value === "/tmp/workspace-link") {
+        return "/home/testuser/workspace";
+      }
+      if (value === "/home/testuser/workspace" || value === "/home/testuser") {
+        return value;
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+
+    try {
+      const result = getMinimalServicePathPartsFromEnv({
+        platform: "linux",
+        cwd: "/home/testuser/workspace",
+        env: {
+          HOME: "/home/testuser",
+          PNPM_HOME: "/tmp/workspace-link/missing-pnpm-home",
+          VOLTA_HOME: "/opt/volta",
+        },
+        existsSync: noneExist,
+      });
+
+      expect(result).not.toContain("/tmp/workspace-link/missing-pnpm-home");
+      expect(result).toContain("/opt/volta/bin");
+    } finally {
+      realpathNative.mockRestore();
+    }
+  });
+
+  it("keeps env-configured user toolchain roots when the install cwd is HOME", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      cwd: "/home/testuser",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/home/testuser/.local/share/pnpm",
+        FNM_DIR: "/home/testuser/.local/share/fnm",
+      },
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/home/testuser/.local/share/pnpm");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
+  });
+
+  it("emits only existing hard-coded version-manager fallbacks", () => {
+    const exists = (candidate: string) =>
+      candidate === "/home/testuser/.volta/bin" ||
+      candidate === "/home/testuser/.local/share/fnm/aliases/default/bin";
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      existsSync: exists,
+    });
+
+    expect(result).toContain("/home/testuser/.volta/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).not.toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.asdf/shims");
+    expect(result).not.toContain("/home/testuser/.fnm/aliases/default/bin");
+  });
+});
+
+describe("getMinimalServicePathParts - Nix Home Manager", () => {
+  it("falls back to default Nix profile when NIX_PROFILES is absent on Linux", () => {
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      existsSync: () => true,
+    });
+
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+  });
+
+  it("omits the default Nix profile from macOS service PATH by default", () => {
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+      existsSync: () => true,
+    });
+
+    expect(result).not.toContain("/Users/testuser/.nix-profile/bin");
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+  });
+
+  it("places rightmost NIX_PROFILES entry before leftmost on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/.nix-profile",
+      },
+      existsSync: () => true,
+    });
+
+    const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(defaultIdx);
+  });
+
+  it("ignores NIX_PROFILES on macOS service PATH by default", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /Users/testuser/.nix-profile",
+      },
+      existsSync: () => true,
+    });
+
+    const userIdx = result.indexOf("/Users/testuser/.nix-profile/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBe(-1);
+    expect(defaultIdx).toBe(-1);
+    expect(result).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
+  });
+
+  it("includes single Nix profile from NIX_PROFILES on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+      existsSync: () => true,
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+  });
+
+  it("can include single Nix profile from NIX_PROFILES on macOS when requested", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      includeUserDirs: true,
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+      existsSync: () => true,
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+  });
+
+  it("preserves Nix precedence across three profiles", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES:
+          "/nix/var/nix/profiles/default /nix/var/nix/profiles/per-user/testuser/custom /home/testuser/.nix-profile",
+      },
+      existsSync: () => true,
+    });
+
+    const userIdx = result.indexOf("/home/testuser/.nix-profile/bin");
+    const customIdx = result.indexOf("/nix/var/nix/profiles/per-user/testuser/custom/bin");
+    const defaultIdx = result.indexOf("/nix/var/nix/profiles/default/bin");
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(customIdx).toBeGreaterThan(-1);
+    expect(defaultIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeLessThan(customIdx);
+    expect(customIdx).toBeLessThan(defaultIdx);
   });
 });
 
@@ -176,15 +480,20 @@ describe("buildMinimalServicePath", () => {
   const splitPath = (value: string, platform: NodeJS.Platform) =>
     value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
 
-  it("includes Homebrew + system dirs on macOS", () => {
+  it("uses canonical launchd system dirs on macOS", () => {
     const result = buildMinimalServicePath({
       platform: "darwin",
     });
     const parts = splitPath(result, "darwin");
-    expect(parts).toContain("/opt/homebrew/bin");
-    expect(parts).toContain("/usr/local/bin");
-    expect(parts).toContain("/usr/bin");
-    expect(parts).toContain("/bin");
+    expect(parts).toEqual([
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ]);
   });
 
   it("returns PATH as-is on Windows", () => {
@@ -199,6 +508,7 @@ describe("buildMinimalServicePath", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/alice" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
@@ -206,6 +516,7 @@ describe("buildMinimalServicePath", () => {
     expect(parts).toContain("/home/alice/.local/bin");
     expect(parts).toContain("/home/alice/.npm-global/bin");
     expect(parts).toContain("/home/alice/.nvm/current/bin");
+    expect(parts).toContain("/home/alice/.local/share/fnm/aliases/default/bin");
 
     // Verify system directories are also included
     expect(parts).toContain("/usr/local/bin");
@@ -222,15 +533,13 @@ describe("buildMinimalServicePath", () => {
 
     // Should only have system directories
     expect(parts).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
-
-    // No user-specific paths
-    expect(parts.some((p) => p.includes("home"))).toBe(false);
   });
 
   it("ensures user directories come before system directories on Linux", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/bob" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
@@ -265,6 +574,7 @@ describe("buildMinimalServicePath", () => {
       platform: "linux",
       extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
       env: { HOME: "/home/alice" },
+      existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
@@ -297,18 +607,69 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards TMPDIR from the host environment", () => {
+  it("sets the OpenClaw-owned launchd marker for macOS gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user" },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+  });
+
+  it("passes through OPENCLAW_WRAPPER for gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_WRAPPER: " /usr/local/bin/openclaw-doppler ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_WRAPPER).toBe("/usr/local/bin/openclaw-doppler");
+  });
+
+  it("forwards TMPDIR from the host environment on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
 
-  it("falls back to os.tmpdir when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS LaunchAgents", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("uses a canonical system PATH for macOS LaunchAgents", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/Users/user",
+        FNM_DIR: "/Users/user/Library/Application Support/fnm",
+        PNPM_HOME: "/Users/user/Library/pnpm",
+        VOLTA_HOME: "/Users/user/.volta",
+        ASDF_DATA_DIR: "/Users/user/.asdf",
+      },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.PATH).toBe(
+      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    );
+  });
+
+  it("falls back to os.tmpdir when TMPDIR is not set on Linux", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
@@ -325,7 +686,44 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
-  it("forwards proxy environment variables for launchd/systemd runtime", () => {
+  it("preserves explicit systemd unit overrides", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+  });
+
+  it("preserves explicit systemd unit overrides with service suffix", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+  });
+
+  it("sets a profile-specific launchd marker for macOS gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", OPENCLAW_PROFILE: "work" },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
+  });
+
+  it("does not persist ambient proxy environment variables for launchd/systemd runtime", () => {
     const env = buildServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -338,11 +736,23 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
 
-    expect(env.HTTP_PROXY).toBe("http://proxy.local:7890");
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
-    expect(env.http_proxy).toBe("http://proxy.local:7890");
-    expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.all_proxy).toBeUndefined();
+  });
+
+  it("forwards proxy URL env fallback for installed gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+      },
+      port: 18789,
+    });
+
+    expect(env.OPENCLAW_PROXY_URL).toBe("http://127.0.0.1:3128");
   });
 
   it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
@@ -371,6 +781,19 @@ describe("buildServiceEnvironment", () => {
       "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
   });
+
+  it("prepends explicit runtime directories to macOS LaunchAgent PATH", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", VOLTA_HOME: "/Users/user/.volta" },
+      port: 18789,
+      platform: "darwin",
+      extraPathDirs: ["/opt/homebrew/Cellar/node/22.19.0/bin"],
+    });
+
+    expect(env.PATH).toBe(
+      "/opt/homebrew/Cellar/node/22.19.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    );
+  });
 });
 
 describe("buildNodeServiceEnvironment", () => {
@@ -381,11 +804,27 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.HOME).toBe("/home/user");
   });
 
+  it("sets the OpenClaw-owned launchd marker for macOS node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user" },
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.node");
+  });
+
   it("passes through OPENCLAW_GATEWAY_TOKEN for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: " node-token " },
     });
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
+  });
+
+  it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: " 1 " },
+    });
+    expect(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS).toBe("1");
   });
 
   it("omits OPENCLAW_GATEWAY_TOKEN when the env var is empty", () => {
@@ -398,7 +837,7 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 
-  it("forwards proxy environment variables for node services", () => {
+  it("does not persist ambient proxy environment variables for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: {
         HOME: "/home/user",
@@ -407,20 +846,41 @@ describe("buildNodeServiceEnvironment", () => {
       },
     });
 
-    expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
-    expect(env.no_proxy).toBe("localhost,127.0.0.1");
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.no_proxy).toBeUndefined();
   });
 
-  it("forwards TMPDIR for node services", () => {
+  it("forwards proxy URL env fallback for installed node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+      },
+    });
+
+    expect(env.OPENCLAW_PROXY_URL).toBe("http://127.0.0.1:3128");
+  });
+
+  it("forwards TMPDIR for node services on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/tmp/custom" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe("/tmp/custom");
   });
 
-  it("falls back to os.tmpdir for node services when TMPDIR is not set", () => {
+  it("uses a durable state temp directory for macOS node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user", TMPDIR: "/var/folders/xw/abc123/T/" },
+      platform: "darwin",
+    });
+    expect(env.TMPDIR).toBe(path.join("/Users/user", ".openclaw", "tmp"));
+  });
+
+  it("falls back to os.tmpdir for node services when TMPDIR is not set on Linux", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
+      platform: "linux",
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
@@ -436,9 +896,20 @@ describe("buildNodeServiceEnvironment", () => {
       "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
   });
+
+  it("marks Windows node tasks for hidden launcher startup", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "C:\\Users\\alice" },
+      platform: "win32",
+    });
+
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Node");
+    expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
+    expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBe("node.cmd");
+  });
 });
 
-describe("shared Node TLS env defaults", () => {
+describe("shared Node TLS env defaults matrix", () => {
   const builders = [
     {
       name: "gateway service env",
@@ -457,8 +928,8 @@ describe("shared Node TLS env defaults", () => {
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
   });
 
-  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on non-macOS", ({ build }) => {
-    const env = build({ HOME: "/home/user" }, "linux");
+  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on Windows", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "win32");
     expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
@@ -540,7 +1011,7 @@ describe("resolveLinuxSystemCaBundle", () => {
   });
 });
 
-describe("shared Node TLS env defaults", () => {
+describe("shared Node TLS env defaults focused", () => {
   it("sets macOS TLS defaults for gateway services", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/Users/test" },
@@ -561,7 +1032,7 @@ describe("shared Node TLS env defaults", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when NVM_DIR is set", () => {
-    const expected = resolveLinuxSystemCaBundle();
+    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" },
       port: 18789,
@@ -572,7 +1043,7 @@ describe("shared Node TLS env defaults", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when execPath is under nvm", () => {
-    const expected = resolveLinuxSystemCaBundle();
+    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
       platform: "linux",

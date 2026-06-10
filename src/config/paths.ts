@@ -1,7 +1,9 @@
+// Resolves config, state, cache, and runtime filesystem paths.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -17,11 +19,11 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export const isNixMode = resolveIsNixMode();
 
-// Support historical (and occasionally misspelled) legacy state dirs.
-const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot"] as const;
+// Support the remaining legacy pre-rebrand state dir.
+const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
-const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json"] as const;
+const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -88,12 +90,60 @@ export function resolveStateDir(
   return newDir;
 }
 
+export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
+  const openclawOverride = env.OPENCLAW_STATE_DIR?.trim();
+  if (openclawOverride) {
+    env.OPENCLAW_STATE_DIR = resolveUserPath(openclawOverride, env, effectiveHomedir);
+  }
+}
+
 function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
   return resolveHomeRelativePath(input, { env, homedir });
+}
+
+/**
+ * Optional allowlist of directories that `$include` directives may resolve
+ * outside the config directory. Set via `OPENCLAW_INCLUDE_ROOTS` as a
+ * platform-delimited path list (`:` on POSIX, `;` on Windows).
+ *
+ * Each entry is tilde-expanded and resolved to an absolute path. Entries that
+ * cannot be resolved or that are not absolute after expansion are dropped.
+ *
+ * Returns an empty array when the var is unset or contains no usable entries,
+ * preserving the historical behavior where `$include` is confined to the
+ * directory containing `openclaw.json`.
+ */
+export function resolveIncludeRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string[] {
+  const raw = env.OPENCLAW_INCLUDE_ROOTS?.trim();
+  if (!raw) {
+    return [];
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const entry of raw.split(path.delimiter)) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const resolved = path.resolve(
+      resolveHomeRelativePath(trimmed, { env, homedir: effectiveHomedir }),
+    );
+    if (!path.isAbsolute(resolved) || seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+  return roots;
 }
 
 export const STATE_DIR = resolveStateDir();
@@ -257,16 +307,14 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
     return null;
   }
   if (/^\d+$/.test(trimmed)) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseTcpPort(trimmed);
   }
 
   // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
   // for example `127.0.0.1:18789` or `[::1]:18789`. Accept only explicit host:port forms.
   const bracketedIpv6Match = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
   if (bracketedIpv6Match?.[1]) {
-    const parsed = Number.parseInt(bracketedIpv6Match[1], 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseTcpPort(bracketedIpv6Match[1]);
   }
 
   const firstColon = trimmed.indexOf(":");
@@ -278,8 +326,7 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
   if (!/^\d+$/.test(suffix)) {
     return null;
   }
-  const parsed = Number.parseInt(suffix, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return parseTcpPort(suffix);
 }
 
 export function resolveGatewayPort(

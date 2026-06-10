@@ -1,17 +1,14 @@
-import {
-  buildDeepSeekModelDefinition,
-  DEEPSEEK_BASE_URL,
-  DEEPSEEK_MODEL_CATALOG,
-} from "openclaw/plugin-sdk/provider-models";
+// Deepseek setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { buildDeepSeekModelDefinition, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_CATALOG } from "./api.js";
 
-export const DEEPSEEK_DEFAULT_MODEL_REF = "deepseek/deepseek-chat";
+export const DEEPSEEK_DEFAULT_MODEL_REF = "deepseek/deepseek-v4-flash";
 
-export function applyDeepSeekProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+function applyDeepSeekProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[DEEPSEEK_DEFAULT_MODEL_REF] = {
     ...models[DEEPSEEK_DEFAULT_MODEL_REF],

@@ -1,3 +1,5 @@
+// Device auth test helpers create paired operator/node identities and tracked
+// WebSocket clients for gateway authorization suites.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
@@ -54,7 +56,9 @@ export async function pairDeviceIdentity(params: {
     clientId: params.clientId,
     clientMode: params.clientMode,
   });
-  await approveDevicePairing(request.request.requestId);
+  await approveDevicePairing(request.request.requestId, {
+    callerScopes: params.scopes,
+  });
   return loaded;
 }
 
@@ -84,7 +88,9 @@ export async function issueOperatorToken(params: {
     });
     expect(rotated.ok).toBe(true);
     const token = rotated.ok ? rotated.entry.token : "";
-    expect(token).toBeTruthy();
+    if (!token) {
+      throw new Error(`expected rotated operator token for device ${paired.identity.deviceId}`);
+    }
     return {
       deviceId: paired.identity.deviceId,
       identityPath: paired.identityPath,
@@ -94,7 +100,9 @@ export async function issueOperatorToken(params: {
 
   const device = await getPairedDevice(paired.identity.deviceId);
   const token = device?.tokens?.operator?.token ?? "";
-  expect(token).toBeTruthy();
+  if (!token) {
+    throw new Error(`expected operator token for paired device ${paired.identity.deviceId}`);
+  }
   expect(device?.approvedScopes).toEqual(params.approvedScopes);
   return {
     deviceId: paired.identity.deviceId,
@@ -103,8 +111,11 @@ export async function issueOperatorToken(params: {
   };
 }
 
-export async function openTrackedWs(port: number): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+export async function openTrackedWs(
+  port: number,
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 5_000);

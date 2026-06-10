@@ -1,11 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+// Setup wizard proxy tests cover proxying setup wizard calls through channel plugin facades.
 import {
   promptSetupWizardAllowFrom,
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedFinalize,
@@ -23,7 +24,8 @@ describe("createDelegatedResolveConfigured", () => {
         status: {
           configuredLabel: "configured",
           unconfiguredLabel: "needs setup",
-          resolveConfigured: async ({ cfg }) => Boolean(cfg.channels?.demo),
+          resolveConfigured: async ({ cfg, accountId }) =>
+            Boolean(cfg.channels?.[accountId ?? "demo"]),
         },
         credentials: [],
       }),
@@ -32,7 +34,9 @@ describe("createDelegatedResolveConfigured", () => {
     const resolveConfigured = createDelegatedResolveConfigured(loadWizard);
 
     expect(await resolveConfigured({ cfg: {} })).toBe(false);
-    expect(await resolveConfigured({ cfg: { channels: { demo: {} } } })).toBe(true);
+    expect(await resolveConfigured({ cfg: { channels: { work: {} } }, accountId: "work" })).toBe(
+      true,
+    );
   });
 });
 
@@ -150,7 +154,7 @@ describe("createAllowlistSetupWizardProxy", () => {
 
     expect(
       await promptSetupWizardAllowFrom({ promptAllowFrom: wizard.dmPolicy?.promptAllowFrom }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       await resolveSetupWizardAllowFromEntries({
         resolveEntries: wizard.allowFrom?.resolveEntries,

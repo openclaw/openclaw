@@ -1,4 +1,6 @@
+// Clack prompter adapts wizard prompt requests to Clack terminal prompts.
 import {
+  autocomplete,
   autocompleteMultiselect,
   cancel,
   confirm,
@@ -7,18 +9,26 @@ import {
   multiselect,
   type Option,
   outro,
+  password,
   select,
   spinner,
   text,
 } from "@clack/prompts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { note as emitNote } from "../../packages/terminal-core/src/note.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createCliProgress } from "../cli/progress.js";
-import { stripAnsi } from "../terminal/ansi.js";
-import { note as emitNote } from "../terminal/note.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import { theme } from "../terminal/theme.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
+// Clack-backed WizardPrompter implementation for interactive CLI setup. It
+// converts the generic wizard prompt contract into styled Clack prompts.
 function guardCancel<T>(value: T | symbol): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
@@ -28,8 +38,7 @@ function guardCancel<T>(value: T | symbol): T {
 }
 
 function normalizeSearchTokens(search: string): string[] {
-  return search
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(search)
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
@@ -39,7 +48,7 @@ function buildOptionSearchText<T>(option: Option<T>): string {
   const label = stripAnsi(option.label ?? "");
   const hint = stripAnsi(option.hint ?? "");
   const value = String(option.value ?? "");
-  return `${label} ${hint} ${value}`.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
 }
 
 export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
@@ -51,6 +60,8 @@ export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boo
   return tokens.every((token) => haystack.includes(token));
 }
 
+// Public factory used by setup/onboard commands. Keep side effects inside method
+// calls so tests can import the module without starting prompts.
 export function createClackPrompter(): WizardPrompter {
   return {
     intro: async (title) => {
@@ -62,17 +73,34 @@ export function createClackPrompter(): WizardPrompter {
     note: async (message, title) => {
       emitNote(message, title);
     },
-    select: async (params) =>
-      guardCancel(
+    plain: async (message) => {
+      process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
+    },
+    select: async (params) => {
+      const options = params.options.map((opt) => {
+        const base = { value: opt.value, label: opt.label };
+        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
+      }) as Option<(typeof params.options)[number]["value"]>[];
+
+      if (params.searchable) {
+        return guardCancel(
+          await autocomplete({
+            message: stylePromptMessage(params.message),
+            options,
+            initialValue: params.initialValue,
+            filter: tokenizedOptionFilter,
+          }),
+        );
+      }
+
+      return guardCancel(
         await select({
           message: stylePromptMessage(params.message),
-          options: params.options.map((opt) => {
-            const base = { value: opt.value, label: opt.label };
-            return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-          }) as Option<(typeof params.options)[number]["value"]>[],
+          options,
           initialValue: params.initialValue,
         }),
-      ),
+      );
+    },
     multiselect: async (params) => {
       const options = params.options.map((opt) => {
         const base = { value: opt.value, label: opt.label };
@@ -100,6 +128,14 @@ export function createClackPrompter(): WizardPrompter {
     },
     text: async (params) => {
       const validate = params.validate;
+      if (params.sensitive) {
+        return guardCancel(
+          await password({
+            message: stylePromptMessage(params.message),
+            validate: validate ? (value) => validate(value ?? "") : undefined,
+          }),
+        );
+      }
       return guardCancel(
         await text({
           message: stylePromptMessage(params.message),
@@ -125,6 +161,8 @@ export function createClackPrompter(): WizardPrompter {
         enabled: true,
         fallback: "none",
       });
+      // Drive both Clack spinner UI and OSC progress output for terminals that
+      // display command progress outside the prompt line.
       return {
         update: (message) => {
           spin.message(theme.accent(message));
@@ -132,7 +170,11 @@ export function createClackPrompter(): WizardPrompter {
         },
         stop: (message) => {
           osc.done();
-          spin.stop(message);
+          if (message === undefined) {
+            spin.clear();
+          } else {
+            spin.stop(message);
+          }
         },
       };
     },

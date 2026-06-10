@@ -1,10 +1,15 @@
+// Read-only session store loading parses JSON without repairing or writing the store.
 import fs from "node:fs";
+import { z } from "zod";
+import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
+import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
-function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry | undefined> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
+  Record<string, SessionEntry | undefined>
+>;
 
+/** Reads a session store without mutating it and drops malformed entries. */
 export function readSessionStoreReadOnly(
   storePath: string,
 ): Record<string, SessionEntry | undefined> {
@@ -13,8 +18,13 @@ export function readSessionStoreReadOnly(
     if (!raw.trim()) {
       return {};
     }
-    const parsed = JSON.parse(raw);
-    return isSessionStoreRecord(parsed) ? parsed : {};
+    const parsed = safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([key, entry]) => {
+        const normalized = normalizePersistedSessionEntryShape(entry);
+        return normalized ? [[key, normalized]] : [];
+      }),
+    );
   } catch {
     return {};
   }

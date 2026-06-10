@@ -1,143 +1,32 @@
+// Web search tests cover model-facing schema limits, provider-specific time
+// filters, unsupported filter errors, and scoped provider config merging.
 import { describe, expect, it } from "vitest";
-import { __testing as braveTesting } from "../../../extensions/brave/src/brave-web-search-provider.js";
-import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
-import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
-import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
 import {
+  MAX_SEARCH_COUNT,
   buildUnsupportedSearchFilterResponse,
-  mergeScopedSearchConfig,
-} from "../../plugin-sdk/provider-web-search.js";
-import { withEnv } from "../../test-utils/env.js";
-const {
-  inferPerplexityBaseUrlFromApiKey,
-  resolvePerplexityBaseUrl,
-  resolvePerplexityModel,
-  resolvePerplexityTransport,
-  isDirectPerplexityBaseUrl,
-  resolvePerplexityRequestModel,
-  resolvePerplexityApiKey,
-  normalizeToIsoDate,
   isoToPerplexityDate,
-} = perplexityTesting;
-const {
-  normalizeBraveLanguageParams,
+  normalizeToIsoDate,
   normalizeFreshness,
-  resolveBraveMode,
-  mapBraveLlmContextResults,
-} = braveTesting;
-const { resolveGrokApiKey, resolveGrokModel, resolveGrokInlineCitations, extractGrokContent } =
-  xaiTesting;
-const { resolveKimiApiKey, resolveKimiModel, resolveKimiBaseUrl, extractKimiCitations } =
-  moonshotTesting;
+  parseWebSearchTimeFilters,
+} from "./web-search-provider-common.js";
+import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
+import { createWebSearchTool } from "./web-search.js";
 
-const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
-const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
-const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
-const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
-const directPerplexityApiKey = ["pplx", "test"].join("-");
-const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+describe("web_search tool schema", () => {
+  it("marks query as required for model tool-call schemas", () => {
+    const tool = createWebSearchTool();
+    const parameters = tool?.parameters as { required?: unknown } | undefined;
 
-describe("web_search perplexity compatibility routing", () => {
-  it("detects API key prefixes", () => {
-    expect(inferPerplexityBaseUrlFromApiKey("pplx-123")).toBe("direct");
-    expect(inferPerplexityBaseUrlFromApiKey("sk-or-v1-123")).toBe("openrouter");
-    expect(inferPerplexityBaseUrlFromApiKey("unknown-key")).toBeUndefined();
+    expect(parameters?.required).toEqual(["query"]);
   });
 
-  it("prefers explicit baseUrl over key-based defaults", () => {
-    expect(resolvePerplexityBaseUrl({ baseUrl: "https://example.com" }, "config", "pplx-123")).toBe(
-      "https://example.com",
-    );
-  });
+  it("advertises the shared runtime count limit", () => {
+    const tool = createWebSearchTool();
+    const parameters = tool?.parameters as
+      | { properties?: { count?: { maximum?: unknown } } }
+      | undefined;
 
-  it("resolves OpenRouter env auth and transport", () => {
-    withEnv(
-      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: openRouterPerplexityApiKey },
-      () => {
-        expect(resolvePerplexityApiKey(undefined)).toEqual({
-          apiKey: openRouterPerplexityApiKey,
-          source: "openrouter_env",
-        });
-        expect(resolvePerplexityTransport(undefined)).toMatchObject({
-          baseUrl: "https://openrouter.ai/api/v1",
-          model: "perplexity/sonar-pro",
-          transport: "chat_completions",
-        });
-      },
-    );
-  });
-
-  it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
-    withEnv(
-      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
-      () => {
-        expect(resolvePerplexityTransport(undefined)).toMatchObject({
-          baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro",
-          transport: "search_api",
-        });
-      },
-    );
-  });
-
-  it("switches direct Perplexity to chat completions when model override is configured", () => {
-    expect(resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
-      "perplexity/sonar-reasoning-pro",
-    );
-    expect(
-      resolvePerplexityTransport({
-        apiKey: directPerplexityApiKey,
-        model: "perplexity/sonar-reasoning-pro",
-      }),
-    ).toMatchObject({
-      baseUrl: "https://api.perplexity.ai",
-      model: "perplexity/sonar-reasoning-pro",
-      transport: "chat_completions",
-    });
-  });
-
-  it("treats unrecognized configured keys as direct Perplexity by default", () => {
-    expect(
-      resolvePerplexityTransport({
-        apiKey: enterprisePerplexityApiKey,
-      }),
-    ).toMatchObject({
-      baseUrl: "https://api.perplexity.ai",
-      transport: "search_api",
-    });
-  });
-
-  it("normalizes direct Perplexity models for chat completions", () => {
-    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
-    expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
-    expect(resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
-      "sonar-pro",
-    );
-    expect(
-      resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
-    ).toBe("perplexity/sonar-pro");
-  });
-});
-
-describe("web_search brave language param normalization", () => {
-  it("normalizes and auto-corrects swapped Brave language params", () => {
-    expect(normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
-      search_lang: "tr",
-      ui_lang: "tr-TR",
-    });
-    expect(normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
-      search_lang: "en",
-      ui_lang: "en-US",
-    });
-  });
-
-  it("flags invalid Brave language formats", () => {
-    expect(normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
-      invalidField: "search_lang",
-    });
-    expect(normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
-      invalidField: "ui_lang",
-    });
+    expect(parameters?.properties?.count?.maximum).toBe(MAX_SEARCH_COUNT);
   });
 });
 
@@ -202,6 +91,52 @@ describe("web_search date normalization", () => {
   });
 });
 
+describe("web_search time filter parsing", () => {
+  const baseMessages = {
+    invalidFreshnessMessage: "bad freshness",
+    invalidDateAfterMessage: "bad after",
+    invalidDateBeforeMessage: "bad before",
+    invalidDateRangeMessage: "bad range",
+  };
+
+  it("normalizes freshness shortcuts for providers", () => {
+    expect(
+      parseWebSearchTimeFilters({
+        rawFreshness: "pd",
+        freshnessProvider: "perplexity",
+        ...baseMessages,
+      }),
+    ).toEqual({ freshness: "day" });
+  });
+
+  it("rejects conflicting freshness and date filters", () => {
+    expect(
+      parseWebSearchTimeFilters({
+        rawFreshness: "week",
+        rawDateAfter: "2026-01-01",
+        freshnessProvider: "brave",
+        ...baseMessages,
+      }),
+    ).toEqual({
+      error: "conflicting_time_filters",
+      message:
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    });
+  });
+
+  it("parses date bounds through the shared ISO range validator", () => {
+    expect(
+      parseWebSearchTimeFilters({
+        rawDateAfter: "2026-01-01",
+        rawDateBefore: "2026-01-31",
+        freshnessProvider: "brave",
+        ...baseMessages,
+      }),
+    ).toEqual({ dateAfter: "2026-01-01", dateBefore: "2026-01-31" });
+  });
+});
+
 describe("web_search unsupported filter response", () => {
   it("returns undefined when no unsupported filter is set", () => {
     expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
@@ -258,127 +193,31 @@ describe("web_search scoped config merge", () => {
       brave: { count: 5, apiKey: "brave-test-key" },
     });
   });
-});
 
-describe("web_search kimi config resolution", () => {
-  it("uses config apiKey when provided", () => {
-    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
-  });
-
-  it("falls back to env apiKey", () => {
-    withEnv({ [kimiApiKeyEnv]: "kimi-env-key" }, () => {
-      expect(resolveKimiApiKey({})).toBe("kimi-env-key");
-    });
-  });
-
-  it("uses config model when provided", () => {
-    expect(resolveKimiModel({ model: "moonshot-v1-32k" })).toBe("moonshot-v1-32k");
-  });
-
-  it("falls back to default model", () => {
-    expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
-  });
-
-  it("uses config baseUrl when provided", () => {
-    expect(resolveKimiBaseUrl({ baseUrl: "https://kimi.example/v1" })).toBe(
-      "https://kimi.example/v1",
+  it("keeps mirrored Brave plugin config runtime-only when newly injected", () => {
+    const merged = mergeScopedSearchConfig(
+      { provider: "brave" },
+      "brave",
+      { apiKey: "brave-test-key" },
+      { mirrorApiKeyToTopLevel: true },
     );
+
+    expect(merged?.brave).toEqual({ apiKey: "brave-test-key" });
+    expect(merged?.apiKey).toBe("brave-test-key");
+    // Injected provider detail is available to runtime validation but hidden
+    // from ordinary config serialization.
+    expect(Object.keys(merged ?? {})).toEqual(["provider", "apiKey"]);
+    expect(Object.getOwnPropertyDescriptor(merged, "brave")?.enumerable).toBe(false);
   });
 
-  it("falls back to default baseUrl", () => {
-    expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
-  });
-
-  it("extracts citations from search_results", () => {
-    expect(
-      extractKimiCitations({
-        search_results: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
-      }),
-    ).toEqual(["https://example.com/one", "https://example.com/two"]);
-  });
-});
-
-describe("web_search brave mode resolution", () => {
-  it("defaults to web mode", () => {
-    expect(resolveBraveMode({})).toBe("web");
-  });
-
-  it("honors explicit llm-context mode", () => {
-    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
-  });
-
-  it("maps llm context results", () => {
-    expect(
-      mapBraveLlmContextResults({
-        grounding: {
-          generic: [{ url: "https://example.com", title: "Example", snippets: ["A", "B"] }],
-        },
-        sources: [{ url: "https://example.com", hostname: "example.com", date: "2024-01-01" }],
-      }),
-    ).toEqual([
-      {
-        title: "Example",
-        url: "https://example.com",
-        siteName: "example.com",
-        snippets: ["A", "B"],
-      },
-    ]);
-  });
-});
-
-describe("web_search grok config resolution", () => {
-  it("uses config apiKey when provided", () => {
-    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
-  });
-
-  it("falls back to env apiKey", () => {
-    withEnv({ XAI_API_KEY: "xai-env-key" }, () => {
-      expect(resolveGrokApiKey({})).toBe("xai-env-key");
+  it("keeps newly injected legacy provider config runtime-only for validation", () => {
+    const merged = mergeScopedSearchConfig({ enabled: true, provider: "gemini" }, "perplexity", {
+      apiKey: "perplexity-test-key",
     });
-  });
 
-  it("uses config model when provided", () => {
-    expect(resolveGrokModel({ model: "grok-4-fast" })).toBe("grok-4-fast");
-  });
+    expect(merged?.perplexity).toEqual({ apiKey: "perplexity-test-key" });
+    expect(Object.keys(merged ?? {})).toEqual(["enabled", "provider"]);
 
-  it("normalizes deprecated grok 4.20 beta ids to GA ids", () => {
-    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-reasoning" })).toBe(
-      "grok-4.20-beta-latest-reasoning",
-    );
-    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-non-reasoning" })).toBe(
-      "grok-4.20-beta-latest-non-reasoning",
-    );
-  });
-
-  it("falls back to default model", () => {
-    expect(resolveGrokModel({})).toBe("grok-4-1-fast");
-  });
-
-  it("resolves inline citations flag", () => {
-    expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
-    expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
-    expect(resolveGrokInlineCitations({})).toBe(false);
-  });
-
-  it("extracts content and annotation citations", () => {
-    expect(
-      extractGrokContent({
-        output: [
-          {
-            type: "message",
-            content: [
-              {
-                type: "output_text",
-                text: "Result",
-                annotations: [{ type: "url_citation", url: "https://example.com" }],
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      text: "Result",
-      annotationCitations: ["https://example.com"],
-    });
+    expect(Object.getOwnPropertyDescriptor(merged, "perplexity")?.enumerable).toBe(false);
   });
 });

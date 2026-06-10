@@ -1,16 +1,29 @@
+// Microsoft Foundry plugin module implements shared behavior.
+import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
   type ProviderAuthResult,
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
 export const DEFAULT_GPT5_API = "openai-responses";
 export const COGNITIVE_SERVICES_RESOURCE = "https://cognitiveservices.azure.com";
 export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+export const MAI_IMAGE_MODELS = [
+  "MAI-Image-2.5-Flash",
+  "MAI-Image-2.5",
+  "MAI-Image-2e",
+  "MAI-Image-2",
+] as const;
+export const MAI_DEFAULT_IMAGE_MODEL = "MAI-Image-2.5";
 
 export interface AzAccount {
   name: string;
@@ -69,36 +82,78 @@ export type CachedTokenEntry = {
 
 export type FoundryProviderApi = typeof DEFAULT_API | typeof DEFAULT_GPT5_API;
 
-export type FoundryDeploymentConfigInput = {
+type FoundryDeploymentConfigInput = {
   name: string;
   modelName?: string;
   api?: FoundryProviderApi;
 };
 
+type FoundryModelCapabilities = {
+  modelName: string;
+  api: FoundryProviderApi;
+  reasoning: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
+  input: Array<"text" | "image">;
+  contextWindow: number;
+  maxTokens: number;
+  compat?: FoundryModelCompat;
+};
+
+function normalizeModelInput(input?: unknown): Array<"text" | "image"> {
+  const normalized = Array.isArray(input)
+    ? input.filter((item): item is "text" | "image" => item === "text" || item === "image")
+    : [];
+  return normalized.length > 0 ? normalized : ["text"];
+}
+
 type FoundryModelCompat = {
   supportsStore?: boolean;
+  supportsReasoningEffort?: boolean;
+  supportedReasoningEfforts?: string[];
   maxTokensField: "max_completion_tokens" | "max_tokens";
 };
 
-type FoundryAuthProfileConfig = {
-  provider: string;
-  mode: "api_key" | "oauth" | "token";
-  email?: string;
-};
-
 type FoundryConfigShape = {
-  auth?: {
-    profiles?: Record<string, FoundryAuthProfileConfig>;
-    order?: Record<string, string[]>;
-  };
+  auth?: AuthConfig;
   models?: {
     providers?: Record<string, ModelProviderConfig>;
   };
 };
 
-export function normalizeFoundryModelName(value?: string | null): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim().toLowerCase() : "";
+type FoundryImageDefaultPatch = {
+  agents?: {
+    defaults?: {
+      imageGenerationModel?: {
+        primary: string;
+      };
+    };
+  };
+};
+
+function normalizeFoundryModelName(value?: string | null): string | undefined {
+  const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
+}
+
+export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(modelName);
+  return normalized ? normalized.startsWith("claude") : false;
+}
+
+export function partitionFoundryDeployments<T extends { name: string; modelName?: string }>(
+  deployments: readonly T[],
+): { supported: T[]; anthropic: T[] } {
+  const supported: T[] = [];
+  const anthropic: T[] = [];
+  for (const deployment of deployments) {
+    const classifier = resolveConfiguredModelNameHint(deployment.name, deployment.modelName);
+    if (isAnthropicFoundryDeployment(classifier)) {
+      anthropic.push(deployment);
+    } else {
+      supported.push(deployment);
+    }
+  }
+  return { supported, anthropic };
 }
 
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
@@ -111,8 +166,53 @@ export function usesFoundryResponsesByDefault(value?: string | null): boolean {
     normalized.startsWith("o1") ||
     normalized.startsWith("o3") ||
     normalized.startsWith("o4") ||
+    normalized.startsWith("deepseek-v4") ||
     normalized === "computer-use-preview"
   );
+}
+
+export function isFoundryMaiImageModel(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "mai-image-2.5-flash" ||
+    normalized === "mai-image-2.5" ||
+    normalized === "mai-image-2e" ||
+    normalized === "mai-image-2" ||
+    normalized === "mai-image-2-efficient"
+  );
+}
+
+export function supportsFoundryReasoningContent(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  return normalized === "mai-ds-r1" || normalized === "mai-thinking-1";
+}
+
+export function supportsFoundryImageInput(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.startsWith("gpt-") ||
+    normalized.startsWith("o1") ||
+    normalized.startsWith("o3") ||
+    normalized.startsWith("o4") ||
+    normalized === "computer-use-preview"
+  );
+}
+
+function resolveFoundryModelTokenLimits(value?: string | null): {
+  contextWindow: number;
+  maxTokens: number;
+} {
+  const normalized = normalizeFoundryModelName(value);
+  if (normalized === "mai-ds-r1") {
+    return { contextWindow: 163_840, maxTokens: 163_840 };
+  }
+  return { contextWindow: 128_000, maxTokens: 16_384 };
 }
 
 export function requiresFoundryMaxCompletionTokens(value?: string | null): boolean {
@@ -128,12 +228,73 @@ export function requiresFoundryMaxCompletionTokens(value?: string | null): boole
   );
 }
 
+export function supportsFoundryReasoningEffort(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  if (
+    !normalized ||
+    /^gpt-5-chat(?:-|$)/u.test(normalized) ||
+    /^o1-mini(?:-|$)/u.test(normalized)
+  ) {
+    return false;
+  }
+  return (
+    normalized.startsWith("gpt-5") ||
+    normalized.startsWith("o1") ||
+    normalized.startsWith("o3") ||
+    normalized.startsWith("o4")
+  );
+}
+
+function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
+  const normalized = normalizeFoundryModelName(value);
+  if (!normalized || !supportsFoundryReasoningEffort(normalized)) {
+    return undefined;
+  }
+  if (normalized === "gpt-5.1-codex-max") {
+    return ["none", "medium", "high", "xhigh"];
+  }
+  if (normalized === "gpt-5-pro") {
+    return ["high"];
+  }
+  if (/^gpt-5\.[2-9](?:\.|-|$)/u.test(normalized)) {
+    return ["none", "low", "medium", "high"];
+  }
+  if (/^gpt-5\.1(?:-|$)/u.test(normalized)) {
+    return ["none", "low", "medium", "high"];
+  }
+  if (/^gpt-5-codex(?:-|$)/u.test(normalized)) {
+    return ["low", "medium", "high"];
+  }
+  if (/^gpt-5(?:-|$)/u.test(normalized)) {
+    return ["minimal", "low", "medium", "high"];
+  }
+  return ["low", "medium", "high"];
+}
+
+function buildFoundryThinkingLevelMap(
+  efforts: string[] | undefined,
+): Record<string, string | null> | undefined {
+  if (!efforts) {
+    return undefined;
+  }
+  const supported = new Set(efforts);
+  return {
+    off: supported.has("none") ? "none" : null,
+    minimal: supported.has("minimal") ? "minimal" : null,
+    low: supported.has("low") ? "low" : null,
+    medium: supported.has("medium") ? "medium" : null,
+    high: supported.has("high") ? "high" : null,
+    xhigh: supported.has("xhigh") ? "xhigh" : null,
+    max: null,
+  };
+}
+
 export function isFoundryProviderApi(value?: string | null): value is FoundryProviderApi {
   return value === DEFAULT_API || value === DEFAULT_GPT5_API;
 }
 
 export function normalizeFoundryEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim();
+  const trimmed = normalizeOptionalString(endpoint) ?? "";
   if (!trimmed) {
     return trimmed;
   }
@@ -149,7 +310,7 @@ export function normalizeFoundryEndpoint(endpoint: string): string {
   }
 }
 
-export function buildFoundryV1BaseUrl(endpoint: string): string {
+function buildFoundryV1BaseUrl(endpoint: string): string {
   const base = normalizeFoundryEndpoint(endpoint);
   return base.endsWith("/openai/v1") ? base : `${base}/openai/v1`;
 }
@@ -157,7 +318,7 @@ export function buildFoundryV1BaseUrl(endpoint: string): string {
 export function resolveFoundryApi(
   modelId: string,
   modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  configuredApi?: ModelApi | null,
 ): FoundryProviderApi {
   if (isFoundryProviderApi(configuredApi)) {
     return configuredApi;
@@ -168,9 +329,9 @@ export function resolveFoundryApi(
 
 export function buildFoundryProviderBaseUrl(
   endpoint: string,
-  modelId: string,
-  modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  _modelId: string,
+  _modelNameHint?: string | null,
+  _configuredApi?: ModelApi | null,
 ): string {
   return buildFoundryV1BaseUrl(endpoint);
 }
@@ -186,20 +347,56 @@ export function extractFoundryEndpoint(baseUrl: string | null | undefined): stri
   }
 }
 
-export function buildFoundryModelCompat(
+function buildFoundryModelCompat(
   modelId: string,
   modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  configuredApi?: ModelApi | null,
 ): FoundryModelCompat | undefined {
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
   const needsMaxCompletionTokens = requiresFoundryMaxCompletionTokens(configuredModelName);
-  if (resolvedApi !== DEFAULT_GPT5_API && !needsMaxCompletionTokens) {
-    return undefined;
+  const supportsReasoningEffort = supportsFoundryReasoningEffort(configuredModelName);
+  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(configuredModelName);
+  if (resolvedApi !== DEFAULT_GPT5_API) {
+    return {
+      supportsReasoningEffort,
+      ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+      maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
+    };
   }
   return {
     ...(resolvedApi === DEFAULT_GPT5_API ? { supportsStore: false } : {}),
+    ...(supportsReasoningEffort ? { supportsReasoningEffort, supportedReasoningEfforts } : {}),
     maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
+  };
+}
+
+export function resolveFoundryModelCapabilities(
+  modelId: string,
+  modelNameHint?: string | null,
+  configuredApi?: ModelApi | null,
+  existingInput?: unknown,
+): FoundryModelCapabilities {
+  const modelName = resolveConfiguredModelNameHint(modelId, modelNameHint) ?? modelId;
+  const api = resolveFoundryApi(modelId, modelName, configuredApi);
+  const normalizedInput = normalizeModelInput(existingInput);
+  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
+  const tokenLimits = resolveFoundryModelTokenLimits(modelName);
+  return {
+    modelName,
+    api,
+    reasoning:
+      supportsFoundryReasoningEffort(modelName) || supportsFoundryReasoningContent(modelName),
+    ...(supportedReasoningEfforts
+      ? { thinkingLevelMap: buildFoundryThinkingLevelMap(supportedReasoningEfforts) }
+      : {}),
+    input:
+      normalizedInput.includes("image") || supportsFoundryImageInput(modelName)
+        ? ["text", "image"]
+        : normalizedInput,
+    contextWindow: tokenLimits.contextWindow,
+    maxTokens: tokenLimits.maxTokens,
+    compat: buildFoundryModelCompat(modelId, modelName, api),
   };
 }
 
@@ -207,15 +404,15 @@ export function resolveConfiguredModelNameHint(
   modelId: string,
   modelNameHint?: string | null,
 ): string | undefined {
-  const trimmedName = typeof modelNameHint === "string" ? modelNameHint.trim() : "";
+  const trimmedName = normalizeOptionalString(modelNameHint) ?? "";
   if (trimmedName) {
     return trimmedName;
   }
-  const trimmedId = modelId.trim();
+  const trimmedId = normalizeOptionalString(modelId) ?? "";
   return trimmedId ? trimmedId : undefined;
 }
 
-export function buildFoundryProviderConfig(
+function buildFoundryProviderConfig(
   endpoint: string,
   modelId: string,
   modelNameHint?: string | null,
@@ -228,10 +425,10 @@ export function buildFoundryProviderConfig(
 ): ModelProviderConfig {
   const runtimeApiKey = options?.authMethod === "api-key" ? options.apiKey : undefined;
   const isApiKeyAuth = options?.authMethod === "api-key";
+  const resolvedApi = resolveFoundryApi(modelId, modelNameHint, options?.api);
   const deployments = options?.deployments?.length
     ? options.deployments
-    : [{ name: modelId, modelName: modelNameHint ?? undefined }];
-  const resolvedApi = resolveFoundryApi(modelId, modelNameHint, options?.api);
+    : [{ name: modelId, modelName: modelNameHint ?? undefined, api: resolvedApi }];
   return {
     baseUrl: buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, resolvedApi),
     api: resolvedApi,
@@ -244,21 +441,69 @@ export function buildFoundryProviderConfig(
         }
       : {}),
     models: deployments.map((deployment) => {
-      const configuredName = resolveConfiguredModelNameHint(deployment.name, deployment.modelName);
-      const api = resolveFoundryApi(deployment.name, configuredName, deployment.api);
-      const compat = buildFoundryModelCompat(deployment.name, configuredName, api);
-      return {
-        id: deployment.name,
-        name: configuredName ?? deployment.name,
-        api,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-        ...(compat ? { compat } : {}),
-      };
+      const capabilities = resolveFoundryModelCapabilities(
+        deployment.name,
+        deployment.modelName,
+        deployment.api ?? resolvedApi,
+      );
+      return Object.assign(
+        {
+          id: deployment.name,
+          name: capabilities.modelName,
+          api: capabilities.api,
+          reasoning: capabilities.reasoning,
+          ...(capabilities.thinkingLevelMap
+            ? { thinkingLevelMap: capabilities.thinkingLevelMap }
+            : {}),
+          input: capabilities.input,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: capabilities.contextWindow,
+          maxTokens: capabilities.maxTokens,
+        },
+        capabilities.compat ? { compat: capabilities.compat } : {},
+      );
     }),
+  };
+}
+
+function resolveSelectedDeploymentModelName(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): string | undefined {
+  const selectedDeployment = params.deployments?.find(
+    (deployment) => deployment.name === params.modelId,
+  );
+  return resolveConfiguredModelNameHint(
+    params.modelId,
+    selectedDeployment?.modelName ?? params.modelNameHint,
+  );
+}
+
+function isSelectedMaiImageDeployment(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): boolean {
+  return isFoundryMaiImageModel(resolveSelectedDeploymentModelName(params));
+}
+
+function buildFoundryImageDefaultPatch(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): FoundryImageDefaultPatch {
+  if (!isSelectedMaiImageDeployment(params)) {
+    return {};
+  }
+  return {
+    agents: {
+      defaults: {
+        imageGenerationModel: {
+          primary: `${PROVIDER_ID}/${params.modelId}`,
+        },
+      },
+    },
   };
 }
 
@@ -355,6 +600,10 @@ export function buildFoundryAuthResult(params: {
   currentProviderProfileIds?: string[];
   deployments?: FoundryDeploymentConfigInput[];
 }): ProviderAuthResult {
+  const imageDefaultPatch = buildFoundryImageDefaultPatch(params);
+  const defaultModel = isSelectedMaiImageDeployment(params)
+    ? undefined
+    : `${PROVIDER_ID}/${params.modelId}`;
   return {
     profiles: [
       {
@@ -381,6 +630,7 @@ export function buildFoundryAuthResult(params: {
         profileId: params.profileId,
         currentProviderProfileIds: params.currentProviderProfileIds,
       }),
+      ...imageDefaultPatch,
       models: {
         providers: {
           [PROVIDER_ID]: buildFoundryProviderConfig(
@@ -398,7 +648,7 @@ export function buildFoundryAuthResult(params: {
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),
     },
-    defaultModel: `${PROVIDER_ID}/${params.modelId}`,
+    ...(defaultModel ? { defaultModel } : {}),
     notes: params.notes,
   };
 }
@@ -431,7 +681,7 @@ export function resolveFoundryTargetProfileId(config: FoundryConfigShape): strin
   }
   // Prefer the explicitly ordered profile; fall back to the sole entry when there is exactly one.
   return (
-    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => profileId.trim().length > 0) ??
+    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => normalizeOptionalString(profileId)) ??
     (configuredProfileEntries.length === 1 ? configuredProfileEntries[0]?.[0] : undefined)
   );
 }

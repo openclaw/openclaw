@@ -1,5 +1,9 @@
+// Reads HTTP request bodies with timeout and byte limits.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage } from "./errors.js";
+import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -67,8 +71,8 @@ function parseContentLengthHeader(req: IncomingMessage): number | null {
   if (typeof raw !== "string") {
     return null;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return null;
   }
   return parsed;
@@ -99,11 +103,14 @@ function resolveRequestBodyLimitValues(options: {
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;
   const timeoutMs =
-    typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-      ? Math.max(1, Math.floor(options.timeoutMs))
-      : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
+    options.timeoutMs === undefined
+      ? DEFAULT_WEBHOOK_BODY_TIMEOUT_MS
+      : resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_WEBHOOK_BODY_TIMEOUT_MS);
   return { maxBytes, timeoutMs };
 }
+
+export const testApi = { resolveRequestBodyLimitValues };
+export { testApi as __test__ };
 
 function advanceRequestBodyChunk(
   chunk: Buffer | string,
@@ -242,7 +249,7 @@ export async function readJsonBodyWithLimit(
       return {
         ok: false,
         code: "INVALID_JSON",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       };
     }
   } catch (error) {
@@ -252,7 +259,7 @@ export async function readJsonBodyWithLimit(
     return {
       ok: false,
       code: "INVALID_JSON",
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     };
   }
 }

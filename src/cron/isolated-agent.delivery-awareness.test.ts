@@ -1,3 +1,4 @@
+// Delivery awareness tests cover isolated agent knowledge of cron delivery targets.
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./isolated-agent.mocks.js";
@@ -102,6 +103,37 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
       expect(peekSystemEvents("global")).toEqual(["global cron digest"]);
+    });
+  });
+
+  it("does not queue main-session awareness for implicit last-target delivery", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now(),
+          lastProvider: "telegram",
+          lastChannel: "telegram",
+          lastTo: "123",
+        },
+      });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "implicit cron digest" }]);
+
+      const result = await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:job-1",
+        deps,
+        delivery: {
+          mode: "announce",
+          channel: "last",
+        },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.delivered).toBe(true);
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
 });

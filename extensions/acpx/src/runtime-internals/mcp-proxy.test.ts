@@ -1,11 +1,14 @@
+// ACPX tests cover mcp proxy plugin behavior.
 import { spawn } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
-const proxyPath = path.resolve("extensions/acpx/src/runtime-internals/mcp-proxy.mjs");
+const proxyPath = path.resolve(bundledPluginFile("acpx", "src/runtime-internals/mcp-proxy.mjs"));
 
 async function makeTempScript(name: string, content: string): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-mcp-proxy-"));
@@ -27,6 +30,21 @@ afterEach(async () => {
 });
 
 describe("mcp-proxy", () => {
+  it("hides the target MCP process window on Windows only", async () => {
+    const moduleUrl = pathToFileURL(proxyPath).href;
+    const { createTargetSpawnOptions } = (await import(moduleUrl)) as {
+      createTargetSpawnOptions: (platform?: NodeJS.Platform) => Record<string, unknown>;
+    };
+
+    expect(createTargetSpawnOptions("win32")).toEqual({
+      env: process.env,
+      stdio: ["pipe", "pipe", "inherit"],
+      windowsHide: true,
+    });
+    expect(createTargetSpawnOptions("darwin")).not.toHaveProperty("windowsHide");
+    expect(createTargetSpawnOptions("linux")).not.toHaveProperty("windowsHide");
+  });
+
   it("injects configured MCP servers into ACP session bootstrap requests", async () => {
     const echoServerPath = await makeTempScript(
       "echo-server.cjs",
@@ -34,7 +52,6 @@ describe("mcp-proxy", () => {
 const { createInterface } = require("node:readline");
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => process.stdout.write(line + "\n"));
-rl.on("close", () => process.exit(0));
 `,
     );
 

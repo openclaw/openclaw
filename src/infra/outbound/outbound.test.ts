@@ -1,12 +1,10 @@
+// Cross-cuts outbound target/cache behavior through shared fixtures and active
+// plugin registry setup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { typedCases } from "../../test-utils/typed-cases.js";
 import { DirectoryCache } from "./directory-cache.js";
-import { buildOutboundResultEnvelope } from "./envelope.js";
-import type { OutboundDeliveryJson } from "./format.js";
-import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -31,104 +29,31 @@ describe("DirectoryCache", () => {
     expect(cache.get("a", cfg)).toBeUndefined();
   });
 
-  it("evicts least-recent entries when capacity is exceeded", () => {
-    const cases = [
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: undefined, b: "value-b", c: "value-c" },
-      },
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "a", "value-a2"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: "value-a2", b: undefined, c: "value-c" },
-      },
-    ];
-
-    for (const testCase of cases) {
-      const cache = new DirectoryCache<string>(60_000, 2);
-      for (const action of testCase.actions) {
-        cache.set(action[1], action[2], cfg);
-      }
-      expect(cache.get("a", cfg)).toBe(testCase.expected.a);
-      expect(cache.get("b", cfg)).toBe(testCase.expected.b);
-      expect(cache.get("c", cfg)).toBe(testCase.expected.c);
+  it.each([
+    {
+      actions: [
+        ["set", "a", "value-a"],
+        ["set", "b", "value-b"],
+        ["set", "c", "value-c"],
+      ] as const,
+      expected: { a: undefined, b: "value-b", c: "value-c" },
+    },
+    {
+      actions: [
+        ["set", "a", "value-a"],
+        ["set", "b", "value-b"],
+        ["set", "a", "value-a2"],
+        ["set", "c", "value-c"],
+      ] as const,
+      expected: { a: "value-a2", b: undefined, c: "value-c" },
+    },
+  ])("evicts least-recent entries when capacity is exceeded for %j", ({ actions, expected }) => {
+    const cache = new DirectoryCache<string>(60_000, 2);
+    for (const [, key, value] of actions) {
+      cache.set(key, value, cfg);
     }
+    expect(cache.get("a", cfg)).toBe(expected.a);
+    expect(cache.get("b", cfg)).toBe(expected.b);
+    expect(cache.get("c", cfg)).toBe(expected.c);
   });
 });
-
-describe("buildOutboundResultEnvelope", () => {
-  it("formats envelope variants", () => {
-    const whatsappDelivery: OutboundDeliveryJson = {
-      channel: "whatsapp",
-      via: "gateway",
-      to: "+1",
-      messageId: "m1",
-      mediaUrl: null,
-    };
-    const telegramDelivery: OutboundDeliveryJson = {
-      channel: "telegram",
-      via: "direct",
-      to: "123",
-      messageId: "m2",
-      mediaUrl: null,
-      chatId: "c1",
-    };
-    const discordDelivery: OutboundDeliveryJson = {
-      channel: "discord",
-      via: "gateway",
-      to: "channel:C1",
-      messageId: "m3",
-      mediaUrl: null,
-      channelId: "C1",
-    };
-    const cases = typedCases<{
-      name: string;
-      input: Parameters<typeof buildOutboundResultEnvelope>[0];
-      expected: unknown;
-    }>([
-      {
-        name: "flatten delivery by default",
-        input: { delivery: whatsappDelivery },
-        expected: whatsappDelivery,
-      },
-      {
-        name: "keep payloads + meta",
-        input: {
-          payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
-          meta: { foo: "bar" },
-        },
-        expected: {
-          payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
-          meta: { foo: "bar" },
-        },
-      },
-      {
-        name: "include delivery when payloads exist",
-        input: { payloads: [], delivery: telegramDelivery, meta: { ok: true } },
-        expected: {
-          payloads: [],
-          meta: { ok: true },
-          delivery: telegramDelivery,
-        },
-      },
-      {
-        name: "keep wrapped delivery when flatten disabled",
-        input: { delivery: discordDelivery, flattenDelivery: false },
-        expected: { delivery: discordDelivery },
-      },
-    ]);
-    for (const testCase of cases) {
-      expect(buildOutboundResultEnvelope(testCase.input), testCase.name).toEqual(testCase.expected);
-    }
-  });
-});
-
-runResolveOutboundTargetCoreTests();

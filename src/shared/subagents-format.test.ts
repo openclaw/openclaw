@@ -1,3 +1,4 @@
+// Subagent format tests cover concise subagent status and duration formatting.
 import { describe, expect, it } from "vitest";
 import {
   formatDurationCompact,
@@ -9,9 +10,10 @@ import {
 } from "./subagents-format.js";
 
 describe("shared/subagents-format", () => {
-  it("formats compact durations across minute, hour, and day buckets", () => {
-    expect(formatDurationCompact()).toBe("n/a");
-    expect(formatDurationCompact(30_000)).toBe("1m");
+  it("re-exports the canonical formatter with second-level precision", () => {
+    expect(formatDurationCompact()).toBeUndefined();
+    expect(formatDurationCompact(30_000)).toBe("30s");
+    expect(formatDurationCompact(90_000)).toBe("1m30s");
     expect(formatDurationCompact(60 * 60_000)).toBe("1h");
     expect(formatDurationCompact(61 * 60_000)).toBe("1h1m");
     expect(formatDurationCompact(24 * 60 * 60_000)).toBe("1d");
@@ -24,6 +26,11 @@ describe("shared/subagents-format", () => {
     expect(formatTokenShort(1_500)).toBe("1.5k");
     expect(formatTokenShort(10_000)).toBe("10k");
     expect(formatTokenShort(15_400)).toBe("15k");
+    // Rollover boundary: rounding to thousands must not emit an out-of-scheme
+    // "1000k" — it has to advance to the million branch.
+    expect(formatTokenShort(999_499)).toBe("999k");
+    expect(formatTokenShort(999_500)).toBe("1m");
+    expect(formatTokenShort(999_999)).toBe("1m");
     expect(formatTokenShort(1_000_000)).toBe("1m");
     expect(formatTokenShort(1_250_000)).toBe("1.3m");
   });

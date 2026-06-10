@@ -1,9 +1,11 @@
+// Configure wizard service install/restart helper for the Gateway daemon.
+import { note } from "../../packages/terminal-core/src/note.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import { confirm, select } from "./configure.shared.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import {
@@ -15,13 +17,14 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { guardCancel } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
+/** Prompt to install, reinstall, restart, or skip the local Gateway service. */
 export async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
   port: number;
   daemonRuntime?: GatewayDaemonRuntime;
 }) {
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (error) {
@@ -98,7 +101,7 @@ export async function maybeInstallDaemon(params: {
       async (progress) => {
         progress.setLabel("Preparing Gateway service…");
 
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const tokenResolution = await resolveGatewayInstallToken({
           config: cfg,
           env: process.env,
@@ -115,13 +118,14 @@ export async function maybeInstallDaemon(params: {
           progress.setLabel("Gateway service install blocked.");
           return;
         }
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port: params.port,
-          runtime: daemonRuntime,
-          warn: (message, title) => note(message, title),
-          config: cfg,
-        });
+        const { programArguments, workingDirectory, environment, environmentValueSources } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port: params.port,
+            runtime: daemonRuntime,
+            warn: (message, title) => note(message, title),
+            config: cfg,
+          });
 
         progress.setLabel("Installing Gateway service…");
         try {
@@ -131,16 +135,17 @@ export async function maybeInstallDaemon(params: {
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
           progress.setLabel("Gateway service installed.");
         } catch (err) {
-          installError = err instanceof Error ? err.message : String(err);
+          installError = formatErrorMessage(err);
           progress.setLabel("Gateway service install failed.");
         }
       },
     );
     if (installError) {
-      note("Gateway service install failed: " + installError, "Gateway");
+      note("Gateway service install failed: ".concat(installError), "Gateway");
       note(gatewayInstallErrorHint(), "Gateway");
       return;
     }

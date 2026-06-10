@@ -1,14 +1,29 @@
+/** Reads Codex/Claude/Cursor bundle manifests into OpenClaw plugin manifest metadata. */
 import fs from "node:fs";
 import path from "node:path";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import JSON5 from "json5";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { readRootStructuredFileSync } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
-import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
-import type { PluginBundleFormat } from "./types.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
+import type { PluginManifestActivation } from "./manifest.js";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  normalizeManifestActivation,
+  PLUGIN_MANIFEST_FILENAME,
+} from "./manifest.js";
 
+/** Relative manifest path for Codex-style plugin bundles. */
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
 export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
 
+/** Normalized bundle manifest shape consumed by plugin discovery. */
 export type BundlePluginManifest = {
   id: string;
   name?: string;
@@ -19,6 +34,7 @@ export type BundlePluginManifest = {
   // Only include hook roots that OpenClaw can execute via HOOK.md + handler files.
   hooks: string[];
   bundleFormat: PluginBundleFormat;
+  activation?: PluginManifestActivation;
   capabilities: string[];
 };
 
@@ -30,24 +46,9 @@ type BundleManifestFileLoadResult =
   | { ok: true; raw: Record<string, unknown>; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
-function normalizeString(value: unknown): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed || undefined;
-}
-
-function normalizePathList(value: unknown): string[] {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? [trimmed] : [];
-  }
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
-}
-
+/** Normalizes string-or-list path fields from bundle manifests. */
 export function normalizeBundlePathList(value: unknown): string[] {
-  return Array.from(new Set(normalizePathList(value)));
+  return normalizeUniqueSingleOrTrimmedStringList(value);
 }
 
 export function mergeBundlePathLists(...groups: string[][]): string[] {
@@ -80,7 +81,7 @@ function hasInlineCapabilityValue(value: unknown): boolean {
 
 function slugifyPluginId(raw: string | undefined, rootDir: string): string {
   const fallback = path.basename(rootDir);
-  const source = (raw?.trim() || fallback).toLowerCase();
+  const source = normalizeLowercaseStringOrEmpty(raw) || normalizeLowercaseStringOrEmpty(fallback);
   const slug = source
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
@@ -90,19 +91,23 @@ function slugifyPluginId(raw: string | undefined, rootDir: string): string {
 
 function loadBundleManifestFile(params: {
   rootDir: string;
+  rootRealPath?: string;
   manifestRelativePath: string;
   rejectHardlinks: boolean;
   allowMissing?: boolean;
 }): BundleManifestFileLoadResult {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: params.rootDir,
+  const result = readRootStructuredFileSync<Record<string, unknown>>({
+    rootDir: params.rootDir,
+    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
+    relativePath: params.manifestRelativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
+    parse: (raw) => JSON5.parse(raw),
+    validate: isRecord,
   });
-  if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
+  if (!result.ok && result.reason === "open") {
+    return matchRootFileOpenFailure(result.failure, {
       path: () => {
         if (params.allowMissing) {
           return { ok: true, raw: {}, manifestPath };
@@ -116,21 +121,17 @@ function loadBundleManifestFile(params: {
       }),
     });
   }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    if (!isRecord(raw)) {
-      return { ok: false, error: "plugin manifest must be an object", manifestPath };
-    }
-    return { ok: true, raw, manifestPath };
-  } catch (err) {
+  if (!result.ok) {
     return {
       ok: false,
-      error: `failed to parse plugin manifest: ${String(err)}`,
+      error:
+        result.reason === "invalid"
+          ? "plugin manifest must be an object"
+          : `failed to parse plugin manifest: ${result.error}`,
       manifestPath,
     };
-  } finally {
-    fs.closeSync(opened.fd);
   }
+  return { ok: true, raw: result.value, manifestPath };
 }
 
 function resolveCodexSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
@@ -325,6 +326,7 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
 
 export function loadBundleManifest(params: {
   rootDir: string;
+  rootRealPath?: string;
   bundleFormat: PluginBundleFormat;
   rejectHardlinks?: boolean;
 }): BundleManifestLoadResult {
@@ -337,6 +339,7 @@ export function loadBundleManifest(params: {
         : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
   const loaded = loadBundleManifestFile({
     rootDir: params.rootDir,
+    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
     manifestRelativePath,
     rejectHardlinks,
     allowMissing: params.bundleFormat === "claude",
@@ -347,12 +350,12 @@ export function loadBundleManifest(params: {
 
   const raw = loaded.raw;
   const interfaceRecord = isRecord(raw.interface) ? raw.interface : undefined;
-  const name = normalizeString(raw.name);
+  const name = normalizeOptionalString(raw.name);
   const description =
-    normalizeString(raw.description) ??
-    normalizeString(raw.shortDescription) ??
-    normalizeString(interfaceRecord?.shortDescription);
-  const version = normalizeString(raw.version);
+    normalizeOptionalString(raw.description) ??
+    normalizeOptionalString(raw.shortDescription) ??
+    normalizeOptionalString(interfaceRecord?.shortDescription);
+  const version = normalizeOptionalString(raw.version);
 
   if (params.bundleFormat === "codex") {
     const skills = resolveCodexSkillDirs(raw, params.rootDir);
@@ -368,6 +371,7 @@ export function loadBundleManifest(params: {
         settingsFiles: [],
         hooks,
         bundleFormat: "codex",
+        activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCodexCapabilities(raw, params.rootDir),
       },
       manifestPath: loaded.manifestPath,
@@ -386,6 +390,7 @@ export function loadBundleManifest(params: {
         settingsFiles: [],
         hooks: [],
         bundleFormat: "cursor",
+        activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCursorCapabilities(raw, params.rootDir),
       },
       manifestPath: loaded.manifestPath,
@@ -403,6 +408,7 @@ export function loadBundleManifest(params: {
       settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
       hooks: resolveClaudeHookPaths(raw, params.rootDir),
       bundleFormat: "claude",
+      activation: normalizeManifestActivation(raw.activation),
       capabilities: buildClaudeCapabilities(raw, params.rootDir),
     },
     manifestPath: loaded.manifestPath,

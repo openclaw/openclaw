@@ -1,14 +1,19 @@
 #!/usr/bin/env node
+// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
 import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(repoRoot, "src");
-const extensionsRoot = path.join(repoRoot, "extensions");
+const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
 const testRoot = path.join(repoRoot, "test");
 const workspacePackagePaths = ["ui/package.json"];
 const MAX_SCAN_BYTES = 2 * 1024 * 1024;
@@ -121,7 +126,7 @@ async function walkAllCodeFiles(rootDir, options = {}) {
   const includeTests = options.includeTests === true;
 
   async function walk(dir) {
-    let entries = [];
+    let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
@@ -168,7 +173,7 @@ function normalizePluginSdkFamily(resolvedPath) {
 }
 
 function resolveOptionalClusterFromPath(resolvedPath) {
-  if (resolvedPath.startsWith("extensions/")) {
+  if (resolvedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
     const cluster = resolvedPath.split("/")[1];
     return optionalBundledClusterSet.has(cluster) ? cluster : null;
   }
@@ -426,7 +431,7 @@ function packageClusterMeta(relativePackagePath) {
     cluster,
     packageName: null,
     packagePath: relativePackagePath,
-    reachability: relativePackagePath.startsWith("extensions/")
+    reachability: relativePackagePath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)
       ? "extension-workspace"
       : "workspace",
   };
@@ -580,7 +585,7 @@ function describeCronSeamKinds(relativePath, source) {
   const seamKinds = [];
   const importsAgentRunner = hasAnyImportSource(source, [
     "../../agents/cli-runner.js",
-    "../../agents/pi-embedded.js",
+    "../../agents/embedded-agent.js",
     "../../agents/model-fallback.js",
     "../../agents/subagent-registry.js",
     "../../infra/agent-events.js",
@@ -621,7 +626,7 @@ function describeCronSeamKinds(relativePath, source) {
 
   if (
     importsAgentRunner &&
-    /\brunCliAgent\b|\brunEmbeddedPiAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
+    /\brunCliAgent\b|\brunEmbeddedAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
       source,
     )
   ) {
@@ -742,7 +747,7 @@ function describeSubagentSeamKinds(relativePath, source) {
 
   if (
     (importsAnnounceDelivery || isAnnounceDispatchPath) &&
-    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedPiMessage\b|\bwaitForEmbeddedPiRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
+    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
       source,
     )
   ) {
@@ -777,7 +782,7 @@ export function describeSeamKinds(relativePath, source) {
       relativePath,
     );
   const isChannelMediaAdapterPath =
-    (relativePath.startsWith("extensions/") &&
+    (relativePath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
       /(outbound|outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
         relativePath,
       )) ||

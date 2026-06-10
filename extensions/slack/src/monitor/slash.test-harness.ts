@@ -1,4 +1,7 @@
+// Slack plugin module implements slash harness behavior.
 import { vi } from "vitest";
+
+type AsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 
 const mocks = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
@@ -7,42 +10,21 @@ const mocks = vi.hoisted(() => ({
   resolveAgentRouteMock: vi.fn(),
   finalizeInboundContextMock: vi.fn(),
   resolveConversationLabelMock: vi.fn(),
-  recordSessionMetaFromInboundMock: vi.fn(),
+  recordSessionMetaFromInboundMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   resolveStorePathMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("./slash-dispatch.runtime.js", () => {
   return {
-    ...actual,
+    deliverSlackSlashReplies: vi.fn(async () => {}),
     dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
     finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
-  return {
-    ...actual,
     resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
+    resolveChunkMode: vi.fn(() => "auto"),
     resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
+    resolveMarkdownTableMode: vi.fn(() => "auto"),
     recordInboundSessionMetaSafe: (...args: unknown[]) =>
       mocks.recordSessionMetaFromInboundMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),
   };
 });
 
@@ -53,7 +35,7 @@ type SlashHarnessMocks = {
   resolveAgentRouteMock: ReturnType<typeof vi.fn>;
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   resolveConversationLabelMock: ReturnType<typeof vi.fn>;
-  recordSessionMetaFromInboundMock: ReturnType<typeof vi.fn>;
+  recordSessionMetaFromInboundMock: AsyncMock;
   resolveStorePathMock: ReturnType<typeof vi.fn>;
 };
 

@@ -1,9 +1,17 @@
+/** Configuration defaults and env parsing for the node-host runner. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { writeJsonAtomic } from "../infra/json-files.js";
+import { writeJson } from "../infra/json-files.js";
 
+/**
+ * Persistent node-host identity/config file helpers.
+ *
+ * Node hosts keep a stable node id and optional Gateway connection metadata in
+ * the state directory so reconnects and plugin node commands can identify the host.
+ */
+/** Gateway endpoint metadata persisted with node-host config. */
 export type NodeHostGatewayConfig = {
   host?: string;
   port?: number;
@@ -11,7 +19,7 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
 };
 
-export type NodeHostConfig = {
+type NodeHostConfig = {
   version: 1;
   nodeId: string;
   token?: string;
@@ -21,7 +29,7 @@ export type NodeHostConfig = {
 
 const NODE_HOST_FILE = "node.json";
 
-export function resolveNodeHostConfigPath(): string {
+function resolveNodeHostConfigPath(): string {
   return path.join(resolveStateDir(), NODE_HOST_FILE);
 }
 
@@ -42,6 +50,7 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
   return base;
 }
 
+/** Load and normalize the node-host config, or null when no readable config exists. */
 export async function loadNodeHostConfig(): Promise<NodeHostConfig | null> {
   const filePath = resolveNodeHostConfigPath();
   try {
@@ -53,11 +62,13 @@ export async function loadNodeHostConfig(): Promise<NodeHostConfig | null> {
   }
 }
 
+/** Save node-host config with private file permissions. */
 export async function saveNodeHostConfig(config: NodeHostConfig): Promise<void> {
   const filePath = resolveNodeHostConfigPath();
-  await writeJsonAtomic(filePath, config, { mode: 0o600 });
+  await writeJson(filePath, config, { mode: 0o600 });
 }
 
+/** Load or create a node-host config with a stable generated node id. */
 export async function ensureNodeHostConfig(): Promise<NodeHostConfig> {
   const existing = await loadNodeHostConfig();
   const normalized = normalizeConfig(existing);

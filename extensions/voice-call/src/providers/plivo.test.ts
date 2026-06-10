@@ -1,3 +1,4 @@
+// Voice Call tests cover plivo plugin behavior.
 import { describe, expect, it } from "vitest";
 import { PlivoProvider } from "./plivo.js";
 
@@ -63,5 +64,31 @@ describe("PlivoProvider", () => {
     expect(requireEvent(result.events[0], "expected verified Plivo event").dedupeKey).toBe(
       "plivo:v3:verified",
     );
+  });
+
+  it("pins stored callback bases to publicUrl instead of request Host", () => {
+    const provider = new PlivoProvider(
+      {
+        authId: "MA000000000000000000",
+        authToken: "test-token",
+      },
+      {
+        publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo",
+      },
+    );
+
+    provider.parseWebhookEvent({
+      headers: { host: "attacker.example" },
+      rawBody:
+        "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
+      url: "https://attacker.example/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
+      method: "POST",
+      query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
+    });
+
+    const callbackMap = (provider as unknown as { callUuidToWebhookUrl: Map<string, string> })
+      .callUuidToWebhookUrl;
+
+    expect(callbackMap.get("call-uuid")).toBe("https://voice.openclaw.ai/voice/webhook");
   });
 });

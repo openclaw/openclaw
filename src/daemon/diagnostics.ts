@@ -1,6 +1,8 @@
+/** Reads recent gateway service logs for actionable daemon restart diagnostics. */
 import fs from "node:fs/promises";
-import { resolveGatewayLogPaths } from "./launchd.js";
+import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
+// Error patterns worth surfacing from gateway service logs after failed starts.
 const GATEWAY_LOG_ERROR_PATTERNS = [
   /refusing to bind gateway/i,
   /gateway auth mode/i,
@@ -24,9 +26,19 @@ async function readLastLogLine(filePath: string): Promise<string | null> {
   }
 }
 
-export async function readLastGatewayErrorLine(env: NodeJS.ProcessEnv): Promise<string | null> {
-  const { stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
-  const stderrRaw = await fs.readFile(stderrPath, "utf8").catch(() => "");
+export async function readLastGatewayErrorLine(
+  env: NodeJS.ProcessEnv,
+  options?: { platform?: NodeJS.Platform },
+): Promise<string | null> {
+  const platform = options?.platform ?? process.platform;
+  const readStderr = platform !== "darwin";
+  // launchd supervisor mode combines child stderr into stdout; other platforms
+  // keep stderr as the strongest failure signal.
+  const { stdoutPath, stderrPath } =
+    platform === "darwin"
+      ? resolveGatewaySupervisorLogPaths(env, { platform })
+      : resolveGatewayLogPaths(env);
+  const stderrRaw = readStderr ? await fs.readFile(stderrPath, "utf8").catch(() => "") : "";
   const stdoutRaw = await fs.readFile(stdoutPath, "utf8").catch(() => "");
   const lines = [...stderrRaw.split(/\r?\n/), ...stdoutRaw.split(/\r?\n/)].map((line) =>
     line.trim(),
@@ -40,5 +52,7 @@ export async function readLastGatewayErrorLine(env: NodeJS.ProcessEnv): Promise<
       return line;
     }
   }
-  return (await readLastLogLine(stderrPath)) ?? (await readLastLogLine(stdoutPath));
+  return readStderr
+    ? ((await readLastLogLine(stderrPath)) ?? (await readLastLogLine(stdoutPath)))
+    : await readLastLogLine(stdoutPath);
 }

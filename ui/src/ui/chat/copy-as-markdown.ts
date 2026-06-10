@@ -1,3 +1,4 @@
+// Control UI chat module implements copy as markdown behavior.
 import { html, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 
@@ -92,6 +93,10 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
   `;
 }
 
+export function renderCopyButton(text: string, label = COPY_LABEL): TemplateResult {
+  return createCopyButton({ text: () => text, label });
+}
+
 export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {
-  return createCopyButton({ text: () => markdown, label: COPY_LABEL });
+  return renderCopyButton(markdown, COPY_LABEL);
 }

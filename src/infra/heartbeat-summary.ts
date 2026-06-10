@@ -1,3 +1,5 @@
+// Summarizes heartbeat config for CLI and UI display.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -5,12 +7,15 @@ import {
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
+// Heartbeat summaries merge default and per-agent heartbeat config for CLI/UI
+// display without scheduling any work.
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
+/** Normalized heartbeat configuration for one agent. */
 export type HeartbeatSummary = {
   enabled: boolean;
   every: string;
@@ -28,6 +33,7 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
+/** Return whether heartbeat scheduling applies to an agent. */
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const list = cfg.agents?.list ?? [];
@@ -37,9 +43,13 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
+  if (cfg.agents?.defaults?.heartbeat) {
+    return true;
+  }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
 
+/** Resolve a heartbeat interval string to milliseconds. */
 export function resolveHeartbeatIntervalMs(
   cfg: OpenClawConfig,
   overrideEvery?: string,
@@ -53,7 +63,7 @@ export function resolveHeartbeatIntervalMs(
   if (!raw) {
     return null;
   }
-  const trimmed = String(raw).trim();
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return null;
   }
@@ -69,6 +79,7 @@ export function resolveHeartbeatIntervalMs(
   return ms;
 }
 
+/** Resolve display-ready heartbeat settings for an agent. */
 export function resolveHeartbeatSummaryForAgent(
   cfg: OpenClawConfig,
   agentId?: string,

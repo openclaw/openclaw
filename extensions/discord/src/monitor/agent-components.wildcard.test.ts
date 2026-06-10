@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+// Discord tests cover agent components.wildcard plugin behavior.
+import { beforeAll, describe, expect, it } from "vitest";
 
 let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;
 let buildDiscordModalCustomId: typeof import("../components.js").buildDiscordModalCustomId;
@@ -50,7 +51,7 @@ describe("discord wildcard component registration ids", () => {
     const components = createWildcardComponents();
     const customIds = components.map((component) => component.customId);
 
-    expect(customIds.every((id) => id !== "*")).toBe(true);
+    expect(customIds.some((id) => id === "*")).toBe(false);
     expect(new Set(customIds).size).toBe(customIds.length);
   });
 

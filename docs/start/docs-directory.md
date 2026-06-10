@@ -5,8 +5,6 @@ read_when:
 title: "Docs directory"
 ---
 
-# Docs Directory
-
 <Note>
 This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
 For a complete map of the docs, see [Docs hubs](/start/hubs).
@@ -40,9 +38,9 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Control UI (browser)](/web/control-ui)
 - [Telegram](/channels/telegram)
 - [Discord](/channels/discord)
-- [Mattermost (plugin)](/channels/mattermost)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
-- [iMessage (legacy)](/channels/imessage)
+- [Mattermost](/channels/mattermost)
+- [QQ Bot](/channels/qqbot)
+- [iMessage](/channels/imessage)
 - [Groups](/channels/groups)
 - [WhatsApp group messages](/channels/group-messages)
 - [Media images](/nodes/images)
@@ -53,14 +51,19 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [macOS app](/platforms/macos)
 - [iOS app](/platforms/ios)
 - [Android app](/platforms/android)
-- [Windows (WSL2)](/platforms/windows)
+- [Windows Hub](/platforms/windows)
 - [Linux app](/platforms/linux)
 
 ## Operations and safety
 
 - [Sessions](/concepts/session)
 - [Cron jobs](/automation/cron-jobs)
-- [Webhooks](/automation/webhook)
-- [Gmail hooks (Pub/Sub)](/automation/gmail-pubsub)
+- [Webhooks](/automation/cron-jobs#webhooks)
+- [Gmail hooks (Pub/Sub)](/automation/cron-jobs#gmail-pubsub-integration)
 - [Security](/gateway/security)
 - [Troubleshooting](/gateway/troubleshooting)
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [Docs hubs](/start/hubs)

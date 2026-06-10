@@ -1,12 +1,35 @@
+// Venice plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-models";
+import {
+  applyModelCompatPatch,
+  type ModelCompatConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
+import { createVeniceDeepSeekV4Wrapper } from "./stream.js";
 
 const PROVIDER_ID = "venice";
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minContains",
+  "maxContains",
+] as const;
+
+function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
+  return applyModelCompatPatch(model as T & { compat?: ModelCompatConfig }, {
+    toolSchemaProfile: "xai",
+    unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
+    nativeWebSearchTool: true,
+    toolCallArgumentsEncoding: "html-entities",
+  }) as T;
+}
 
 function isXaiBackedVeniceModel(modelId: string): boolean {
-  return modelId.trim().toLowerCase().includes("grok");
+  return normalizeLowercaseStringOrEmpty(modelId).includes("grok");
 }
 
 export default defineSingleProviderPluginEntry({
@@ -43,5 +66,6 @@ export default defineSingleProviderPluginEntry({
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
+    wrapStreamFn: (ctx) => createVeniceDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
   },
 });

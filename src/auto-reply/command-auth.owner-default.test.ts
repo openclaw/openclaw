@@ -1,3 +1,4 @@
+/** Tests command authorization owner defaults for direct-message senders. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
@@ -53,6 +54,30 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
+  it("keeps channel-validated native group commands authorized without owner status", () => {
+    const cfg = {
+      channels: { telegram: {} },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:group:-100123",
+      SenderId: "200482621",
+      CommandSource: "native",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
   it("senderIsOwner is false when ownerAllowFrom is configured and sender does not match", () => {
     const cfg = {
       channels: { discord: {} },
@@ -73,6 +98,31 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     });
 
     expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("does not let native command authorization bypass explicit owner allowlists", () => {
+    const cfg = {
+      channels: { telegram: {} },
+      commands: { ownerAllowFrom: ["456"] },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:group:-100123",
+      SenderId: "200482621",
+      CommandSource: "native",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
   });
 
   it("senderIsOwner is true when ownerAllowFrom matches sender", () => {

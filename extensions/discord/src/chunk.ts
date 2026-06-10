@@ -1,6 +1,8 @@
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+// Discord plugin module implements chunk behavior.
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 
-export type ChunkDiscordTextOpts = {
+type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
   maxChars?: number;
   /**
@@ -22,6 +24,11 @@ type OpenFence = {
 const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
+
+function resolveDiscordChunkLimit(value: unknown, fallback: number) {
+  return resolveIntegerOption(value, fallback, { min: 1 });
+}
 
 function countLines(text: string) {
   if (!text) {
@@ -63,12 +70,57 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
   return `${text}${closeLine}`;
 }
 
+function isHighSurrogate(code: number) {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number) {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function clampToCodePointBoundary(text: string, index: number) {
+  const boundary = Math.min(Math.max(0, index), text.length);
+  if (boundary <= 0 || boundary >= text.length) {
+    return boundary;
+  }
+  const previous = text.charCodeAt(boundary - 1);
+  const next = text.charCodeAt(boundary);
+  if (isHighSurrogate(previous) && isLowSurrogate(next)) {
+    return boundary > 1 ? boundary - 1 : boundary + 1;
+  }
+  return boundary;
+}
+
+function findWhitespaceBreak(window: string) {
+  for (let i = window.length - 1; i >= 0; i--) {
+    if (/\s/.test(window[i])) {
+      // Return the separator index so whitespace stays with the next segment.
+      return i;
+    }
+  }
+  return -1;
+}
+
+function findCjkPunctuationBreak(window: string) {
+  for (let end = window.length; end > 0; ) {
+    const code = window.charCodeAt(end - 1);
+    const start = isLowSurrogate(code) && end > 1 ? end - 2 : end - 1;
+    const char = window.slice(start, end);
+    if (start > 0 && CJK_PUNCTUATION_BREAK_AFTER_RE.test(char)) {
+      // Return the exclusive end so CJK punctuation stays with the current segment.
+      return end;
+    }
+    end = start;
+  }
+  return -1;
+}
+
 function splitLongLine(
   line: string,
   maxChars: number,
   opts: { preserveWhitespace: boolean },
 ): string[] {
-  const limit = Math.max(1, Math.floor(maxChars));
+  const limit = resolveDiscordChunkLimit(maxChars, DEFAULT_MAX_CHARS);
   if (line.length <= limit) {
     return [line];
   }
@@ -76,20 +128,18 @@ function splitLongLine(
   let remaining = line;
   while (remaining.length > limit) {
     if (opts.preserveWhitespace) {
-      out.push(remaining.slice(0, limit));
-      remaining = remaining.slice(limit);
+      const breakIdx = clampToCodePointBoundary(remaining, limit);
+      out.push(remaining.slice(0, breakIdx));
+      remaining = remaining.slice(breakIdx);
       continue;
     }
     const window = remaining.slice(0, limit);
-    let breakIdx = -1;
-    for (let i = window.length - 1; i >= 0; i--) {
-      if (/\s/.test(window[i])) {
-        breakIdx = i;
-        break;
-      }
+    let breakIdx = findWhitespaceBreak(window);
+    if (breakIdx <= 0) {
+      breakIdx = findCjkPunctuationBreak(window);
     }
     if (breakIdx <= 0) {
-      breakIdx = limit;
+      breakIdx = clampToCodePointBoundary(remaining, limit);
     }
     out.push(remaining.slice(0, breakIdx));
     // Keep the separator for the next segment so words don't get glued together.
@@ -106,8 +156,8 @@ function splitLongLine(
  * while keeping fenced code blocks balanced across chunks.
  */
 export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
-  const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
-  const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
+  const maxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
+  const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
 
   const body = text ?? "";
   if (!body) {
@@ -218,7 +268,7 @@ export function chunkDiscordTextWithMode(
   }
   const lineChunks = chunkMarkdownTextWithMode(
     text,
-    Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS)),
+    resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS),
     "newline",
   );
   const chunks: string[] = [];
@@ -243,7 +293,7 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   }
 
   const opensWithReasoningItalics =
-    source.startsWith("Reasoning:\n_") && source.trimEnd().endsWith("_");
+    /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(source) && source.trimEnd().endsWith("_");
   if (!opensWithReasoningItalics) {
     return chunks;
   }

@@ -1,27 +1,64 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Tests provider usage loading from plugin-provided sources.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
+  getRuntimeConfig: () => ({}),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageSnapshotWithPlugin: (...args: unknown[]) =>
-    resolveProviderUsageSnapshotWithPluginMock(...args),
-}));
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderUsageSnapshotWithPlugin: (...args: unknown[]) =>
+      resolveProviderUsageSnapshotWithPluginMock(...args),
+  };
+});
 
 let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProviderUsageSummary;
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
+function requireFirstPluginUsageCall(): {
+  provider?: unknown;
+  context?: {
+    provider?: unknown;
+    token?: unknown;
+    authProfileId?: unknown;
+    timeoutMs?: unknown;
+  };
+} {
+  const [call] = resolveProviderUsageSnapshotWithPluginMock.mock.calls;
+  if (!call) {
+    throw new Error("expected provider usage plugin call");
+  }
+  const [pluginCall] = call;
+  if (!pluginCall || typeof pluginCall !== "object" || Array.isArray(pluginCall)) {
+    throw new Error("expected provider usage plugin call");
+  }
+  return pluginCall as {
+    provider?: unknown;
+    context?: {
+      provider?: unknown;
+      token?: unknown;
+      authProfileId?: unknown;
+      timeoutMs?: unknown;
+    };
+  };
+}
+
 describe("provider-usage.load plugin boundary", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
+  });
+
+  beforeEach(() => {
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
-    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
   });
 
   it("prefers plugin-owned usage snapshots", async () => {
@@ -52,15 +89,48 @@ describe("provider-usage.load plugin boundary", () => {
     });
 
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "github-copilot",
-        context: expect.objectContaining({
-          provider: "github-copilot",
-          token: "copilot-token",
-          timeoutMs: 5_000,
-        }),
+    expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledOnce();
+    const pluginCall = requireFirstPluginUsageCall();
+    expect(pluginCall.provider).toBe("github-copilot");
+    expect(pluginCall.context?.provider).toBe("github-copilot");
+    expect(pluginCall.context?.token).toBe("copilot-token");
+    expect(pluginCall.context?.timeoutMs).toBe(5_000);
+  });
+
+  it("routes synthetic Codex usage through the Codex hook while preserving OpenAI context", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 9 }],
+    });
+
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        auth: [
+          {
+            provider: "openai",
+            token: "codex-app-server",
+            authProfileId: "openai:work",
+            hookProvider: "codex",
+          },
+        ],
       }),
-    );
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    const pluginCall = requireFirstPluginUsageCall();
+    expect(pluginCall.provider).toBe("codex");
+    expect(pluginCall.context?.provider).toBe("openai");
+    expect(pluginCall.context?.token).toBe("codex-app-server");
+    expect(pluginCall.context?.authProfileId).toBe("openai:work");
   });
 });

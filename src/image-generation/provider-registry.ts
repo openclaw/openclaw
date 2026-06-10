@@ -1,10 +1,12 @@
+/** Registry for image-generation providers contributed by plugin capabilities. */
 import { normalizeProviderId } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "../plugins/runtime.js";
+import * as capabilityProviderRuntime from "../plugins/capability-provider-runtime.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
+// Image-generation providers come from plugin capability registration. The
+// registry keeps aliases separate from canonical ids for user config lookups.
 const BUILTIN_IMAGE_GENERATION_PROVIDERS: readonly ImageGenerationProviderPlugin[] = [];
 const UNSAFE_PROVIDER_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -23,12 +25,10 @@ function isSafeImageGenerationProviderId(id: string | undefined): id is string {
 function resolvePluginImageGenerationProviders(
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin[] {
-  const active = getActivePluginRegistry();
-  const registry =
-    (active?.imageGenerationProviders?.length ?? 0) > 0 || getActivePluginRegistryKey() || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  return registry?.imageGenerationProviders?.map((entry) => entry.provider) ?? [];
+  return capabilityProviderRuntime.resolvePluginCapabilityProviders({
+    key: "imageGenerationProviders",
+    cfg,
+  });
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {
@@ -42,6 +42,8 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
     if (!isSafeImageGenerationProviderId(id)) {
       return;
     }
+    // Canonical list output is one entry per provider; aliases only affect
+    // lookup so duplicate aliases cannot duplicate providers in UI/config.
     canonical.set(id, provider);
     aliases.set(id, provider);
     for (const alias of provider.aliases ?? []) {
@@ -62,12 +64,14 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
   return { canonical, aliases };
 }
 
+/** Lists canonical image-generation providers visible for config. */
 export function listImageGenerationProviders(
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin[] {
   return [...buildProviderMaps(cfg).canonical.values()];
 }
 
+/** Resolves an image-generation provider by canonical id or alias. */
 export function getImageGenerationProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,

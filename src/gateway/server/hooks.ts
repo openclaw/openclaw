@@ -1,28 +1,97 @@
+// Gateway hook server wiring translates external hook requests into wake events or isolated agent runs.
 import { randomUUID } from "node:crypto";
-import type { CliDeps } from "../../cli/deps.js";
-import { loadConfig, type OpenClawConfig } from "../../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
-import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
+import type { CliDeps } from "../../cli/deps.types.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+  resolveMainSessionKeyFromConfig,
+} from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
 import type { CronJob } from "../../cron/types.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  normalizeHookDispatchSessionKey,
-  type HookAgentDispatchPayload,
-  type HooksConfigResolved,
-} from "../hooks.js";
-import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
+import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
+import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
+/**
+ * Gateway hook HTTP handler factory.
+ *
+ * Hooks can either enqueue wake events or spawn isolated agent turns; both paths
+ * sanitize external input before it reaches logs or system-event text.
+ */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-export function resolveHookClientIpConfig(cfg: OpenClawConfig): HookClientIpConfig {
-  return {
-    trustedProxies: cfg.gateway?.trustedProxies,
-    allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
-  };
+function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
+  return params.agentId
+    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
+    : resolveMainSessionKey(params.cfg);
 }
 
+function shouldAnnounceHookRunResult(params: {
+  deliver: boolean;
+  result: RunCronAgentTurnResult;
+}): boolean {
+  if (params.result.status !== "ok") {
+    return true;
+  }
+  return (
+    params.deliver && params.result.delivered !== true && params.result.deliveryAttempted !== true
+  );
+}
+
+function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
+  const diagnosticsSummary =
+    result.status !== "ok" ? normalizeOptionalString(result.diagnostics?.summary) : undefined;
+  return (
+    diagnosticsSummary ||
+    normalizeOptionalString(result.summary) ||
+    normalizeOptionalString(result.error) ||
+    result.status
+  );
+}
+
+function sanitizeHookConsoleValue(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  const withoutControlChars = Array.from(normalized, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 32 || code === 127 ? " " : char;
+  }).join("");
+  return withoutControlChars.replace(/\s+/gu, " ").trim().slice(0, 500);
+}
+
+function formatHookRunWarningConsoleMessage(params: {
+  status: string;
+  model: string | undefined;
+  summary: string;
+}): string {
+  const parts = [
+    "hook agent run returned non-ok status",
+    `status=${sanitizeHookConsoleValue(params.status) ?? "unknown"}`,
+  ];
+  const model = sanitizeHookConsoleValue(params.model);
+  if (model) {
+    parts.push(`model=${model}`);
+  }
+  const summary = sanitizeHookConsoleValue(params.summary);
+  if (summary) {
+    parts.push(`summary=${summary}`);
+  }
+  return parts.join(" ");
+}
+
+/** Creates the HTTP handler used by gateway hook endpoints. */
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -35,28 +104,35 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, { sessionKey });
+    enqueueSystemEvent(value.text, {
+      sessionKey,
+    });
     if (value.mode === "now") {
-      requestHeartbeatNow({ reason: "hook:wake" });
+      requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake" });
     }
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
-    const sessionKey = normalizeHookDispatchSessionKey({
-      sessionKey: value.sessionKey,
-      targetAgentId: value.agentId,
-    });
-    const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const sessionKey = value.sessionKey;
+    const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
-    const now = Date.now();
+    const runId = randomUUID();
+    const nowMs = resolveDateTimestampMs(Date.now());
+    const delivery = value.deliver
+      ? {
+          mode: "announce" as const,
+          channel: value.channel,
+          to: value.to,
+        }
+      : { mode: "none" as const };
     const job: CronJob = {
       id: jobId,
       agentId: value.agentId,
-      name: value.name,
+      name: safeName,
       enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "at", at: new Date(now).toISOString() },
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+      schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
       sessionTarget: "isolated",
       wakeMode: value.wakeMode,
       payload: {
@@ -65,19 +141,24 @@ export function createGatewayHooksRequestHandler(params: {
         model: value.model,
         thinking: value.thinking,
         timeoutSeconds: value.timeoutSeconds,
-        deliver: value.deliver,
-        channel: value.channel,
-        to: value.to,
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
         externalContentSource: value.externalContentSource,
       },
-      state: { nextRunAtMs: now },
+      delivery,
+      state: { nextRunAtMs: nowMs },
     };
 
-    const runId = randomUUID();
+    let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
-        const cfg = loadConfig();
+        // Agent hooks run after the HTTP response path has returned, so failure
+        // handling must record a system event instead of throwing to the caller.
+        const cfg = getRuntimeConfig();
+        hookEventSessionKey = resolveHookEventSessionKey({
+          cfg,
+          agentId: value.agentId,
+        });
+        const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
@@ -85,26 +166,59 @@ export function createGatewayHooksRequestHandler(params: {
           message: value.message,
           sessionKey,
           lane: "cron",
-          deliveryContract: "shared",
         });
-        const summary = result.summary?.trim() || result.error?.trim() || result.status;
+        const summary = resolveHookRunSummary(result);
         const prefix =
-          result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
-        if (!result.delivered) {
+          result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
+        const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+        if (result.status !== "ok") {
+          logHooks.warn("hook agent run returned non-ok status", {
+            sourcePath: value.sourcePath,
+            name: safeName,
+            runId,
+            jobId,
+            agentId: value.agentId,
+            sessionKey,
+            status: result.status,
+            model: value.model,
+            summary,
+            consoleMessage: formatHookRunWarningConsoleMessage({
+              status: result.status,
+              model: value.model,
+              summary,
+            }),
+          });
+        }
+        if (shouldAnnounce) {
+          const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
+            sessionKey: eventSessionKey,
           });
           if (value.wakeMode === "now") {
-            requestHeartbeatNow({ reason: `hook:${jobId}` });
+            requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
           }
+        } else if (result.status === "ok" && !value.deliver) {
+          logHooks.info("hook agent run completed without announcement", {
+            sourcePath: value.sourcePath,
+            name: safeName,
+            runId,
+            jobId,
+            agentId: value.agentId,
+            sessionKey,
+            completedAt: new Date().toISOString(),
+          });
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
-        enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
+        enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
+          sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
         });
         if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}:error` });
+          requestHeartbeat({
+            source: "hook",
+            intent: "immediate",
+            reason: `hook:${jobId}:error`,
+          });
         }
       }
     })();
