@@ -320,16 +320,20 @@ export function buildGatewayCronService(params: {
 
   // Gateway-owned watchers for `on-exit` schedule jobs. The watcher process
   // runs under the ProcessSupervisor (outside any agent turn's process tree) so
-  // it survives per-turn CLI teardown; on exit it fires the job via enqueueRun.
-  let exitWatchers: ReturnType<typeof createCronExitWatchers> | undefined;
+  // it survives per-turn CLI teardown; on exit it fires the origin-aware wake.
+  // Held in a ref so reconcile/stop can close over it before it is built (the
+  // watcher needs `cron`, which is constructed below).
+  const exitWatchersRef: { current: ReturnType<typeof createCronExitWatchers> | undefined } = {
+    current: undefined,
+  };
   const reconcileExitWatchers = async () => {
-    if (!exitWatchers) {
+    if (!exitWatchersRef.current) {
       return;
     }
     try {
       const result = await cron.list({ includeDisabled: true });
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
-      exitWatchers.reconcile(jobs);
+      exitWatchersRef.current.reconcile(jobs);
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
     }
@@ -661,7 +665,7 @@ export function buildGatewayCronService(params: {
     },
   });
 
-  exitWatchers = createCronExitWatchers({
+  exitWatchersRef.current = createCronExitWatchers({
     getProcessSupervisor,
     // On exit, fire the origin-aware wake on the job's captured session so the
     // woken turn continues the originating conversation/thread (not a throwaway
@@ -687,6 +691,6 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     reconcileExitWatchers,
-    stopExitWatchers: () => exitWatchers?.cancelAll(),
+    stopExitWatchers: () => exitWatchersRef.current?.cancelAll(),
   };
 }

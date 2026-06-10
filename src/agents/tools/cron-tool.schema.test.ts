@@ -75,9 +75,9 @@ describe("CronToolSchema", () => {
     );
   });
 
-  it("job.schedule exposes kind, at, everyMs, anchorMs, expr, tz, staggerMs", () => {
+  it("job.schedule exposes kind, at, everyMs, anchorMs, expr, tz, staggerMs, command, cwd", () => {
     expect(keysAt(schemaRecord, "job.schedule")).toEqual(
-      ["anchorMs", "at", "everyMs", "expr", "kind", "staggerMs", "tz"].toSorted(),
+      ["anchorMs", "at", "command", "cwd", "everyMs", "expr", "kind", "staggerMs", "tz"].toSorted(),
     );
   });
 

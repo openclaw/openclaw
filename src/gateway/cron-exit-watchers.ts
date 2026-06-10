@@ -1,18 +1,16 @@
-import type { CronJob } from "../cron/types.js";
 /**
  * Gateway-owned watchers for cron jobs with an `on-exit` schedule.
  *
  * The watcher process runs under the gateway ProcessSupervisor — NOT inside any
  * agent turn's process tree — so it survives the per-turn spawn-and-kill
  * teardown that CLI backends apply at turn end (#71662). When the watched
- * command exits, the job is fired through the normal cron run pipeline
- * (`enqueueRun`), so delivery to the bound session is identical to a scheduled
- * main-session job.
+ * command exits, the job is fired via the origin-aware cron wake (`fireOnExit`),
+ * so the woken turn continues the originating session/thread.
  *
  * v1 is one-shot per arm: a job fires once when its command exits and is not
- * re-armed (re-watching = re-add the job). Exit-code/output folding into the
- * event text is a planned enhancement.
+ * re-armed (re-watching = re-add the job).
  */
+import type { CronJob } from "../cron/types.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
 
 type Logger = {
@@ -39,7 +37,7 @@ function scopeKey(jobId: string): string {
 
 /** True when a job should currently have a live exit-watcher. */
 function isWatchableExitJob(job: CronJob): boolean {
-  return job.enabled !== false && job.schedule.kind === "on-exit";
+  return job.enabled && job.schedule.kind === "on-exit";
 }
 
 export function createCronExitWatchers(params: {
@@ -127,7 +125,7 @@ export function createCronExitWatchers(params: {
   const reconcile = (jobs: CronJob[]) => {
     const want = new Map(jobs.filter(isWatchableExitJob).map((j) => [j.id, j] as const));
     // Cancel watchers whose job is gone or no longer watchable.
-    for (const jobId of [...active.keys()]) {
+    for (const jobId of Array.from(active.keys())) {
       if (!want.has(jobId)) {
         cancel(jobId);
       }
@@ -143,7 +141,7 @@ export function createCronExitWatchers(params: {
   };
 
   const cancelAll = () => {
-    for (const jobId of [...active.keys()]) {
+    for (const jobId of Array.from(active.keys())) {
       cancel(jobId);
     }
   };
@@ -152,6 +150,6 @@ export function createCronExitWatchers(params: {
     reconcile,
     cancel,
     cancelAll,
-    activeJobIds: () => [...active.keys()],
+    activeJobIds: () => Array.from(active.keys()),
   };
 }

@@ -70,7 +70,7 @@ const flush = async () => {
 describe("createCronExitWatchers", () => {
   it("arms a watcher for an enabled on-exit job and fires the job on exit", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    const fireOnExit = vi.fn(async () => {});
+    const fireOnExit = vi.fn(async (_job: CronJob, _exit: { exitCode: number | null }) => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
       fireOnExit,
@@ -87,8 +87,8 @@ describe("createCronExitWatchers", () => {
     runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
     await flush();
     expect(fireOnExit).toHaveBeenCalledTimes(1);
-    expect(fireOnExit.mock.calls[0][0].id).toBe("job-a");
-    expect(fireOnExit.mock.calls[0][1]).toEqual({ exitCode: 0 });
+    expect(fireOnExit.mock.calls[0]?.[0].id).toBe("job-a");
+    expect(fireOnExit.mock.calls[0]?.[1]).toEqual({ exitCode: 0 });
   });
 
   it("does not arm a watcher for time-based or disabled jobs", async () => {

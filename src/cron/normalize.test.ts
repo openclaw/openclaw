@@ -979,7 +979,8 @@ describe("on-exit schedule normalization", () => {
       payload: { kind: "systemEvent", text: "build done" },
       sessionTarget: "main",
     });
-    expect(normalized.schedule).toEqual({ kind: "on-exit", command: "make build", cwd: "/repo" });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.schedule).toEqual({ kind: "on-exit", command: "make build", cwd: "/repo" });
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
@@ -990,7 +991,8 @@ describe("on-exit schedule normalization", () => {
       payload: { kind: "systemEvent", text: "tick" },
       sessionTarget: "main",
     });
-    expect(normalized.schedule).not.toHaveProperty("command");
-    expect(normalized.schedule).not.toHaveProperty("cwd");
+    expect(normalized).not.toBeNull();
+    expect(normalized?.schedule).not.toHaveProperty("command");
+    expect(normalized?.schedule).not.toHaveProperty("cwd");
   });
 });

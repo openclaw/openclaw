@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import type { CronSchedule } from "../types.js";
 import { bindScheduleColumns, scheduleFromRow } from "./row-codec.js";
-import type { CronJobRow } from "./types.js";
+import type { CronJobRow } from "./schema.js";
 
 function roundTrip(schedule: CronSchedule): CronSchedule | null {
   const cols = bindScheduleColumns(schedule);
