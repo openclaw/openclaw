@@ -1969,9 +1969,7 @@ describe("gateway server chat", () => {
       expect(firstAssistantTimingCallIndex).toBeGreaterThanOrEqual(0);
       expect(
         broadcastToConnIds.mock.invocationCallOrder[firstAssistantTimingCallIndex],
-      ).toBeLessThan(
-        broadcast.mock.invocationCallOrder[0],
-      );
+      ).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;

@@ -773,13 +773,23 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("thread-root-456");
   });
 
-  it("suppresses existing thread roots when replyToMode is off", () => {
+  it("keeps an existing thread root when replyToMode is off", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "channel",
         postId: "post-123",
         replyToMode: "off",
         threadRootId: "thread-root-456",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("does not start a new thread for top-level messages when replyToMode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "off",
       }),
     ).toBeUndefined();
   });
@@ -858,7 +868,7 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps threaded messages top-level when replyToMode is off", () => {
+  it("keeps threaded messages in their Mattermost thread when replyToMode is off", () => {
     expect(
       resolveMattermostThreadSessionContext({
         baseSessionKey: "agent:main:mattermost:default:chan-1",
@@ -866,6 +876,21 @@ describe("resolveMattermostThreadSessionContext", () => {
         postId: "post-123",
         replyToMode: "off",
         threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "root-456",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps top-level messages on the base session when replyToMode is off", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "off",
       }),
     ).toEqual({
       effectiveReplyToId: undefined,

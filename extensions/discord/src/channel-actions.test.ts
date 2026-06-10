@@ -141,12 +141,14 @@ describe("discordMessageActions", () => {
   });
 
   it("requires trusted requester sender for privileged guild admin actions only from Discord turns", () => {
-    expect(
-      discordMessageActions.requiresTrustedRequesterSender?.({
-        action: "channel-delete",
-        toolContext: { currentChannelProvider: "discord" },
-      }),
-    ).toBe(true);
+    for (const action of ["channel-delete", "timeout", "kick", "ban"] as const) {
+      expect(
+        discordMessageActions.requiresTrustedRequesterSender?.({
+          action,
+          toolContext: { currentChannelProvider: "discord" },
+        }),
+      ).toBe(true);
+    }
     expect(
       discordMessageActions.requiresTrustedRequesterSender?.({
         action: "channel-delete",
