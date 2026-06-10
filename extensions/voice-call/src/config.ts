@@ -321,6 +321,8 @@ const VoiceCallRealtimeConfigSchema = z
     consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
     /** Optional fast mode override for the regular agent behind realtime consults. */
     consultFastMode: z.boolean().optional(),
+    /** Optional exact short message spoken while OpenClaw handles a delegated consult. */
+    workingResponseMessage: z.string().min(1).optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */

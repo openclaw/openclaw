@@ -26,6 +26,8 @@ export type RealtimeVoiceAgentConsultArgs = {
   question: string;
   context?: string;
   responseStyle?: string;
+  workingAction?: string;
+  workingMessage?: string;
 };
 /** Compact transcript entry included in delegated agent prompts. */
 export type RealtimeVoiceAgentConsultTranscriptEntry = {
@@ -54,19 +56,69 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
         type: "string",
         description: "Optional style hint for the spoken answer.",
       },
+      workingAction: {
+        type: "string",
+        description:
+          "Optional brief description of the action being taken while OpenClaw works, e.g. checking the calendar.",
+      },
+      workingMessage: {
+        type: "string",
+        description:
+          "Optional exact short message to speak while OpenClaw works before the final result.",
+      },
     },
     required: ["question"],
   },
 };
 
+export type RealtimeVoiceAgentConsultWorkingResponseOptions = {
+  audienceLabel?: string;
+  workingAction?: string;
+  workingMessage?: string;
+};
+
 /** Build the interim spoken instruction while the delegated agent turn runs. */
 export function buildRealtimeVoiceAgentConsultWorkingResponse(
-  audienceLabel = "person",
+  audienceLabelOrOptions: string | RealtimeVoiceAgentConsultWorkingResponseOptions = "person",
 ): Record<string, unknown> {
+  const options =
+    typeof audienceLabelOrOptions === "string"
+      ? { audienceLabel: audienceLabelOrOptions }
+      : audienceLabelOrOptions;
+  const audienceLabel = normalizeOptionalString(options.audienceLabel) ?? "person";
+  const workingMessage = normalizeOptionalString(options.workingMessage);
+  const workingAction = normalizeOptionalString(options.workingAction);
+  const workingMessageSuffix = workingMessage && /[.!?]$/.test(workingMessage) ? "" : ".";
+  const message = workingMessage
+    ? `Briefly tell the ${audienceLabel} in their language: "${workingMessage}"${workingMessageSuffix} Then wait for the final OpenClaw result before answering with the actual result.`
+    : workingAction
+      ? `Briefly tell the ${audienceLabel} in their language that you are ${workingAction}. Then wait for the final OpenClaw result before answering with the actual result.`
+      : `Briefly tell the ${audienceLabel} in their language that you are checking, for example: "Alles klar, ich schaue ganz kurz." Then wait for the final OpenClaw result before answering with the actual result.`;
   return {
     status: "working",
     tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    message: `Tell the ${audienceLabel} briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.`,
+    message,
+  };
+}
+
+export type RealtimeVoiceAgentConsultProgressResponseOptions = {
+  audienceLabel?: string;
+  workingAction?: string;
+};
+
+/** Build a short interim spoken instruction when a delegated agent turn is still running. */
+export function buildRealtimeVoiceAgentConsultProgressResponse(
+  options: RealtimeVoiceAgentConsultProgressResponseOptions = {},
+): Record<string, unknown> {
+  const audienceLabel = normalizeOptionalString(options.audienceLabel) ?? "person";
+  const workingAction = normalizeOptionalString(options.workingAction);
+  const message = workingAction
+    ? `Briefly reassure the ${audienceLabel} in their language that you are still ${workingAction} and will answer as soon as you have the result.`
+    : `Briefly reassure the ${audienceLabel} in their language that you are still working and will answer as soon as you have the result.`;
+  return {
+    status: "progress",
+    tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+    message,
   };
 }
 
@@ -171,6 +223,8 @@ export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoice
     question,
     context: readConsultStringArg(args, "context"),
     responseStyle: readConsultStringArg(args, "responseStyle"),
+    workingAction: readConsultStringArg(args, "workingAction"),
+    workingMessage: readConsultStringArg(args, "workingMessage"),
   };
 }
 

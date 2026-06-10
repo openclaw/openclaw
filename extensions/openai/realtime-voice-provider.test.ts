@@ -243,6 +243,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      emitsSpeechStartedEvent: true,
       supportsToolCalls: true,
     });
   });
@@ -1564,7 +1565,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
   });
 
-  it("does not request a realtime response for continuing tool results", async () => {
+  it("requests an interim realtime response for continuing tool results", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
@@ -1584,7 +1585,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
 
-    expect(parseSent(socket).slice(-1)).toEqual([
+    expect(parseSent(socket).slice(-2)).toEqual([
       {
         type: "conversation.item.create",
         item: {
@@ -1593,12 +1594,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
           output: JSON.stringify({ status: "working" }),
         },
       },
+      { type: "response.create" },
     ]);
-    expect(hasSentEventType(socket, "response.create")).toBe(false);
 
     bridge.submitToolResult("call_1", { text: "done" });
 
-    expect(parseSent(socket).slice(-2)).toEqual([
+    expect(parseSent(socket).slice(-1)).toEqual([
       {
         type: "conversation.item.create",
         item: {
@@ -1607,15 +1608,14 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
           output: JSON.stringify({ text: "done" }),
         },
       },
-      { type: "response.create" },
     ]);
     socket.emit(
       "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
 
-    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
   });
 
   it("does not request a realtime response for suppressed tool results", async () => {
@@ -1686,7 +1686,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
 
     expect(onError).not.toHaveBeenCalled();
-    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
 
     bridge.submitToolResult("call_1", { text: "done" });
 

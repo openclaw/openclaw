@@ -493,6 +493,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     });
     if (options?.willContinue === true) {
+      this.requestResponseCreate();
       this.continuingToolCallIds.add(callId);
       return;
     }
@@ -1368,6 +1369,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      emitsSpeechStartedEvent: true,
       supportsToolCalls: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),

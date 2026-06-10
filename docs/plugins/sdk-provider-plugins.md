@@ -780,6 +780,7 @@ API key auth, and dynamic model resolution.
             inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
             outputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
             supportsBargeIn: true,
+            emitsSpeechStartedEvent: true,
             supportsToolCalls: true,
           },
           isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
@@ -805,6 +806,11 @@ API key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        Set `emitsSpeechStartedEvent` only when the provider emits an explicit
+        server speech-start event, such as `input_audio_buffer.speech_started`,
+        that OpenClaw can use as the authoritative barge-in signal. Providers
+        that do not emit that event should omit the flag so OpenClaw keeps its
+        local input-audio fallback detection.
       </Tab>
       <Tab title="Media understanding">
         ```typescript

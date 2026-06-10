@@ -59,6 +59,14 @@ const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
 
+function readConsultArgText(args: unknown, key: string): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const value = (args as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
@@ -592,11 +600,16 @@ export function createTalkRealtimeRelaySession(
           if (forcedConsult.kind === "already_delivered") {
             submitAlreadyDeliveredToolResult(relay, toolCall.callId, turnId);
           } else {
-            submitRealtimeAgentConsultWorkingResponse(relay, toolCall.callId, turnId);
+            submitRealtimeAgentConsultWorkingResponse(
+              relay,
+              toolCall.callId,
+              turnId,
+              toolCall.args,
+            );
           }
           return;
         }
-        submitRealtimeAgentConsultWorkingResponse(relay, toolCall.callId, turnId);
+        submitRealtimeAgentConsultWorkingResponse(relay, toolCall.callId, turnId, toolCall.args);
       }
       emit(
         {
@@ -795,13 +808,20 @@ function submitRealtimeAgentConsultWorkingResponse(
   session: RelaySession,
   callId: string,
   turnId = ensureRelayTurn(session),
+  args?: unknown,
 ): void {
   if (!session.bridge.bridge.supportsToolResultContinuation) {
     return;
   }
-  session.bridge.submitToolResult(callId, buildRealtimeVoiceAgentConsultWorkingResponse("person"), {
-    willContinue: true,
-  });
+  session.bridge.submitToolResult(
+    callId,
+    buildRealtimeVoiceAgentConsultWorkingResponse({
+      audienceLabel: "person",
+      workingAction: readConsultArgText(args, "workingAction"),
+      workingMessage: readConsultArgText(args, "workingMessage"),
+    }),
+    { willContinue: true },
+  );
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "toolResult",
