@@ -17,168 +17,129 @@ import {
 const owner = "agent:main:main";
 const marker = { ownerSessionKey: owner, createdAt: 1 };
 
-describe("resolveHubDelegatedAcpPolicy", () => {
-  it("uses documented defaults", () => {
+describe("hub-delegated policy and identity", () => {
+  it("uses documented lifecycle defaults", () => {
     expect(resolveHubDelegatedAcpPolicy()).toEqual({
       idleMs: DEFAULT_HUB_DELEGATED_IDLE_HOURS * 60 * 60 * 1000,
       maxAgeMs: DEFAULT_HUB_DELEGATED_MAX_AGE_HOURS * 60 * 60 * 1000,
     });
   });
-});
 
-describe("isHubDelegatedOwnedByRequester", () => {
   it.each([
-    ["owner match", { hubDelegated: marker, spawnedBy: owner }, owner, true],
-    ["owner without sqlite acp metadata", { hubDelegated: marker, spawnedBy: owner }, owner, true],
+    ["owner", { hubDelegated: marker, spawnedBy: owner }, owner, true],
     ["unrelated requester", { hubDelegated: marker, spawnedBy: owner }, "agent:peer:main", false],
     [
-      "mismatched spawnedBy lineage",
+      "drifted spawnedBy",
       { hubDelegated: marker, spawnedBy: "agent:attacker:main" },
       "agent:attacker:main",
       false,
     ],
-  ] as const)("$name returns ownership=$expected", (name, entry, requester, expected) => {
-    expect(isHubDelegatedOwnedByRequester({ entry, requesterSessionKey: requester })).toBe(
-      expected,
-    );
+  ] as const)("checks requester ownership: %s", (_name, entry, requesterSessionKey, expected) => {
+    expect(isHubDelegatedOwnedByRequester({ entry, requesterSessionKey })).toBe(expected);
   });
-});
 
-describe("resolveHubDelegatedLineageMismatch", () => {
+  it("rejects lineage drift", () => {
+    expect(
+      resolveHubDelegatedLineageMismatch({
+        hubDelegated: marker,
+        spawnedBy: owner,
+        parentSessionKey: owner,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveHubDelegatedLineageMismatch({
+        hubDelegated: marker,
+        spawnedBy: "agent:attacker:main",
+      }),
+    ).toContain("spawnedBy");
+  });
+
   it.each([
-    [
-      "matching lineage",
-      { hubDelegated: marker, spawnedBy: owner, parentSessionKey: owner },
-      undefined,
-    ],
-    ["spawnedBy drift", { hubDelegated: marker, spawnedBy: "agent:attacker:main" }, "spawnedBy"],
-  ] as const)("detects $0", (_label, entry, expected) => {
-    const result = resolveHubDelegatedLineageMismatch(entry);
-    if (expected === undefined) {
-      expect(result).toBeUndefined();
-      return;
-    }
-    expect(result).toContain(expected);
+    ["marker only", { hubDelegated: marker }, true],
+    ["ACP only", { acp: { mode: "persistent" as const } }, false],
+    ["marker with ACP", { hubDelegated: marker, acp: { mode: "persistent" as const } }, true],
+  ] as const)("detects delegate entries: %s", (_name, entry, expected) => {
+    expect(isHubDelegatedAcpSessionEntry(entry)).toBe(expected);
   });
 });
 
-describe("resolveHubDelegatedExpiry", () => {
+describe("hub-delegated expiry", () => {
   const createdAt = 1_000_000;
 
   it.each([
     [
-      "idle expiry",
+      "idle",
       { hubDelegated: marker, acp: { lastActivityAt: createdAt, mode: "persistent" as const } },
       { idleMs: 60_000, maxAgeMs: 0 },
       createdAt + 60_001,
-      true,
-      "delegate-idle-expired",
+      { expired: true, reason: "delegate-idle-expired" },
     ],
     [
-      "max age expiry",
+      "max age",
       {
         hubDelegated: marker,
         acp: { lastActivityAt: createdAt + 50_000, mode: "persistent" as const },
       },
       { idleMs: 0, maxAgeMs: 60_000 },
       createdAt + 60_001,
-      true,
-      "delegate-max-age-expired",
+      { expired: true, reason: "delegate-max-age-expired" },
     ],
     [
-      "recent JSON updatedAt",
+      "recent activity",
       { hubDelegated: marker, updatedAt: createdAt + 50_000 },
       { idleMs: 60_000, maxAgeMs: 0 },
       createdAt + 80_000,
-      false,
-      undefined,
+      { expired: false },
     ],
-  ] as const)("evaluates $0", (_label, entry, policy, now, expired, reason) => {
-    const result = resolveHubDelegatedExpiry({ entry, policy, now });
-    expect(result.expired).toBe(expired);
-    if (expired) {
-      expect(result).toMatchObject({ reason });
-    }
+  ] as const)("resolves expiry: %s", (_name, entry, policy, now, expected) => {
+    expect(resolveHubDelegatedExpiry({ entry, policy, now })).toMatchObject(expected);
   });
 });
 
-describe("isHubDelegatedAcpSessionEntry", () => {
-  it.each([
-    ["hubDelegated marker", { hubDelegated: marker }, true],
-    ["persistent acp without marker", { acp: { mode: "persistent" as const } }, false],
-    [
-      "marker with sqlite acp metadata",
-      { hubDelegated: marker, acp: { mode: "persistent" } },
-      true,
-    ],
-  ] as const)("detects $0", (_label, entry, expected) => {
-    expect(isHubDelegatedAcpSessionEntry(entry)).toBe(expected);
-  });
-});
-
-describe("findHubDelegatedLabelConflictInStore", () => {
-  it("scopes conflicts to the same owner and ignores closed rows without hubDelegated", () => {
+describe("hub-delegated labels", () => {
+  it("scopes conflicts to active delegates owned by the requester", () => {
     const store = {
-      "agent:codex:acp:closed": { label: "refactor", updatedAt: 1 },
-      "agent:codex:acp:other-owner": {
+      closed: { label: "refactor", updatedAt: 1 },
+      other: {
         label: "refactor",
-        updatedAt: 2,
-        hubDelegated: { ownerSessionKey: "agent:main:discord:other", createdAt: 2 },
+        hubDelegated: { ownerSessionKey: "agent:main:other", createdAt: 2 },
       },
-      "agent:codex:acp:active": {
-        label: "refactor",
-        updatedAt: 3,
-        hubDelegated: { ownerSessionKey: "agent:main:webchat:main", createdAt: 3 },
-      },
+      active: { label: "refactor", hubDelegated: marker },
     };
+    const findConflict = (
+      candidateStore: Parameters<typeof findHubDelegatedLabelConflictInStore>[0]["store"] = store,
+    ) =>
+      findHubDelegatedLabelConflictInStore({
+        store: candidateStore,
+        storeKey: "new",
+        ownerSessionKey: owner,
+        label: "refactor",
+      });
 
-    expect(
-      findHubDelegatedLabelConflictInStore({
-        store,
-        storeKey: "agent:codex:acp:new",
-        ownerSessionKey: "agent:main:webchat:main",
-        label: "refactor",
-      }),
-    ).toBe("agent:codex:acp:active");
-    expect(
-      findHubDelegatedLabelConflictInStore({
-        store: { "agent:codex:acp:closed": { label: "refactor" } },
-        storeKey: "agent:codex:acp:reuse-after-close",
-        ownerSessionKey: "agent:main:webchat:main",
-        label: "refactor",
-      }),
-    ).toBeUndefined();
+    expect(findConflict()).toBe("active");
+    expect(findConflict({ closed: store.closed })).toBeUndefined();
   });
-});
-
-describe("resolveHubDelegatedLabelLookup", () => {
-  const entries = [{ label: "Build" }, { label: "build" }, { label: "refactor" }];
 
   it.each([
-    ["Build", entries, { status: "match", index: 0 }],
-    ["build", entries, { status: "match", index: 1 }],
-    ["BUILD", entries, { status: "ambiguous", labels: ["Build", "build"] }],
+    ["Build", [{ label: "Build" }, { label: "build" }], { status: "match", index: 0 }],
+    ["build", [{ label: "Build" }, { label: "build" }], { status: "match", index: 1 }],
+    [
+      "BUILD",
+      [{ label: "Build" }, { label: "build" }],
+      { status: "ambiguous", labels: ["Build", "build"] },
+    ],
     ["build", [{ label: "Build" }], { status: "missing" }],
-  ] as const)("resolves label lookup for $0", (label, lookupEntries, expected) => {
-    expect(resolveHubDelegatedLabelLookup({ entries: lookupEntries, label })).toEqual(expected);
+  ] as const)("resolves %s with exact-case preference", (label, entries, expected) => {
+    expect(resolveHubDelegatedLabelLookup({ entries, label })).toEqual(expected);
   });
-});
 
-describe("hub-delegated auto labels", () => {
-  it("auto-generates a UTC timestamp label and suffixes on conflict", () => {
+  it("generates timestamp labels and suffixes conflicts", () => {
     const now = new Date("2026-06-05T14:30:22.000Z");
-    expect(formatHubDelegatedAutoLabel(now)).toBe("delegate-20260605-143022");
-    expect(
-      resolveHubDelegatedAutoLabel({
-        now,
-        hasLabelConflict: () => false,
-      }),
-    ).toBe("delegate-20260605-143022");
-    expect(
-      resolveHubDelegatedAutoLabel({
-        now,
-        hasLabelConflict: (label) => label === "delegate-20260605-143022",
-      }),
-    ).toBe("delegate-20260605-143022-2");
+    const base = formatHubDelegatedAutoLabel(now);
+    expect(base).toBe("delegate-20260605-143022");
+    expect(resolveHubDelegatedAutoLabel({ now, hasLabelConflict: () => false })).toBe(base);
+    expect(resolveHubDelegatedAutoLabel({ now, hasLabelConflict: (label) => label === base })).toBe(
+      `${base}-2`,
+    );
   });
 });

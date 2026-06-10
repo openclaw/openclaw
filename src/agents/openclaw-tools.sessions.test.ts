@@ -1782,49 +1782,32 @@ describe("sessions tools", () => {
       requesterKey: "agent:main:discord:direct:parent",
       targetKey: "agent:main:subagent:child",
       agentChannel: "discord",
-      callId: "call-parent-owned-native-subagent",
-      buildEntry: (requesterKey: string) => ({
+      entry: {
         sessionId: "child-session",
         updatedAt: 1,
-        spawnedBy: requesterKey,
+        spawnedBy: "agent:main:discord:direct:parent",
         deliveryContext: {
           channel: "discord",
           to: "direct:parent",
         },
-      }),
+      },
       expectedDeliveryMode: "announce" as const,
-      assertNoReplyPrompt: true,
     },
     {
       caseName: "hub-delegated delegates without sqlite acp metadata",
       requesterKey: HUB_OWNER_A,
       targetKey: delegateSessionKey("claude", "delegate-child"),
       agentChannel: "openclaw-weixin",
-      callId: "call-hub-delegated-acp",
-      buildEntry: (requesterKey: string) =>
-        hubDelegatedEntry({
-          sessionId: "child-session",
-          ownerSessionKey: requesterKey,
-          label: "delegate-child",
-        }),
+      entry: hubDelegatedEntry({ sessionId: "child-session", label: "delegate-child" }),
       expectedDeliveryMode: undefined,
-      assertNoReplyPrompt: false,
     },
   ])(
     "sessions_send skips duplicate A2A delivery for $caseName",
-    async ({
-      requesterKey,
-      targetKey,
-      agentChannel,
-      callId,
-      buildEntry,
-      expectedDeliveryMode,
-      assertNoReplyPrompt,
-    }) => {
+    async ({ requesterKey, targetKey, agentChannel, entry, expectedDeliveryMode }) => {
       const calls: Array<{ method?: string; params?: unknown }> = [];
       let historyCallCount = 0;
       loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
-        sessionKey === targetKey ? buildEntry(requesterKey) : undefined,
+        sessionKey === targetKey ? entry : undefined,
       );
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string; params?: unknown };
@@ -1861,7 +1844,7 @@ describe("sessions tools", () => {
         throw new Error("missing sessions_send tool");
       }
 
-      const result = await tool.execute(callId, {
+      const result = await tool.execute("call-parent-owned-session", {
         sessionKey: targetKey,
         message: "ping",
         timeoutSeconds: 1,
@@ -1875,19 +1858,16 @@ describe("sessions tools", () => {
         expect(details.delivery?.mode).toBe(expectedDeliveryMode);
       }
       expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
-      if (assertNoReplyPrompt) {
-        const replyPromptAgentCalls = calls.filter(
+      expect(
+        calls.some(
           (call) =>
             call.method === "agent" &&
-            typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt ===
-              "string" &&
-            (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+            String((call.params as { extraSystemPrompt?: string })?.extraSystemPrompt).includes(
               "Agent-to-agent reply step",
             ),
-        );
-        expect(replyPromptAgentCalls).toStrictEqual([]);
-        expect(calls.some((call) => call.method === "send")).toBe(false);
-      }
+        ),
+      ).toBe(false);
+      expect(calls.some((call) => call.method === "send")).toBe(false);
     },
   );
 

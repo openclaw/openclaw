@@ -1,13 +1,18 @@
 // Hub-delegated ACP maintenance clears delegate markers after expiry cleanup.
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  delegateSessionKey,
+  hubDelegatedEntry,
+} from "../../test/helpers/hub-delegated-fixtures.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
   readSessionStoreForTest,
   writeSessionStoreForTest,
 } from "../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
@@ -15,12 +20,7 @@ import {
   stopTaskRegistryMaintenanceForTests,
 } from "./task-registry.maintenance.js";
 
-const runtimeConfigState = vi.hoisted(() => ({
-  cfg: {} as {
-    session?: { store?: string };
-    acp?: { allowedAgents?: string[]; delegate?: { idleHours?: number; maxAgeHours?: number } };
-  },
-}));
+const runtimeConfigState = vi.hoisted(() => ({ cfg: {} as OpenClawConfig }));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => runtimeConfigState.cfg,
@@ -32,45 +32,48 @@ afterEach(() => {
   runtimeConfigState.cfg = {};
 });
 
-function installHubDelegatedMaintenanceRuntime(params: {
+function setupMaintenance(params: {
   home: string;
-  storePath: string;
-  sessionKey: string;
-  closeAcpSession: ReturnType<typeof vi.fn>;
-  hasActiveAcpTurn?: (sessionKey: string) => boolean;
-  readAcpSessionEntry?: () => {
-    cfg: typeof runtimeConfigState.cfg;
-    storePath: string;
-    sessionKey: string;
-    storeSessionKey: string;
-    entry?: SessionEntry;
-    acp?: SessionEntry["acp"];
-    storeReadFailed: boolean;
-  };
+  suffix: string;
+  ageMs: number;
+  acp?: SessionEntry["acp"];
+  active?: boolean;
 }) {
+  const storePath = path.join(params.home, "agents/codex/sessions/sessions.json");
+  const sessionKey = delegateSessionKey("codex", params.suffix);
+  const timestamp = Date.now() - params.ageMs;
+  const entry = hubDelegatedEntry({
+    sessionId: `sess-${params.suffix}`,
+    ownerSessionKey: "agent:main:main",
+    label: params.suffix,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    acp: params.acp,
+  });
+  writeSessionStoreForTest(storePath, { [sessionKey]: entry });
   runtimeConfigState.cfg = {
-    session: { store: params.storePath },
+    session: { store: storePath },
     acp: { allowedAgents: ["codex"], delegate: { idleHours: 72, maxAgeHours: 168 } },
   };
+  const closeAcpSession = vi.fn(async () => {});
   setTaskRegistryMaintenanceRuntimeForTests({
     listAcpSessionEntries: async () => [],
-    readAcpSessionEntry:
-      params.readAcpSessionEntry ??
-      (() => ({
-        cfg: runtimeConfigState.cfg as never,
-        storePath: params.storePath,
-        sessionKey: params.sessionKey,
-        storeSessionKey: params.sessionKey,
-        entry: undefined,
-        storeReadFailed: false,
-      })),
-    closeAcpSession: params.closeAcpSession,
+    readAcpSessionEntry: () => ({
+      cfg: runtimeConfigState.cfg,
+      storePath,
+      sessionKey,
+      storeSessionKey: sessionKey,
+      entry,
+      acp: params.acp,
+      storeReadFailed: false,
+    }),
+    closeAcpSession,
     loadSessionStore,
-    resolveStorePath: () => params.storePath,
+    resolveStorePath: () => storePath,
     parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
     isCronJobActive: () => false,
     getAgentRunContext: () => undefined,
-    hasActiveAcpTurn: params.hasActiveAcpTurn ?? (() => false),
+    hasActiveAcpTurn: (key) => params.active === true && key === sessionKey,
     hasActiveTaskForChildSessionKey: () => false,
     deleteTaskRecordById: () => true,
     ensureTaskRegistryReady: () => {},
@@ -86,101 +89,51 @@ function installHubDelegatedMaintenanceRuntime(params: {
     loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
     readCronRunLogEntriesSync: () => [],
   });
+  return { closeAcpSession, sessionKey, storePath };
 }
 
 describe("task-registry maintenance hub-delegated cleanup", () => {
-  it("clears hubDelegated after closing expired delegate sessions", async () => {
-    const home = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "openclaw-hub-delegate-maint-"));
-    try {
-      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      const sessionKey = "agent:codex:acp:expired-delegate";
-      const createdAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
-      writeSessionStoreForTest(storePath, {
-        [sessionKey]: {
-          sessionId: "sess-expired",
-          updatedAt: createdAt,
-          label: "refactor",
-          hubDelegated: {
-            ownerSessionKey: "agent:main:main",
-            createdAt,
-          },
-        },
-      });
-      const closeAcpSession = vi.fn(async () => {});
-      installHubDelegatedMaintenanceRuntime({
-        home,
-        storePath,
-        sessionKey,
-        closeAcpSession,
-      });
+  it("clears expired delegates", async () => {
+    await withTempDir({ prefix: "openclaw-hub-delegate-maint-" }, async (home) => {
+      const fixture = setupMaintenance({ home, suffix: "expired", ageMs: 8 * 24 * 60 * 60_000 });
 
       await runTaskRegistryMaintenance();
 
-      expect(closeAcpSession).toHaveBeenCalledWith(
+      expect(fixture.closeAcpSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          sessionKey,
+          sessionKey: fixture.sessionKey,
           reason: "delegate-max-age-expired",
         }),
       );
-      expect(readSessionStoreForTest(storePath)[sessionKey]?.hubDelegated).toBeUndefined();
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
+      expect(
+        readSessionStoreForTest(fixture.storePath)[fixture.sessionKey]?.hubDelegated,
+      ).toBeUndefined();
+    });
   });
 
-  it("skips idle-expired hub-delegated cleanup while an ACP turn is active", async () => {
-    const home = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "openclaw-hub-delegate-maint-"));
-    try {
-      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      const sessionKey = "agent:codex:acp:idle-active-turn";
-      const createdAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
-      const lastActivityAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
-      const persistentAcpMeta = {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: sessionKey,
-        mode: "persistent" as const,
-        state: "running" as const,
-        lastActivityAt,
-      };
-      writeSessionStoreForTest(storePath, {
-        [sessionKey]: {
-          sessionId: "sess-idle-active",
-          updatedAt: lastActivityAt,
-          label: "long-task",
-          hubDelegated: {
-            ownerSessionKey: "agent:main:main",
-            createdAt,
-          },
-          acp: persistentAcpMeta,
-        },
-      });
-      const closeAcpSession = vi.fn(async () => {});
-      installHubDelegatedMaintenanceRuntime({
+  it("keeps idle-expired delegates while an ACP turn is active", async () => {
+    await withTempDir({ prefix: "openclaw-hub-delegate-maint-" }, async (home) => {
+      const fixture = setupMaintenance({
         home,
-        storePath,
-        sessionKey,
-        closeAcpSession,
-        hasActiveAcpTurn: (activeSessionKey) => activeSessionKey === sessionKey,
-        readAcpSessionEntry: () => ({
-          cfg: runtimeConfigState.cfg as never,
-          storePath,
-          sessionKey,
-          storeSessionKey: sessionKey,
-          entry: readSessionStoreForTest(storePath)[sessionKey],
-          acp: persistentAcpMeta,
-          storeReadFailed: false,
-        }),
+        suffix: "active-turn",
+        ageMs: 4 * 24 * 60 * 60_000,
+        active: true,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: delegateSessionKey("codex", "active-turn"),
+          mode: "persistent",
+          state: "running",
+          lastActivityAt: Date.now() - 4 * 24 * 60 * 60_000,
+        },
       });
 
       await runTaskRegistryMaintenance();
 
-      expect(closeAcpSession).not.toHaveBeenCalled();
-      expect(readSessionStoreForTest(storePath)[sessionKey]?.hubDelegated).toBeDefined();
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
+      expect(fixture.closeAcpSession).not.toHaveBeenCalled();
+      expect(
+        readSessionStoreForTest(fixture.storePath)[fixture.sessionKey]?.hubDelegated,
+      ).toBeDefined();
+    });
   });
 });

@@ -5,97 +5,82 @@ import {
   delegateSessionKey,
   HUB_OWNER_A,
   hubDelegatedEntry,
-  writeDelegateStore,
 } from "../../test/helpers/hub-delegated-fixtures.js";
-import { readSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTest,
+} from "../config/sessions/test-helpers.js";
 import { withHubDelegatedLabelPatchLock } from "../gateway/sessions-patch.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { closeHubDelegatedAcpWorker } from "./hub-delegated-lifecycle.js";
 
+function setupDelegate(home: string, suffix: string) {
+  const storePath = path.join(home, "sessions.json");
+  const sessionKey = delegateSessionKey("codex", suffix);
+  const createdAt = Date.now();
+  writeSessionStoreForTest(storePath, {
+    [sessionKey]: hubDelegatedEntry({
+      sessionId: `sess-${suffix}`,
+      label: "refactor",
+      createdAt,
+      updatedAt: createdAt,
+    }),
+  });
+  return { storePath, sessionKey, marker: { ownerSessionKey: HUB_OWNER_A, createdAt } };
+}
+
+function closeDelegate(
+  fixture: ReturnType<typeof setupDelegate>,
+  closeRuntime: () => Promise<void>,
+  unbind?: () => Promise<void>,
+) {
+  return closeHubDelegatedAcpWorker({
+    cfg: { session: { store: fixture.storePath } },
+    sessionKey: fixture.sessionKey,
+    storePath: fixture.storePath,
+    storeSessionKey: fixture.sessionKey,
+    reason: "manual-delegate-close",
+    closeRuntime,
+    unbind,
+  });
+}
+
 describe("hub-delegated lifecycle", () => {
   it("clears routing fields before runtime close and restores them on failure", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      const sessionKey = delegateSessionKey("codex", "close-order");
-      const marker = { ownerSessionKey: HUB_OWNER_A, createdAt: Date.now() };
-      writeDelegateStore(
-        storePath,
-        sessionKey,
-        hubDelegatedEntry({
-          sessionId: "sess-close-order",
-          ownerSessionKey: HUB_OWNER_A,
-          label: "refactor",
-          createdAt: marker.createdAt,
-          updatedAt: marker.createdAt,
-        }),
-      );
+      const fixture = setupDelegate(home, "close-order");
 
       const successEvents: string[] = [];
-      await closeHubDelegatedAcpWorker({
-        cfg: { session: { store: storePath } },
-        sessionKey,
-        storePath,
-        storeSessionKey: sessionKey,
-        reason: "manual-delegate-close",
-        closeRuntime: async () => {
+      await closeDelegate(
+        fixture,
+        async () => {
           successEvents.push("close");
-          const persisted = readSessionStoreForTest(storePath);
-          expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
-          expect(persisted[sessionKey]?.label).toBeUndefined();
+          const persisted = readSessionStoreForTest(fixture.storePath)[fixture.sessionKey];
+          expect(persisted?.hubDelegated).toBeUndefined();
+          expect(persisted?.label).toBeUndefined();
         },
-        unbind: async () => {
+        async () => {
           successEvents.push("unbind");
         },
-      });
+      );
       expect(successEvents).toEqual(["close", "unbind"]);
 
-      const restoreKey = delegateSessionKey("codex", "close-restore");
-      writeDelegateStore(
-        storePath,
-        restoreKey,
-        hubDelegatedEntry({
-          sessionId: "sess-close-restore",
-          ownerSessionKey: HUB_OWNER_A,
-          label: "refactor",
-          createdAt: marker.createdAt,
-          updatedAt: marker.createdAt,
-        }),
-      );
+      const restore = setupDelegate(home, "close-restore");
       await expect(
-        closeHubDelegatedAcpWorker({
-          cfg: { session: { store: storePath } },
-          sessionKey: restoreKey,
-          storePath,
-          storeSessionKey: restoreKey,
-          reason: "manual-delegate-close",
-          closeRuntime: async () => {
-            throw new Error("close failed");
-          },
+        closeDelegate(restore, async () => {
+          throw new Error("close failed");
         }),
       ).rejects.toThrow("close failed");
 
-      const restored = readSessionStoreForTest(storePath)[restoreKey];
-      expect(restored?.hubDelegated).toEqual(marker);
+      const restored = readSessionStoreForTest(restore.storePath)[restore.sessionKey];
+      expect(restored?.hubDelegated).toEqual(restore.marker);
       expect(restored?.label).toBe("refactor");
     });
   });
 
   it("holds the hub-delegated label lock while clearing and restoring on close failure", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      const sessionKey = delegateSessionKey("codex", "close-lock");
-      const marker = { ownerSessionKey: HUB_OWNER_A, createdAt: Date.now() };
-      writeDelegateStore(
-        storePath,
-        sessionKey,
-        hubDelegatedEntry({
-          sessionId: "sess-close-lock",
-          ownerSessionKey: HUB_OWNER_A,
-          label: "refactor",
-          createdAt: marker.createdAt,
-          updatedAt: marker.createdAt,
-        }),
-      );
+      const fixture = setupDelegate(home, "close-lock");
 
       let unblockClose!: () => void;
       const closeBlocked = new Promise<void>((resolve) => {
@@ -107,17 +92,10 @@ describe("hub-delegated lifecycle", () => {
       });
       let concurrentFinished = false;
 
-      const closePromise = closeHubDelegatedAcpWorker({
-        cfg: { session: { store: storePath } },
-        sessionKey,
-        storePath,
-        storeSessionKey: sessionKey,
-        reason: "manual-delegate-close",
-        closeRuntime: async () => {
-          closeRuntimeEntered();
-          await closeBlocked;
-          throw new Error("close failed");
-        },
+      const closePromise = closeDelegate(fixture, async () => {
+        closeRuntimeEntered();
+        await closeBlocked;
+        throw new Error("close failed");
       });
       await closeRuntimeEnteredPromise;
       const concurrent = withHubDelegatedLabelPatchLock(async () => {

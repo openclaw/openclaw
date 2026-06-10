@@ -83,19 +83,16 @@ function requireGatewayRequest(index = 0) {
   return requireRecord(callGatewayMock.mock.calls[index]?.[0], `gateway request ${index}`);
 }
 
-function mockLabelResolveSendGateway(params: {
-  onResolve: (resolveParams: Record<string, unknown>, attempt: number) => { key: string } | "throw";
-}) {
-  let resolveAttempts = 0;
+function mockLabelResolveSendGateway(resolveKeys: Array<string | undefined>) {
+  let resolveAttempt = 0;
   callGatewayMock.mockImplementation(
     async (request: { method?: string; params?: Record<string, unknown> }) => {
       if (request.method === "sessions.resolve") {
-        resolveAttempts += 1;
-        const result = params.onResolve(request.params ?? {}, resolveAttempts);
-        if (result === "throw") {
+        const key = resolveKeys[resolveAttempt++];
+        if (!key) {
           throw new Error(`No session found with label: ${request.params?.label ?? "unknown"}`);
         }
-        return result;
+        return { key };
       }
       if (request.method === "agent") {
         return { runId: "run-label-send", status: "accepted", acceptedAt: 2000 };
@@ -113,9 +110,6 @@ function mockLabelResolveSendGateway(params: {
       throw new Error(`unexpected gateway call: ${request.method ?? "unknown"}`);
     },
   );
-  return {
-    getResolveAttempts: () => resolveAttempts,
-  };
 }
 
 function enableAllSessionVisibility() {
@@ -841,12 +835,7 @@ describe("sessions_send gating", () => {
   });
 
   it("returns an error when label resolution fails", async () => {
-    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "sessions.resolve") {
-        throw new Error("No session found with label: nope");
-      }
-      throw new Error(`unexpected gateway call: ${request.method ?? "unknown"}`);
-    });
+    mockLabelResolveSendGateway([undefined, undefined, undefined]);
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-missing-label", {
@@ -952,33 +941,32 @@ describe("sessions_send gating", () => {
   it.each([
     {
       label: "refactor",
-      onResolve: (resolveParams: Record<string, unknown>) => {
-        expect(resolveParams).toEqual({
+      resolveKeys: ["agent:codex:acp:delegate-child"],
+      expectedResolveParams: [
+        {
           label: "refactor",
           hubDelegatedOwner: MAIN_AGENT_SESSION_KEY,
-        });
-        return { key: "agent:codex:acp:delegate-child" };
-      },
-      expectedResolveAttempts: 1,
+        },
+      ],
     },
     {
       label: "worker",
-      onResolve: (resolveParams: Record<string, unknown>) => {
-        if (resolveParams.hubDelegatedOwner) {
-          return "throw";
-        }
-        expect(resolveParams).toEqual({
+      resolveKeys: [undefined, "agent:main:subagent:owned-child"],
+      expectedResolveParams: [
+        {
+          label: "worker",
+          hubDelegatedOwner: MAIN_AGENT_SESSION_KEY,
+        },
+        {
           label: "worker",
           spawnedBy: MAIN_AGENT_SESSION_KEY,
-        });
-        return { key: "agent:main:subagent:owned-child" };
-      },
-      expectedResolveAttempts: 2,
+        },
+      ],
     },
   ])(
     "resolves labels via scoped cascade ($label)",
-    async ({ label, onResolve, expectedResolveAttempts }) => {
-      const flow = mockLabelResolveSendGateway({ onResolve });
+    async ({ label, resolveKeys, expectedResolveParams }) => {
+      mockLabelResolveSendGateway(resolveKeys);
       enableAllSessionVisibility();
       const tool = createMainSessionsSendTool();
 
@@ -989,7 +977,12 @@ describe("sessions_send gating", () => {
       });
 
       expect(requireDetails(result).status).toBe("ok");
-      expect(flow.getResolveAttempts()).toBe(expectedResolveAttempts);
+      expect(
+        callGatewayMock.mock.calls
+          .map(([request]) => request as { method?: string; params?: Record<string, unknown> })
+          .filter((request) => request.method === "sessions.resolve")
+          .map((request) => request.params),
+      ).toEqual(expectedResolveParams);
     },
   );
 
