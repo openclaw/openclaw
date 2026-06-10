@@ -55,9 +55,13 @@ async function mutateSignalReaction(params: {
   targetAuthor?: string;
   targetAuthorUuid?: string;
 }) {
+  const accountInfo = resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId });
   const options = {
     cfg: params.cfg,
     accountId: params.accountId,
+    account: accountInfo.config.account,
+    accountUuid: accountInfo.config.accountUuid,
+    configPath: accountInfo.config.configPath,
     groupId: params.target.groupId,
     targetAuthor: params.targetAuthor,
     targetAuthorUuid: params.targetAuthorUuid,

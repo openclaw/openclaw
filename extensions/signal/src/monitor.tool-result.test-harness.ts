@@ -15,6 +15,7 @@ type SignalToolResultTestMocks = {
   signalCheckMock: MockFn;
   signalRpcRequestMock: MockFn;
   spawnSignalDaemonMock: MockFn;
+  discoverSignalAccountUuidMock: MockFn;
 };
 
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
@@ -28,6 +29,7 @@ const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const discoverSignalAccountUuidMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalToolResultSessionStorePath = vi.hoisted(
   () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
 );
@@ -45,6 +47,7 @@ export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
     signalCheckMock,
     signalRpcRequestMock,
     spawnSignalDaemonMock,
+    discoverSignalAccountUuidMock,
   };
 }
 
@@ -190,6 +193,14 @@ vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
+vi.mock("./account-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./account-store.js")>();
+  return {
+    ...actual,
+    discoverSignalAccountUuid: (...args: unknown[]) => discoverSignalAccountUuidMock(...args),
+  };
+});
+
 vi.mock("./daemon.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./daemon.js")>();
   return {
@@ -237,6 +248,7 @@ export function installSignalToolResultTestHooks() {
     signalCheckMock.mockReset().mockResolvedValue({ ok: true });
     signalRpcRequestMock.mockReset().mockResolvedValue({});
     spawnSignalDaemonMock.mockReset().mockReturnValue(createMockSignalDaemonHandle());
+    discoverSignalAccountUuidMock.mockReset().mockResolvedValue(undefined);
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
     upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);

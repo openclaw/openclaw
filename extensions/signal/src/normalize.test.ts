@@ -1,6 +1,10 @@
 // Signal tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
-import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
+import {
+  looksLikeSignalTargetId,
+  normalizeSignalMessagingTarget,
+  normalizeSignalUuidForCompare,
+} from "./normalize.js";
 
 describe("normalizeSignalMessagingTarget", () => {
   it("normalizes uuid targets by stripping uuid:", () => {
@@ -25,6 +29,18 @@ describe("normalizeSignalMessagingTarget", () => {
     expect(
       normalizeSignalMessagingTarget("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD="),
     ).toBe("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=");
+  });
+});
+
+describe("normalizeSignalUuidForCompare", () => {
+  it("normalizes only valid UUID forms", () => {
+    expect(normalizeSignalUuidForCompare("uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
+      "123e4567e89b12d3a456426614174000",
+    );
+    expect(normalizeSignalUuidForCompare("123e4567e89b12d3a456426614174000")).toBe(
+      "123e4567e89b12d3a456426614174000",
+    );
+    expect(normalizeSignalUuidForCompare("legacy copied sender id")).toBeUndefined();
   });
 });
 

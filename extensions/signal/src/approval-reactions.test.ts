@@ -9,6 +9,7 @@ import {
   registerSignalApprovalReactionTargetForOutboundMessage,
   registerSignalApprovalReactionTarget,
   resolveSignalApprovalReactionTargetWithPersistence,
+  unregisterSignalApprovalReactionTarget,
 } from "./approval-reactions.js";
 
 const resolverMocks = vi.hoisted(() => ({
@@ -135,6 +136,45 @@ describe("Signal approval reactions", () => {
     });
   });
 
+  it("keeps UUID target-mode approval reactions enabled across compact and hyphenated forms", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: ["123e4567-e89b-12d3-a456-426614174000"],
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "uuid:123e4567-e89b-12d3-a456-426614174000" }],
+        },
+      },
+    };
+    const text =
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
+    const compactTo = "uuid:123e4567e89b12d3a456426614174000";
+    const textWithHint = appendSignalApprovalReactionHintForOutboundMessage({
+      cfg,
+      accountId: "default",
+      to: compactTo,
+      text,
+      targetAuthor: "+15550009999",
+    });
+
+    expect(textWithHint).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    expect(
+      registerSignalApprovalReactionTargetForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: compactTo,
+        messageId: "1700000000010",
+        text: textWithHint,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps target-mode outbound prompts manual when the target route is disabled", () => {
     const text =
       "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
@@ -222,6 +262,63 @@ describe("Signal approval reactions", () => {
     });
   });
 
+  it("resolves persisted hyphenated UUID conversation keys after compact lookup", async () => {
+    registerSignalApprovalReactionTarget({
+      accountId: "default",
+      conversationKey: "123e4567-e89b-12d3-a456-426614174000",
+      messageId: "1700000000000",
+      approvalId: "exec-1",
+      allowedDecisions: ["allow-once", "deny"],
+      targetAuthorKeys: ["+15550009999"],
+      route: approvalRoute,
+      routeAllowed: true,
+    });
+
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "123e4567e89b12d3a456426614174000",
+        messageId: "1700000000000",
+        reactionKey: "👎",
+        targetAuthor: "+15550009999",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-1",
+      approvalKind: "exec",
+      decision: "deny",
+      route: approvalRoute,
+    });
+  });
+
+  it("removes persisted hyphenated UUID conversation keys during compact cleanup", async () => {
+    registerSignalApprovalReactionTarget({
+      accountId: "default",
+      conversationKey: "123e4567-e89b-12d3-a456-426614174000",
+      messageId: "1700000000000",
+      approvalId: "exec-1",
+      allowedDecisions: ["allow-once", "deny"],
+      targetAuthorKeys: ["+15550009999"],
+      route: approvalRoute,
+      routeAllowed: true,
+    });
+
+    unregisterSignalApprovalReactionTarget({
+      accountId: "default",
+      conversationKey: "123e4567e89b12d3a456426614174000",
+      messageId: "1700000000000",
+    });
+
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "123e4567e89b12d3a456426614174000",
+        messageId: "1700000000000",
+        reactionKey: "👎",
+        targetAuthor: "+15550009999",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("does not match timestamp-only bindings when the inbound conversation id differs", async () => {
     registerSignalApprovalReactionTarget({
       accountId: "default",
@@ -263,7 +360,7 @@ describe("Signal approval reactions", () => {
         conversationKey: "+15551230000",
         messageId: "1700000000001",
         reactionKey: "👍",
-        targetAuthorUuid: "abcdef12-3456-7890-abcd-ef1234567890",
+        targetAuthorUuid: "abcdef1234567890abcdef1234567890",
       }),
     ).resolves.toEqual({
       approvalId: "exec-1",

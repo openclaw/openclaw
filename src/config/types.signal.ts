@@ -5,6 +5,7 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 export type SignalApiMode = "auto" | "native" | "container";
+export type SignalIngressMode = "standard" | "note-to-self";
 
 export type SignalGroupConfig = {
   requireMention?: boolean;
@@ -19,6 +20,8 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   account?: string;
   /** Optional account UUID for signal-cli (used for loop protection). */
   accountUuid?: string;
+  /** Inbound mode. note-to-self accepts self-chat messages from the linked Signal account. */
+  ingressMode?: SignalIngressMode;
   /** Optional signal-cli config directory path (passed as --config). */
   configPath?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */

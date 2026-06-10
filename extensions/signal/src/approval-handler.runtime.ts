@@ -38,6 +38,7 @@ type PreparedSignalApprovalTarget = {
   baseUrl?: string;
   account?: string;
   accountUuid?: string;
+  configPath?: string;
   targetAuthorKeys: readonly string[];
 };
 type PendingSignalApprovalEntry = {
@@ -47,6 +48,8 @@ type PendingSignalApprovalEntry = {
   messageId: string;
   baseUrl?: string;
   account?: string;
+  accountUuid?: string;
+  configPath?: string;
   targetAuthorKeys: readonly string[];
   reactionsActive: boolean;
 };
@@ -58,11 +61,12 @@ type SignalApprovalRuntimeContext = {
   baseUrl?: string;
   account?: string;
   accountUuid?: string;
+  configPath?: string;
 };
 
 function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRuntimeContext {
   const value = context as
-    | { baseUrl?: unknown; account?: unknown; accountUuid?: unknown }
+    | { baseUrl?: unknown; account?: unknown; accountUuid?: unknown; configPath?: unknown }
     | null
     | undefined;
   return {
@@ -73,6 +77,10 @@ function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRunti
     accountUuid:
       typeof value?.accountUuid === "string" && value.accountUuid.trim()
         ? value.accountUuid.trim()
+        : undefined,
+    configPath:
+      typeof value?.configPath === "string" && value.configPath.trim()
+        ? value.configPath.trim()
         : undefined,
   };
 }
@@ -130,6 +138,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         ...(runtimeContext.baseUrl ? { baseUrl: runtimeContext.baseUrl } : {}),
         ...(runtimeContext.account ? { account: runtimeContext.account } : {}),
         ...(runtimeContext.accountUuid ? { accountUuid: runtimeContext.accountUuid } : {}),
+        ...(runtimeContext.configPath ? { configPath: runtimeContext.configPath } : {}),
         targetAuthorKeys,
       };
       return {
@@ -157,6 +166,8 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: preparedTarget.accountId,
         ...(preparedTarget.baseUrl ? { baseUrl: preparedTarget.baseUrl } : {}),
         ...(preparedTarget.account ? { account: preparedTarget.account } : {}),
+        ...(preparedTarget.accountUuid ? { accountUuid: preparedTarget.accountUuid } : {}),
+        ...(preparedTarget.configPath ? { configPath: preparedTarget.configPath } : {}),
         textMode: "plain",
       });
       if (!result.messageId || result.messageId === "unknown") {
@@ -175,6 +186,8 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         reactionsActive,
         ...(preparedTarget.baseUrl ? { baseUrl: preparedTarget.baseUrl } : {}),
         ...(preparedTarget.account ? { account: preparedTarget.account } : {}),
+        ...(preparedTarget.accountUuid ? { accountUuid: preparedTarget.accountUuid } : {}),
+        ...(preparedTarget.configPath ? { configPath: preparedTarget.configPath } : {}),
       };
     },
     updateEntry: async ({ cfg, entry, payload }) => {
@@ -183,6 +196,8 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: entry.accountId,
         ...(entry.baseUrl ? { baseUrl: entry.baseUrl } : {}),
         ...(entry.account ? { account: entry.account } : {}),
+        ...(entry.accountUuid ? { accountUuid: entry.accountUuid } : {}),
+        ...(entry.configPath ? { configPath: entry.configPath } : {}),
         textMode: "plain",
       });
     },

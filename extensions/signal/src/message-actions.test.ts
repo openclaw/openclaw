@@ -91,7 +91,7 @@ describe("signalMessageActions", () => {
         expectedRecipient: "+15550001111",
         expectedTimestamp: 123,
         expectedEmoji: "👍",
-        expectedOptions: { accountId: "work" },
+        expectedOptions: { accountId: "work", account: "+15550001111" },
       },
       {
         name: "normalizes uuid recipients",
@@ -104,7 +104,7 @@ describe("signalMessageActions", () => {
         expectedRecipient: "123e4567-e89b-12d3-a456-426614174000",
         expectedTimestamp: 123,
         expectedEmoji: "🔥",
-        expectedOptions: {},
+        expectedOptions: { account: "+15550001111" },
       },
       {
         name: "passes groupId and targetAuthor for group reactions",
@@ -119,6 +119,7 @@ describe("signalMessageActions", () => {
         expectedTimestamp: 123,
         expectedEmoji: "✅",
         expectedOptions: {
+          account: "+15550001111",
           groupId: "group-id",
           targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
         },
@@ -130,7 +131,7 @@ describe("signalMessageActions", () => {
         expectedRecipient: "+15559999999",
         expectedTimestamp: 1737630212345,
         expectedEmoji: "🔥",
-        expectedOptions: {},
+        expectedOptions: { account: "+15550001111" },
         toolContext: { currentMessageId: "1737630212345" },
       },
     ] as const;
@@ -139,6 +140,9 @@ describe("signalMessageActions", () => {
       sendReactionSignalMock.mockClear();
       const expectedOptions = testCase.expectedOptions as {
         accountId?: string;
+        account?: string;
+        accountUuid?: string;
+        configPath?: string;
         groupId?: string;
         targetAuthor?: string;
         targetAuthorUuid?: string;
@@ -159,6 +163,9 @@ describe("signalMessageActions", () => {
         {
           cfg: testCase.cfg,
           accountId: expectedOptions.accountId,
+          account: expectedOptions.account,
+          accountUuid: expectedOptions.accountUuid,
+          configPath: expectedOptions.configPath,
           groupId: expectedOptions.groupId,
           targetAuthor: expectedOptions.targetAuthor,
           targetAuthorUuid: expectedOptions.targetAuthorUuid,

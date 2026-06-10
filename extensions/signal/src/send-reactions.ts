@@ -5,14 +5,24 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { discoverSignalAccountUuid, resolveConfiguredSignalAccountUuid } from "./account-store.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client-adapter.js";
+import { normalizeSignalUuidForCompare } from "./normalize.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import {
+  forgetSignalSelfReplyEcho,
+  rememberSignalSelfReplyEcho,
+  resolveSignalSelfReplyReactionEchoText,
+} from "./self-reply-echoes.js";
 
 export type SignalReactionOpts = {
   cfg: OpenClawConfig;
   baseUrl?: string;
   account?: string;
+  accountUuid?: string | null;
+  configPath?: string;
   accountId?: string;
   timeoutMs?: number;
   targetAuthor?: string;
@@ -51,6 +61,15 @@ function normalizeSignalUuid(raw: string): string {
   return trimmed;
 }
 
+function isDefiniteSignalReactionFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b|^Signal REST \d{3}:|^Signal RPC -?\d+:/i.test(
+    error.message,
+  );
+}
+
 function resolveTargetAuthorParams(params: {
   targetAuthor?: string;
   targetAuthorUuid?: string;
@@ -70,6 +89,25 @@ function resolveTargetAuthorParams(params: {
   return {};
 }
 
+function isSignalSelfReactionTarget(params: {
+  recipient: string;
+  account?: string | null;
+  accountUuid?: string | null;
+}): boolean {
+  const recipientUuid = normalizeSignalUuidForCompare(params.recipient);
+  const accountUuid = normalizeSignalUuidForCompare(params.accountUuid);
+  if (recipientUuid && accountUuid && recipientUuid === accountUuid) {
+    return true;
+  }
+  const recipientPhone = normalizeE164(params.recipient);
+  const accountPhone = normalizeE164(params.account ?? "");
+  return Boolean(recipientPhone && accountPhone && recipientPhone === accountPhone);
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
 async function sendReactionSignalCore(params: {
   recipient: string;
   targetTimestamp: number;
@@ -85,6 +123,22 @@ async function sendReactionSignalCore(params: {
     accountId: params.opts.accountId,
   });
   const { baseUrl, account } = resolveSignalRpcContext(params.opts, accountInfo);
+  const accountOverridden = Boolean(params.opts.account?.trim());
+  let accountUuid =
+    params.opts.accountUuid ??
+    resolveConfiguredSignalAccountUuid({
+      configuredAccount: accountInfo.config.account,
+      configuredAccountUuid: accountInfo.config.accountUuid,
+      effectiveAccount: account,
+      accountOverridden,
+    });
+  const discoverAccountUuid = async () => {
+    accountUuid ??= await discoverSignalAccountUuid({
+      account,
+      configPath: params.opts.configPath ?? accountInfo.config.configPath,
+    });
+    return accountUuid;
+  };
 
   const normalizedRecipient = normalizeSignalUuid(params.recipient);
   const groupId = params.opts.groupId?.trim();
@@ -124,11 +178,104 @@ async function sendReactionSignalCore(params: {
     requestParams.account = account;
   }
 
-  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
-    baseUrl,
-    timeoutMs: params.opts.timeoutMs,
-    apiMode,
-  });
+  if (accountInfo.config.ingressMode === "note-to-self" && !groupId) {
+    await discoverAccountUuid();
+  }
+  const selfReactionEchoTexts =
+    accountInfo.config.ingressMode === "note-to-self" &&
+    !groupId &&
+    isSignalSelfReactionTarget({
+      recipient: normalizedRecipient,
+      account,
+      accountUuid,
+    })
+      ? uniqueStrings([
+          resolveSignalSelfReplyReactionEchoText({
+            emoji: normalizedEmoji,
+            remove: params.remove,
+            targetTimestamp: params.targetTimestamp,
+            targetAuthor: targetAuthorParams.targetAuthor,
+            targetAuthorUuid: params.opts.targetAuthorUuid,
+          }),
+          accountUuid
+            ? resolveSignalSelfReplyReactionEchoText({
+                emoji: normalizedEmoji,
+                remove: params.remove,
+                targetTimestamp: params.targetTimestamp,
+                targetAuthor: targetAuthorParams.targetAuthor,
+                targetAuthorUuid: params.opts.targetAuthorUuid ?? accountUuid,
+              })
+            : undefined,
+        ])
+      : [];
+  const echoIdentities = [
+    ...new Set(
+      [accountUuid ?? undefined, account].filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const rememberSelfReactionEcho = async (echo: {
+    messageId?: string;
+    timestamp?: number;
+    text?: string;
+    includeTextWithPrimary?: boolean;
+  }) => {
+    for (const accountIdentity of echoIdentities) {
+      await rememberSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...echo,
+      });
+    }
+  };
+  const forgetSelfReactionEcho = (echo: { messageId?: string; text?: string }) => {
+    for (const accountIdentity of echoIdentities) {
+      forgetSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...echo,
+      });
+    }
+  };
+  for (const selfReactionEchoText of selfReactionEchoTexts) {
+    await rememberSelfReactionEcho({
+      messageId: "unknown",
+      text: selfReactionEchoText,
+      includeTextWithPrimary: true,
+    });
+  }
+
+  let result: { timestamp?: number } | undefined;
+  try {
+    result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
+      baseUrl,
+      timeoutMs: params.opts.timeoutMs,
+      apiMode,
+    });
+  } catch (err) {
+    if (isDefiniteSignalReactionFailure(err)) {
+      for (const selfReactionEchoText of selfReactionEchoTexts) {
+        forgetSelfReactionEcho({
+          messageId: "unknown",
+          text: selfReactionEchoText,
+        });
+      }
+    }
+    throw err;
+  }
+  for (const selfReactionEchoText of selfReactionEchoTexts) {
+    if (result?.timestamp != null) {
+      forgetSelfReactionEcho({
+        messageId: "unknown",
+        text: selfReactionEchoText,
+      });
+    }
+    await rememberSelfReactionEcho({
+      messageId: result?.timestamp != null ? String(result.timestamp) : undefined,
+      timestamp: result?.timestamp,
+      text: selfReactionEchoText,
+      includeTextWithPrimary: true,
+    });
+  }
 
   return {
     ok: true,

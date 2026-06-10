@@ -1,4 +1,5 @@
 // Signal plugin module implements send behavior.
+import fs from "node:fs/promises";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -11,19 +12,31 @@ import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { discoverSignalAccountUuid, resolveConfiguredSignalAccountUuid } from "./account-store.js";
 import { resolveSignalAccount } from "./accounts.js";
 import {
   appendSignalApprovalReactionHintForOutboundMessage,
+  extractSignalApprovalPromptBinding,
   registerSignalApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { normalizeSignalUuidForCompare } from "./normalize.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import {
+  forgetSignalSelfReplyEcho,
+  rememberSignalSelfReplyEcho,
+  resolveSignalSelfReplyMediaEchoText,
+} from "./self-reply-echoes.js";
+import { looksLikeUuid } from "./uuid.js";
 
 export type SignalSendOpts = {
   cfg: OpenClawConfig;
   baseUrl?: string;
   account?: string;
+  accountUuid?: string | null;
+  configPath?: string;
   accountId?: string;
   mediaUrl?: string;
   mediaAccess?: {
@@ -55,6 +68,28 @@ type SignalTarget =
   | { type: "recipient"; recipient: string }
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
+
+function isDefiniteSignalSendFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b|^Signal REST \d{3}:|^Signal RPC -?\d+:/i.test(
+    error.message,
+  );
+}
+
+function isSignalUuidRecipient(value: string): boolean {
+  return looksLikeUuid(value.trim().replace(/^uuid:/i, ""));
+}
+
+function resolveGenericMediaEchoText(contentType?: string): string {
+  const kind = kindFromMime(contentType ?? undefined);
+  return kind ? `<media:${kind}>` : "<media:attachment>";
+}
+
+function uniqueEchoTexts(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
 
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   if (opts.baseUrl?.trim() && opts.account?.trim()) {
@@ -183,13 +218,34 @@ export async function sendMessageSignal(
     accountId: opts.accountId,
   });
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
+  const accountOverridden = Boolean(opts.account?.trim());
+  let accountUuid =
+    opts.accountUuid ??
+    resolveConfiguredSignalAccountUuid({
+      configuredAccount: accountInfo.config.account,
+      configuredAccountUuid: accountInfo.config.accountUuid,
+      effectiveAccount: account,
+      accountOverridden,
+    });
+  const discoverAccountUuid = async () => {
+    accountUuid ??= await discoverSignalAccountUuid({
+      account,
+      configPath: opts.configPath ?? accountInfo.config.configPath,
+    });
+    return accountUuid;
+  };
   const target = parseTarget(to);
+  const approvalBinding = extractSignalApprovalPromptBinding(text ?? "");
+  if (accountUuid == null && approvalBinding) {
+    await discoverAccountUuid();
+  }
   const outboundText = appendSignalApprovalReactionHintForOutboundMessage({
     cfg,
     accountId: accountInfo.accountId,
     to,
     text: text ?? "",
     targetAuthor: account,
+    targetAuthorUuid: accountUuid,
   });
   let message = outboundText;
   let messageFromPlaceholder = false;
@@ -209,6 +265,7 @@ export async function sendMessageSignal(
   })();
 
   let attachments: string[] | undefined;
+  let attachmentEchoMetadata: { contentType?: string; path: string } | undefined;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       mediaAccess: opts.mediaAccess,
@@ -216,6 +273,7 @@ export async function sendMessageSignal(
       readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
+    attachmentEchoMetadata = { path: resolved.path, contentType: resolved.contentType };
     const kind = kindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
@@ -265,12 +323,96 @@ export async function sendMessageSignal(
     throw new Error("Signal recipient is required");
   }
   Object.assign(params, targetParams);
+  if (
+    accountUuid == null &&
+    accountInfo.config.ingressMode === "note-to-self" &&
+    target.type === "recipient" &&
+    isSignalUuidRecipient(target.recipient)
+  ) {
+    await discoverAccountUuid();
+  }
+  const isPhoneSelfTarget =
+    target.type === "recipient" &&
+    account != null &&
+    normalizeE164(target.recipient) === normalizeE164(account);
+  if (
+    accountUuid == null &&
+    accountInfo.config.ingressMode === "note-to-self" &&
+    isPhoneSelfTarget
+  ) {
+    await discoverAccountUuid();
+  }
+  const isUuidSelfTarget =
+    accountUuid != null &&
+    target.type === "recipient" &&
+    normalizeSignalUuidForCompare(target.recipient) === normalizeSignalUuidForCompare(accountUuid);
+  const shouldRememberSelfEcho =
+    accountInfo.config.ingressMode === "note-to-self" && (isPhoneSelfTarget || isUuidSelfTarget);
+  const attachmentEchoText =
+    shouldRememberSelfEcho && attachmentEchoMetadata
+      ? resolveSignalSelfReplyMediaEchoText({
+          contentType: attachmentEchoMetadata.contentType,
+          size: await fs
+            .stat(attachmentEchoMetadata.path)
+            .then((stat) => stat.size)
+            .catch(() => undefined),
+        })
+      : undefined;
+  const attachmentFallbackEchoText = attachmentEchoMetadata
+    ? resolveGenericMediaEchoText(attachmentEchoMetadata.contentType)
+    : undefined;
+  const fallbackEchoTexts =
+    messageFromPlaceholder || (attachmentEchoMetadata && !message.trim())
+      ? uniqueEchoTexts([attachmentEchoText, attachmentFallbackEchoText])
+      : uniqueEchoTexts([message]);
+  const selfEchoAccountIdentities = uniqueEchoTexts([accountUuid ?? undefined, account]);
+  const rememberSelfEcho = async (echo: {
+    messageId: string;
+    timestamp?: number;
+    text?: string;
+  }) => {
+    for (const accountIdentity of selfEchoAccountIdentities) {
+      await rememberSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...echo,
+      });
+    }
+  };
+  const forgetSelfEcho = (echo: { messageId: string; text?: string }) => {
+    for (const accountIdentity of selfEchoAccountIdentities) {
+      forgetSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...echo,
+      });
+    }
+  };
+  for (const fallbackEchoText of shouldRememberSelfEcho ? fallbackEchoTexts : []) {
+    await rememberSelfEcho({
+      messageId: "unknown",
+      text: fallbackEchoText,
+    });
+  }
 
-  const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
-    baseUrl,
-    timeoutMs: opts.timeoutMs,
-    apiMode,
-  });
+  let result: { timestamp?: number } | undefined;
+  try {
+    result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
+      baseUrl,
+      timeoutMs: opts.timeoutMs,
+      apiMode,
+    });
+  } catch (err) {
+    if (shouldRememberSelfEcho && isDefiniteSignalSendFailure(err)) {
+      for (const fallbackEchoText of fallbackEchoTexts) {
+        forgetSelfEcho({
+          messageId: "unknown",
+          text: fallbackEchoText,
+        });
+      }
+    }
+    throw err;
+  }
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
   registerSignalApprovalReactionTargetForOutboundMessage({
@@ -280,7 +422,30 @@ export async function sendMessageSignal(
     messageId,
     text: outboundText,
     targetAuthor: account,
+    targetAuthorUuid: accountUuid,
   });
+  if (shouldRememberSelfEcho && timestamp != null) {
+    for (const fallbackEchoText of fallbackEchoTexts) {
+      forgetSelfEcho({
+        messageId: "unknown",
+        text: fallbackEchoText,
+      });
+    }
+    for (const fallbackEchoText of fallbackEchoTexts.length ? fallbackEchoTexts : [message]) {
+      await rememberSelfEcho({
+        messageId,
+        timestamp,
+        text: fallbackEchoText,
+      });
+    }
+  } else if (shouldRememberSelfEcho) {
+    for (const fallbackEchoText of fallbackEchoTexts) {
+      await rememberSelfEcho({
+        messageId: "unknown",
+        text: fallbackEchoText,
+      });
+    }
+  }
   return {
     messageId,
     timestamp,

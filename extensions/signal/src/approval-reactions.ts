@@ -18,7 +18,7 @@ import {
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getSignalApprovalApprovers, signalApprovalAuth } from "./approval-auth.js";
 import { looksLikeUuid } from "./identity.js";
-import { normalizeSignalMessagingTarget } from "./normalize.js";
+import { normalizeSignalMessagingTarget, normalizeSignalUuidForCompare } from "./normalize.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
 const PERSISTENT_NAMESPACE = "signal.approval-reactions";
@@ -33,6 +33,8 @@ type SignalApprovalReactionResolution = {
   decision: ExecApprovalReplyDecision;
   route: SignalApprovalReactionRoute;
 };
+
+export type SignalApprovalReactionAttemptStatus = "none" | "denied" | "resolved";
 
 type ApprovalKind = "exec" | "plugin";
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
@@ -136,12 +138,13 @@ function hasMatchingSignalApprovalReactionTarget(params: {
   config: ApprovalForwardingConfig;
   route: Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }>;
 }): boolean {
+  const routeTo = normalizeSignalApprovalTargetForCompare(params.route.to);
   return (params.config.targets ?? []).some((target) => {
     if (normalizeLowercaseStringOrEmpty(target.channel) !== "signal") {
       return false;
     }
-    const configuredTo = normalizeSignalMessagingTarget(target.to);
-    if (!configuredTo || configuredTo !== params.route.to) {
+    const configuredTo = normalizeSignalApprovalTargetForCompare(target.to);
+    if (!configuredTo || configuredTo !== routeTo) {
       return false;
     }
     return targetAccountMatches({
@@ -149,6 +152,18 @@ function hasMatchingSignalApprovalReactionTarget(params: {
       configuredAccountId: target.accountId,
     });
   });
+}
+
+function normalizeSignalApprovalTargetForCompare(raw: string): string | undefined {
+  const normalized = normalizeSignalMessagingTarget(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (looksLikeUuid(normalized)) {
+    const uuid = normalizeSignalUuidForCompare(normalized);
+    return uuid ? `uuid:${uuid}` : undefined;
+  }
+  return normalized;
 }
 
 function isSignalApprovalReactionRouteStillEnabled(params: {
@@ -177,7 +192,14 @@ function isSignalApprovalReactionRouteStillEnabled(params: {
 }
 
 export function resolveSignalApprovalConversationKey(to: string): string | null {
-  return normalizeSignalMessagingTarget(to) ?? null;
+  const normalized = normalizeSignalMessagingTarget(to);
+  if (!normalized) {
+    return null;
+  }
+  if (looksLikeUuid(normalized)) {
+    return normalizeSignalUuidForCompare(normalized) ?? null;
+  }
+  return normalized;
 }
 
 function normalizeSignalApprovalTargetAuthorKey(value: string): string | null {
@@ -188,11 +210,12 @@ function normalizeSignalApprovalTargetAuthorKey(value: string): string | null {
   const withoutSignalPrefix = normalized.replace(/^signal:/i, "").trim();
   const lower = normalizeLowercaseStringOrEmpty(withoutSignalPrefix);
   if (lower.startsWith("uuid:")) {
-    const uuid = withoutSignalPrefix.slice("uuid:".length).trim().toLowerCase();
+    const uuid = normalizeSignalUuidForCompare(withoutSignalPrefix.slice("uuid:".length));
     return uuid ? `uuid:${uuid}` : null;
   }
   if (looksLikeUuid(withoutSignalPrefix)) {
-    return `uuid:${withoutSignalPrefix.toLowerCase()}`;
+    const uuid = normalizeSignalUuidForCompare(withoutSignalPrefix);
+    return uuid ? `uuid:${uuid}` : null;
   }
   return normalizeE164(withoutSignalPrefix);
 }
@@ -201,14 +224,9 @@ export function resolveSignalApprovalTargetAuthorKeys(params: {
   targetAuthor?: string | null;
   targetAuthorUuid?: string | null;
 }): string[] {
-  const targetAuthorUuid = normalizeOptionalString(params.targetAuthorUuid);
+  const targetAuthorUuid = normalizeSignalUuidForCompare(params.targetAuthorUuid);
   const keys = [
-    targetAuthorUuid
-      ? `uuid:${targetAuthorUuid
-          .replace(/^uuid:/i, "")
-          .trim()
-          .toLowerCase()}`
-      : null,
+    targetAuthorUuid ? `uuid:${targetAuthorUuid}` : null,
     params.targetAuthor ? normalizeSignalApprovalTargetAuthorKey(params.targetAuthor) : null,
   ].filter((key): key is string => Boolean(key));
   return Array.from(new Set(keys));
@@ -226,6 +244,37 @@ function buildReactionTargetKey(params: {
     return null;
   }
   return `${accountId}:${conversationKey}:${messageId}`;
+}
+
+function hyphenateCompactUuid(value: string): string | null {
+  if (!/^[0-9a-f]{32}$/i.test(value)) {
+    return null;
+  }
+  const lower = value.toLowerCase();
+  return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}`;
+}
+
+function buildReactionTargetLookupKeys(params: {
+  accountId: string;
+  conversationKey: string;
+  messageId: string;
+}): string[] {
+  const keys = new Set<string>();
+  const primary = buildReactionTargetKey(params);
+  if (primary) {
+    keys.add(primary);
+  }
+  const legacyUuidConversationKey = hyphenateCompactUuid(params.conversationKey);
+  if (legacyUuidConversationKey) {
+    const legacy = buildReactionTargetKey({
+      ...params,
+      conversationKey: legacyUuidConversationKey,
+    });
+    if (legacy) {
+      keys.add(legacy);
+    }
+  }
+  return [...keys];
 }
 
 function reportPersistentApprovalReactionError(error: unknown): void {
@@ -278,11 +327,14 @@ function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | nu
             ? { sessionKey: value.route.sessionKey }
             : {}),
         };
+  const targetAuthorKeys = value.targetAuthorKeys
+    .map((key) => normalizeSignalApprovalTargetAuthorKey(key))
+    .filter((key): key is string => Boolean(key));
   return {
     approvalId: value.approvalId,
     approvalKind: value.approvalKind,
     allowedDecisions: value.allowedDecisions,
-    targetAuthorKeys: value.targetAuthorKeys,
+    targetAuthorKeys: Array.from(new Set(targetAuthorKeys)),
     route,
   };
 }
@@ -581,11 +633,9 @@ export function unregisterSignalApprovalReactionTarget(params: {
   conversationKey: string;
   messageId: string;
 }): void {
-  const key = buildReactionTargetKey(params);
-  if (!key) {
-    return;
+  for (const key of buildReactionTargetLookupKeys(params)) {
+    signalApprovalReactionTargets.delete(key);
   }
-  signalApprovalReactionTargets.delete(key);
 }
 
 function resolveTarget(params: {
@@ -626,22 +676,28 @@ export async function resolveSignalApprovalReactionTargetWithPersistence(params:
   targetAuthor?: string | null;
   targetAuthorUuid?: string | null;
 }): Promise<SignalApprovalReactionResolution | null> {
-  const key = buildReactionTargetKey(params);
-  if (!key) {
+  const keys = buildReactionTargetLookupKeys(params);
+  if (keys.length === 0) {
     return null;
   }
   const targetAuthorKeys = resolveSignalApprovalTargetAuthorKeys(params);
   if (targetAuthorKeys.length === 0) {
     return null;
   }
-  return resolveTarget({
-    target: await signalApprovalReactionTargets.lookup(key),
-    reactionKey: params.reactionKey,
-    targetAuthorKeys,
-  });
+  for (const key of keys) {
+    const resolved = resolveTarget({
+      target: await signalApprovalReactionTargets.lookup(key),
+      reactionKey: params.reactionKey,
+      targetAuthorKeys,
+    });
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
 }
 
-export async function maybeResolveSignalApprovalReaction(params: {
+export async function resolveSignalApprovalReactionAttempt(params: {
   cfg: OpenClawConfig;
   accountId: string;
   conversationKey: string;
@@ -652,7 +708,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
   targetAuthorUuid?: string | null;
   gatewayUrl?: string;
   logVerboseMessage?: (message: string) => void;
-}): Promise<boolean> {
+}): Promise<SignalApprovalReactionAttemptStatus> {
   const target = await resolveSignalApprovalReactionTargetWithPersistence({
     accountId: params.accountId,
     conversationKey: params.conversationKey,
@@ -662,14 +718,14 @@ export async function maybeResolveSignalApprovalReaction(params: {
     targetAuthorUuid: params.targetAuthorUuid,
   });
   if (!target) {
-    return false;
+    return "none";
   }
 
   if (!isSignalApprovalReactionRouteStillEnabled({ cfg: params.cfg, target })) {
     params.logVerboseMessage?.(
       `signal: approval reaction denied id=${target.approvalId}; approval route is no longer enabled`,
     );
-    return true;
+    return "denied";
   }
 
   const actorId = params.actorId?.trim();
@@ -677,7 +733,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
     params.logVerboseMessage?.(
       `signal: approval reaction ignored for ${target.approvalId}; missing actor identity`,
     );
-    return true;
+    return "denied";
   }
 
   const approvers = getSignalApprovalApprovers({ cfg: params.cfg, accountId: params.accountId });
@@ -685,7 +741,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
     params.logVerboseMessage?.(
       `signal: approval reaction denied id=${target.approvalId}; reactions require explicit approvers`,
     );
-    return true;
+    return "denied";
   }
   const auth = signalApprovalAuth.authorizeActorAction({
     cfg: params.cfg,
@@ -698,7 +754,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
     params.logVerboseMessage?.(
       `signal: approval reaction denied id=${target.approvalId} sender=${actorId}`,
     );
-    return true;
+    return "denied";
   }
 
   const { isApprovalNotFoundError, resolveSignalApproval } = await loadApprovalResolver();
@@ -713,7 +769,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
     params.logVerboseMessage?.(
       `signal: approval reaction resolved id=${target.approvalId} sender=${actorId} decision=${target.decision}`,
     );
-    return true;
+    return "resolved";
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
       unregisterSignalApprovalReactionTarget({
@@ -724,13 +780,19 @@ export async function maybeResolveSignalApprovalReaction(params: {
       params.logVerboseMessage?.(
         `signal: approval reaction ignored for expired approval id=${target.approvalId} sender=${actorId}`,
       );
-      return true;
+      return "denied";
     }
     params.logVerboseMessage?.(
       `signal: approval reaction failed id=${target.approvalId} sender=${actorId}: ${String(error)}`,
     );
-    return true;
+    return "denied";
   }
+}
+
+export async function maybeResolveSignalApprovalReaction(
+  params: Parameters<typeof resolveSignalApprovalReactionAttempt>[0],
+): Promise<boolean> {
+  return (await resolveSignalApprovalReactionAttempt(params)) !== "none";
 }
 
 export function clearSignalApprovalReactionTargetsForTest(): void {

@@ -19,13 +19,15 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP — ei
 
 ## Quick setup (beginner)
 
-1. Use a **separate Signal number** for the bot (recommended).
+1. Choose the account model:
+   - Use **Note to Self mode** when you want to link your own Signal account and message yourself.
+   - Use a **separate Signal number** when you want other Signal users to DM a bot account directly.
 2. Install `signal-cli` (Java required if you use the JVM build).
 3. Choose one setup path:
    - **Path A (QR link):** `signal-cli link -n "OpenClaw"` and scan with Signal.
    - **Path B (SMS register):** register a dedicated number with captcha + SMS verification.
 4. Configure OpenClaw and restart the gateway.
-5. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
+5. In Note to Self mode, send yourself a message in Signal. With a separate bot number, send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
 
 Minimal config:
 
@@ -45,13 +47,15 @@ Minimal config:
 
 Field reference:
 
-| Field        | Description                                       |
-| ------------ | ------------------------------------------------- |
-| `account`    | Bot phone number in E.164 format (`+15551234567`) |
-| `cliPath`    | Path to `signal-cli` (`signal-cli` if on `PATH`)  |
-| `configPath` | signal-cli config dir passed as `--config`        |
-| `dmPolicy`   | DM access policy (`pairing` recommended)          |
-| `allowFrom`  | Phone numbers or `uuid:<id>` values allowed to DM |
+| Field         | Description                                                                         |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `account`     | Linked Signal account phone number in E.164 format (`+15551234567`)                 |
+| `accountUuid` | Optional linked account UUID override; usually auto-discovered from signal-cli data |
+| `ingressMode` | `standard` or `note-to-self`; use `note-to-self` for self-chat operation            |
+| `cliPath`     | Path to `signal-cli` (`signal-cli` if on `PATH`)                                    |
+| `configPath`  | signal-cli config dir passed as `--config`                                          |
+| `dmPolicy`    | DM access policy (`pairing`, `allowlist`, `open`, `disabled`)                       |
+| `allowFrom`   | Phone numbers or `uuid:<id>` values allowed to DM or pair, depending on policy      |
 
 ## What it is
 
@@ -71,11 +75,45 @@ Disable with:
 }
 ```
 
-## The number model (important)
+## The account model
 
 - The gateway connects to a **Signal device** (the `signal-cli` account).
-- If you run the bot on **your personal Signal account**, it will ignore your own messages (loop protection).
-- For "I text the bot and it replies," use a **separate bot number**.
+- In `standard` ingress mode, messages from the linked account are ignored as loop protection. This is the right mode for a separate bot number.
+- In `note-to-self` ingress mode, messages from the linked account are accepted when they arrive as Signal Note to Self or self-chat events. OpenClaw still drops recognized reply echoes from itself.
+- External Signal users are controlled by `dmPolicy` and `allowFrom` in both modes.
+
+## Note to Self mode
+
+Use this when you do not want to dedicate a second Signal number to OpenClaw. Link your personal Signal account with `signal-cli`, then write to yourself in Signal.
+
+Note to Self mode requires your linked account phone number. OpenClaw normally discovers the matching Signal account UUID from signal-cli's account store (`data/accounts.json`) at runtime, so you do not need to store the UUID in OpenClaw config. Set `accountUuid` only as an override when your signal-cli account store is unavailable or nonstandard. Prefer a bare UUID such as `123e4567-e89b-12d3-a456-426614174000`; older `uuid:<id>` values still parse for upgrade compatibility and are normalized at runtime.
+
+Recommended config:
+
+```json5
+{
+  channels: {
+    signal: {
+      enabled: true,
+      account: "+15551234567",
+      cliPath: "signal-cli",
+      receiveMode: "on-start",
+      ingressMode: "note-to-self",
+      dmPolicy: "disabled",
+      groupPolicy: "disabled",
+    },
+  },
+}
+```
+
+Behavior:
+
+- Your Note to Self messages are accepted even when your own account would be ignored in `standard` mode.
+- Use `receiveMode: "on-start"` with native `signal-cli` so the daemon starts receiving self-chat sync events immediately.
+- Use `dmPolicy: "disabled"` if no external Signal user should be able to request pairing.
+- Use the default `dmPolicy: "pairing"` only when external Signal users should be able to request pairing with this account.
+- Use native `signal-cli` mode when possible. Container wrappers have historically lagged behind native `signal-cli` on Note to Self receive payloads.
+- OpenClaw remembers its own Note to Self replies only in memory. It intentionally does not persist self-reply replay markers across gateway restarts, because that would overfit the rare edge case of an in-flight Signal sync echo during a short OpenClaw restart.
 
 ## Setup path A: link existing Signal account (QR)
 
@@ -380,6 +418,8 @@ Provider options:
 - `channels.signal.enabled`: enable/disable channel startup.
 - `channels.signal.apiMode`: `auto | native | container` (default: auto). See [Container mode](#container-mode-bbernhardsignal-cli-rest-api).
 - `channels.signal.account`: E.164 for the bot account.
+- `channels.signal.accountUuid`: optional Signal account UUID override for self-message detection and approval reaction targeting. Prefer a bare UUID; `uuid:<id>` remains accepted for upgrade compatibility.
+- `channels.signal.ingressMode`: `standard | note-to-self` (default: standard). `note-to-self` accepts self-chat messages from the linked Signal account.
 - `channels.signal.cliPath`: path to `signal-cli`.
 - `channels.signal.configPath`: optional `signal-cli --config` directory.
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
@@ -391,7 +431,7 @@ Provider options:
 - `channels.signal.ignoreStories`: ignore stories from the daemon.
 - `channels.signal.sendReadReceipts`: forward read receipts.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID ids.
+- `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`; `allowlist` requires at least one entry. Signal has no usernames; use phone/UUID ids.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender E.164 numbers, or `uuid:<id>` values.
 - `channels.signal.groups`: per-group overrides keyed by Signal group id (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.

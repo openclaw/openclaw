@@ -37,6 +37,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
+import { discoverSignalAccountUuid, resolveConfiguredSignalAccountUuid } from "./account-store.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
@@ -48,6 +49,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { normalizeSignalUuidForCompare } from "./normalize.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -206,26 +208,33 @@ function isSignalReactionMessage(
 function shouldEmitSignalReactionNotification(params: {
   mode?: SignalReactionNotificationMode;
   account?: string | null;
+  accountUuid?: string | null;
   targets?: SignalReactionTarget[];
   sender?: ReturnType<typeof resolveSignalSender> | null;
   allowlist?: string[];
 }) {
-  const { mode, account, targets, sender, allowlist } = params;
+  const { mode, account, accountUuid, targets, sender, allowlist } = params;
   const effectiveMode = mode ?? "own";
   if (effectiveMode === "off") {
     return false;
   }
   if (effectiveMode === "own") {
     const accountId = account?.trim();
-    if (!accountId || !targets || targets.length === 0) {
+    const normalizedAccountUuid = normalizeSignalUuidForCompare(accountUuid);
+    if ((!accountId && !normalizedAccountUuid) || !targets || targets.length === 0) {
       return false;
     }
-    const normalizedAccount = normalizeE164(accountId);
+    const normalizedAccount = accountId ? normalizeE164(accountId) : undefined;
     return targets.some((target) => {
       if (target.kind === "uuid") {
-        return accountId === target.id || accountId === `uuid:${target.id}`;
+        const targetUuid = normalizeSignalUuidForCompare(target.id);
+        return (
+          accountId === target.id ||
+          accountId === `uuid:${target.id}` ||
+          normalizedAccountUuid === targetUuid
+        );
       }
-      return normalizedAccount === target.id;
+      return normalizedAccount != null && normalizedAccount === target.id;
     });
   }
   if (effectiveMode === "allowlist") {
@@ -360,14 +369,27 @@ async function deliverReplies(params: {
   target: string;
   baseUrl: string;
   account?: string;
+  accountUuid?: string | null;
+  configPath?: string;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
 }) {
-  const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountUuid,
+    configPath,
+    accountId,
+    runtime,
+    maxBytes,
+    textLimit,
+    chunkMode,
+  } = params;
   for (const payload of replies) {
     const reply = resolveSendableOutboundReplyParts(payload);
     const delivered = await deliverTextOrMediaReply({
@@ -379,6 +401,8 @@ async function deliverReplies(params: {
           cfg: params.cfg,
           baseUrl,
           account,
+          accountUuid,
+          configPath,
           maxBytes,
           accountId,
         });
@@ -388,6 +412,8 @@ async function deliverReplies(params: {
           cfg: params.cfg,
           baseUrl,
           account,
+          accountUuid,
+          configPath,
           mediaUrl,
           maxBytes,
           accountId,
@@ -419,6 +445,17 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const baseUrl = normalizeOptionalString(opts.baseUrl) ?? accountInfo.baseUrl;
   const account =
     normalizeOptionalString(opts.account) ?? normalizeOptionalString(accountInfo.config.account);
+  const signalConfigPath =
+    normalizeOptionalString(opts.configPath) ??
+    normalizeOptionalString(accountInfo.config.configPath);
+  const accountOverridden = Boolean(normalizeOptionalString(opts.account));
+  const accountUuid =
+    resolveConfiguredSignalAccountUuid({
+      configuredAccount: accountInfo.config.account,
+      configuredAccountUuid: accountInfo.config.accountUuid,
+      effectiveAccount: account,
+      accountOverridden,
+    }) ?? (await discoverSignalAccountUuid({ account, configPath: signalConfigPath }));
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -467,14 +504,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
-    const configPath =
-      normalizeOptionalString(opts.configPath) ??
-      normalizeOptionalString(accountInfo.config.configPath);
     const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
     const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
     daemonHandle = spawnSignalDaemon({
       cliPath,
-      ...(configPath ? { configPath } : {}),
+      ...(signalConfigPath ? { configPath: signalConfigPath } : {}),
       account,
       httpHost,
       httpPort,
@@ -522,7 +556,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
             accountId: accountInfo.accountId,
             baseUrl,
             account,
-            accountUuid: accountInfo.config.accountUuid,
+            accountUuid,
+            configPath: signalConfigPath,
           }
         : null,
       abortSignal: opts.abortSignal,
@@ -533,7 +568,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       cfg,
       baseUrl,
       account,
-      accountUuid: accountInfo.config.accountUuid,
+      accountUuid,
+      configPath: signalConfigPath,
+      ingressMode: accountInfo.config.ingressMode,
       accountId: accountInfo.accountId,
       blockStreaming: accountInfo.config.blockStreaming,
       historyLimit,

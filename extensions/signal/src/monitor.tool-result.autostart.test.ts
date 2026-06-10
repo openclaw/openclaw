@@ -15,8 +15,12 @@ installSignalToolResultTestHooks();
 
 const { monitorSignalProvider } = await import("./monitor.js");
 
-const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
-  getSignalToolResultTestMocks();
+const {
+  waitForTransportReadyMock,
+  spawnSignalDaemonMock,
+  streamMock,
+  discoverSignalAccountUuidMock,
+} = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
@@ -131,6 +135,30 @@ describe("monitorSignalProvider autostart", () => {
         configPath: "~/.openclaw/signal-cli",
       }),
     );
+  });
+
+  it("discovers the UUID for the effective account override", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig({
+      autoStart: false,
+      account: "+15550001111",
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+      configPath: "/tmp/signal-cli",
+    });
+    const abortController = createAutoAbortController();
+
+    await runMonitorWithMocks({
+      autoStart: false,
+      account: "+15550009999",
+      baseUrl: SIGNAL_BASE_URL,
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    expect(discoverSignalAccountUuidMock).toHaveBeenCalledWith({
+      account: "+15550009999",
+      configPath: "/tmp/signal-cli",
+    });
   });
 
   it("omits configPath when channels.signal.configPath is blank", async () => {

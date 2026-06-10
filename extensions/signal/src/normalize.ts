@@ -39,6 +39,17 @@ export function normalizeSignalMessagingTarget(raw: string): string | undefined 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_COMPACT_PATTERN = /^[0-9a-f]{32}$/i;
 
+export function normalizeSignalUuidForCompare(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^uuid:/i, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!UUID_PATTERN.test(trimmed) && !UUID_COMPACT_PATTERN.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed.toLowerCase().replace(/-/g, "");
+}
+
 export function looksLikeSignalTargetId(raw: string, normalized?: string): boolean {
   const candidates = normalizeStringEntries([raw, normalized ?? ""]);
 

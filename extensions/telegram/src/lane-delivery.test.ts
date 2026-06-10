@@ -228,10 +228,7 @@ describe("createLaneTextDeliverer", () => {
     expect(answer.update).toHaveBeenCalledWith(previousBlock);
     expect(answer.update).not.toHaveBeenCalledWith(nextAssistantBlock);
     expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      { text: previousBlock },
-      { durable: false },
-    );
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: previousBlock }, { durable: false });
     expect(harness.sendPayload).not.toHaveBeenCalledWith(
       { text: nextAssistantBlock },
       expect.anything(),

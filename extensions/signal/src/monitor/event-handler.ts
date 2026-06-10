@@ -1,4 +1,5 @@
 // Signal plugin module implements event handler behavior.
+import crypto from "node:crypto";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -40,8 +41,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  maybeResolveSignalApprovalReaction,
   resolveSignalApprovalConversationKey,
+  resolveSignalApprovalReactionAttempt,
 } from "../approval-reactions.js";
 import {
   formatSignalPairingIdLine,
@@ -53,17 +54,222 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
-import { normalizeSignalMessagingTarget } from "../normalize.js";
+import { normalizeSignalMessagingTarget, normalizeSignalUuidForCompare } from "../normalize.js";
+import {
+  hasSignalSelfReplyEcho,
+  rememberSignalSelfReplyEcho,
+  resolveSignalSelfReplyMediaEchoText,
+  resolveSignalSelfReplyReactionEchoText,
+} from "../self-reply-echoes.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
+  SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
   SignalReactionMessage,
   SignalReceivePayload,
+  SignalSentSyncMessage,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions } from "./mentions.js";
+
+function isOwnSignalSender(params: {
+  sender: SignalSender;
+  account?: string;
+  accountUuid?: string;
+  sourceUuid?: string | null;
+}): boolean {
+  const normalizedAccount = params.account ? normalizeE164(params.account) : undefined;
+  const normalizedAccountUuid = normalizeSignalUuidForCompare(params.accountUuid);
+  const normalizedSourceUuid = normalizeSignalUuidForCompare(params.sourceUuid);
+  return (
+    (params.sender.kind === "phone" &&
+      normalizedAccount != null &&
+      params.sender.e164 === normalizedAccount) ||
+    (normalizedAccountUuid != null &&
+      normalizedSourceUuid != null &&
+      normalizedSourceUuid === normalizedAccountUuid) ||
+    (params.sender.kind === "uuid" &&
+      normalizedAccountUuid != null &&
+      normalizeSignalUuidForCompare(params.sender.raw) === normalizedAccountUuid)
+  );
+}
+
+function isSentSyncAddressedToOwnAccount(params: {
+  sentMessage: SignalSentSyncMessage;
+  account?: string;
+  accountUuid?: string;
+  sourceNumber?: string | null;
+}): boolean {
+  const destination = params.sentMessage.destinationNumber ?? params.sentMessage.destination;
+  if (
+    destination &&
+    ((params.account && normalizeE164(destination) === normalizeE164(params.account)) ||
+      (!params.account &&
+        params.accountUuid &&
+        params.sourceNumber &&
+        normalizeE164(destination) === normalizeE164(params.sourceNumber)))
+  ) {
+    return true;
+  }
+  const destinationUuid = normalizeSignalUuidForCompare(params.sentMessage.destinationUuid);
+  const accountUuid = normalizeSignalUuidForCompare(params.accountUuid);
+  return Boolean(destinationUuid && accountUuid && destinationUuid === accountUuid);
+}
+
+function resolveConfiguredSignalSelfSender(params: {
+  account?: string;
+  accountUuid?: string;
+}): SignalSender | null {
+  if (params.account) {
+    return {
+      kind: "phone",
+      raw: params.account,
+      e164: normalizeE164(params.account),
+    };
+  }
+  if (params.accountUuid) {
+    return { kind: "uuid", raw: params.accountUuid.toLowerCase() };
+  }
+  return null;
+}
+
+function resolveSentSyncDataMessage(sentMessage: SignalSentSyncMessage): SignalDataMessage | null {
+  if (sentMessage.dataMessage) {
+    return sentMessage.dataMessage;
+  }
+  if (sentMessage.editMessage?.dataMessage) {
+    return sentMessage.editMessage.dataMessage;
+  }
+  if (sentMessage.message && typeof sentMessage.message === "object") {
+    return sentMessage.message;
+  }
+  const hasUnwrappedDataMessageFields = Boolean(
+    sentMessage.attachments?.length ||
+    sentMessage.mentions?.length ||
+    sentMessage.groupInfo ||
+    sentMessage.quote ||
+    sentMessage.reaction,
+  );
+  if (typeof sentMessage.message !== "string" && !hasUnwrappedDataMessageFields) {
+    return null;
+  }
+  return {
+    timestamp: sentMessage.timestamp ?? undefined,
+    message: typeof sentMessage.message === "string" ? sentMessage.message : "",
+    attachments: sentMessage.attachments ?? [],
+    mentions: sentMessage.mentions ?? [],
+    groupInfo: sentMessage.groupInfo ?? null,
+    quote: sentMessage.quote ?? null,
+    reaction: sentMessage.reaction ?? null,
+  };
+}
+
+function resolveSelfReplyEchoText(
+  dataMessage: SignalDataMessage | null,
+  reaction?: SignalReactionMessage | null,
+): string | undefined {
+  if (reaction) {
+    const reactionEchoText = resolveSignalSelfReplyReactionEchoText({
+      emoji: reaction.emoji,
+      remove: reaction.isRemove,
+      targetTimestamp: reaction.targetSentTimestamp,
+      targetAuthor: reaction.targetAuthor,
+      targetAuthorUuid: reaction.targetAuthorUuid,
+      groupId: reaction.groupInfo?.groupId,
+    });
+    if (reactionEchoText) {
+      return reactionEchoText;
+    }
+  }
+  const text = dataMessage?.message?.trim();
+  if (text) {
+    return dataMessage?.message ?? undefined;
+  }
+  const firstAttachment = dataMessage?.attachments?.[0];
+  if (!firstAttachment) {
+    return undefined;
+  }
+  const mediaEchoText = resolveSignalSelfReplyMediaEchoText({
+    contentType: firstAttachment.contentType,
+    size: firstAttachment.size,
+  });
+  if (mediaEchoText) {
+    return mediaEchoText;
+  }
+  if ((dataMessage?.attachments?.length ?? 0) > 1) {
+    return formatAttachmentSummaryPlaceholder(
+      dataMessage?.attachments?.map((attachment) => attachment.contentType ?? undefined) ?? [],
+    );
+  }
+  const kind = kindFromMime(firstAttachment.contentType ?? undefined);
+  return kind ? `<media:${kind}>` : "<media:attachment>";
+}
+
+function resolveEditedSelfReplyEchoId(params: {
+  timestamp?: number;
+  text?: string;
+}): string | undefined {
+  if (typeof params.timestamp !== "number" || !Number.isFinite(params.timestamp)) {
+    return undefined;
+  }
+  const text = params.text?.trim();
+  if (!text) {
+    return undefined;
+  }
+  const textHash = crypto.createHash("sha256").update(text).digest("base64url").slice(0, 32);
+  return `edit:${params.timestamp}:${textHash}`;
+}
+
+function resolveNoteToSelfDataMessage(params: {
+  envelope: SignalEnvelope;
+  isOwnMessage: boolean;
+  noteToSelfMode: boolean;
+  account?: string;
+  accountUuid?: string;
+}): { envelope: SignalEnvelope; dataMessage: SignalDataMessage | null; isEdit?: boolean } | null {
+  if ("syncMessage" in params.envelope) {
+    if (!params.noteToSelfMode) {
+      return null;
+    }
+    const sentMessage = params.envelope.syncMessage?.sentMessage;
+    const addressedToOwnAccount = sentMessage
+      ? isSentSyncAddressedToOwnAccount({
+          sentMessage,
+          account: params.account,
+          accountUuid: params.accountUuid,
+          sourceNumber: params.envelope.sourceNumber,
+        })
+      : false;
+    if (
+      !sentMessage ||
+      (!params.isOwnMessage && !addressedToOwnAccount) ||
+      !addressedToOwnAccount
+    ) {
+      return null;
+    }
+    const dataMessage = resolveSentSyncDataMessage(sentMessage);
+    if (!dataMessage) {
+      return null;
+    }
+    return {
+      envelope: {
+        ...params.envelope,
+        timestamp: params.envelope.timestamp ?? sentMessage?.timestamp ?? undefined,
+      },
+      dataMessage,
+      isEdit: Boolean(sentMessage.editMessage?.dataMessage),
+    };
+  }
+  if (params.isOwnMessage) {
+    return null;
+  }
+  return {
+    envelope: params.envelope,
+    dataMessage: params.envelope.dataMessage ?? params.envelope.editMessage?.dataMessage ?? null,
+  };
+}
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -103,6 +309,43 @@ function resolveSignalInboundRoute(params: {
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
+  const noteToSelfMode = deps.ingressMode === "note-to-self";
+
+  async function isKnownSelfReplyEcho(
+    envelope: SignalEnvelope,
+    dataMessage: SignalDataMessage | null,
+    options?: { ignorePrimaryId?: boolean },
+  ) {
+    if (!noteToSelfMode) {
+      return false;
+    }
+    const timestamp =
+      typeof envelope.timestamp === "number"
+        ? envelope.timestamp
+        : typeof dataMessage?.timestamp === "number"
+          ? dataMessage.timestamp
+          : undefined;
+    const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
+      ? envelope.reactionMessage
+      : deps.isSignalReactionMessage(dataMessage?.reaction)
+        ? dataMessage?.reaction
+        : null;
+    const echoText = resolveSelfReplyEchoText(dataMessage, reaction);
+    const editedEchoId = options?.ignorePrimaryId
+      ? resolveEditedSelfReplyEchoId({ timestamp, text: echoText })
+      : undefined;
+    return await hasSignalSelfReplyEcho({
+      accountId: deps.accountId,
+      accountIdentity: deps.accountUuid ?? deps.account,
+      messageId:
+        editedEchoId ??
+        (!options?.ignorePrimaryId && timestamp != null ? String(timestamp) : undefined),
+      timestamp: options?.ignorePrimaryId ? undefined : timestamp,
+      text: echoText,
+      includeTextWithPrimary: true,
+    });
+  }
+
   type SignalInboundEntry = {
     senderName: string;
     senderDisplay: string;
@@ -124,6 +367,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
+    recordSelfEchoAfterDispatch?: boolean;
+    selfEchoRecords?: Array<{ messageId?: string; timestamp?: number; text: string }>;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -307,6 +552,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
           account: deps.account,
+          accountUuid: deps.accountUuid,
+          configPath: deps.configPath,
           accountId: deps.accountId,
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
@@ -406,6 +653,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }),
       },
     });
+    if (entry.recordSelfEchoAfterDispatch) {
+      const records = entry.selfEchoRecords ?? [
+        { messageId: entry.messageId, timestamp: entry.timestamp, text: entry.bodyText },
+      ];
+      for (const record of records) {
+        if (!record.messageId && record.timestamp == null && !record.text.trim()) {
+          continue;
+        }
+        await rememberSignalSelfReplyEcho({
+          accountId: deps.accountId,
+          accountIdentity: deps.accountUuid ?? deps.account,
+          messageId: record.messageId,
+          timestamp: record.timestamp,
+          text: record.text,
+        });
+      }
+    }
   }
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
@@ -448,6 +712,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaType: undefined,
         mediaPaths: undefined,
         mediaTypes: undefined,
+        selfEchoRecords: entries.flatMap((entry) => entry.selfEchoRecords ?? []),
       });
     },
     onError: (err) => {
@@ -458,6 +723,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   async function handleReactionOnlyInbound(params: {
     envelope: SignalEnvelope;
     sender: SignalSender;
+    conversationSender?: SignalSender;
     senderDisplay: string;
     reaction: SignalReactionMessage;
     hasBodyContent: boolean;
@@ -478,23 +744,83 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageId = params.reaction.targetSentTimestamp
       ? String(params.reaction.targetSentTimestamp)
       : "unknown";
+    const conversationSender = params.conversationSender ?? params.sender;
     const conversationKey = resolveSignalApprovalConversationKey(
-      groupId ? `group:${groupId}` : `signal:${resolveSignalRecipient(params.sender)}`,
+      groupId ? `group:${groupId}` : `signal:${resolveSignalRecipient(conversationSender)}`,
     );
-    if (
-      conversationKey &&
-      (await maybeResolveSignalApprovalReaction({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        conversationKey,
-        messageId,
-        reactionKey: emojiLabel,
-        actorId: formatSignalSenderId(params.sender),
-        targetAuthor: params.reaction.targetAuthor,
-        targetAuthorUuid: params.reaction.targetAuthorUuid,
-        logVerboseMessage: logVerbose,
-      }))
-    ) {
+    const conversationKeys = new Set<string>();
+    if (conversationKey) {
+      conversationKeys.add(conversationKey);
+    }
+    const isOwnReactionSender = isOwnSignalSender({
+      sender: params.sender,
+      account: deps.account,
+      accountUuid: deps.accountUuid,
+      sourceUuid: params.envelope.sourceUuid,
+    });
+    const actorIds = Array.from(
+      new Set(
+        [
+          isOwnReactionSender && deps.account ? normalizeE164(deps.account) : null,
+          isOwnReactionSender && deps.accountUuid
+            ? (() => {
+                const uuid = normalizeSignalUuidForCompare(deps.accountUuid);
+                return uuid ? `uuid:${uuid}` : null;
+              })()
+            : null,
+          params.sender.kind === "uuid"
+            ? (() => {
+                const uuid = normalizeSignalUuidForCompare(params.sender.raw);
+                return uuid ? `uuid:${uuid}` : null;
+              })()
+            : formatSignalSenderId(params.sender),
+        ].filter((id): id is string => Boolean(id)),
+      ),
+    );
+    if (!groupId && noteToSelfMode && isOwnReactionSender) {
+      const accountConversationKey = deps.account
+        ? resolveSignalApprovalConversationKey(`signal:${normalizeE164(deps.account)}`)
+        : undefined;
+      if (accountConversationKey) {
+        conversationKeys.add(accountConversationKey);
+      }
+      const normalizedAccountUuid = normalizeSignalUuidForCompare(deps.accountUuid);
+      const accountUuidConversationKey = normalizedAccountUuid
+        ? resolveSignalApprovalConversationKey(`signal:${normalizedAccountUuid}`)
+        : undefined;
+      if (accountUuidConversationKey) {
+        conversationKeys.add(accountUuidConversationKey);
+      }
+    }
+    const targetAuthorUuid = normalizeSignalUuidForCompare(params.reaction.targetAuthorUuid);
+    const accountUuid = normalizeSignalUuidForCompare(deps.accountUuid);
+    if (!groupId && targetAuthorUuid && accountUuid && targetAuthorUuid === accountUuid) {
+      const uuidConversationKey = resolveSignalApprovalConversationKey(`signal:${accountUuid}`);
+      if (uuidConversationKey) {
+        conversationKeys.add(uuidConversationKey);
+      }
+    }
+    let handledApprovalReaction = false;
+    for (const key of conversationKeys) {
+      for (const actorId of actorIds) {
+        const approvalAttempt = await resolveSignalApprovalReactionAttempt({
+          cfg: deps.cfg,
+          accountId: deps.accountId,
+          conversationKey: key,
+          messageId,
+          reactionKey: emojiLabel,
+          actorId,
+          targetAuthor: params.reaction.targetAuthor,
+          targetAuthorUuid: params.reaction.targetAuthorUuid,
+          logVerboseMessage: logVerbose,
+        });
+        if (approvalAttempt === "resolved") {
+          return true;
+        }
+        handledApprovalReaction ||= approvalAttempt === "denied";
+      }
+    }
+    if (handledApprovalReaction) {
       return true;
     }
     if (params.accessDecision.decision !== "allow") {
@@ -504,18 +830,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return true;
     }
     const targets = deps.resolveSignalReactionTargets(params.reaction);
+    const notificationSender = params.conversationSender ?? params.sender;
     const shouldNotify = deps.shouldEmitSignalReactionNotification({
       mode: deps.reactionMode,
       account: deps.account,
+      accountUuid: deps.accountUuid,
       targets,
-      sender: params.sender,
+      sender: notificationSender,
       allowlist: deps.reactionAllowlist,
     });
     if (!shouldNotify) {
       return true;
     }
 
-    const senderPeerId = resolveSignalPeerId(params.sender);
+    const senderPeerId = resolveSignalPeerId(notificationSender);
     const route = resolveSignalInboundRoute({
       cfg: deps.cfg,
       accountId: deps.accountId,
@@ -531,7 +859,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       targetLabel: targets[0]?.display,
       groupLabel,
     });
-    const senderId = formatSignalSenderId(params.sender);
+    const senderId = formatSignalSenderId(notificationSender);
     const contextKey = [
       "signal",
       "reaction",
@@ -570,34 +898,42 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    // Check for syncMessage (e.g., sentTranscript from other devices)
-    // We need to check if it's from our own account to prevent self-reply loops
     const sender = resolveSignalSender(envelope);
     if (!sender) {
       return;
     }
 
-    // Check if the message is from our own account to prevent loop/self-reply
-    // This handles both phone number and UUID based identification
-    const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
-    const isOwnMessage =
-      (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
-      (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
-    if (isOwnMessage) {
+    const isOwnMessage = isOwnSignalSender({
+      sender,
+      account: deps.account,
+      accountUuid: deps.accountUuid,
+      sourceUuid: envelope.sourceUuid,
+    });
+    const resolvedMessage = resolveNoteToSelfDataMessage({
+      envelope,
+      isOwnMessage,
+      noteToSelfMode,
+      account: deps.account,
+      accountUuid: deps.accountUuid,
+    });
+    if (!resolvedMessage) {
+      return;
+    }
+    const resolvedEnvelope = resolvedMessage.envelope;
+    const dataMessage = resolvedMessage.dataMessage;
+    const noteToSelfOwnMessage =
+      noteToSelfMode && (isOwnMessage || "syncMessage" in resolvedEnvelope);
+    if (
+      noteToSelfOwnMessage &&
+      (await isKnownSelfReplyEcho(resolvedEnvelope, dataMessage, {
+        ignorePrimaryId: resolvedMessage.isEdit,
+      }))
+    ) {
       return;
     }
 
-    // Filter all sync messages (sentTranscript, readReceipts, etc.).
-    // signal-cli may set syncMessage to null instead of omitting it, so
-    // check property existence rather than truthiness to avoid replaying
-    // the bot's own sent messages on daemon restart.
-    if ("syncMessage" in envelope) {
-      return;
-    }
-
-    const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
-    const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
-      ? envelope.reactionMessage
+    const reaction = deps.isSignalReactionMessage(resolvedEnvelope.reactionMessage)
+      ? resolvedEnvelope.reactionMessage
       : deps.isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
@@ -612,11 +948,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
+    const senderAllowId = formatSignalSenderId(sender);
+    const noteToSelfDirectMessage = noteToSelfOwnMessage && !isGroup;
     const { senderAccess, commandAccess } = await resolveSignalAccessState({
       accountId: deps.accountId,
-      dmPolicy: deps.dmPolicy,
+      dmPolicy: noteToSelfDirectMessage ? "allowlist" : deps.dmPolicy,
       groupPolicy: deps.groupPolicy,
-      allowFrom: deps.allowFrom,
+      allowFrom: noteToSelfDirectMessage ? [senderAllowId] : deps.allowFrom,
       groupAllowFrom: deps.groupAllowFrom,
       sender,
       groupId,
@@ -645,8 +983,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (
       reaction &&
       (await handleReactionOnlyInbound({
-        envelope,
+        envelope: resolvedEnvelope,
         sender,
+        conversationSender: noteToSelfDirectMessage
+          ? (resolveConfiguredSignalSelfSender({
+              account: deps.account,
+              accountUuid: deps.accountUuid,
+            }) ?? sender)
+          : undefined,
         senderDisplay,
         reaction,
         hasBodyContent,
@@ -659,9 +1003,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const senderRecipient = resolveSignalRecipient(sender);
-    const senderPeerId = resolveSignalPeerId(sender);
-    const senderAllowId = formatSignalSenderId(sender);
+    const routingSender = noteToSelfDirectMessage
+      ? (resolveConfiguredSignalSelfSender({
+          account: deps.account,
+          accountUuid: deps.accountUuid,
+        }) ?? sender)
+      : sender;
+    const senderRecipient = resolveSignalRecipient(routingSender);
+    const senderPeerId = resolveSignalPeerId(routingSender);
     if (!senderRecipient) {
       return;
     }
@@ -675,13 +1024,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         senderId: senderAllowId,
         senderIdLine,
         senderDisplay,
-        senderName: envelope.sourceName ?? undefined,
+        senderName: resolvedEnvelope.sourceName ?? undefined,
         accountId: deps.accountId,
         sendPairingReply: async (text) => {
           await sendMessageSignal(`signal:${senderRecipient}`, text, {
             cfg: deps.cfg,
             baseUrl: deps.baseUrl,
             account: deps.account,
+            configPath: deps.configPath,
             maxBytes: deps.mediaMaxBytes,
             accountId: deps.accountId,
           });
@@ -783,11 +1133,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         historyKey,
         limit: deps.historyLimit,
         entry: {
-          sender: envelope.sourceName ?? senderDisplay,
+          sender: resolvedEnvelope.sourceName ?? senderDisplay,
           body: pendingBodyText,
-          timestamp: envelope.timestamp ?? undefined,
+          timestamp: resolvedEnvelope.timestamp ?? undefined,
           messageId:
-            typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+            typeof resolvedEnvelope.timestamp === "number"
+              ? String(resolvedEnvelope.timestamp)
+              : undefined,
         },
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
@@ -811,14 +1163,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                 from: `group:${groupId}`,
                 to: canonicalGroupTarget,
                 content: pendingBodyText,
-                timestamp: envelope.timestamp ?? undefined,
+                timestamp: resolvedEnvelope.timestamp ?? undefined,
                 channelId: "signal",
                 accountId: deps.accountId,
                 conversationId: canonicalGroupTarget,
                 messageId:
-                  typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+                  typeof resolvedEnvelope.timestamp === "number"
+                    ? String(resolvedEnvelope.timestamp)
+                    : undefined,
                 senderId: senderDisplay,
-                senderName: envelope.sourceName ?? undefined,
+                senderName: resolvedEnvelope.sourceName ?? undefined,
                 provider: "signal",
                 surface: "signal",
                 originatingChannel: "signal",
@@ -887,8 +1241,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const receiptTimestamp =
-      typeof envelope.timestamp === "number"
-        ? envelope.timestamp
+      typeof resolvedEnvelope.timestamp === "number"
+        ? resolvedEnvelope.timestamp
         : typeof dataMessage.timestamp === "number"
           ? dataMessage.timestamp
           : undefined;
@@ -912,9 +1266,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal read receipt skipped (missing timestamp) for ${senderDisplay}`);
     }
 
-    const senderName = envelope.sourceName ?? senderDisplay;
+    const senderName = resolvedEnvelope.sourceName ?? senderDisplay;
     const messageId =
-      typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+      typeof resolvedEnvelope.timestamp === "number"
+        ? String(resolvedEnvelope.timestamp)
+        : undefined;
+    const editedSelfEchoId = resolvedMessage.isEdit
+      ? resolveEditedSelfReplyEchoId({
+          timestamp: resolvedEnvelope.timestamp ?? undefined,
+          text: resolveSelfReplyEchoText(dataMessage),
+        })
+      : undefined;
+    const editedSelfEchoText = resolvedMessage.isEdit
+      ? resolveSelfReplyEchoText(dataMessage)
+      : undefined;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -925,7 +1290,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       isGroup,
       bodyText,
       commandBody: messageText,
-      timestamp: envelope.timestamp ?? undefined,
+      timestamp: resolvedEnvelope.timestamp ?? undefined,
       messageId,
       mediaPath,
       mediaType,
@@ -936,6 +1301,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
+      recordSelfEchoAfterDispatch: noteToSelfDirectMessage && "syncMessage" in resolvedEnvelope,
+      selfEchoRecords:
+        noteToSelfDirectMessage && "syncMessage" in resolvedEnvelope
+          ? [
+              resolvedMessage.isEdit
+                ? { messageId: editedSelfEchoId, text: editedSelfEchoText ?? bodyText }
+                : { messageId, timestamp: resolvedEnvelope.timestamp ?? undefined, text: bodyText },
+            ]
+          : undefined,
     });
   };
 }

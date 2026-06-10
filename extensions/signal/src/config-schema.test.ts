@@ -1,10 +1,15 @@
 // Signal tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { SignalConfigSchema } from "../config-api.js";
+import { signalConfigAdapter } from "./shared.js";
 
 function expectValidSignalConfig(config: unknown) {
   const res = SignalConfigSchema.safeParse(config);
   expect(res.success).toBe(true);
+  if (!res.success) {
+    throw new Error("expected Signal config to be valid");
+  }
+  return res.data;
 }
 
 function expectInvalidSignalConfig(config: unknown) {
@@ -17,6 +22,199 @@ function expectInvalidSignalConfig(config: unknown) {
 }
 
 describe("signal groups schema", () => {
+  it("clears note-to-self root account fields when deleting the default account", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            ingressMode: "note-to-self",
+            httpUrl: "http://signal.test",
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal).toBeUndefined();
+  });
+
+  it("materializes note-to-self root defaults when deleting the default account with named accounts", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            ingressMode: "note-to-self",
+            accounts: {
+              work: {
+                account: "+15555550123",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal).toMatchObject({
+      accounts: {
+        work: {
+          account: "+15555550123",
+          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+          ingressMode: "note-to-self",
+        },
+      },
+    });
+    expect(updated?.channels?.signal?.account).toBeUndefined();
+    expect(updated?.channels?.signal?.accountUuid).toBeUndefined();
+    expect(updated?.channels?.signal?.ingressMode).toBeUndefined();
+  });
+
+  it("materializes inherited note-to-self account numbers when deleting the default account", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            configPath: "/tmp/signal-cli",
+            ingressMode: "note-to-self",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal).toMatchObject({
+      accounts: {
+        work: {
+          account: "+15555550123",
+          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+          configPath: "/tmp/signal-cli",
+          ingressMode: "note-to-self",
+        },
+      },
+    });
+    expect(updated?.channels?.signal?.account).toBeUndefined();
+    expect(updated?.channels?.signal?.accountUuid).toBeUndefined();
+    expect(updated?.channels?.signal?.ingressMode).toBeUndefined();
+    expectValidSignalConfig(updated?.channels?.signal);
+  });
+
+  it("materializes inherited note-to-self transport fields for explicit named accounts", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            configPath: "/tmp/signal-cli",
+            httpUrl: "http://signal.test",
+            ingressMode: "note-to-self",
+            accounts: {
+              work: {
+                account: "+15555550123",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal).toMatchObject({
+      accounts: {
+        work: {
+          account: "+15555550123",
+          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+          configPath: "/tmp/signal-cli",
+          httpUrl: "http://signal.test",
+          ingressMode: "note-to-self",
+        },
+      },
+    });
+    expect(updated?.channels?.signal?.account).toBeUndefined();
+    expect(updated?.channels?.signal?.accountUuid).toBeUndefined();
+    expect(updated?.channels?.signal?.configPath).toBeUndefined();
+    expect(updated?.channels?.signal?.ingressMode).toBeUndefined();
+    expectValidSignalConfig(updated?.channels?.signal);
+  });
+
+  it("materializes inherited UUIDs for standard named accounts when deleting the default account", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            httpUrl: "http://signal.test",
+            cliPath: "/opt/signal-cli/bin/signal-cli",
+            accounts: {
+              work: {
+                account: "+15555550123",
+              },
+              inherited: {},
+              other: {
+                account: "+15555550999",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal?.accounts?.work).toMatchObject({
+      account: "+15555550123",
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+      httpUrl: "http://signal.test",
+      cliPath: "/opt/signal-cli/bin/signal-cli",
+    });
+    expect(updated?.channels?.signal?.accounts?.inherited).toMatchObject({
+      account: "+15555550123",
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+      httpUrl: "http://signal.test",
+      cliPath: "/opt/signal-cli/bin/signal-cli",
+    });
+    expect(updated?.channels?.signal?.accounts?.other?.accountUuid).toBeUndefined();
+    expect(updated?.channels?.signal?.accountUuid).toBeUndefined();
+    expectValidSignalConfig(updated?.channels?.signal);
+  });
+
+  it("does not copy the default UUID onto explicit accounts with a different number", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            configPath: "/tmp/signal-cli",
+            ingressMode: "note-to-self",
+            accounts: {
+              work: {
+                account: "+15555550999",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal?.accounts?.work).toMatchObject({
+      account: "+15555550999",
+      configPath: "/tmp/signal-cli",
+      ingressMode: "note-to-self",
+    });
+    expect(updated?.channels?.signal?.accounts?.work?.accountUuid).toBeUndefined();
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidSignalConfig({
       dmPolicy: "open",
@@ -69,6 +267,78 @@ describe("signal groups schema", () => {
   it("accepts accountUuid for loop protection", () => {
     expectValidSignalConfig({
       accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    });
+    const compact = SignalConfigSchema.safeParse({
+      accountUuid: "a1b2c3d4e5f67890abcdef1234567890",
+    });
+
+    expect(compact.success).toBe(true);
+    if (compact.success) {
+      expect(compact.data.accountUuid).toBe("a1b2c3d4e5f67890abcdef1234567890");
+    }
+  });
+
+  it("keeps accountUuid parse-compatible with shipped string configs", () => {
+    const prefixed = expectValidSignalConfig({
+      accountUuid: "uuid:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    });
+    const padded = expectValidSignalConfig({
+      accountUuid: " a1b2c3d4-e5f6-7890-abcd-ef1234567890 ",
+    });
+    const legacy = expectValidSignalConfig({ accountUuid: "legacy copied sender id" });
+
+    expect(prefixed.accountUuid).toBe("uuid:a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    expect(padded.accountUuid).toBe(" a1b2c3d4-e5f6-7890-abcd-ef1234567890 ");
+    expect(legacy.accountUuid).toBe("legacy copied sender id");
+  });
+
+  it("accepts note-to-self ingress mode", () => {
+    expectValidSignalConfig({
+      ingressMode: "note-to-self",
+      account: "+15550001111",
+    });
+  });
+
+  it("rejects note-to-self ingress mode without a self identifier", () => {
+    const issues = expectInvalidSignalConfig({
+      ingressMode: "note-to-self",
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("ingressMode");
+
+    const emptyAccountsIssues = expectInvalidSignalConfig({
+      ingressMode: "note-to-self",
+      accounts: {},
+    });
+    expect(emptyAccountsIssues[0]?.path.join(".")).toBe("ingressMode");
+
+    const blankIssues = expectInvalidSignalConfig({
+      ingressMode: "note-to-self",
+      account: "   ",
+    });
+    expect(blankIssues[0]?.path.join(".")).toBe("ingressMode");
+  });
+
+  it("accepts note-to-self accounts that inherit the root transport account", () => {
+    expectValidSignalConfig({
+      account: "+15550001111",
+      accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      accounts: {
+        work: {
+          ingressMode: "note-to-self",
+        },
+      },
+    });
+  });
+
+  it("accepts note-to-self accounts with an explicit account", () => {
+    expectValidSignalConfig({
+      ingressMode: "note-to-self",
+      accounts: {
+        work: {
+          account: "+15550001111",
+        },
+      },
     });
   });
 

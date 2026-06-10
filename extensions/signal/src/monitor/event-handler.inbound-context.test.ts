@@ -10,6 +10,7 @@ const [
 ] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
 
 const {
+  sendMessageMock,
   sendTypingMock,
   sendReadReceiptMock,
   dispatchInboundMessageMock,
@@ -20,6 +21,7 @@ const {
   const captureState: { ctx?: MsgContext } = {};
   return {
     sendTypingMock: vi.fn(),
+    sendMessageMock: vi.fn(),
     sendReadReceiptMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
@@ -38,13 +40,51 @@ const {
 });
 
 const approvalReactionMocks = vi.hoisted(() => ({
-  maybeResolveSignalApprovalReaction: vi.fn(async () => false),
+  maybeResolveSignalApprovalReaction: vi.fn(async (_params?: unknown) => false),
 }));
+const hasSignalSelfReplyEchoMock = vi.hoisted(() =>
+  vi.fn(async (_params?: { messageId?: string }) => false),
+);
+const rememberSignalSelfReplyEchoMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../send.js", () => ({
-  sendMessageSignal: vi.fn(),
+  sendMessageSignal: sendMessageMock,
   sendTypingSignal: sendTypingMock,
   sendReadReceiptSignal: sendReadReceiptMock,
+}));
+
+vi.mock("../self-reply-echoes.js", () => ({
+  hasSignalSelfReplyEcho: hasSignalSelfReplyEchoMock,
+  rememberSignalSelfReplyEcho: rememberSignalSelfReplyEchoMock,
+  resolveSignalSelfReplyMediaEchoText: (params: {
+    contentType?: string | null;
+    size?: number | null;
+  }) => {
+    const contentType = params.contentType?.trim().toLowerCase();
+    return contentType && params.size ? `<media:image:${contentType}:${params.size}>` : undefined;
+  },
+  resolveSignalSelfReplyReactionEchoText: (params: {
+    emoji?: string | null;
+    remove?: boolean | null;
+    targetTimestamp?: number | null;
+    targetAuthor?: string | null;
+    targetAuthorUuid?: string | null;
+    groupId?: string | null;
+  }) => {
+    const emoji = params.emoji?.trim();
+    if (!emoji || typeof params.targetTimestamp !== "number") {
+      return undefined;
+    }
+    const targetAuthor = params.targetAuthorUuid?.trim() ?? params.targetAuthor?.trim() ?? "";
+    return `${[
+      "<reaction",
+      params.remove ? "remove" : "add",
+      params.targetTimestamp,
+      emoji,
+      targetAuthor.toLowerCase(),
+      params.groupId?.trim() ?? "",
+    ].join(":")}>`;
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
@@ -67,7 +107,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
     ...actual,
     recordInboundSession: recordInboundSessionMock,
     readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
-    upsertChannelPairingRequest: vi.fn(),
+    upsertChannelPairingRequest: vi.fn().mockResolvedValue({ created: true, code: "123456" }),
   };
 });
 
@@ -88,6 +128,12 @@ vi.mock("../approval-reactions.js", async () => {
   return {
     ...actual,
     maybeResolveSignalApprovalReaction: approvalReactionMocks.maybeResolveSignalApprovalReaction,
+    resolveSignalApprovalReactionAttempt: async (
+      ...args: Parameters<typeof actual.maybeResolveSignalApprovalReaction>
+    ) =>
+      (await approvalReactionMocks.maybeResolveSignalApprovalReaction(...args))
+        ? "resolved"
+        : "none",
   };
 });
 
@@ -101,6 +147,9 @@ function requireCapturedContext(): MsgContext {
 describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
     delete capture.ctx;
+    sendMessageMock.mockReset().mockResolvedValue({ messageId: "pairing-reply" });
+    hasSignalSelfReplyEchoMock.mockReset().mockResolvedValue(false);
+    rememberSignalSelfReplyEchoMock.mockReset().mockResolvedValue(undefined);
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
     enqueueSystemEventMock.mockReset();
@@ -133,6 +182,38 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(contextWithBody.Body ?? "").toContain("Alice");
     expect(contextWithBody.Body ?? "").toMatch(/Alice.*:/);
     expect(contextWithBody.Body ?? "").not.toContain("[from:");
+  });
+
+  it("passes the runtime configPath override when delivering inbound replies", async () => {
+    const deliverRepliesMock = vi.fn(async () => undefined);
+    dispatchInboundMessageMock.mockImplementationOnce(async (params: any) => {
+      params.dispatcher.sendFinalReply({ text: "reply from agent" });
+      await params.dispatcher.waitForIdle();
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+    });
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        configPath: "/tmp/active-signal-cli",
+        deliverReplies: deliverRepliesMock,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hi",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configPath: "/tmp/active-signal-cli",
+      }),
+    );
   });
 
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
@@ -590,6 +671,184 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
+  it("uses the UUID conversation key for UUID-targeted note-to-self approval reactions", async () => {
+    approvalReactionMocks.maybeResolveSignalApprovalReaction
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const accountUuid = "123E4567-E89B-12D3-A456-426614174000";
+    const cfg = {
+      messages: { inbound: { debounceMs: 0 } },
+      channels: {
+        signal: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          account: "+15550001111",
+          accountUuid,
+          ingressMode: "note-to-self",
+        },
+      },
+    };
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: cfg as any,
+        account: "+15550001111",
+        accountUuid,
+        ingressMode: "note-to-self",
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        reactionMode: "all",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000107,
+            reaction: {
+              emoji: "👍",
+              targetAuthorUuid: accountUuid.toLowerCase(),
+              targetSentTimestamp: 1700000000001,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        conversationKey: "+15550001111",
+      }),
+    );
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationKey: "123e4567e89b12d3a456426614174000",
+        messageId: "1700000000001",
+        reactionKey: "👍",
+        targetAuthorUuid: accountUuid.toLowerCase(),
+      }),
+    );
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the account conversation key for UUID-only note-to-self approval reaction envelopes", async () => {
+    const accountUuid = "123E4567-E89B-12D3-A456-426614174000";
+    const cfg = {
+      messages: { inbound: { debounceMs: 0 } },
+      channels: {
+        signal: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          account: "+15550001111",
+          accountUuid,
+          ingressMode: "note-to-self",
+        },
+      },
+    };
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: cfg as any,
+        account: "+15550001111",
+        accountUuid,
+        ingressMode: "note-to-self",
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        reactionMode: "all",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: undefined,
+        sourceUuid: accountUuid.toLowerCase(),
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000109,
+            reaction: {
+              emoji: "👍",
+              targetAuthor: "+15550001111",
+              targetSentTimestamp: 1700000000002,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationKey: "+15550001111",
+        messageId: "1700000000002",
+        reactionKey: "👍",
+        actorId: "+15550001111",
+        targetAuthor: "+15550001111",
+      }),
+    );
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationKey: "123e4567e89b12d3a456426614174000",
+      }),
+    );
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("does not probe self-chat approval keys for unrelated direct reactions", async () => {
+    const accountUuid = "123E4567-E89B-12D3-A456-426614174000";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              account: "+15550001111",
+              accountUuid,
+              ingressMode: "note-to-self",
+            },
+          },
+        },
+        account: "+15550001111",
+        accountUuid,
+        ingressMode: "note-to-self",
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        reactionMode: "all",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        dataMessage: {
+          reaction: {
+            emoji: "👍",
+            targetAuthor: "+15550001111",
+            targetSentTimestamp: 1700000000003,
+          },
+        },
+      }),
+    );
+
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledTimes(1);
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationKey: "+15550002222",
+        messageId: "1700000000003",
+      }),
+    );
+  });
+
   it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
@@ -725,8 +984,8 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.MediaTypes).toEqual(["audio/aac"]);
   });
 
-  it("drops own UUID inbound messages when only accountUuid is configured", async () => {
-    const ownUuid = "123e4567-e89b-12d3-a456-426614174000";
+  it("drops own UUID inbound messages when they are not sent sync events", async () => {
+    const ownUuid = "123E4567-E89B-12D3-A456-426614174000";
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: {
@@ -735,6 +994,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         },
         account: undefined,
         accountUuid: ownUuid,
+        ingressMode: "note-to-self",
         historyLimit: 0,
       }),
     );
@@ -742,7 +1002,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     await handler(
       createSignalReceiveEvent({
         sourceNumber: null,
-        sourceUuid: ownUuid,
+        sourceUuid: ownUuid.toLowerCase(),
         dataMessage: {
           message: "self message",
           attachments: [],
@@ -752,6 +1012,568 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts attachment-only note-to-self sync messages", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.dat`,
+          contentType: "image/jpeg",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000105,
+            attachments: [{ id: "self-image", contentType: "image/jpeg", size: 4321 }],
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.RawBody).toBe("<media:image>");
+    expect(context.MediaPath).toBe("/tmp/self-image.dat");
+    expect(context.MediaTypes).toEqual(["image/jpeg"]);
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "<media:image:image/jpeg:4321>",
+      }),
+    );
+  });
+
+  it("checks approvals for reaction-only note-to-self sync messages", async () => {
+    approvalReactionMocks.maybeResolveSignalApprovalReaction.mockResolvedValueOnce(true);
+    const cfg = {
+      messages: { inbound: { debounceMs: 0 } },
+      channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+    };
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: cfg as any,
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        reactionMode: "own",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000106,
+            reaction: {
+              emoji: "👍",
+              targetAuthor: "+15550001111",
+              targetSentTimestamp: 1700000000100,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        conversationKey: "+15550001111",
+        messageId: "1700000000100",
+        reactionKey: "👍",
+        actorId: "+15550001111",
+        targetAuthor: "+15550001111",
+      }),
+    );
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("emits generic reaction notifications for note-to-self sync reactions", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        reactionMode: "own",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        shouldEmitSignalReactionNotification: () => true,
+        resolveSignalReactionTargets: () => [
+          { kind: "phone", id: "+15550001111", display: "+15550001111" },
+        ],
+        buildSignalReactionSystemEventText: () => "self reaction added",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000107,
+            reaction: {
+              emoji: "❤️",
+              targetAuthor: "+15550001111",
+              targetSentTimestamp: 1700000000100,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("self reaction added", {
+      sessionKey: "agent:main:main",
+      contextKey: "signal:reaction:added:1700000000100:+15550001111:❤️",
+    });
+  });
+
+  it("routes UUID-only note-to-self reaction notifications through the configured self sender", async () => {
+    const accountUuid = "123E4567-E89B-12D3-A456-426614174000";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"], account: "+15550001111" } },
+        } as any,
+        account: "+15550001111",
+        accountUuid,
+        ingressMode: "note-to-self",
+        reactionMode: "own",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        shouldEmitSignalReactionNotification: () => true,
+        resolveSignalReactionTargets: () => [
+          { kind: "uuid", id: accountUuid.toLowerCase(), display: "self uuid" },
+        ],
+        buildSignalReactionSystemEventText: () => "self uuid reaction added",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: undefined,
+        sourceUuid: accountUuid.toLowerCase(),
+        syncMessage: {
+          sentMessage: {
+            destinationUuid: accountUuid.toLowerCase(),
+            timestamp: 1700000000108,
+            reaction: {
+              emoji: "❤️",
+              targetAuthorUuid: accountUuid.toLowerCase(),
+              targetSentTimestamp: 1700000000101,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("self uuid reaction added", {
+      sessionKey: "agent:main:main",
+      contextKey: "signal:reaction:added:1700000000101:+15550001111:❤️",
+    });
+  });
+
+  it("accepts note-to-self sync messages from the configured Signal account", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        sourceName: "Note to Self",
+        timestamp: 1700000000100,
+        syncMessage: {
+          sentMessage: {
+            destination: "+15550001111",
+            timestamp: 1700000000100,
+            message: {
+              message: "self prompt",
+              attachments: [],
+            },
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.ChatType).toBe("direct");
+    expect(context.RawBody).toBe("self prompt");
+    expect(context.To).toBe("+15550001111");
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "+15550001111",
+      messageId: "1700000000100",
+      timestamp: 1700000000100,
+      text: "self prompt",
+    });
+  });
+
+  it("accepts native note-to-self sync messages with flat message text", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        sourceName: "Note to Self",
+        timestamp: 1700000000101,
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000101,
+            message: "native self prompt",
+            attachments: [],
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.RawBody).toBe("native self prompt");
+    expect(context.To).toBe("+15550001111");
+  });
+
+  it("accepts edited note-to-self sync messages", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        timestamp: 1700000000108,
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000108,
+            editMessage: {
+              dataMessage: {
+                message: "edited self prompt",
+                attachments: [],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.RawBody).toBe("edited self prompt");
+  });
+
+  it("accepts edited note-to-self sync messages after the original timestamp was processed", async () => {
+    hasSignalSelfReplyEchoMock.mockImplementation(
+      async (params?: { messageId?: string }) => params?.messageId === "1700000000108",
+    );
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        timestamp: 1700000000108,
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000108,
+            editMessage: {
+              dataMessage: {
+                message: "edited self prompt after original",
+                attachments: [],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.RawBody).toBe("edited self prompt after original");
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: expect.stringMatching(/^edit:1700000000108:/),
+        timestamp: undefined,
+        text: "edited self prompt after original",
+      }),
+    );
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: expect.stringMatching(/^edit:1700000000108:/),
+        timestamp: undefined,
+        text: "edited self prompt after original",
+      }),
+    );
+  });
+
+  it("uses canonical attachment text for edited note-to-self replay keys", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.dat`,
+          contentType: "image/jpeg",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        timestamp: 1700000000109,
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000109,
+            editMessage: {
+              dataMessage: {
+                attachments: [{ id: "edited-self-image", contentType: "image/jpeg" }],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.RawBody).toBe("<media:image>");
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: expect.stringMatching(/^edit:1700000000109:/),
+        timestamp: undefined,
+        text: "<media:image>",
+      }),
+    );
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: expect.stringMatching(/^edit:1700000000109:/),
+        timestamp: undefined,
+        text: "<media:image>",
+      }),
+    );
+  });
+
+  it("drops sent sync transcripts addressed to other Signal users", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        sourceName: "Alice",
+        timestamp: 1700000000102,
+        syncMessage: {
+          sentMessage: {
+            destination: "+15550002222",
+            timestamp: 1700000000102,
+            message: "private outbound transcript",
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("drops UUID-only sent sync transcripts addressed to other Signal users", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            },
+          },
+        },
+        account: undefined,
+        accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
+        sourceName: "Alice",
+        timestamp: 1700000000102,
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550002222",
+            timestamp: 1700000000102,
+            message: "private outbound transcript",
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("drops remembered self-reply echoes in note-to-self mode", async () => {
+    hasSignalSelfReplyEchoMock.mockResolvedValueOnce(true);
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        sourceName: "Note to Self",
+        timestamp: 1700000000103,
+        syncMessage: {
+          sentMessage: {
+            destination: "+15550001111",
+            timestamp: 1700000000103,
+            message: "echoed agent reply",
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "+15550001111",
+      messageId: "1700000000103",
+      timestamp: 1700000000103,
+      text: "echoed agent reply",
+      includeTextWithPrimary: true,
+    });
+  });
+
+  it("drops remembered self-reaction echoes in note-to-self mode", async () => {
+    hasSignalSelfReplyEchoMock.mockResolvedValueOnce(true);
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+        ingressMode: "note-to-self",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
+        timestamp: 1700000000104,
+        syncMessage: {
+          sentMessage: {
+            destinationUuid: "123e4567-e89b-12d3-a456-426614174000",
+            timestamp: 1700000000104,
+            reaction: {
+              emoji: "👍",
+              targetAuthor: "+15550001111",
+              targetSentTimestamp: 1700000000100,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "123e4567-e89b-12d3-a456-426614174000",
+      messageId: "1700000000104",
+      timestamp: 1700000000104,
+      text: "<reaction:add:1700000000100:👍:+15550001111:>",
+      includeTextWithPrimary: true,
+    });
   });
 
   it("drops sync envelopes when syncMessage is present but null", async () => {
