@@ -213,7 +213,6 @@ export const registerTelegramHandlers = ({
     scope: resolveTelegramMessageCacheScope(telegramDeps.resolveStorePath(cfg.session?.store)),
   });
   const messageDispatchReplayGuard = createTelegramMessageDispatchReplayGuard({
-    storePath: telegramDeps.resolveStorePath(cfg.session?.store),
     onDiskError: (error) => {
       runtime.error?.(danger(`[telegram] message dispatch dedupe store failed: ${String(error)}`));
     },
