@@ -66,9 +66,9 @@ export function resolveOAuthRefreshLockPath(provider: string, profileId: string)
   const hash = createHash("sha256");
   // This hashes provider/profile identifiers into a path-safe lock name; it is
   // not password storage or credential verification.
-  // codeql[js/insufficient-password-hash]
   hash.update(provider, "utf8");
   hash.update("\u0000", "utf8"); // NUL separator: unambiguous boundary.
+  // codeql[js/insufficient-password-hash]
   hash.update(profileId, "utf8");
   const safeId = `sha256-${hash.digest("hex")}`;
   return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
