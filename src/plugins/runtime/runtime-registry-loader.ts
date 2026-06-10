@@ -131,6 +131,8 @@ export function ensurePluginRegistryLoaded(options?: {
   workspaceDir?: string;
   onlyPluginIds?: string[];
   onlyChannelIds?: string[];
+  /** Only for raw source configs that never went through env substitution. */
+  resolveRawConfigEnvVars?: boolean;
 }): void {
   const scope = options?.scope ?? "all";
   const requestedPluginIdsFromOptions = normalizePluginIdScope(options?.onlyPluginIds);

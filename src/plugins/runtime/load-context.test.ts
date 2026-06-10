@@ -240,7 +240,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
   });
 
-  it("resolves plugin config env placeholders through config env vars before runtime loads", () => {
+  it("resolves plugin config env placeholders for raw configs that opt into resolution", () => {
     const rawConfig = {
       env: {
         vars: {
@@ -268,6 +268,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const context = resolvePluginRuntimeLoadContext({
       config: rawConfig,
       env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      resolveRawConfigEnvVars: true,
     });
 
     const options = buildPluginRuntimeLoadOptions(context);
@@ -276,5 +277,80 @@ describe("resolvePluginRuntimeLoadContext", () => {
       apiKey: "resolved-from-config",
     });
     expect(options.resolveRawConfigEnvVars).toBeUndefined();
+  });
+
+  it("preserves $${VAR} escapes as literals when resolving a raw config", () => {
+    const rawConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "resolved-from-config",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "$${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: rawConfig,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      resolveRawConfigEnvVars: true,
+    });
+
+    expect(context.config.plugins?.entries?.pioneer?.config).toEqual({
+      apiKey: "${PIONEER_API_KEY}",
+    });
+  });
+
+  it("never re-resolves prepared configs, so escaped literals survive runtime loads", () => {
+    // A prepared config already went through the single substitution pass, so
+    // an escaped $${VAR} arrives here as the literal ${VAR}. Resolving again
+    // would turn that literal into the real env value.
+    const preparedConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "real-secret",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: preparedConfig,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(context.config.plugins?.entries?.pioneer?.config).toEqual({
+      apiKey: "${PIONEER_API_KEY}",
+    });
+    expect(context.activationSourceConfig).toBe(preparedConfig);
   });
 });

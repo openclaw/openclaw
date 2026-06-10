@@ -55,6 +55,14 @@ export type PluginRuntimeLoadContextOptions = {
   workspaceDir?: string;
   logger?: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
+  /**
+   * Set only when the supplied `config`/`activationSourceConfig` are raw
+   * source inputs that have never been through config env substitution.
+   * Prepared runtime config (including the `getRuntimeConfig()` default) must
+   * stay untouched: it already had its single substitution pass, and resolving
+   * it again would turn escaped `$${VAR}` literals into real env values.
+   */
+  resolveRawConfigEnvVars?: boolean;
 };
 
 /** Creates the default plugin runtime loader logger. */
@@ -74,9 +82,16 @@ export function resolvePluginRuntimeLoadContext(
   const baseEnv = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
   const env = createConfigRuntimeEnv(rawConfig, baseEnv);
-  const resolvedRawConfig = resolveConfigEnvVars(rawConfig, env, {
-    onMissing: () => undefined,
-  }) as OpenClawConfig;
+  // Env placeholders resolve only for caller-supplied raw config; the
+  // getRuntimeConfig() default is already substituted and a second pass would
+  // resolve escaped $${VAR} literals.
+  const shouldResolveRawConfigEnvVars =
+    options?.resolveRawConfigEnvVars === true && options.config !== undefined;
+  const resolvedRawConfig = shouldResolveRawConfigEnvVars
+    ? (resolveConfigEnvVars(rawConfig, env, {
+        onMissing: () => undefined,
+      }) as OpenClawConfig)
+    : rawConfig;
   const rawWorkspaceDir =
     options?.workspaceDir ??
     resolveAgentWorkspaceDir(resolvedRawConfig, resolveDefaultAgentId(resolvedRawConfig));
@@ -96,9 +111,11 @@ export function resolvePluginRuntimeLoadContext(
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
   });
-  const activationSourceConfig = resolveConfigEnvVars(rawActivationSourceConfig, env, {
-    onMissing: () => undefined,
-  }) as OpenClawConfig;
+  const activationSourceConfig = shouldResolveRawConfigEnvVars
+    ? (resolveConfigEnvVars(rawActivationSourceConfig, env, {
+        onMissing: () => undefined,
+      }) as OpenClawConfig)
+    : rawActivationSourceConfig;
   const autoEnabled = applyPluginAutoEnable({
     config: resolvedRawConfig,
     env,

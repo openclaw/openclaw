@@ -227,7 +227,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(load.resolveRawConfigEnvVars).toBeUndefined();
   });
 
-  it("resolves configured plugin env placeholders before the runtime loader calls the plugin loader", () => {
+  it("resolves configured plugin env placeholders for raw configs that opt into resolution", () => {
     const rawConfig = {
       env: {
         vars: {
@@ -258,6 +258,7 @@ describe("ensurePluginRegistryLoaded", () => {
       scope: "configured-channels",
       config: rawConfig as never,
       env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      resolveRawConfigEnvVars: true,
     });
 
     const load = loadOptions();
@@ -269,6 +270,53 @@ describe("ensurePluginRegistryLoaded", () => {
       },
     });
     expect(requireRecord(load.env, "load env").PIONEER_API_KEY).toBe("resolved-runtime-key");
+    expect(load.resolveRawConfigEnvVars).toBeUndefined();
+  });
+
+  it("leaves prepared configs untouched so escaped placeholders stay literal", () => {
+    // Without the raw-config opt-in, a literal ${VAR} (e.g. produced from an
+    // escaped $${VAR} during the config IO substitution pass) must reach the
+    // plugin loader unchanged instead of being resolved into the env value.
+    const preparedConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "real-secret",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    mocks.applyPluginAutoEnable.mockImplementation((params) => ({
+      config: params.config as never,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["pioneer"]);
+    mocks.resolveEffectivePluginIds.mockReturnValue(["pioneer"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: preparedConfig as never,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    const load = loadOptions();
+    const loadConfig = requireRecord(load.config, "load config");
+    expect(pluginEntries(loadConfig).pioneer).toEqual({
+      enabled: true,
+      config: {
+        apiKey: "${PIONEER_API_KEY}",
+      },
+    });
     expect(load.resolveRawConfigEnvVars).toBeUndefined();
   });
 
