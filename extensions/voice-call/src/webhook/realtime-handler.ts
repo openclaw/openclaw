@@ -216,6 +216,11 @@ function buildForcedConsultSpeechPrompt(result: string): string {
   ].join("\n");
 }
 
+function buildForcedConsultInterimSpeechPrompt(response: Record<string, unknown>): string {
+  const message = typeof response.message === "string" ? response.message.trim() : "";
+  return message || "Briefly tell the caller in their language that you are checking.";
+}
+
 type PendingStreamToken = {
   expiry: number;
   from?: string;
@@ -254,6 +259,7 @@ type ForcedConsultState = {
   promise: Promise<unknown>;
   sendSpeechPrompt: boolean;
   completedAt?: number;
+  stopInterimSpeech?: () => void;
 };
 
 type NativeConsultState = {
@@ -1032,6 +1038,7 @@ export class RealtimeCallHandler {
   private clearForcedConsultState(callId: string): void {
     this.forcedConsultCoordinatorsByCallId.get(callId)?.clear();
     this.forcedConsultCoordinatorsByCallId.delete(callId);
+    this.forcedConsultsByCallId.get(callId)?.stopInterimSpeech?.();
     this.forcedConsultsByCallId.delete(callId);
   }
 
@@ -1132,10 +1139,62 @@ export class RealtimeCallHandler {
         ),
       ),
     };
+    let consultProgressTimer: ReturnType<typeof setTimeout> | undefined;
+    let consultProgressUpdates = 0;
+    let interimSpeechStopped = false;
+    const clearConsultProgressTimer = (): void => {
+      if (!consultProgressTimer) {
+        return;
+      }
+      clearTimeout(consultProgressTimer);
+      consultProgressTimer = undefined;
+    };
+    const stopInterimSpeech = (): void => {
+      interimSpeechStopped = true;
+      clearConsultProgressTimer();
+    };
+    const sendInterimSpeech = (response: Record<string, unknown>): boolean => {
+      if (interimSpeechStopped || !state.sendSpeechPrompt || state.completedAt) {
+        return false;
+      }
+      params.session.sendUserMessage(buildForcedConsultInterimSpeechPrompt(response));
+      return true;
+    };
+    const scheduleProgressResponse = (delayMs: number): void => {
+      clearConsultProgressTimer();
+      consultProgressTimer = setTimeout(() => {
+        consultProgressTimer = undefined;
+        consultProgressUpdates += 1;
+        if (
+          !sendInterimSpeech(
+            buildRealtimeVoiceAgentConsultProgressResponse({
+              audienceLabel: "caller",
+            }),
+          ) ||
+          consultProgressUpdates >= CONSULT_PROGRESS_MAX_UPDATES
+        ) {
+          return;
+        }
+        scheduleProgressResponse(CONSULT_PROGRESS_INTERVAL_MS);
+      }, delayMs);
+      consultProgressTimer.unref?.();
+    };
+    state.stopInterimSpeech = stopInterimSpeech;
     this.forcedConsultsByCallId.set(params.callId, state);
+    if (
+      sendInterimSpeech(
+        buildRealtimeVoiceAgentConsultWorkingResponse({
+          audienceLabel: "caller",
+          workingMessage: this.config.workingResponseMessage,
+        }),
+      )
+    ) {
+      scheduleProgressResponse(CONSULT_PROGRESS_INITIAL_DELAY_MS);
+    }
     try {
       const result = await state.promise;
       state.completedAt = Date.now();
+      stopInterimSpeech();
       coordinator.markDelivered(params.handle);
       const text = readSpeakableRealtimeVoiceToolResult(result, {
         keys: ["text", "output"],
@@ -1160,6 +1219,7 @@ export class RealtimeCallHandler {
         `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
       );
     } finally {
+      stopInterimSpeech();
       const cleanupTimer = setTimeout(() => {
         if (this.forcedConsultsByCallId.get(params.callId) === state) {
           this.forcedConsultsByCallId.delete(params.callId);
@@ -1381,6 +1441,7 @@ export class RealtimeCallHandler {
           return;
         }
         forcedConsult.sendSpeechPrompt = false;
+        forcedConsult.stopInterimSpeech?.();
         const result = await forcedConsult.promise.catch((error: unknown) => ({
           error: formatErrorMessage(error),
         }));

@@ -1237,9 +1237,15 @@ describe("RealtimeCallHandler path routing", () => {
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
     );
+    let resolveConsult: ((value: { text: string }) => void) | undefined;
     const consult = vi.fn<
       (args: unknown, callId: string, context: Record<string, unknown>) => Promise<{ text: string }>
-    >(async () => ({ text: "I created the smoke test file." }));
+    >(
+      () =>
+        new Promise((resolve) => {
+          resolveConsult = resolve;
+        }),
+    );
     handler.registerToolHandler("openclaw_agent_consult", consult);
     const server = await startRealtimeServer(handler);
 
@@ -1263,6 +1269,12 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(consult).toHaveBeenCalledTimes(1);
         });
+        await waitForRealtimeTest(() => {
+          expect(sendUserMessage).toHaveBeenCalledTimes(1);
+          expect(requireFirstMockCall(sendUserMessage.mock.calls, "user message")).toEqual([
+            'Briefly tell the caller in their language that you are checking, for example: "Alles klar, ich schaue ganz kurz." Then wait for the final OpenClaw result before answering with the actual result.',
+          ]);
+        });
         const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
@@ -1271,12 +1283,24 @@ describe("RealtimeCallHandler path routing", () => {
         expect(JSON.stringify(args)).not.toContain("openclaw_agent_consult");
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
+        await vi.advanceTimersByTimeAsync(7000);
         await waitForRealtimeTest(() => {
-          expect(sendUserMessage).toHaveBeenCalledTimes(1);
-          expect(requireFirstMockCall(sendUserMessage.mock.calls, "user message")).toEqual([
-            "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nI created the smoke test file.",
-          ]);
+          expect(sendUserMessage).toHaveBeenCalledTimes(2);
+          expect(sendUserMessage).toHaveBeenLastCalledWith(
+            "Briefly reassure the caller in their language that you are still working and will answer as soon as you have the result.",
+          );
         });
+
+        resolveConsult?.({ text: "I created the smoke test file." });
+        await waitForRealtimeTest(() => {
+          expect(sendUserMessage).toHaveBeenCalledTimes(3);
+          expect(sendUserMessage).toHaveBeenLastCalledWith(
+            "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nI created the smoke test file.",
+          );
+        });
+        const callsAfterFinalResult = sendUserMessage.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(24000);
+        expect(sendUserMessage).toHaveBeenCalledTimes(callsAfterFinalResult);
       } finally {
         vi.useRealTimers();
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
