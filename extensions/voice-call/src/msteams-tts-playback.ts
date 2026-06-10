@@ -27,6 +27,8 @@ export interface TtsPlaybackTarget {
   /** Monotonic outbound audio.frame sequence number / presentation timestamp for this call. */
   outboundSeq: number;
   outboundTimestampMs: number;
+  /** Wall-clock (ms) of the last audio.frame we sent — drives the streaming half-duplex echo guard. */
+  lastOutboundFrameAt: number;
 }
 
 export interface TtsPlaybackDeps {
@@ -132,6 +134,7 @@ async function streamPcmFrames(
     }
     state.outboundSeq += 1;
     state.outboundTimestampMs += FRAME_DURATION_MS;
+    state.lastOutboundFrameAt = Date.now();
 
     const waitMs = nextFrameDueAt - Date.now();
     if (waitMs > 0) {

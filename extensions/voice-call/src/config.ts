@@ -425,6 +425,10 @@ const VoiceCallRealtimeConfigSchema = z
      * set false to disable.
      */
     suppressInputDuringPlayback: z.boolean().optional(),
+    /** Echo guard: playout window (ms) after our last sent frame during which caller input is gated. Default 600. */
+    echoSuppressionWindowMs: z.number().int().nonnegative().optional(),
+    /** Echo guard: normalized RMS (0..1) above which caller input during playback is a barge-in, not echo. Default 0.04. */
+    echoBargeInRms: z.number().nonnegative().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */

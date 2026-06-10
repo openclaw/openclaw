@@ -23,8 +23,11 @@ import {
 } from "../msteams-media-stream.js";
 import {
   createMsteamsRealtimeCall,
+  ECHO_BARGE_IN_RMS,
+  ECHO_SUPPRESSION_WINDOW_MS,
   type MsteamsRealtimeCall,
   type MsteamsRealtimeDeps,
+  pcm16Rms,
 } from "../msteams-realtime.js";
 import { playTtsToCall } from "../msteams-tts-playback.js";
 import type { MsteamsTtsProvider } from "../msteams-tts.js";
@@ -91,6 +94,8 @@ interface MsteamsCallState {
   outboundSeq: number;
   /** Monotonic outbound presentation timestamp (ms) for this call. */
   outboundTimestampMs: number;
+  /** Wall-clock (ms) of the last audio.frame we sent — drives the streaming half-duplex echo guard. */
+  lastOutboundFrameAt: number;
   /** Current assistant turn id (used for assistant.cancel on barge-in). */
   turnId: number;
   /** Teams recording status — transcripts are only persisted while this is true. */
@@ -342,6 +347,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       ttsAbort: null,
       outboundSeq: 0,
       outboundTimestampMs: 0,
+      lastOutboundFrameAt: 0,
       turnId: 0,
       recordingActive: session.recordingStatus === "active",
       pendingAudio: [],
@@ -588,6 +594,19 @@ export class MsteamsProvider implements VoiceCallProvider {
     // active. Drop pre-recording frames rather than buffering them across the
     // recording boundary, so STT never processes audio captured before recording.
     if (this.requireRecordingStatus() && !state.recordingActive) {
+      return;
+    }
+    // Half-duplex echo guard: while our TTS is (or was just) playing, the caller leg can carry it back
+    // (acoustic echo); dropping that before STT stops the agent replying to its own voice. Loud input
+    // still passes, so STT turns a genuine barge-in into a speech-start that cancels playback. Shares
+    // the realtime echo-guard knobs (same physical echo concern).
+    const echo = this.responseRuntime?.voiceConfig.realtime;
+    if (
+      echo?.suppressInputDuringPlayback !== false &&
+      Date.now() - state.lastOutboundFrameAt <
+        (echo?.echoSuppressionWindowMs ?? ECHO_SUPPRESSION_WINDOW_MS) &&
+      pcm16Rms(frame.payload) < (echo?.echoBargeInRms ?? ECHO_BARGE_IN_RMS)
+    ) {
       return;
     }
     // PCM 16 kHz passes straight through (provider configured for pcm_16000).

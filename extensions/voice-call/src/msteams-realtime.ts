@@ -65,9 +65,9 @@ const MAX_TRANSCRIPT_ENTRIES = 40;
  * call, the caller leg can carry it back as acoustic echo. We drop that caller input to the realtime
  * model so its server-VAD does not answer our own voice — unless it is loud enough to be a barge-in.
  */
-const ECHO_SUPPRESSION_WINDOW_MS = 600;
+export const ECHO_SUPPRESSION_WINDOW_MS = 600;
 /** Normalized RMS above which caller input during our playback is treated as a real barge-in, not echo. */
-const ECHO_BARGE_IN_RMS = 0.04;
+export const ECHO_BARGE_IN_RMS = 0.04;
 
 /** RMS loudness of 16-bit little-endian mono PCM, normalized to roughly 0..1. */
 export function pcm16Rms(pcm: Buffer): number {
@@ -328,6 +328,10 @@ export interface MsteamsRealtimeDeps {
    * Set false to disable.
    */
   suppressInputDuringPlayback?: boolean;
+  /** Echo guard playout window (ms); default {@link ECHO_SUPPRESSION_WINDOW_MS}. */
+  echoSuppressionWindowMs?: number;
+  /** Echo guard barge-in RMS gate (0..1); default {@link ECHO_BARGE_IN_RMS}. */
+  echoBargeInRms?: number;
 
   /**
    * Group-call gate. The realtime model owns turn-taking, so (unlike the deterministic streaming
@@ -1062,8 +1066,8 @@ export function createMsteamsRealtimeCall(params: {
       // enough to be a real barge-in, so the caller can still interrupt.
       if (
         deps.suppressInputDuringPlayback !== false &&
-        Date.now() - lastOutputAt < ECHO_SUPPRESSION_WINDOW_MS &&
-        pcm16Rms(pcm16k) < ECHO_BARGE_IN_RMS
+        Date.now() - lastOutputAt < (deps.echoSuppressionWindowMs ?? ECHO_SUPPRESSION_WINDOW_MS) &&
+        pcm16Rms(pcm16k) < (deps.echoBargeInRms ?? ECHO_BARGE_IN_RMS)
       ) {
         return;
       }
