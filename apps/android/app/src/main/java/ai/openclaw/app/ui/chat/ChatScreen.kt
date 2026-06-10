@@ -542,6 +542,8 @@ private data class StarterPrompt(
   val message: String,
 )
 
+internal const val CHAT_SCREEN_BUBBLE_WIDTH_FRACTION = 0.90f
+
 /** Default prompts shown only for an empty, connected session. */
 private val starterPrompts =
   listOf(
@@ -559,14 +561,7 @@ private fun ChatBubble(
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
-  val displayableContent =
-    content.filter { part ->
-      when (part.type) {
-        "text" -> !part.text.isNullOrBlank()
-        "image" -> !part.base64.isNullOrBlank()
-        else -> false
-      }
-    }
+  val displayableContent = displayableChatBubbleContent(content)
   if (displayableContent.isEmpty()) return
 
   Row(
@@ -574,7 +569,7 @@ private fun ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.64f else 0.56f),
+      modifier = Modifier.fillMaxWidth(CHAT_SCREEN_BUBBLE_WIDTH_FRACTION),
       shape = RoundedCornerShape(7.dp),
       color = ClawTheme.colors.surfaceRaised,
       contentColor = ClawTheme.colors.text,
@@ -594,7 +589,7 @@ private fun ChatBubble(
         )
         displayableContent.forEach { part ->
           if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
+            ChatText(text = chatBubbleMarkdownText(part), textColor = ClawTheme.colors.text)
           } else {
             Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
@@ -612,20 +607,23 @@ private fun ChatBubble(
   }
 }
 
+internal fun displayableChatBubbleContent(content: List<ChatMessageContent>): List<ChatMessageContent> =
+  content.filter { part ->
+    when (part.type) {
+      "text" -> !part.text.isNullOrBlank()
+      "image" -> !part.base64.isNullOrBlank()
+      else -> false
+    }
+  }
+
+internal fun chatBubbleMarkdownText(part: ChatMessageContent): String = part.text.orEmpty()
+
 @Composable
 private fun ChatText(
   text: String,
   textColor: Color,
 ) {
-  if (text.hasMarkdownSyntax()) {
-    ChatMarkdown(text = text, textColor = textColor)
-  } else {
-    Text(
-      text = text,
-      style = ClawTheme.type.body,
-      color = textColor,
-    )
-  }
+  ChatMarkdown(text = text, textColor = textColor)
 }
 
 @Composable
@@ -970,9 +968,3 @@ private fun thinkingMeterWidth(value: String): Float =
 private fun contextPercent(value: String): Int = (thinkingMeterWidth(value) * 100).toInt()
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
-
-/** Quick markdown detector used to avoid routing plain chat text through the markdown renderer. */
-private fun String.hasMarkdownSyntax(): Boolean =
-  any { it == '#' || it == '*' || it == '`' || it == '[' || it == '|' } ||
-    contains("\n- ") ||
-    contains("\n1. ")
