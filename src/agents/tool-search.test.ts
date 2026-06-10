@@ -160,6 +160,90 @@ describe("Tool Search", () => {
     expect(telemetry.callCount).toBe(1);
   });
 
+  it("does not crash on unreadable catalog tool descriptors", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const descriptorTool = {
+      name: "descriptor_probe",
+      get label(): string {
+        throw new Error("tool search label getter exploded");
+      },
+      get description(): string {
+        throw new Error("tool search description getter exploded");
+      },
+      parameters: {
+        type: "object",
+      },
+      execute: vi.fn(async () => jsonResult({ ok: true })),
+    } satisfies AnyAgentTool;
+    const badParametersTool = {
+      name: "bad_parameters",
+      label: "Bad Parameters",
+      description: "bad",
+      get parameters(): AnyAgentTool["parameters"] {
+        throw new Error("tool search parameters getter exploded");
+      },
+      execute: vi.fn(async () => jsonResult({ ok: true })),
+    } satisfies AnyAgentTool;
+    const nestedBadParameters = {
+      type: "object",
+      get properties(): Record<string, unknown> {
+        throw new Error("tool search nested parameters getter exploded");
+      },
+    };
+    const nestedBadParametersTool = {
+      name: "nested_bad_parameters",
+      label: "Nested Bad Parameters",
+      description: "nested bad",
+      parameters: nestedBadParameters,
+      execute: vi.fn(async () => jsonResult({ ok: true })),
+    } satisfies AnyAgentTool;
+    const badNameTool = {
+      get name(): string {
+        throw new Error("tool search name getter exploded");
+      },
+      label: "Bad Name",
+      description: "bad",
+      parameters: {
+        type: "object",
+      },
+      execute: vi.fn(async () => jsonResult({ ok: true })),
+    } satisfies AnyAgentTool;
+
+    const compacted = applyToolSearchCatalog({
+      tools: [codeTool, descriptorTool, badParametersTool, nestedBadParametersTool, badNameTool],
+      config: { tools: { toolSearch: true } } as never,
+      sessionId: "session-unreadable-catalog",
+      catalogRef,
+      toolHookContext: {} as never,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(compacted.catalogToolCount).toBe(3);
+    expect(catalogRef.current?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "descriptor_probe",
+          label: undefined,
+          description: "",
+          parameters: { type: "object" },
+        }),
+        expect.objectContaining({
+          name: "bad_parameters",
+          label: "Bad Parameters",
+          description: "bad",
+          parameters: undefined,
+        }),
+        expect.objectContaining({
+          name: "nested_bad_parameters",
+          label: "Nested Bad Parameters",
+          description: "nested bad",
+          parameters: undefined,
+        }),
+      ]),
+    );
+  });
+
   it("scopes catalogs by run id when attempts share a session", async () => {
     // Overlapping run attempts can share a session id; run-scoped catalogs keep
     // one attempt from calling tools only exposed to another.

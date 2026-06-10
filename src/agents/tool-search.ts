@@ -13,7 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { copyPluginToolMeta, getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -46,6 +46,13 @@ type CatalogSource = "openclaw" | "mcp" | "client";
 type CatalogTool = AnyAgentTool | ToolDefinition;
 type CatalogVisibilityOptions = {
   includeMcp?: boolean;
+};
+type CatalogToolDescriptor = {
+  name: string;
+  label?: string;
+  description: string;
+  parameters?: unknown;
+  hasUnreadableDescriptor: boolean;
 };
 
 type ReusableCatalogSnapshot = {
@@ -641,9 +648,13 @@ function classifyTool(tool: CatalogTool): {
   return { source: "openclaw", sourceName: "core" };
 }
 
-function makeCatalogId(tool: CatalogTool, source: CatalogSource, sourceName?: string): string {
+function makeCatalogId(
+  descriptor: CatalogToolDescriptor,
+  source: CatalogSource,
+  sourceName?: string,
+): string {
   const owner = sourceName?.trim() || "core";
-  return `${source}:${owner}:${tool.name}`;
+  return `${source}:${owner}:${descriptor.name}`;
 }
 
 function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgentTool {
@@ -653,31 +664,154 @@ function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgen
   return wrapToolWithBeforeToolCallHook(tool, hookContext);
 }
 
+function createCatalogRuntimeTool(
+  tool: AnyAgentTool,
+  descriptor: CatalogToolDescriptor,
+): AnyAgentTool | undefined {
+  const execute = readCatalogToolExecute(tool);
+  if (!execute) {
+    return undefined;
+  }
+  const safeTool: AnyAgentTool = {
+    name: descriptor.name,
+    label: descriptor.label ?? descriptor.name,
+    description: descriptor.description,
+    parameters: (descriptor.parameters ?? Type.Object({})) as AnyAgentTool["parameters"],
+    execute,
+  };
+  copyPluginToolMeta(tool, safeTool);
+  return safeTool;
+}
+
 function toCatalogEntry(
   tool: CatalogTool,
   sourceOverride?: CatalogSource,
   hookContext?: HookContext,
-): ToolSearchCatalogEntry {
+): ToolSearchCatalogEntry | undefined {
+  const descriptor = readCatalogToolDescriptor(tool);
+  if (!descriptor) {
+    return undefined;
+  }
   const classified = classifyTool(tool);
   const source = sourceOverride ?? classified.source;
   const sourceName = sourceOverride === "client" ? "client" : classified.sourceName;
-  const catalogTool =
-    source === "client" ? tool : wrapCatalogTool(tool as AnyAgentTool, hookContext);
+  const catalogTool = resolveCatalogTool({ tool, descriptor, source, hookContext });
+  if (!catalogTool) {
+    return undefined;
+  }
   return {
-    id: makeCatalogId(tool, source, sourceName),
+    id: makeCatalogId(descriptor, source, sourceName),
     source,
     sourceName,
     ...(source === "mcp" && classified.mcp ? { mcp: classified.mcp } : {}),
-    name: tool.name,
-    label: tool.label,
-    description: tool.description ?? "",
-    parameters: tool.parameters,
+    name: descriptor.name,
+    label: descriptor.label,
+    description: descriptor.description,
+    parameters: descriptor.parameters,
     tool: catalogTool,
   };
 }
 
+function resolveCatalogTool(params: {
+  tool: CatalogTool;
+  descriptor: CatalogToolDescriptor;
+  source: CatalogSource;
+  hookContext?: HookContext;
+}): CatalogTool | undefined {
+  if (params.source === "client") {
+    return params.tool;
+  }
+  const tool = params.tool as AnyAgentTool;
+  if (!params.descriptor.hasUnreadableDescriptor) {
+    return wrapCatalogTool(tool, params.hookContext);
+  }
+  const safeTool = createCatalogRuntimeTool(tool, params.descriptor);
+  if (!safeTool) {
+    return undefined;
+  }
+  if (isToolWrappedWithBeforeToolCallHook(tool)) {
+    return safeTool;
+  }
+  return wrapCatalogTool(safeTool, params.hookContext);
+}
+
+function readCatalogToolName(tool: CatalogTool): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && name.trim() ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readCatalogToolExecute(tool: AnyAgentTool): AnyAgentTool["execute"] | undefined {
+  try {
+    return typeof tool.execute === "function" ? tool.execute.bind(tool) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readCatalogToolDescriptor(tool: CatalogTool): CatalogToolDescriptor | undefined {
+  const name = readCatalogToolName(tool);
+  if (!name) {
+    return undefined;
+  }
+  let hasUnreadableDescriptor = false;
+  let label: string | undefined;
+  let description = "";
+  let parameters: unknown;
+  try {
+    const value = tool.label;
+    label = typeof value === "string" ? value : undefined;
+  } catch {
+    hasUnreadableDescriptor = true;
+  }
+  try {
+    const value = tool.description;
+    description = typeof value === "string" ? value : "";
+  } catch {
+    hasUnreadableDescriptor = true;
+  }
+  try {
+    const cloned = cloneCatalogToolParameters(tool.parameters);
+    parameters = cloned.value;
+    if (cloned.unreadable) {
+      hasUnreadableDescriptor = true;
+    }
+  } catch {
+    hasUnreadableDescriptor = true;
+  }
+  return {
+    name,
+    label,
+    description,
+    parameters,
+    hasUnreadableDescriptor,
+  };
+}
+
+function cloneCatalogToolParameters(value: unknown): { value: unknown; unreadable: boolean } {
+  if (value === undefined) {
+    return { value: undefined, unreadable: false };
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return {
+      value: typeof serialized === "string" ? JSON.parse(serialized) : undefined,
+      unreadable: false,
+    };
+  } catch {
+    return { value: undefined, unreadable: true };
+  }
+}
+
+function isControlToolName(name: string | undefined): boolean {
+  return Boolean(name && TOOL_SEARCH_CONTROL_TOOL_NAMES.has(name));
+}
+
 function shouldCatalogTool(tool: AnyAgentTool): boolean {
-  if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
+  if (isControlToolName(readCatalogToolName(tool))) {
     return false;
   }
   return true;
@@ -695,6 +829,28 @@ function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
     return mode === "tools";
   }
   return false;
+}
+
+function canUseVisibleControlTool(
+  tool: AnyAgentTool,
+  isVisibleControlTool: (tool: AnyAgentTool) => boolean,
+): boolean {
+  try {
+    return isVisibleControlTool(tool);
+  } catch {
+    return false;
+  }
+}
+
+function canCatalogTool(
+  tool: AnyAgentTool,
+  shouldCatalog: (tool: AnyAgentTool) => boolean,
+): boolean {
+  try {
+    return shouldCatalog(tool);
+  } catch {
+    return false;
+  }
 }
 
 function readMessageToolResultId(message: AgentMessage): string | undefined {
@@ -866,9 +1022,10 @@ export function applyToolSearchCatalog(params: {
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
-    isVisibleControlTool: (tool) =>
-      TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
-      shouldExposeControlTool(tool.name, config.mode),
+    isVisibleControlTool: (tool) => {
+      const name = readCatalogToolName(tool);
+      return isControlToolName(name) && shouldExposeControlTool(name, config.mode);
+    },
   });
 }
 
@@ -1271,11 +1428,13 @@ export function applyToolCatalogCompaction(params: {
       catalogReused: false,
     };
   }
-  const hasControlTool = params.tools.some((tool) => params.isVisibleControlTool(tool));
+  const hasControlTool = params.tools.some((tool) =>
+    canUseVisibleControlTool(tool, params.isVisibleControlTool),
+  );
   const key = sessionCatalogKey(params);
   if (!hasControlTool || (!key && !params.catalogRef)) {
     return {
-      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      tools: params.tools.filter((tool) => !isControlToolName(readCatalogToolName(tool))),
       compacted: false,
       catalogToolCount: 0,
       catalogRegistered: false,
@@ -1287,15 +1446,18 @@ export function applyToolCatalogCompaction(params: {
   const catalog: ToolSearchCatalogEntry[] = [];
   const shouldCatalog = params.shouldCatalogTool ?? shouldCatalogTool;
   for (const tool of params.tools) {
-    if (params.isVisibleControlTool(tool)) {
+    if (canUseVisibleControlTool(tool, params.isVisibleControlTool)) {
       visible.push(tool);
       continue;
     }
-    if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
+    if (isControlToolName(readCatalogToolName(tool))) {
       continue;
     }
-    if (shouldCatalog(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
+    if (canCatalogTool(tool, shouldCatalog)) {
+      const entry = toCatalogEntry(tool, undefined, params.toolHookContext);
+      if (entry) {
+        catalog.push(entry);
+      }
       continue;
     }
     visible.push(tool);
@@ -1385,16 +1547,20 @@ export function addClientToolsToToolCatalog(params: {
   if (!existing) {
     return { tools: params.tools, compacted: false, catalogToolCount: 0 };
   }
+  const entries = params.tools.flatMap((tool) => {
+    const entry = toCatalogEntry(tool, "client");
+    return entry ? [entry] : [];
+  });
   registerToolSearchCatalog({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     runId: params.runId,
     catalogRef: params.catalogRef,
-    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
+    entries,
     append: true,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
+  return { tools: [], compacted: entries.length > 0, catalogToolCount: entries.length };
 }
 
 function toJsonSafe(value: unknown): unknown {
