@@ -55,13 +55,7 @@ export function pruneDiagnosticSessionStates(now = Date.now(), force = false): v
 
   for (const [key, state] of diagnosticSessionStates.entries()) {
     const ageMs = now - state.lastActivity;
-    const isIdle = state.state === "idle";
-    if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
-      diagnosticSessionStates.delete(key);
-    } else if (!isIdle && ageMs > SESSION_STATE_TTL_MS) {
-      // Fallback: clean up non-idle entries that survived past the TTL
-      // (e.g. recovery-failed sessions that never transitioned back to idle).
-      // Idle entries with queued work are preserved for heartbeat recovery.
+    if (state.state === "idle" && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
       diagnosticSessionStates.delete(key);
     }
   }

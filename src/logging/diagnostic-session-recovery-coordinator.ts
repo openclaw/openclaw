@@ -96,6 +96,16 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   }
   if (!recoveryOutcomeMutatesSessionState(params.outcome)) {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
+    // When recovery does not mutate session state (e.g. status "failed"),
+    // the diagnostic entry stays non-idle forever unless we explicitly
+    // transition it.  Mark it idle and clear queued work so stale-idle
+    // pruning can eventually remove it instead of accumulating a ghost entry.
+    const ghostState = peekDiagnosticSessionState(params.request);
+    if (ghostState && ghostState.state !== "idle") {
+      ghostState.state = "idle";
+      ghostState.queueDepth = 0;
+      ghostState.lastActivity = Date.now();
+    }
     return;
   }
   const expectedState = params.request.expectedState ?? "processing";
