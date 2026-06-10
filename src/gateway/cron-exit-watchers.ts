@@ -1,3 +1,4 @@
+import type { CronJob } from "../cron/types.js";
 /**
  * Gateway-owned watchers for cron jobs with an `on-exit` schedule.
  *
@@ -10,8 +11,16 @@
  * v1 is one-shot per arm: a job fires once when its command exits and is not
  * re-armed (re-watching = re-add the job).
  */
-import type { CronJob } from "../cron/types.js";
+import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
+
+/**
+ * Safety bound for a watched command, so a hung/never-exiting command cannot
+ * keep a gateway-owned process alive forever. Generous (24h) because on-exit
+ * legitimately watches long-running commands (builds, deploys); on timeout the
+ * watch ends and the job fires like any other exit.
+ */
+const ON_EXIT_WATCH_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 type Logger = {
   info: (obj: unknown, msg?: string) => void;
@@ -115,6 +124,11 @@ export function createCronExitWatchers(params: {
           mode: "child",
           argv: [shell.command, ...shell.argsFor(command)],
           ...(cwd ? { cwd } : {}),
+          // Mark the child as an OpenClaw-launched subprocess (loop protection /
+          // detection) and bound its lifetime — consistent with how cron
+          // command-payload jobs run via runCommandWithTimeout.
+          env: markOpenClawExecEnv({ ...process.env }),
+          timeoutMs: ON_EXIT_WATCH_TIMEOUT_MS,
           captureOutput: true,
         });
       } catch (err) {
