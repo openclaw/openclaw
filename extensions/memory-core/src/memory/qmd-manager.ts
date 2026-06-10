@@ -85,6 +85,9 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+// Mirrors the builtin hybrid engine's DEFAULT_HYBRID_CANDIDATE_MULTIPLIER so
+// temporal decay re-ranks over a comparable raw candidate pool.
+const QMD_TEMPORAL_DECAY_CANDIDATE_MULTIPLIER = 4;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -1248,7 +1251,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     const requestedSources = opts?.sources?.length ? uniqueValues(opts.sources) : undefined;
     const collectionNames = this.listManagedCollectionNames(requestedSources);
-    const limit = resultLimit;
+    // With temporal decay enabled, widen the raw candidate pool the same way
+    // the builtin hybrid engine does (maxResults * candidateMultiplier), so a
+    // fresh document ranked just below the raw top N can still be rescued by
+    // recency re-ranking before the final truncation.
+    const limit = this.temporalDecay.enabled
+      ? resultLimit * QMD_TEMPORAL_DECAY_CANDIDATE_MULTIPLIER
+      : resultLimit;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
@@ -1374,6 +1383,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       parsed = await runSearchAttempt(false);
     }
     const results: MemorySearchResult[] = [];
+    const absPathBySourceRel = new Map<string, string>();
     for (const entry of parsed) {
       const docHints = this.normalizeDocHints({
         preferredCollection: entry.collection,
@@ -1398,6 +1408,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         snippet,
         source: doc.source,
       });
+      absPathBySourceRel.set(`${doc.source}:${doc.rel}`, doc.abs);
     }
     opts?.onDebug?.({
       backend: "qmd",
@@ -1413,12 +1424,32 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.temporalDecay.enabled) {
       // Match the builtin hybrid engine: decay the combined ranking score by
       // document age so fresher dated memory outranks stale high-frequency hits.
+      // Memory-source entries keep their workspace-relative path so dated
+      // filename parsing and evergreen exemptions apply; other sources (e.g.
+      // session exports outside the workspace) decay by mtime via their
+      // absolute path instead of silently skipping decay on a failed stat.
+      const decayInput = ranked.map((entry, index) => ({
+        index,
+        score: entry.score,
+        source: entry.source,
+        path:
+          entry.source === "memory"
+            ? entry.path
+            : (absPathBySourceRel.get(`${entry.source}:${entry.path}`) ?? entry.path),
+      }));
       const decayed = await applyTemporalDecayToHybridResults({
-        results: ranked,
+        results: decayInput,
         temporalDecay: this.temporalDecay,
         workspaceDir: this.workspaceDir,
       });
-      ranked = decayed.toSorted((a, b) => b.score - a.score);
+      // Reapply the relevance floor: decay can push stale hits below the
+      // caller's minScore, and the builtin path filters on post-decay scores.
+      const minScore = opts?.minScore ?? 0;
+      const rankedBeforeDecay = ranked;
+      ranked = decayed
+        .filter((entry) => entry.score >= minScore)
+        .toSorted((a, b) => b.score - a.score)
+        .map((entry) => Object.assign({}, rankedBeforeDecay[entry.index], { score: entry.score }));
     }
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }

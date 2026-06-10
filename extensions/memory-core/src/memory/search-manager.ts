@@ -23,7 +23,7 @@ import {
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { resolveTemporalDecaySearchConfig } from "./temporal-decay.js";
+import { resolveTemporalDecaySearchConfig, type TemporalDecayConfig } from "./temporal-decay.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
@@ -31,7 +31,7 @@ type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   contextLimits: ReturnType<typeof resolveAgentContextLimits>;
-  temporalDecay: { enabled: boolean; halfLifeDays: number };
+  temporalDecay: TemporalDecayConfig;
 };
 
 type CachedQmdManagerEntry = {
@@ -649,7 +649,12 @@ function buildQmdManagerIdentityKey(
 ): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${JSON.stringify(runtimeConfig.temporalDecay ?? null)}:${runtimeConfig.workspaceDir}`;
+  // Normalize disabled decay to null so halfLifeDays edits without enabling
+  // decay do not churn the cached manager.
+  const temporalDecayKey = runtimeConfig.temporalDecay?.enabled
+    ? JSON.stringify(runtimeConfig.temporalDecay)
+    : null;
+  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${temporalDecayKey}:${runtimeConfig.workspaceDir}`;
 }
 
 function resolveQmdManagerRuntimeConfig(

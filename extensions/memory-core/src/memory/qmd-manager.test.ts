@@ -2169,6 +2169,15 @@ describe("QmdMemoryManager", () => {
     const stale = results[1];
     expect(recent.score).toBeGreaterThan(0.55);
     expect(stale.score).toBeLessThan(0.3);
+
+    // minScore is a post-decay relevance floor, matching the builtin hybrid
+    // path: the stale hit passes the raw-score filter (0.9 >= 0.35) but its
+    // decayed score (~0.225) must not be returned.
+    const floored = await manager.search("router glacier backup", {
+      sessionKey: "agent:main:slack:dm:u123",
+      minScore: 0.35,
+    });
+    expect(floored.map((entry) => entry.path)).toEqual([recentPath]);
     await manager.close();
   });
 
