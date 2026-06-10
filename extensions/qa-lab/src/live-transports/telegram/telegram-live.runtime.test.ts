@@ -565,14 +565,6 @@ describe("telegram live qa runtime", () => {
       "help-command",
       "mention-gating",
     ]);
-    expect(testing.TELEGRAM_QA_EVIDENCE_SCENARIOS).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "telegram-canary",
-          standardId: "canary",
-        }),
-      ]),
-    );
     expect(
       findMissingLiveTransportStandardScenarios({
         coveredStandardScenarioIds: testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS,

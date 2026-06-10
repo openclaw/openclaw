@@ -45,9 +45,13 @@ describe("evidence summary", () => {
     expect(evidence.schemaVersion).toBe(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION);
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
-      scenarioId: "dm-chat-baseline",
+      test: {
+        kind: "qa-scenario",
+        id: "dm-chat-baseline",
+        title: "DM baseline conversation",
+        sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+      },
       coverageIds: ["channels.dm", "channels.qa-channel"],
-      sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
       runtimeParity: "standard",
       scorecard: {
         surfaceIds: ["dm"],
@@ -93,16 +97,10 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:05:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioSpecs: [
-        {
-          id: "telegram-canary",
-          standardId: "canary",
-          title: "Telegram canary",
-        },
-      ],
       scenarioResults: [
         {
           id: "telegram-canary",
+          standardId: "canary",
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
@@ -115,7 +113,11 @@ describe("evidence summary", () => {
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.entries).toEqual([
       expect.objectContaining({
-        scenarioId: "telegram-canary",
+        test: {
+          kind: "live-transport-check",
+          id: "telegram-canary",
+          title: "Telegram canary",
+        },
         coverageIds: ["channels.telegram.canary", "channels.telegram.live"],
         scorecard: {
           surfaceIds: ["channels.telegram"],
@@ -183,10 +185,13 @@ describe("evidence summary", () => {
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.entries).toEqual([
       expect.objectContaining({
-        scenarioId: "runtime.agent-runner-boundary",
-        scenarioTitle: "Agent runner boundary integration tests",
+        test: {
+          kind: "vitest-test",
+          id: "runtime.agent-runner-boundary",
+          title: "Agent runner boundary integration tests",
+          sourcePath: "src/agents/agent-runner.e2e.test.ts",
+        },
         coverageIds: ["runtime.agent-runner", "runtime.delivery"],
-        sourcePath: "src/agents/agent-runner.e2e.test.ts",
         scorecard: {
           surfaceIds: ["agent-runtime-and-provider-execution"],
           categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
@@ -237,10 +242,13 @@ describe("evidence summary", () => {
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.entries[0]).toMatchObject({
-      scenarioId: "control-ui.browser-run",
-      scenarioTitle: "Control UI browser workflow",
+      test: {
+        kind: "playwright-test",
+        id: "control-ui.browser-run",
+        title: "Control UI browser workflow",
+        sourcePath: "ui/control-ui.e2e.test.ts",
+      },
       coverageIds: ["control-ui.browser"],
-      sourcePath: "ui/control-ui.e2e.test.ts",
       scorecard: {
         surfaceIds: ["browser-control-ui-and-webchat"],
         categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
@@ -323,14 +331,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:15:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioSpecs: [
-        {
-          id: "telegram-canary",
-          standardId: "canary",
-          title: "Telegram canary",
-        },
-      ],
-      scenarioResults: [{ id: "telegram-canary", status: "pass" }],
+      scenarioResults: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
       transportId: "telegram",
     });
     const tarballEvidence = buildLiveTransportEvidenceSummary({
@@ -341,14 +342,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:16:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioSpecs: [
-        {
-          id: "telegram-canary",
-          standardId: "canary",
-          title: "Telegram canary",
-        },
-      ],
-      scenarioResults: [{ id: "telegram-canary", status: "pass" }],
+      scenarioResults: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
       transportId: "telegram",
     });
 

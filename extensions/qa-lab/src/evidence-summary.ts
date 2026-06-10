@@ -57,12 +57,19 @@ const qaEvidenceTimingSchema = z
   })
   .strict();
 
+const qaEvidenceTestSchema = z
+  .object({
+    kind: nonEmptyStringSchema,
+    id: nonEmptyStringSchema,
+    title: nonEmptyStringSchema,
+    sourcePath: nonEmptyStringSchema.optional(),
+  })
+  .strict();
+
 export const qaEvidenceSummaryEntrySchema = z
   .object({
-    scenarioId: nonEmptyStringSchema,
-    scenarioTitle: nonEmptyStringSchema,
+    test: qaEvidenceTestSchema,
     coverageIds: z.array(nonEmptyStringSchema),
-    sourcePath: nonEmptyStringSchema.optional(),
     docsRefs: z.array(nonEmptyStringSchema).optional(),
     codeRefs: z.array(nonEmptyStringSchema).optional(),
     runtimeParity: nonEmptyStringSchema.optional(),
@@ -127,6 +134,7 @@ type QaEvidenceScenarioSpecInput = {
 type QaEvidenceScenarioResultInput = {
   id?: string;
   name?: string;
+  standardId?: string;
   title?: string;
   status: QaEvidenceScenarioStatusInput;
   details?: string;
@@ -166,6 +174,20 @@ type QaEvidenceBuildBase = {
   profile?: QaEvidenceProfile;
   runner?: string;
 };
+
+function buildQaEvidenceTest(params: {
+  kind: string;
+  id: string;
+  title: string;
+  sourcePath?: string;
+}) {
+  return {
+    kind: params.kind,
+    id: params.id,
+    title: params.title,
+    ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
+  };
+}
 
 function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])].toSorted(
@@ -353,11 +375,15 @@ export function buildQaSuiteEvidenceSummary(
     ]);
     const surfaceIds = uniqueSortedStrings([...(scenario?.surfaces ?? []), scenario?.surface]);
     const runtimeParity = scenario?.runtimeParity ?? scenario?.runtimeParityTier;
+    const testId = scenario?.id ?? result.id ?? result.name ?? `scenario-${index + 1}`;
     return {
-      scenarioId: scenario?.id ?? result.id ?? result.name ?? `scenario-${index + 1}`,
-      scenarioTitle: scenario?.title ?? result.title ?? result.name ?? `Scenario ${index + 1}`,
+      test: buildQaEvidenceTest({
+        kind: "qa-scenario",
+        id: testId,
+        title: scenario?.title ?? result.title ?? result.name ?? `Scenario ${index + 1}`,
+        sourcePath: scenario?.sourcePath,
+      }),
       coverageIds,
-      ...(scenario?.sourcePath ? { sourcePath: scenario.sourcePath } : {}),
       ...(scenario?.docsRefs ? { docsRefs: [...scenario.docsRefs] } : {}),
       ...(scenario?.codeRefs ? { codeRefs: [...scenario.codeRefs] } : {}),
       ...(runtimeParity ? { runtimeParity } : {}),
@@ -388,6 +414,7 @@ export function buildQaSuiteEvidenceSummary(
 function buildTestRunnerEvidenceSummary(
   params: QaEvidenceBuildBase & {
     defaultRunner: string;
+    testKind: string;
     targets: readonly QaEvidenceTestTargetInput[];
     results: readonly QaEvidenceTestResultInput[];
   },
@@ -415,10 +442,13 @@ function buildTestRunnerEvidenceSummary(
     const fallbackId = result.id ?? result.sourcePath ?? `test-${index + 1}`;
     const sourcePath = target?.sourcePath ?? result.sourcePath;
     return {
-      scenarioId: target?.id ?? fallbackId,
-      scenarioTitle: target?.title ?? result.title ?? fallbackId,
+      test: buildQaEvidenceTest({
+        kind: params.testKind,
+        id: target?.id ?? fallbackId,
+        title: target?.title ?? result.title ?? fallbackId,
+        sourcePath,
+      }),
       coverageIds: uniqueSortedStrings(target?.coverageIds ?? []),
-      ...(sourcePath ? { sourcePath } : {}),
       ...(target?.docsRefs ? { docsRefs: [...target.docsRefs] } : {}),
       ...(target?.codeRefs ? { codeRefs: [...target.codeRefs] } : {}),
       scorecard: {
@@ -448,6 +478,7 @@ export function buildVitestEvidenceSummary(
   return buildTestRunnerEvidenceSummary({
     ...params,
     defaultRunner: "vitest",
+    testKind: "vitest-test",
     runner: params.runner ?? "vitest",
   });
 }
@@ -461,17 +492,13 @@ export function buildPlaywrightEvidenceSummary(
   return buildTestRunnerEvidenceSummary({
     ...params,
     defaultRunner: "playwright",
+    testKind: "playwright-test",
     runner: params.runner ?? "playwright",
   });
 }
 
 export function buildLiveTransportEvidenceSummary(
   params: QaEvidenceBuildBase & {
-    scenarioSpecs: readonly {
-      id: string;
-      standardId?: string;
-      title: string;
-    }[];
     scenarioResults: readonly QaEvidenceScenarioResultInput[];
     transportId: string;
   },
@@ -489,18 +516,17 @@ export function buildLiveTransportEvidenceSummary(
     env: params.env,
     fallback: params.channelDriver ?? "native",
   }) ?? { id: "native" };
-  const definitionsById = new Map(
-    params.scenarioSpecs.map((definition) => [definition.id, definition]),
-  );
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
-    const scenarioId = result.id ?? result.name ?? `scenario-${index + 1}`;
-    const definition = definitionsById.get(scenarioId);
-    const standardCoverageId = definition?.standardId
-      ? `channels.${params.transportId}.${definition.standardId}`
+    const testId = result.id ?? result.name ?? `live-transport-check-${index + 1}`;
+    const standardCoverageId = result.standardId
+      ? `channels.${params.transportId}.${result.standardId}`
       : undefined;
     return {
-      scenarioId,
-      scenarioTitle: definition?.title ?? result.title ?? result.name ?? scenarioId,
+      test: buildQaEvidenceTest({
+        kind: "live-transport-check",
+        id: testId,
+        title: result.title ?? result.name ?? testId,
+      }),
       coverageIds: uniqueSortedStrings([`channels.${params.transportId}.live`, standardCoverageId]),
       scorecard: {
         surfaceIds: [`channels.${params.transportId}`],

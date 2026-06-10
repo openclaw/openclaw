@@ -142,6 +142,7 @@ const DEFAULT_TELEGRAM_QA_CANARY_TIMEOUT_MS = 30_000;
 
 type TelegramQaScenarioResult = {
   id: string;
+  standardId?: string;
   title: string;
   status: "pass" | "fail";
   details: string;
@@ -545,19 +546,6 @@ const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCo
   alwaysOnStandardScenarioIds: ["canary"],
   scenarios: TELEGRAM_QA_SCENARIOS,
 });
-
-const TELEGRAM_QA_EVIDENCE_SCENARIOS = [
-  {
-    id: "telegram-canary",
-    standardId: "canary",
-    title: "Telegram canary",
-  },
-  ...TELEGRAM_QA_SCENARIOS,
-] satisfies readonly {
-  id: string;
-  standardId?: string;
-  title: string;
-}[];
 
 const TELEGRAM_QA_ENV_KEYS = [
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
@@ -1803,6 +1791,7 @@ export async function runTelegramQaLive(params: {
         latestSutMessageId = canaryTiming.responseMessageId;
         scenarioResults.push({
           id: "telegram-canary",
+          standardId: "canary",
           title: "Telegram canary",
           status: "pass",
           details: redactPublicMetadata
@@ -1833,6 +1822,7 @@ export async function runTelegramQaLive(params: {
         });
         scenarioResults.push({
           id: "telegram-canary",
+          standardId: "canary",
           title: "Telegram canary",
           status: "fail",
           details: canaryFailure,
@@ -1928,6 +1918,7 @@ export async function runTelegramQaLive(params: {
             if (!lastMatched || !firstRequestStartedAt || lastSentMessageId === undefined) {
               const result = {
                 id: scenario.id,
+                ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
                 title: scenario.title,
                 status: "pass",
                 details: "no reply",
@@ -1951,6 +1942,7 @@ export async function runTelegramQaLive(params: {
                 : `; ${scenarioSteps.filter((step) => step.expectReply).length} command replies matched`;
             const result = {
               id: scenario.id,
+              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
               title: scenario.title,
               status: "pass",
               details: redactPublicMetadata
@@ -1976,6 +1968,7 @@ export async function runTelegramQaLive(params: {
           } catch (error) {
             const result = {
               id: scenario.id,
+              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
               title: scenario.title,
               status: "fail",
               details: formatErrorMessage(error),
@@ -2037,7 +2030,6 @@ export async function runTelegramQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
-    scenarioSpecs: TELEGRAM_QA_EVIDENCE_SCENARIOS,
     scenarioResults,
     transportId: "telegram",
   });
@@ -2128,7 +2120,6 @@ export async function runTelegramQaLive(params: {
 
 export const testing = {
   TELEGRAM_QA_SCENARIOS,
-  TELEGRAM_QA_EVIDENCE_SCENARIOS,
   TELEGRAM_QA_STANDARD_SCENARIO_IDS,
   buildTelegramQaConfig,
   buildObservedMessagesArtifact,
