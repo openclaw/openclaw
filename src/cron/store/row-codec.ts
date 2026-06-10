@@ -21,7 +21,7 @@ import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
-function bindScheduleColumns(
+export function bindScheduleColumns(
   schedule: CronSchedule,
 ): Pick<
   CronJobInsert,
@@ -204,7 +204,7 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-function scheduleFromRow(row: CronJobRow): CronSchedule | null {
+export function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   if (row.schedule_kind === "at" && row.at) {
     return { kind: "at", at: row.at };
   }
