@@ -1974,6 +1974,17 @@ async function executeMainSessionCronJob(
       return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
     if (heartbeatResult.status === "skipped") {
+      if (heartbeatResult.reason === "disabled") {
+        state.deps.requestHeartbeat({
+          source: "cron",
+          intent: "immediate",
+          reason,
+          agentId: job.agentId,
+          sessionKey: cronRunSessionKey,
+          heartbeat: { target: "last" },
+        });
+        return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+      }
       return {
         status: "skipped",
         error: heartbeatResult.reason,
