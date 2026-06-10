@@ -1179,7 +1179,7 @@ describe("gateway server cron", () => {
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
       const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
-      expect(storePath).toContain("jobs.json");
+      expect(storePath).toContain("openclaw.sqlite");
 
       const autoRes = await directCronReq(cronState, "cron.add", {
         name: "auto run test",
