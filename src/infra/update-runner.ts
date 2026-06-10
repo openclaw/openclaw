@@ -588,10 +588,17 @@ function isSupersededInstallFailure(
   return steps.some((candidate) => candidate.name === retryName && candidate.exitCode === 0);
 }
 
+function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
+  return /^preflight (?:checkout|deps install(?: \(ignore scripts\))?|build|lint) \(.+\)$/u.test(
+    step.name,
+  );
+}
+
 function findBlockingGitFailure(steps: readonly UpdateStepResult[]): UpdateStepResult | undefined {
   return steps.find(
     (step, index) =>
       step.exitCode !== 0 &&
+      !isPreflightCandidateFailure(step) &&
       !isSupersededInstallFailure(step, steps) &&
       !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
   );
@@ -604,8 +611,15 @@ function isSupersededTargetRefFailure(
   const isTargetRefProbe = step.name.startsWith("git rev-parse ");
   const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
   const isUpstreamProbe = step.name === "upstream check";
-  if (!isTargetRefProbe && !isTargetTagFetch && !isUpstreamProbe) {
+  const isLocalDevBranchProbe = step.name === `git show-ref ${DEV_BRANCH}`;
+  if (!isTargetRefProbe && !isTargetTagFetch && !isUpstreamProbe && !isLocalDevBranchProbe) {
     return false;
+  }
+  if (isLocalDevBranchProbe) {
+    return followingSteps.some(
+      (candidate) =>
+        candidate.name.startsWith(`git checkout -B ${DEV_BRANCH} `) && candidate.exitCode === 0,
+    );
   }
   return followingSteps.some(
     (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
@@ -1290,43 +1304,68 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       } else {
         await prepareGitMutation();
+        let checkedOutSelectedSha = false;
         if (needsCheckoutMain) {
+          const localMainStep = await runStep(
+            step(
+              `git show-ref ${DEV_BRANCH}`,
+              ["git", "-C", gitRoot, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
+              gitRoot,
+            ),
+          );
+          steps.push(localMainStep);
           const failure = await runRequiredGitStep(
-            `git checkout ${DEV_BRANCH}`,
-            ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
+            localMainStep.exitCode === 0
+              ? `git checkout ${DEV_BRANCH}`
+              : `git checkout -B ${DEV_BRANCH} ${selectedSha}`,
+            localMainStep.exitCode === 0
+              ? ["git", "-C", gitRoot, "checkout", DEV_BRANCH]
+              : ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, selectedSha],
             "checkout-failed",
           );
           if (failure) {
             return failure;
           }
+          checkedOutSelectedSha = localMainStep.exitCode !== 0;
         }
-        const rebaseStep = await runStep(
-          step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
-        );
-        steps.push(rebaseStep);
-        if (rebaseStep.exitCode !== 0) {
-          const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
-            cwd: gitRoot,
-            timeoutMs,
-          });
+        if (checkedOutSelectedSha) {
           steps.push({
-            name: "git rebase --abort",
-            command: "git rebase --abort",
+            name: "git rebase",
+            command: `git rebase ${selectedSha}`,
             cwd: gitRoot,
             durationMs: 0,
-            exitCode: abortResult.code,
-            stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
-            stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
+            exitCode: 0,
+            stdoutTail: `skipped; ${DEV_BRANCH} was created at selected preflight SHA`,
           });
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "rebase-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+        } else {
+          const rebaseStep = await runStep(
+            step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
+          );
+          steps.push(rebaseStep);
+          if (rebaseStep.exitCode !== 0) {
+            const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
+              cwd: gitRoot,
+              timeoutMs,
+            });
+            steps.push({
+              name: "git rebase --abort",
+              command: "git rebase --abort",
+              cwd: gitRoot,
+              durationMs: 0,
+              exitCode: abortResult.code,
+              stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
+              stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
+            });
+            return {
+              status: "error",
+              mode: "git",
+              root: gitRoot,
+              reason: "rebase-failed",
+              before: { sha: beforeSha, version: beforeVersion },
+              steps,
+              durationMs: Date.now() - startedAt,
+            };
+          }
         }
       }
     } else {
