@@ -208,14 +208,9 @@ function mockAcpManager(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
   }) => ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]>;
-  repairMissingSessionMetadata?: (params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-  }) => Promise<boolean>;
 }) {
   getAcpSessionManagerSpy.mockReturnValue({
     runTurn: params.runTurn,
-    repairMissingSessionMetadata: params.repairMissingSessionMetadata ?? vi.fn(async () => false),
     resolveSession:
       params.resolveSession ??
       ((input) => {
@@ -391,62 +386,6 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
-  it("emits ACP lifecycle end after transcript persistence", async () => {
-    await withAcpSessionEnv(async () => {
-      await runAcpTurnWithTextDeltas({ chunks: ["done"] });
-
-      const persistOrder =
-        attemptExecutionMocks.persistAcpTurnTranscript.mock.invocationCallOrder[0] ?? 0;
-      const lifecycleEndOrder =
-        attemptExecutionMocks.emitAcpLifecycleEnd.mock.invocationCallOrder[0] ?? 0;
-      expect(persistOrder).toBeGreaterThan(0);
-      expect(lifecycleEndOrder).toBeGreaterThan(persistOrder);
-    });
-  });
-
-  it("persists hub-delegated ACP replies to the canonical session transcript", async () => {
-    await withAcpSessionEnvInfo(async ({ storePath }) => {
-      const sessionKey = "agent:codex:acp:test";
-      writeSessionStoreForTest(storePath, {
-        [sessionKey]: {
-          sessionId: "acp-session-1",
-          updatedAt: Date.now(),
-          hubDelegated: {
-            ownerSessionKey: "agent:main:main",
-            createdAt: Date.now(),
-          },
-          acp: {
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: sessionKey,
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: Date.now(),
-          },
-        },
-      });
-      mockAcpManager({
-        runTurn: createRunTurnFromTextDeltas(["delegated-reply"]),
-        resolveSession: ({ sessionKey: resolvedKey }) =>
-          resolveReadySession(resolvedKey, "codex", "persistent"),
-      });
-      await agentCommand(
-        {
-          message: "follow up",
-          sessionKey,
-          sessionEffects: "internal",
-        },
-        runtime,
-      );
-      expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalled();
-      const persistCall = attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0] as
-        | { sessionStore?: unknown; storePath?: string }
-        | undefined;
-      expect(persistCall?.sessionStore).toBeDefined();
-      expect(persistCall?.storePath).toBe(storePath);
-    });
-  });
-
   it("streams ACP visible text deltas", async () => {
     await withAcpSessionEnv(async () => {
       const repeated = await runAcpTurnWithAssistantEvents(["bo", "ok"]);
@@ -485,10 +424,8 @@ describe("agentCommand ACP runtime routing", () => {
       mockConfig(home, storePath);
 
       const runTurn = vi.fn(async (_params: unknown) => {});
-      const repairMissingSessionMetadata = vi.fn(async () => false);
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
-        repairMissingSessionMetadata,
         resolveSession: ({ sessionKey }) => {
           return {
             kind: "stale",
@@ -506,54 +443,7 @@ describe("agentCommand ACP runtime routing", () => {
         "ACP_SESSION_INIT_FAILED",
         "ACP metadata is missing",
       );
-      expect(repairMissingSessionMetadata).toHaveBeenCalledTimes(1);
       expect(runTurn).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("repairs stale ACP metadata before running the turn", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          "agent:codex:acp:stale": {
-            sessionId: "stale-1",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
-      mockConfig(home, storePath);
-
-      const runTurn = createRunTurnFromTextDeltas(["repaired"]);
-      const repairMissingSessionMetadata = vi.fn(async () => true);
-      let resolveCalls = 0;
-      mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
-        repairMissingSessionMetadata,
-        resolveSession: ({ sessionKey }) => {
-          resolveCalls += 1;
-          if (resolveCalls === 1) {
-            return {
-              kind: "stale",
-              sessionKey,
-              error: new AcpRuntimeError(
-                "ACP_SESSION_INIT_FAILED",
-                `ACP metadata is missing for session ${sessionKey}.`,
-              ),
-            };
-          }
-          return resolveReadySession(sessionKey);
-        },
-      });
-
-      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:stale" }, runtime);
-
-      expect(repairMissingSessionMetadata).toHaveBeenCalledTimes(1);
-      expect(resolveCalls).toBe(2);
-      expect(runTurn).toHaveBeenCalledTimes(1);
       expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
     });
   });

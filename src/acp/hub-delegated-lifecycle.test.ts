@@ -98,7 +98,7 @@ describe("hub-delegated lifecycle", () => {
     });
   });
 
-  it("repairs runtime metadata before clearing the delegate marker", async () => {
+  it("runs prepareRuntime before clearing the delegate marker", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "sessions.json");
       const sessionKey = delegateSessionKey("codex", "repair-before-close");

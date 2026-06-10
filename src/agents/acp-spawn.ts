@@ -16,14 +16,13 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { hasPersistedAcpSessionMetadata } from "../acp/control-plane/manager.repair-missing-metadata.js";
 import type { AcpTurnAttachment } from "../acp/control-plane/manager.types.js";
 import {
   cleanupFailedAcpSpawn,
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntry, readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import {
@@ -1648,10 +1647,11 @@ export async function spawnAcpDirect(
     initializedRuntime = initializedSession.runtimeCloseHandle;
 
     if (
-      !hasPersistedAcpSessionMetadata({
+      !readAcpSessionEntry({
         cfg,
         sessionKey,
-      })
+        clone: false,
+      })?.acp
     ) {
       throw new Error(`Could not persist ACP metadata for ${sessionKey}.`);
     }

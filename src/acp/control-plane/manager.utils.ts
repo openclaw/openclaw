@@ -121,13 +121,6 @@ export function resolveRuntimeIdleTtlMs(cfg: OpenClawConfig): number {
   return Math.round(ttlMinutes * 60 * 1000);
 }
 
-/** Max idle gap before a cached persistent handle must be re-ensured before reuse. */
-export function resolveCachedHandleReuseMaxIdleMs(cfg: OpenClawConfig): number {
-  // No implicit default: unconfigured ttlMinutes means persistent handles stay reusable
-  // until explicit runtime reuse checks fail or acp.runtime.ttlMinutes is set.
-  return resolveRuntimeIdleTtlMs(cfg);
-}
-
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
   const raw = meta as Record<string, unknown>;
   return (

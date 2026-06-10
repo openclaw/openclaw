@@ -115,10 +115,6 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntry: () => ({ acp: { backend: "acpx", agent: "codex" } }),
 }));
 
-vi.mock("../acp/control-plane/manager.repair-missing-metadata.js", () => ({
-  hasPersistedAcpSessionMetadata: () => true,
-}));
-
 vi.mock("../config/sessions/store-cache.js", () => ({
   invalidateSessionStoreCache: vi.fn(),
 }));

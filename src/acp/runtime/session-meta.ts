@@ -165,16 +165,6 @@ function acpSessionRowMatchesEntry(
   return row.session_id == null || row.session_id === entry?.sessionId;
 }
 
-function selectAcpSessionRowForEntry(
-  row: AcpSessionRow | undefined,
-  entry: Pick<SessionEntry, "sessionId"> | undefined,
-): AcpSessionRow | undefined {
-  if (!row || !acpSessionRowMatchesEntry(row, entry)) {
-    return undefined;
-  }
-  return row;
-}
-
 export function readAcpSessionMeta(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
@@ -195,11 +185,8 @@ export function readAcpSessionMeta(params: {
     env: params.env,
     path: params.databasePath,
   });
-  const row = selectAcpSessionRowForEntry(
-    selectAcpSessionRow(database.db, storeEntry.storeSessionKey),
-    storeEntry.entry,
-  );
-  if (!row) {
+  const row = selectAcpSessionRow(database.db, storeEntry.storeSessionKey);
+  if (!row || !acpSessionRowMatchesEntry(row, storeEntry.entry)) {
     return undefined;
   }
   return rowToAcpSessionMeta(row);
@@ -219,11 +206,8 @@ export function readAcpSessionMetaForEntry(params: {
     env: params.env,
     path: params.databasePath,
   });
-  const row = selectAcpSessionRowForEntry(
-    selectAcpSessionRow(database.db, sessionKey),
-    params.entry,
-  );
-  if (!row) {
+  const row = selectAcpSessionRow(database.db, sessionKey);
+  if (!row || !acpSessionRowMatchesEntry(row, params.entry)) {
     return undefined;
   }
   return rowToAcpSessionMeta(row);
@@ -419,11 +403,9 @@ export function readAcpSessionEntry(params: {
     env: params.env,
     path: params.databasePath,
   });
-  const row = selectAcpSessionRowForEntry(
-    selectAcpSessionRow(database.db, storeEntry.storeSessionKey),
-    storeEntry.entry,
-  );
-  const acp = row ? rowToAcpSessionMeta(row) : undefined;
+  const row = selectAcpSessionRow(database.db, storeEntry.storeSessionKey);
+  const acp =
+    row && acpSessionRowMatchesEntry(row, storeEntry.entry) ? rowToAcpSessionMeta(row) : undefined;
   return {
     cfg: storeEntry.cfg,
     storePath: storeEntry.storePath,
@@ -463,8 +445,7 @@ export async function listAcpSessionEntries(params: {
     }
     const storeSessionKey = resolveStoreSessionKey(store, sessionKey);
     const entry = store[storeSessionKey];
-    const matchedRow = selectAcpSessionRowForEntry(row, entry);
-    if (!entry || !matchedRow) {
+    if (!entry || !acpSessionRowMatchesEntry(row, entry)) {
       continue;
     }
     entries.push({
@@ -473,7 +454,7 @@ export async function listAcpSessionEntries(params: {
       sessionKey,
       storeSessionKey,
       entry,
-      acp: rowToAcpSessionMeta(matchedRow),
+      acp: rowToAcpSessionMeta(row),
     });
   }
 
@@ -527,15 +508,15 @@ export async function upsertAcpSessionMeta(params: {
   const updatedAt = params.now?.() ?? Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
+      const currentRow = selectAcpSessionRow(database.db, storageSessionKey);
+      current =
+        currentRow && acpSessionRowMatchesEntry(currentRow, entry)
+          ? rowToAcpSessionMeta(currentRow)
+          : undefined;
       preparedEntry = mergeSessionEntry(entry, { updatedAt });
-      const currentRow = selectAcpSessionRowForEntry(
-        selectAcpSessionRow(database.db, storageSessionKey),
-        preparedEntry,
-      );
-      current = currentRow ? rowToAcpSessionMeta(currentRow) : undefined;
       nextMeta = params.mutate(
         current,
-        current ? mergeAcpForReturn(preparedEntry, current) : preparedEntry,
+        current ? mergeAcpForReturn(preparedEntry, current) : entry,
       );
       if (nextMeta === null) {
         executeSqliteQuerySync(

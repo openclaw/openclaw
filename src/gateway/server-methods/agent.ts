@@ -2827,7 +2827,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
     ]);
 
-    const snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
+    let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
       first.snapshot;
     if (snapshot) {
       if (first.source === "lifecycle") {
@@ -2836,8 +2836,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         lifecycleAbortController.abort();
       }
     } else {
-      // Both waiters share the same timeoutMs budget. Once one side times out,
-      // abort the loser instead of awaiting a long-running in-flight agent job.
+      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
       lifecycleAbortController.abort();
       dedupeAbortController.abort();
     }

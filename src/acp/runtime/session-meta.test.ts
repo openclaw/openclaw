@@ -173,7 +173,7 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it("treats sqlite session_id drift as missing metadata until explicitly rebound", async () => {
+  it("ignores SQLite ACP metadata rows for replaced session ids", async () => {
     await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
@@ -207,27 +207,23 @@ describe("ACP session metadata SQLite store", () => {
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toBeUndefined();
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(0);
 
-      await upsertAcpSessionMeta({
-        cfg,
+      writeAcpSessionMetaForMigration({
         databasePath,
         sessionKey,
-        mutate: (current) => {
-          expect(current).toBeUndefined();
-          return {
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "codex-current",
-            mode: "persistent",
-            state: "running",
-            lastActivityAt: 124,
-          };
+        sessionId: "sess-new",
+        meta: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-current",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 124,
         },
       });
 
-      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toMatchObject({
-        runtimeSessionName: "codex-current",
-        state: "running",
-      });
+      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
+        "codex-current",
+      );
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
     });
   });
@@ -279,43 +275,6 @@ describe("ACP session metadata SQLite store", () => {
         readAcpSessionEntry({ cfg, databasePath, sessionKey: canonicalKey })?.acp
           ?.runtimeSessionName,
       ).toBe(legacyKey);
-    });
-  });
-
-  it("keeps sqlite metadata hidden after a no-op upsert when session_id drift exists", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
-      const sessionKey = "agent:codex:acp:drift-no-op";
-      await writeSessionStoreForTestAsync(storePath, {
-        [sessionKey]: {
-          sessionId: "sess-new",
-          updatedAt: 100,
-        },
-      });
-      writeAcpSessionMetaForMigration({
-        databasePath,
-        sessionKey,
-        sessionId: "sess-old",
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-persisted",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        },
-      });
-
-      await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
-        sessionKey,
-        mutate: () => undefined,
-      });
-
-      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toBeUndefined();
     });
   });
 

@@ -147,10 +147,13 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     mutate: (current, entry) => {
-      if (!entry || !current) {
-        return undefined;
+      if (!entry) {
+        return null;
       }
       const base = current;
+      if (!base) {
+        return null;
+      }
       return {
         backend: base.backend,
         agent: base.agent,

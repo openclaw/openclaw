@@ -14,10 +14,6 @@ import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import {
-  hasPersistedAcpSessionMetadata,
-  shouldRepairMissingAcpSessionMetadata,
-} from "./manager.repair-missing-metadata.js";
-import {
   applyManagerRuntimeControls,
   resolveManagerRuntimeCapabilities,
 } from "./manager.runtime-controls.js";
@@ -169,47 +165,6 @@ export class AcpSessionManager {
         runtimeHandles: this.runtimeHandles,
         enforceConcurrentSessionLimit: this.enforceConcurrentSessionLimit.bind(this),
         writeSessionMeta: this.writeSessionMeta.bind(this),
-      });
-    });
-  }
-
-  async repairMissingSessionMetadata(params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-  }): Promise<boolean> {
-    const sessionKey = canonicalizeAcpSessionKey(params);
-    if (!sessionKey) {
-      return false;
-    }
-    await this.evictIdleRuntimeHandles(params.cfg);
-    return await this.withSessionActor(sessionKey, async () => {
-      const repairPlan = shouldRepairMissingAcpSessionMetadata({
-        cfg: params.cfg,
-        sessionKey,
-      });
-      if (!repairPlan) {
-        return false;
-      }
-      await runManagerInitializeSession({
-        input: {
-          cfg: params.cfg,
-          sessionKey: repairPlan.sessionKey,
-          agent: repairPlan.agent,
-          mode: repairPlan.mode,
-          backendId: repairPlan.backendId,
-          ...(repairPlan.cwd !== undefined ? { cwd: repairPlan.cwd } : {}),
-          ...(repairPlan.runtimeOptions ? { runtimeOptions: repairPlan.runtimeOptions } : {}),
-          ...(repairPlan.resumeSessionId ? { resumeSessionId: repairPlan.resumeSessionId } : {}),
-        },
-        sessionKey,
-        deps: this.deps,
-        runtimeHandles: this.runtimeHandles,
-        enforceConcurrentSessionLimit: this.enforceConcurrentSessionLimit.bind(this),
-        writeSessionMeta: this.writeSessionMeta.bind(this),
-      });
-      return hasPersistedAcpSessionMetadata({
-        cfg: params.cfg,
-        sessionKey,
       });
     });
   }
@@ -507,11 +462,13 @@ export class AcpSessionManager {
       skipMaintenance: true,
       takeCacheOwnership: true,
       mutate: (current, entry) => {
-        // Missing store rows or session_id drift must not delete sqlite metadata.
-        if (!entry || !current) {
-          return undefined;
+        if (!entry) {
+          return null;
         }
         const base = current;
+        if (!base) {
+          return null;
+        }
         const next: SessionAcpMeta = {
           backend: base.backend,
           agent: base.agent,

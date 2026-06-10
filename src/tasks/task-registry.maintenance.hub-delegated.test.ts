@@ -57,11 +57,6 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
       };
 
       const closeAcpSession = vi.fn(async () => {});
-      const repairAcpSessionMetadata = vi.fn(async () => {
-        const persisted = readSessionStoreForTest(storePath);
-        expect(persisted[sessionKey]?.hubDelegated).toBeDefined();
-        throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "backend offline");
-      });
       setTaskRegistryMaintenanceRuntimeForTests({
         listAcpSessionEntries: async () => [],
         readAcpSessionEntry: () => ({
@@ -72,7 +67,6 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           entry: undefined,
           storeReadFailed: false,
         }),
-        repairAcpSessionMetadata,
         closeAcpSession,
         loadSessionStore,
         resolveStorePath: () => storePath,
@@ -103,9 +97,6 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           sessionKey,
           reason: "delegate-max-age-expired",
         }),
-      );
-      expect(repairAcpSessionMetadata).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey }),
       );
       const persisted = readSessionStoreForTest(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
