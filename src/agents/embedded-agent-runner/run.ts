@@ -3778,7 +3778,7 @@ export async function runEmbeddedAgent(
               replayInvalid,
               livenessState,
             });
-            if (lastProfileId && !reasoningOnlyAsyncFallback && !reasoningOnlyToolFallback) {
+            if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
@@ -3938,12 +3938,7 @@ export async function runEmbeddedAgent(
 
             // Mark the failing profile for cooldown so multi-profile setups
             // rotate away from the exhausted credential on the next turn.
-            if (
-              lastProfileId &&
-              !incompleteTurnPayloadsFromExistingError &&
-              !incompleteTurnAsyncTaskPayloads &&
-              !incompleteTurnToolFallback
-            ) {
+            if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
