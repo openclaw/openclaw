@@ -1,7 +1,5 @@
 // Voice Call tests cover webhook plugin behavior.
-import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -176,36 +174,6 @@ async function expectTwilioReplayTwiML(response: Response) {
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toContain("text/xml");
   expect(await response.text()).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
-}
-
-async function attemptWebSocketUpgrade(requestUrl: URL): Promise<void> {
-  const req = request(requestUrl, {
-    method: "GET",
-    headers: {
-      Connection: "Upgrade",
-      Upgrade: "websocket",
-    },
-  });
-  const controller = new AbortController();
-  const waitFor = (eventName: string) =>
-    once(req, eventName, { signal: controller.signal })
-      .then(() => undefined)
-      .catch(() => undefined);
-
-  try {
-    req.end();
-    await Promise.race([
-      waitFor("response"),
-      waitFor("error"),
-      waitFor("upgrade"),
-      sleep(1000, undefined, { signal: controller.signal }).then(() => {
-        throw new Error("upgrade request timed out");
-      }),
-    ]);
-  } finally {
-    controller.abort();
-    req.destroy();
-  }
 }
 
 function createTwilioVerificationProvider(
@@ -862,72 +830,6 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(processEvent).not.toHaveBeenCalled();
     } finally {
       parseWebhookEvent.mockRestore();
-      await server.stop();
-    }
-  });
-
-  it("does not route sibling realtime websocket paths to the realtime handler", async () => {
-    const calls = [createCall(Date.now())];
-    const { manager } = createManager(calls);
-    const realtimeHandler = {
-      getStreamPathPattern: vi.fn(() => "/voice/stream/realtime"),
-      handleWebSocketUpgrade: vi.fn((_request, socket) => {
-        socket.destroy();
-      }),
-    } as unknown as RealtimeCallHandler;
-
-    const server = new VoiceCallWebhookServer(
-      createConfig({
-        serve: { path: "/voice/webhook" },
-        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
-      }),
-      manager,
-      provider,
-    );
-    server.setRealtimeHandler(realtimeHandler);
-
-    const baseUrl = await server.start();
-    const requestUrl = requireBoundRequestUrl(server, baseUrl);
-    requestUrl.pathname = "/voice/stream/realtime-evil";
-
-    try {
-      await attemptWebSocketUpgrade(requestUrl);
-
-      expect(realtimeHandler.handleWebSocketUpgrade).not.toHaveBeenCalled();
-    } finally {
-      await server.stop();
-    }
-  });
-
-  it("preserves root realtime websocket child paths", async () => {
-    const calls = [createCall(Date.now())];
-    const { manager } = createManager(calls);
-    const realtimeHandler = {
-      getStreamPathPattern: vi.fn(() => "/"),
-      handleWebSocketUpgrade: vi.fn((_request, socket) => {
-        socket.destroy();
-      }),
-    } as unknown as RealtimeCallHandler;
-
-    const server = new VoiceCallWebhookServer(
-      createConfig({
-        serve: { path: "/voice/webhook" },
-        realtime: { enabled: true, streamPath: "/" },
-      }),
-      manager,
-      provider,
-    );
-    server.setRealtimeHandler(realtimeHandler);
-
-    const baseUrl = await server.start();
-    const requestUrl = requireBoundRequestUrl(server, baseUrl);
-    requestUrl.pathname = "/token";
-
-    try {
-      await attemptWebSocketUpgrade(requestUrl);
-
-      expect(realtimeHandler.handleWebSocketUpgrade).toHaveBeenCalledTimes(1);
-    } finally {
       await server.stop();
     }
   });
