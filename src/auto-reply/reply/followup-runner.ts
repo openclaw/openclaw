@@ -33,6 +33,7 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.j
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
@@ -840,6 +841,32 @@ export function createFollowupRunner(params: {
                   startedAt: cliLifecycleStartedAt,
                 };
                 const followupCurrentMessageId = resolveFollowupCurrentMessageId();
+                const cliToolSummaryTracker = createCliToolSummaryTracker({
+                  detailMode: toolProgressDetail,
+                  shouldEmitToolResult: shouldEmitToolResultProgress,
+                  shouldEmitToolOutput: shouldEmitToolOutputProgress,
+                  deliver: (payload) =>
+                    enqueueProgressDelivery(async () => {
+                      if (
+                        run.sourceReplyDeliveryMode === "message_tool_only" &&
+                        !shouldEmitToolResultProgress()
+                      ) {
+                        return;
+                      }
+                      await sendFollowupPayloads(
+                        [payload],
+                        effectiveQueued,
+                        {
+                          provider,
+                          modelId: model,
+                        },
+                        { kind: "tool", mirror: false, runId },
+                      );
+                      if (payload.isError === true) {
+                        markVisibleToolErrorProgress();
+                      }
+                    }),
+                });
                 const result = await runCliAgentWithLifecycle({
                   runId,
                   provider: cliExecutionProvider,
@@ -847,11 +874,15 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
-                  onToolEvent: async ({ name, phase, args }) => {
+                  onToolEvent: async (payload) => {
+                    await cliToolSummaryTracker.noteToolEvent(payload);
+                    if (payload.phase === "result") {
+                      return;
+                    }
                     await forwardFollowupProgressEvent({
                       evt: {
                         stream: "tool",
-                        data: { name, phase, args },
+                        data: { name: payload.name, phase: payload.phase, args: payload.args },
                       },
                       opts,
                       detailMode: toolProgressDetail,
