@@ -642,6 +642,27 @@ describe("normalizeToolParameterSchema", () => {
     expect(parentId?.anyOf).toBeUndefined();
     expect(count?.oneOf).toBeUndefined();
   });
+
+  it("applies Gemini schema cleaning for OpenAI-compatible Gemini model ids", () => {
+    const cleaned = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          sessionKey: { anyOf: [{ type: "string" }, { type: "null" }] },
+          agentId: { anyOf: [{ type: "string" }, { type: "null" }] },
+        },
+      },
+      {
+        modelProvider: "jjcc",
+        modelId: "gemini-3.1-pro-preview",
+      },
+    ) as { properties?: Record<string, { type?: unknown; anyOf?: unknown }> };
+
+    expect(cleaned.properties?.sessionKey?.type).toBe("string");
+    expect(cleaned.properties?.sessionKey?.anyOf).toBeUndefined();
+    expect(cleaned.properties?.agentId?.type).toBe("string");
+    expect(cleaned.properties?.agentId?.anyOf).toBeUndefined();
+  });
 });
 
 function makeTool(parameters: TSchema): AnyAgentTool {
