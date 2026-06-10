@@ -121,6 +121,21 @@ describe("MCP HTTP fetch helpers", () => {
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
+  it.each([204, 205, 304])("preserves bodyless HTTP %s responses", async (status) => {
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new Response(null, { status }),
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    const response = await fetch("https://mcp.example.com/mcp");
+
+    expect(response.status).toBe(status);
+    expect(response.body).toBeNull();
+  });
+
   it("keeps same-origin TLS overrides ahead of configured env proxy", async () => {
     vi.stubEnv("https_proxy", "http://proxy.example:8080");
     const fetch = buildMcpHttpFetch({

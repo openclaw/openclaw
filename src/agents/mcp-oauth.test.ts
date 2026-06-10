@@ -116,6 +116,21 @@ describe("MCP OAuth provider", () => {
     ]);
   });
 
+  it("does not retry a code exchange redirect mismatch", async () => {
+    authMock.mockReset();
+    authMock.mockRejectedValueOnce(new Error("invalid_grant: redirect_uri mismatch"));
+
+    await expect(
+      runMcpOAuthLogin({
+        serverName: "Calendly",
+        serverUrl: "https://mcp.calendly.com/",
+        authorizationCode: "code-123",
+      }),
+    ).rejects.toThrow("redirect_uri mismatch");
+
+    expect(authMock).toHaveBeenCalledOnce();
+  });
+
   it("persists localhost redirect for a later code exchange login", async () => {
     await withTempHome(
       async (home) => {

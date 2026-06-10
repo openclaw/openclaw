@@ -65,6 +65,9 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
   if (response.body != null) {
     return new Response(response.body, init);
   }
+  if (response.status === 204 || response.status === 205 || response.status === 304) {
+    return new Response(null, init);
+  }
   if (typeof response.text === "function") {
     const text = await response.text();
     return new Response(text, init);

@@ -270,6 +270,7 @@ export async function runMcpOAuthLogin(params: {
     return await runMcpOAuthLoginAttempt(loginParams);
   } catch (error) {
     if (
+      !normalizeOptionalString(params.authorizationCode) &&
       !normalizeOptionalString(params.config?.redirectUrl) &&
       isMcpOAuthRedirectRegistrationError(error)
     ) {
