@@ -306,13 +306,16 @@ export async function handleCodexConversationInboundClaim(
 export async function handleCodexConversationBindingResolved(
   event: PluginConversationBindingResolvedEvent,
 ): Promise<void> {
-  if (event.status !== "denied") {
-    return;
-  }
   const data = readCodexConversationBindingDataRecord(event.request.data ?? {});
   if (!data || data.kind !== "codex-app-server-session") {
     return;
   }
+  // Clean up the pending sidecar on any resolution (approved or denied).
+  // In yolo/auto-approved mode the event fires with status "approved" and
+  // the sidecar must be removed just as it is for denied bindings.
+  // clearCodexAppServerBinding is a no-op when the sidecar is absent,
+  // so calling it for an approved binding that has not yet written a
+  // sidecar is safe.
   await clearCodexAppServerBinding(data.sessionFile);
 }
 

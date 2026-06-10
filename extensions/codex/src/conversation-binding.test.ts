@@ -386,6 +386,58 @@ describe("codex conversation binding", () => {
     await expect(fs.stat(sidecar)).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("clears the Codex app-server sidecar when a pending bind is approved", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sidecar = `${sessionFile}.codex-app-server.json`;
+    await fs.writeFile(sidecar, JSON.stringify({ schemaVersion: 1, threadId: "thread-1" }));
+
+    await handleCodexConversationBindingResolved({
+      status: "approved",
+      decision: "allow-once",
+      request: {
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
+        },
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:1",
+        },
+      },
+    });
+
+    await expect(fs.stat(sidecar)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("is a safe no-op when an approved binding has no sidecar yet", async () => {
+    const sessionFile = path.join(tempDir, "no-sidecar-session.jsonl");
+    // No sidecar file written — simulating yolo auto-approval before the
+    // app-server starts. The call must not throw.
+
+    await expect(
+      handleCodexConversationBindingResolved({
+        status: "approved",
+        decision: "allow-once",
+        request: {
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: "channel:1",
+          },
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("consumes inbound bound messages when command authorization is absent", async () => {
     const result = await handleCodexConversationInboundClaim(
       {
