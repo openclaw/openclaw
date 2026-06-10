@@ -55,7 +55,7 @@ vi.mock("./icons.ts", () => ({
 import { renderApp } from "./app-render.ts";
 import { saveLocalAssistantIdentity } from "./storage.ts";
 
-function createState(overrides: Partial<AppViewState> = {}): AppViewState {
+export function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   return {
     settings: {
       gatewayUrl: "ws://localhost:18789",
