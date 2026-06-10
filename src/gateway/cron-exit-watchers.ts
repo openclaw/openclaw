@@ -11,7 +11,7 @@
  * re-armed (re-watching = re-add the job).
  */
 import type { CronJob } from "../cron/types.js";
-import type { ProcessSupervisor } from "../process/supervisor/index.js";
+import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 
 type Logger = {
   info: (obj: unknown, msg?: string) => void;
@@ -62,15 +62,29 @@ export function createCronExitWatchers(params: {
     command: "bash",
     argsFor: (command: string) => ["-lc", command],
   };
-  // jobId -> watcher state. `fired` marks one-shot completion so reconcile does
-  // not re-arm a job whose command already exited.
-  const active = new Map<string, { runId: string; fired: boolean }>();
+  // jobId -> watcher state. `armToken` identifies the current arm so an async
+  // spawn/wait that loses ownership (the job was cancelled or re-armed for a
+  // changed command) becomes a no-op. The slot is reserved synchronously in
+  // arm() BEFORE the spawn awaits, so a concurrent cancel can act on an
+  // in-flight spawn. `fired` marks one-shot completion.
+  type WatcherSlot = {
+    armToken: object;
+    run: ManagedRun | undefined;
+    fired: boolean;
+    command: string;
+    cwd: string | undefined;
+  };
+  const active = new Map<string, WatcherSlot>();
 
   const cancel = (jobId: string) => {
-    if (!active.has(jobId)) {
+    const slot = active.get(jobId);
+    if (!slot) {
       return;
     }
     active.delete(jobId);
+    // Cancel an already-spawned child; an in-flight spawn (run undefined) is
+    // killed by the arm() ownership check once it resolves.
+    slot.run?.cancel("manual-cancel");
     try {
       params.getProcessSupervisor().cancelScope(scopeKey(jobId), "manual-cancel");
     } catch (err) {
@@ -84,9 +98,16 @@ export function createCronExitWatchers(params: {
     }
     const command = job.schedule.command;
     const cwd = job.schedule.cwd;
+    const armToken: object = {};
+    // Reserve the slot synchronously so a concurrent cancel/replace can observe
+    // and act on this arm before the child is spawned.
+    const slot: WatcherSlot = { armToken, run: undefined, fired: false, command, cwd };
+    active.set(job.id, slot);
+    const owns = () => active.get(job.id) === slot && slot.armToken === armToken;
     void (async () => {
+      let run: ManagedRun;
       try {
-        const run = await params.getProcessSupervisor().spawn({
+        run = await params.getProcessSupervisor().spawn({
           sessionId: `cron-exit:${job.id}`,
           backendId: "cron-exit-watch",
           scopeKey: scopeKey(job.id),
@@ -96,44 +117,49 @@ export function createCronExitWatchers(params: {
           ...(cwd ? { cwd } : {}),
           captureOutput: true,
         });
-        active.set(job.id, { runId: run.runId, fired: false });
-        params.logger.info(
-          { jobId: job.id, runId: run.runId, command },
-          "cron-exit: watcher armed",
-        );
-        const exit = await run.wait();
-        const state = active.get(job.id);
-        // If the watcher was cancelled (operator removed/disabled the job) the
-        // map entry is gone or replaced — do not fire a stale job.
-        if (!state || state.runId !== run.runId) {
-          return;
-        }
-        state.fired = true;
-        params.logger.info(
-          { jobId: job.id, exitCode: exit.exitCode, reason: exit.reason },
-          "cron-exit: watched command exited; firing job",
-        );
-        // Persist the terminal one-shot state BEFORE firing the wake so a
-        // gateway restart cannot re-arm this job and re-run the command.
-        try {
-          await params.persistCompletion(job.id);
-        } catch (err) {
-          params.logger.warn(
-            { err: String(err), jobId: job.id },
-            "cron-exit: persistCompletion failed; firing anyway (restart may replay)",
-          );
-        }
-        try {
-          await params.fireOnExit(job, { exitCode: exit.exitCode });
-        } catch (err) {
-          params.logger.warn(
-            { err: String(err), jobId: job.id },
-            "cron-exit: fireOnExit after exit failed",
-          );
-        }
       } catch (err) {
-        active.delete(job.id);
+        if (owns()) {
+          active.delete(job.id);
+        }
         params.logger.warn({ err: String(err), jobId: job.id }, "cron-exit: watcher spawn failed");
+        return;
+      }
+      if (!owns()) {
+        // Cancelled or re-armed (changed command/cwd) while the spawn was in
+        // flight — kill this now-orphaned child instead of leaking it.
+        run.cancel("manual-cancel");
+        return;
+      }
+      slot.run = run;
+      params.logger.info({ jobId: job.id, runId: run.runId, command }, "cron-exit: watcher armed");
+      const exit = await run.wait();
+      if (!owns()) {
+        return;
+      }
+      params.logger.info(
+        { jobId: job.id, exitCode: exit.exitCode, reason: exit.reason },
+        "cron-exit: watched command exited; firing job",
+      );
+      // Persist the terminal one-shot state BEFORE firing. FAIL CLOSED: if the
+      // store write fails we do NOT wake — waking without a persisted terminal
+      // state would let a gateway restart re-arm and re-run the command.
+      try {
+        await params.persistCompletion(job.id);
+      } catch (err) {
+        params.logger.warn(
+          { err: String(err), jobId: job.id },
+          "cron-exit: persistCompletion failed; NOT firing (fail closed to avoid replay)",
+        );
+        return;
+      }
+      slot.fired = true;
+      try {
+        await params.fireOnExit(job, { exitCode: exit.exitCode });
+      } catch (err) {
+        params.logger.warn(
+          { err: String(err), jobId: job.id },
+          "cron-exit: fireOnExit after exit failed",
+        );
       }
     })();
   };
@@ -146,11 +172,20 @@ export function createCronExitWatchers(params: {
         cancel(jobId);
       }
     }
-    // Arm watchers for newly-watchable jobs. Skip any job already tracked —
-    // whether still armed or already fired (one-shot; re-watch = re-add).
     for (const [jobId, job] of want) {
-      if (active.has(jobId)) {
-        continue;
+      const slot = active.get(jobId);
+      if (slot) {
+        // Already tracked. A fired one-shot stays put (re-watch = re-add). If
+        // the watched command/cwd changed, cancel the stale watcher and re-arm.
+        if (slot.fired) {
+          continue;
+        }
+        const command = job.schedule.kind === "on-exit" ? job.schedule.command : undefined;
+        const cwd = job.schedule.kind === "on-exit" ? job.schedule.cwd : undefined;
+        if (slot.command === command && slot.cwd === cwd) {
+          continue;
+        }
+        cancel(jobId);
       }
       arm(job);
     }

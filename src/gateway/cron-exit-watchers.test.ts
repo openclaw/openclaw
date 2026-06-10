@@ -8,19 +8,33 @@ type Deferred = { resolve: (exit: { exitCode: number | null; reason: string }) =
  * Minimal fake ProcessSupervisor: each spawn returns a run whose wait() is
  * controlled by the test, so we can deterministically drive "command exited".
  */
-function makeFakeSupervisor() {
-  const runs: { scopeKey?: string; runId: string; deferred: Deferred }[] = [];
-  const cancelled: string[] = [];
+function makeFakeSupervisor(opts: { deferSpawn?: boolean } = {}) {
+  const runs: { scopeKey?: string; runId: string; deferred: Deferred; cancelled: boolean }[] = [];
+  const cancelledScopes: string[] = [];
+  const runCancels: string[] = [];
   let counter = 0;
+  let releaseSpawn: (() => void) | undefined;
+  const spawnGate = opts.deferSpawn
+    ? new Promise<void>((res) => {
+        releaseSpawn = res;
+      })
+    : Promise.resolve();
   const supervisor = {
     spawn: vi.fn(async (input: { scopeKey?: string }) => {
+      await spawnGate;
       counter += 1;
       const runId = `run-${counter}`;
       let resolveWait!: (exit: { exitCode: number | null; reason: string }) => void;
       const waitPromise = new Promise<{ exitCode: number | null; reason: string }>((res) => {
         resolveWait = res;
       });
-      runs.push({ scopeKey: input.scopeKey, runId, deferred: { resolve: resolveWait } });
+      const entry = {
+        scopeKey: input.scopeKey,
+        runId,
+        deferred: { resolve: resolveWait },
+        cancelled: false,
+      };
+      runs.push(entry);
       return {
         runId,
         startedAtMs: 0,
@@ -34,14 +48,24 @@ function makeFakeSupervisor() {
             timedOut: false,
             noOutputTimedOut: false,
           })),
-        cancel: () => {},
+        cancel: () => {
+          entry.cancelled = true;
+          runCancels.push(runId);
+        },
       };
     }),
     cancelScope: vi.fn((scopeKey: string) => {
-      cancelled.push(scopeKey);
+      cancelledScopes.push(scopeKey);
     }),
   };
-  return { supervisor, runs, cancelled };
+  return {
+    supervisor,
+    runs,
+    cancelled: cancelledScopes,
+    cancelledScopes,
+    runCancels,
+    releaseSpawn: () => releaseSpawn?.(),
+  };
 }
 
 function onExitJob(id: string, command = "true", enabled = true): CronJob {
@@ -127,6 +151,63 @@ describe("createCronExitWatchers", () => {
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(1); // no re-spawn → command not re-run
     expect(restarted.activeJobIds()).toEqual([]);
+  });
+
+  it("does NOT fire when persistCompletion fails (fail closed to avoid replay)", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    const fireOnExit = vi.fn(async () => {});
+    const w = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {
+        throw new Error("store write failed");
+      }),
+      fireOnExit,
+      logger: noopLogger,
+    });
+    w.reconcile([onExitJob("job-a")]);
+    await flush();
+    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    await flush();
+    expect(fireOnExit).not.toHaveBeenCalled();
+  });
+
+  it("replaces the watcher when the watched command changes", async () => {
+    const { supervisor, cancelledScopes } = makeFakeSupervisor();
+    const w = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
+      logger: noopLogger,
+    });
+    w.reconcile([onExitJob("job-a", "sleep 1")]);
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(1);
+    // Same job id, different command → cancel the stale watcher and re-arm.
+    w.reconcile([onExitJob("job-a", "sleep 999")]);
+    await flush();
+    expect(cancelledScopes).toContain("cron-exit:job-a");
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels and kills an in-flight spawn when the job is removed mid-spawn", async () => {
+    const fake = makeFakeSupervisor({ deferSpawn: true });
+    const fireOnExit = vi.fn(async () => {});
+    const w = createCronExitWatchers({
+      getProcessSupervisor: () => fake.supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
+      fireOnExit,
+      logger: noopLogger,
+    });
+    w.reconcile([onExitJob("job-a")]);
+    await flush(); // spawn is awaiting the gate (in flight, untracked child)
+    w.reconcile([]); // remove the job while the spawn is in flight
+    fake.releaseSpawn(); // spawn now resolves
+    await flush();
+    await flush();
+    // The orphaned child is killed and the job never fires.
+    expect(fake.runCancels.length).toBe(1);
+    expect(fireOnExit).not.toHaveBeenCalled();
+    expect(w.activeJobIds()).toEqual([]);
   });
 
   it("does not arm a watcher for time-based or disabled jobs", async () => {
