@@ -38,6 +38,7 @@ export function createOpenrouterProvider(): ProviderPlugin {
           groupHint: "OAuth or API key",
           methodId: "oauth",
           onboardingScopes: ["text-inference", "music-generation"],
+          onboardingFeatured: true,
         },
       },
     ],

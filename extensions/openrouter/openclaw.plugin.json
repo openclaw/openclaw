@@ -67,7 +67,8 @@
       "groupId": "openrouter",
       "groupLabel": "OpenRouter",
       "groupHint": "OAuth or API key",
-      "onboardingScopes": ["text-inference", "music-generation"]
+      "onboardingScopes": ["text-inference", "music-generation"],
+      "onboardingFeatured": true
     }
   ],
   "contracts": {

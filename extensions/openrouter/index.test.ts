@@ -87,6 +87,7 @@ type OpenRouterManifest = {
     groupLabel?: string;
     groupHint?: string;
     onboardingScopes?: string[];
+    onboardingFeatured?: boolean;
   }>;
 };
 
@@ -137,6 +138,7 @@ describe("openrouter provider hooks", () => {
       groupLabel: choice.groupLabel,
       groupHint: choice.groupHint,
       onboardingScopes: choice.onboardingScopes,
+      onboardingFeatured: choice.onboardingFeatured,
     }));
 
     expect(
@@ -160,6 +162,7 @@ describe("openrouter provider hooks", () => {
         groupLabel: method.wizard?.groupLabel,
         groupHint: method.wizard?.groupHint,
         onboardingScopes: method.wizard?.onboardingScopes,
+        onboardingFeatured: method.wizard?.onboardingFeatured,
       })),
     ).toEqual(manifestChoices);
 
@@ -174,6 +177,20 @@ describe("openrouter provider hooks", () => {
 
     expect(bareProviderChoice?.method.id).toBe("api-key");
     expect(oauthChoice?.method.id).toBe("oauth");
+  });
+
+  it("features OpenRouter OAuth in the top-level onboarding picker", () => {
+    const oauthChoice = readManifest().providerAuthChoices?.find(
+      (choice) => choice.choiceId === "openrouter-oauth",
+    );
+
+    expect(oauthChoice).toMatchObject({
+      provider: "openrouter",
+      method: "oauth",
+      groupId: "openrouter",
+      groupLabel: "OpenRouter",
+      onboardingFeatured: true,
+    });
   });
 
   it("includes current Kimi models in the bundled catalog", () => {

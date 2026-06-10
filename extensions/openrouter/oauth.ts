@@ -419,6 +419,7 @@ export function createOpenRouterOAuthAuthMethod(): ProviderAuthMethod {
       groupHint: "OAuth or API key",
       methodId: OPENROUTER_OAUTH_METHOD_ID,
       onboardingScopes: ["text-inference", "music-generation"],
+      onboardingFeatured: true,
     },
     run: async (ctx) => await loginOpenRouterOAuth(ctx),
   };
