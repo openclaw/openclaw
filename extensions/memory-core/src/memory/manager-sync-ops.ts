@@ -128,6 +128,11 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
+// Targeted delta syncs skip the sessions-dir enumeration entirely, so rows for
+// files deleted out-of-band (another process/node on shared storage) are only
+// pruned by full enumerations. Force one full-enumeration delta sync at most
+// this often to bound how long such stale rows can linger in search.
+const SESSION_PRUNE_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
@@ -274,6 +279,10 @@ export abstract class MemoryManagerSyncOps {
   protected sessionsDirty = false;
   private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   protected sessionsDirtyFiles = new Set<string>();
+  // Epoch ms of the last completed session stale-row prune (authoritative full
+  // enumeration). Starts at 0 so the first active delta sync reconciles unless
+  // the startup catch-up sync already did.
+  private lastSessionPruneReconcileAt = 0;
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
     string,
@@ -1426,7 +1435,16 @@ export abstract class MemoryManagerSyncOps {
       shouldSync = true;
     }
     if (shouldSync) {
-      void this.sync({ reason: "session-delta" }).catch((err: unknown) => {
+      // The dirty set already names every transcript this sync must index, so
+      // pass it through and skip the sessions-dir enumeration (expensive on
+      // networked filesystems). Periodically fall back to a full enumeration
+      // so out-of-band deletions still get their stale index rows pruned.
+      const reconcileDue =
+        Date.now() - this.lastSessionPruneReconcileAt >= SESSION_PRUNE_RECONCILE_INTERVAL_MS;
+      const syncParams = reconcileDue
+        ? { reason: "session-delta" }
+        : { reason: "session-delta", sessionFiles: Array.from(this.sessionsDirtyFiles) };
+      void this.sync(syncParams).catch((err: unknown) => {
         log.warn(`memory sync failed (session-delta): ${String(err)}`);
       });
     }
@@ -1876,6 +1894,9 @@ export abstract class MemoryManagerSyncOps {
           await yieldAfterStaleSessionRow();
         }
       }
+      // A completed authoritative prune is the reconciliation point targeted
+      // delta syncs rely on; record it so they keep skipping enumerations.
+      this.lastSessionPruneReconcileAt = Date.now();
     };
 
     if (params.deferIndex) {
