@@ -177,7 +177,7 @@ describe("startCodexAttemptThread", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const root of tempRoots) {
-      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     }
     tempRoots.clear();
   });
