@@ -276,6 +276,16 @@ export abstract class MemoryManagerSyncOps {
   >();
   protected vectorDegradedWriteWarningShown = false;
   private lastMetaSerialized: string | null = null;
+  // A full reindex briefly repoints this.db at a half-built temp DB (see
+  // performSafeReindex). Concurrent readers must never observe it: searches wait
+  // on this latch and status() serves a pre-swap snapshot of the durable index.
+  // Refcounted because a search-triggered fallback reindex can overlap a
+  // sync-driven one; the snapshot/latch clear only when the last one settles.
+  protected reindexing: Promise<void> | null = null;
+  private reindexDepth = 0;
+  private resolveReindexing: (() => void) | null = null;
+  private activeIndexReaders = 0;
+  private activeIndexReaderResolvers: Array<() => void> = [];
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
@@ -390,6 +400,60 @@ export abstract class MemoryManagerSyncOps {
     }
     await this.executeSourceSyncPlans([memoryPlan], params.progress);
   }
+
+  // Wait for any in-flight full reindex so reads come from the stable swapped-in
+  // index, never the temporary build DB that performSafeReindex assigns to this.db.
+  protected async drainReindex(): Promise<void> {
+    while (this.reindexing) {
+      // Only wait for the swap to settle; a failed reindex restores the durable
+      // DB, so reads proceed against it rather than inheriting the reindex error.
+      try {
+        await this.reindexing;
+      } catch {}
+    }
+  }
+
+  protected async withIndexRead<T>(read: () => Promise<T>): Promise<T> {
+    while (true) {
+      await this.drainReindex();
+      this.activeIndexReaders++;
+      // drainReindex can yield before the reader is counted; re-check the latch
+      // so a newly published reindex cannot race past an unregistered reader.
+      if (!this.reindexing) {
+        break;
+      }
+      this.releaseIndexRead();
+    }
+
+    try {
+      return await read();
+    } finally {
+      this.releaseIndexRead();
+    }
+  }
+
+  private async drainActiveIndexReaders(): Promise<void> {
+    while (this.activeIndexReaders > 0) {
+      await new Promise<void>((resolve) => {
+        this.activeIndexReaderResolvers.push(resolve);
+      });
+    }
+  }
+
+  private releaseIndexRead(): void {
+    this.activeIndexReaders--;
+    if (this.activeIndexReaders === 0) {
+      const resolvers = this.activeIndexReaderResolvers.splice(0);
+      for (const resolve of resolvers) {
+        resolve();
+      }
+    }
+  }
+
+  // Hooks for the subclass to snapshot/restore reader-facing state (status()) so
+  // it keeps reflecting the durable index while this.db points at the temp build.
+  protected captureReindexReadSnapshot(): void {}
+  protected clearReindexReadSnapshot(): void {}
 
   protected hasIndexedChunks(): boolean {
     const row = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
@@ -2274,7 +2338,35 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  protected async runSafeReindex(params: {
+  protected runSafeReindex(params: {
+    reason?: string;
+    force?: boolean;
+    progress?: MemorySyncProgressState;
+  }): Promise<void> {
+    // Publish the latch and snapshot the durable index for readers before the
+    // swap. Overlapping reindexes share the outermost snapshot/latch, which clear
+    // only once the last one settles (depth returns to 0).
+    if (this.reindexDepth === 0) {
+      this.captureReindexReadSnapshot();
+      this.reindexing = new Promise<void>((resolve) => {
+        this.resolveReindexing = resolve;
+      });
+    }
+    this.reindexDepth++;
+    // Starting the body runs synchronously through `this.db = tempDb` before its
+    // first await, so the latch is already published when readers can observe temp.
+    return this.performSafeReindex(params).finally(() => {
+      this.reindexDepth--;
+      if (this.reindexDepth === 0) {
+        this.clearReindexReadSnapshot();
+        this.reindexing = null;
+        this.resolveReindexing?.();
+        this.resolveReindexing = null;
+      }
+    });
+  }
+
+  private async performSafeReindex(params: {
     reason?: string;
     force?: boolean;
     progress?: MemorySyncProgressState;
@@ -2313,6 +2405,7 @@ export abstract class MemoryManagerSyncOps {
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
     };
 
+    await this.drainActiveIndexReaders();
     this.db = tempDb;
     this.lastMetaSerialized = null;
     this.resetVectorState();
@@ -2415,6 +2508,13 @@ export abstract class MemoryManagerSyncOps {
       this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
       this.resetVectorState();
       this.ensureSchema();
+      // The temp build wrote this metadata, but the post-swap handle is the
+      // canonical reader DB. Re-write idempotently so immediate readers never see
+      // chunks from the new index without the matching identity row.
+      if (nextMeta) {
+        this.lastMetaSerialized = null;
+        this.writeMeta(nextMeta);
+      }
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
       try {
