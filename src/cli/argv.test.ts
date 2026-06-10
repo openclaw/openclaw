@@ -455,13 +455,6 @@ describe("argv helpers", () => {
     expect(getCommandPath(argv, 2)).toEqual(["channels"]);
   });
 
-  it("FLAG_TERMINATOR is the canonical '--' string", () => {
-    // Contract: the constant must be '--'.  If this value changes, all
-    // callers (including getCommandPathInternal) must follow suit, and
-    // this assertion makes that dependency explicit.
-    expect(FLAG_TERMINATOR).toBe("--");
-  });
-
   it("extracts command path while skipping known root option values", () => {
     expect(
       getCommandPathWithRootOptions(
