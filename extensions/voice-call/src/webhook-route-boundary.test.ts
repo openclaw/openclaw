@@ -1,5 +1,5 @@
 // Voice Call tests cover realtime route-boundary matching.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
   type VoiceCallConfig,
@@ -24,8 +24,8 @@ const provider: VoiceCallProvider = {
 
 const manager = {
   getActiveCalls: () => [],
-  endCall: vi.fn(async () => ({ success: true })),
-  processEvent: vi.fn(),
+  endCall: async () => ({ success: true }),
+  processEvent: () => {},
 } as unknown as CallManager;
 
 const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => {
@@ -97,7 +97,7 @@ describe("VoiceCallWebhookServer realtime route boundary", () => {
       provider,
     );
     const realtimeHandler = {
-      getStreamPathPattern: vi.fn(() => pattern),
+      getStreamPathPattern: () => pattern,
     } as unknown as RealtimeCallHandler;
     server.setRealtimeHandler(realtimeHandler);
 
