@@ -31,7 +31,6 @@ import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
-  type ExternalContentProvenanceState,
   type ToolOutcomeObserver,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -543,8 +542,6 @@ export function createOpenClawCodingTools(options?: {
   toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
-  /** Run-owned external-content provenance state shared by all wrapped tools in this run. */
-  externalContentState?: ExternalContentProvenanceState;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
 }): AnyAgentTool[] {
@@ -1179,9 +1176,6 @@ export function createOpenClawCodingTools(options?: {
         sessionId: options?.sessionId,
         runId: options?.runId,
         channelId: options?.hookChannelId ?? options?.currentChannelId,
-        ...(options?.externalContentState
-          ? { externalContentState: options.externalContentState }
-          : {}),
         ...(options?.trace ? { trace: options.trace } : {}),
         loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
         onToolOutcome: options?.onToolOutcome,

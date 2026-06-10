@@ -1298,10 +1298,6 @@ export async function runEmbeddedAttempt(
       forceMessageTool: params.forceMessageTool,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     });
-    const runToolHookExternalContentState: NonNullable<HookContext["externalContentState"]> = {};
-    if (initialToolHookExternalContent) {
-      runToolHookExternalContentState.externalContent = initialToolHookExternalContent;
-    }
     const shouldConstructTools =
       toolConstructionPlan.constructTools ||
       toolSearchControlsEnabledForRun ||
@@ -1318,7 +1314,6 @@ export async function runEmbeddedAttempt(
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
-            externalContentState: runToolHookExternalContentState,
             exec: {
               ...params.execOverrides,
               config: params.config,
@@ -1717,9 +1712,8 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentId: sessionAgentId,
       }),
-      externalContentState: runToolHookExternalContentState,
-      ...(runToolHookExternalContentState.externalContent
-        ? { externalContent: runToolHookExternalContentState.externalContent }
+      ...(initialToolHookExternalContent
+        ? { externalContent: initialToolHookExternalContent }
         : {}),
       onToolOutcome: params.onToolOutcome,
     };
@@ -3768,14 +3762,10 @@ export async function runEmbeddedAttempt(
           hookResult?.prependSystemContext,
           hookResult?.appendSystemContext,
         ]);
-        const mergedPromptBuildExternalContent = mergeToolHookExternalContentProvenance(
-          runToolHookExternalContentState.externalContent,
+        catalogToolHookContext.externalContent = mergeToolHookExternalContentProvenance(
+          catalogToolHookContext.externalContent,
           promptBuildExternalContent,
         );
-        if (mergedPromptBuildExternalContent) {
-          runToolHookExternalContentState.externalContent = mergedPromptBuildExternalContent;
-          catalogToolHookContext.externalContent = mergedPromptBuildExternalContent;
-        }
         const hasPromptBuildContext =
           Boolean(promptBuildPrependContext?.trim()) || Boolean(promptBuildAppendContext?.trim());
         {

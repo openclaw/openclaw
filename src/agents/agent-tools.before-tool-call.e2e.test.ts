@@ -1151,23 +1151,13 @@ describe("before_tool_call requireApproval handling", () => {
     }
   });
 
-  it("refreshes external content provenance across production-style split tool contexts", async () => {
-    const runOwnedExternalContentState = {};
-    const fetchContext = {
+  it("refreshes external content provenance after a same-run external tool result", async () => {
+    const sharedContext = {
       agentId: "main",
       sessionKey: "main",
       runId: "run-fetch-then-exec",
       loopDetection: { enabled: false },
-      externalContentState: runOwnedExternalContentState,
     };
-    const execContext = {
-      agentId: "main",
-      sessionKey: "main",
-      runId: "run-fetch-then-exec",
-      loopDetection: { enabled: false },
-      externalContentState: runOwnedExternalContentState,
-    };
-    expect(fetchContext).not.toBe(execContext);
     const fetchExecute = vi.fn().mockResolvedValue({
       content: [
         {
@@ -1194,7 +1184,7 @@ describe("before_tool_call requireApproval handling", () => {
         label: "Web Fetch",
         execute: fetchExecute,
       } as Parameters<typeof wrapToolWithBeforeToolCallHook>[0],
-      fetchContext,
+      sharedContext,
     );
     const execTool = wrapToolWithBeforeToolCallHook(
       {
@@ -1204,7 +1194,7 @@ describe("before_tool_call requireApproval handling", () => {
         label: "Bash",
         execute: execExecute,
       } as Parameters<typeof wrapToolWithBeforeToolCallHook>[0],
-      execContext,
+      sharedContext,
     );
 
     if (!fetchTool.execute || !execTool.execute) {
