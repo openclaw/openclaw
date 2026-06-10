@@ -301,7 +301,7 @@ tool invocations before the command runs. It receives:
 - `event.toolName`, currently always `"exec"`
 - `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`,
-  `ctx.messageProvider`, and `ctx.channelId`
+  `ctx.messageProvider`, `ctx.channelId`, and `ctx.accountId`
 
 Return a `Record<string, string>` to merge into the exec environment. Handlers
 run in priority order; later results override earlier results for the same
@@ -379,6 +379,9 @@ session key or delivery metadata.
 
 When sender identity is available, agent hook contexts also include:
 
+- `ctx.accountId` - channel-account identifier the turn belongs to, in
+  multi-account channel deployments (e.g. Feishu apps A / B / C under one
+  gateway). Populated when the run carries an account origin.
 - `ctx.senderId` - channel-scoped sender ID (e.g. Feishu `open_id`, Discord
   user ID). Populated when the run originates from a user message with known
   sender metadata.
