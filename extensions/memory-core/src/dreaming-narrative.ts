@@ -342,6 +342,108 @@ export function extractNarrativeText(messages: unknown[]): string | null {
   return null;
 }
 
+
+
+/**
+ * Extract narrative text from a trajectory file when session messages are unavailable.
+ * This is a recovery mechanism for the race condition where the gateway archives
+ * the session before memory-core can read it (#87182).
+ */
+async function extractNarrativeFromTrajectory(params: {
+  sessionKey: string;
+  workspaceDir: string;
+  logger: Logger;
+}): Promise<string | null> {
+  try {
+    const stateDir = await resolveStateDir({ workspaceDir: params.workspaceDir });
+    const agentsDir = path.join(stateDir, "agents");
+
+    // Find the trajectory file for this session
+    const mainAgentDir = path.join(agentsDir, "main");
+    const sessionsDir = path.join(mainAgentDir, "sessions");
+
+    // Build possible trajectory file paths from session key
+    // Session keys like "dreaming-narrative-light-abc123" map to session files
+    const safeSessionKey = params.sessionKey.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
+    const possiblePaths = [
+      path.join(sessionsDir, `${safeSessionKey}.trajectory.jsonl`),
+      path.join(sessionsDir, `${safeSessionKey}.jsonl.trajectory`),
+    ];
+
+    // Search for matching trajectory files
+    try {
+      const sessionFiles = await fs.readdir(sessionsDir);
+      const keyParts = params.sessionKey.split(/[-_]/);
+      for (const file of sessionFiles) {
+        if (!file.endsWith(".trajectory.jsonl")) {
+          continue;
+        }
+        // Check if filename contains key components
+        const matches = keyParts.every(
+          (part) => part.length > 2 && file.toLowerCase().includes(part.toLowerCase()),
+        );
+        if (matches) {
+          possiblePaths.push(path.join(sessionsDir, file));
+        }
+      }
+    } catch {
+      // Directory might not exist or be inaccessible
+    }
+
+    for (const trajectoryPath of possiblePaths) {
+      try {
+        const stat = await fs.stat(trajectoryPath);
+        if (!stat.isFile()) {
+          continue;
+        }
+
+        const content = await fs.readFile(trajectoryPath, "utf-8");
+        const lines = content.split("\n").filter((line) => line.trim());
+
+        // Parse trajectory entries and find model.completed events
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim();
+          if (!line) {
+            continue;
+          }
+
+          try {
+            const entry = JSON.parse(line) as Record<string, unknown>;
+            if (entry.type === "model.completed") {
+              const data = entry.data as Record<string, unknown> | undefined;
+              if (!data) {
+                continue;
+              }
+
+              const assistantTexts = data.assistantTexts as string[] | undefined;
+              if (Array.isArray(assistantTexts) && assistantTexts.length > 0) {
+                const text = assistantTexts[assistantTexts.length - 1];
+                if (text && typeof text === "string" && text.trim().length > 0) {
+                  params.logger.info(
+                    `memory-core: recovered narrative text from trajectory for ${params.sessionKey.slice(0, 12)}...`,
+                  );
+                  return text.trim();
+                }
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  } catch (err) {
+    params.logger.warn(
+      `memory-core: failed to extract narrative from trajectory: ${formatErrorMessage(err)}`,
+    );
+    return null;
+  }
+}
+
 // ── Date formatting ────────────────────────────────────────────────────
 
 export function formatNarrativeDate(epochMs: number, timezone?: string): string {
@@ -966,12 +1068,35 @@ export async function generateAndAppendDreamNarrative(params: {
         return;
       }
 
-      const { messages } = await params.subagent.getSessionMessages({
-        sessionKey: successfulSessionKey,
-        limit: 5,
-      });
+      // Recovery for #87182: Try to get messages first, but be prepared to recover
+      // from trajectory if the session was archived before we could read it.
+      let narrative: string | null = null;
 
-      const narrative = extractNarrativeText(messages);
+      if (successfulSessionKey) {
+        try {
+          const { messages } = await params.subagent.getSessionMessages({
+            sessionKey: successfulSessionKey,
+            limit: 5,
+          });
+          narrative = extractNarrativeText(messages);
+        } catch (getSessionErr) {
+          params.logger.warn(
+            `memory-core: failed to get session messages for ${params.data.phase} phase: ${formatErrorMessage(getSessionErr)}`,
+          );
+        }
+      }
+
+      // Recovery for #87182: If session messages are unavailable (race condition
+      // where gateway archives session before extraction), try to recover from
+      // the trajectory file which persists longer than session JSONL files.
+      if (!narrative && successfulSessionKey) {
+        narrative = await extractNarrativeFromTrajectory({
+          sessionKey: successfulSessionKey,
+          workspaceDir: params.workspaceDir,
+          logger: params.logger,
+        });
+      }
+
       if (!narrative) {
         params.logger.warn(
           `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,
