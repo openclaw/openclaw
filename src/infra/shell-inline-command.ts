@@ -216,6 +216,22 @@ export function resolveInlineCommandMatch(
   return { command: null, valueTokenIndex: null };
 }
 
+/** Return true when an inline shell payload directly dispatches positional args. */
+export function isDirectShellPositionalCarrierCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
+}
+
 /** Find the PowerShell inline command payload and value token index. */
 export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   command: string | null;

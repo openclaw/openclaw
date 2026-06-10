@@ -7,7 +7,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
-  analyzeShellCommand,
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
@@ -19,6 +18,7 @@ import {
   type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import {
   requestExecHostViaSocket,
   type ExecHostRequest,
@@ -135,7 +135,7 @@ function buildSystemRunPrepareCoverageEnv(params: {
   };
 }
 
-function buildSystemRunAllowAlwaysCoverage(params: {
+async function buildSystemRunAllowAlwaysCoverage(params: {
   argv: string[];
   rawCommand?: string | null;
   cwd: string | null | undefined;
@@ -148,17 +148,22 @@ function buildSystemRunAllowAlwaysCoverage(params: {
     if (!shellWrapper.command) {
       return { complete: false, patterns: [] };
     }
-    const analysis = analyzeShellCommand({
+    const authorizationPlan = await planShellAuthorization({
       command: shellWrapper.command,
       cwd,
       env: params.env,
       platform: process.platform,
     });
-    if (!analysis.ok) {
+    if (!authorizationPlan.ok) {
       return { complete: false, patterns: [] };
     }
+    const segments = authorizationPlan.groups.flatMap((group) =>
+      group.candidates
+        .filter((candidate) => candidate.allowAlways)
+        .map((candidate) => candidate.sourceSegment),
+    );
     return resolveAllowAlwaysPatternCoverage({
-      segments: analysis.segments,
+      segments,
       cwd,
       env: params.env,
       platform: process.platform,
@@ -595,7 +600,7 @@ export async function handleInvoke(
           security: execPolicy.security,
           ask: execPolicy.ask,
         },
-        allowAlwaysCoverage: buildSystemRunAllowAlwaysCoverage({
+        allowAlwaysCoverage: await buildSystemRunAllowAlwaysCoverage({
           argv: prepared.plan.argv,
           rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
           cwd: prepared.plan.cwd,

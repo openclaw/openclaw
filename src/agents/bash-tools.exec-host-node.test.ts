@@ -12,6 +12,9 @@ type StrictInlineEvalBoundary =
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
 type ExecSecurity = import("../infra/exec-approvals.js").ExecSecurity;
+type MockAllowAlwaysPersistenceDecision =
+  import("../infra/exec-approvals.js").AllowAlwaysPersistenceDecision;
+type MockExecApprovalDecision = import("../infra/exec-approvals.js").ExecApprovalDecision;
 type MockAllowlistSegment = {
   raw?: string;
   resolution: null;
@@ -23,6 +26,7 @@ type MockAllowlistResult = {
   allowlistSatisfied: boolean;
   segments: MockAllowlistSegment[];
   segmentAllowlistEntries: unknown[];
+  segmentSatisfiedBy?: unknown[];
 };
 type MockExecAllowlistEntry = {
   pattern: string;
@@ -87,6 +91,7 @@ const evaluateShellAllowlistMock = vi.hoisted(() =>
       allowlistSatisfied: false,
       segments: [{ resolution: null, argv: ["bun", "./script.ts"] }],
       segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [],
     }),
   ),
 );
@@ -121,6 +126,25 @@ const requiresExecApprovalMock = vi.hoisted(() =>
   vi.fn((_raw?: RequiresExecApprovalMockParams) => true),
 );
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
+const resolveAllowAlwaysPersistenceDecisionMock = vi.hoisted(() =>
+  vi.fn(
+    (_raw: unknown): MockAllowAlwaysPersistenceDecision => ({
+      kind: "patterns",
+      patterns: [{ pattern: "/trusted/bin/tool" }],
+    }),
+  ),
+);
+const resolveExecApprovalAllowedDecisionsMock = vi.hoisted(() =>
+  vi.fn(
+    (params?: {
+      ask?: string | null;
+      allowAlwaysPersistence?: { kind: string } | null;
+    }): readonly MockExecApprovalDecision[] =>
+      params?.ask === "always" || params?.allowAlwaysPersistence?.kind === "one-shot"
+        ? ["allow-once", "deny"]
+        : ["allow-once", "allow-always", "deny"],
+  ),
+);
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
     approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
@@ -170,13 +194,15 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
 
 vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlist: evaluateShellAllowlistMock,
+  evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
   commandRequiresSecurityAuditSuppressionApproval:
     commandRequiresSecurityAuditSuppressionApprovalMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
   hasNodeCommandAllowAlwaysMarker: hasNodeCommandAllowAlwaysMarkerMock,
   requiresExecApproval: requiresExecApprovalMock,
+  resolveAllowAlwaysPersistenceDecision: resolveAllowAlwaysPersistenceDecisionMock,
   resolveAllowAlwaysPatternCoverage: resolveAllowAlwaysPatternCoverageMock,
-  resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
+  resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
   resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
 }));
 
@@ -478,6 +504,12 @@ describe("executeNodeHostCommand", () => {
     requiresExecApprovalMock.mockReturnValue(true);
     hasDurableExecApprovalMock.mockReset();
     hasDurableExecApprovalMock.mockReturnValue(false);
+    resolveAllowAlwaysPersistenceDecisionMock.mockReset();
+    resolveAllowAlwaysPersistenceDecisionMock.mockReturnValue({
+      kind: "patterns",
+      patterns: [{ pattern: "/trusted/bin/tool" }],
+    });
+    resolveExecApprovalAllowedDecisionsMock.mockClear();
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -2018,6 +2050,54 @@ describe("executeNodeHostCommand", () => {
       }),
     );
     expect(requireRunParams(requireGatewayCommand("system.run")).env).toBeUndefined();
+  });
+
+  it("omits allow-always from node approval prompts when persistence is one-shot", async () => {
+    mockGatewayInvokesWithNodeApprovals({ version: 1, agents: {} });
+    usePolicyApprovalRequirementMock();
+    resolveAllowAlwaysPersistenceDecisionMock.mockReturnValue({
+      kind: "one-shot",
+      reasons: ["unplanned"],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(resolveAllowAlwaysPersistenceDecisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "bun ./script.ts",
+        platform: process.platform,
+        runtimePayload: false,
+      }),
+    );
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "on-miss",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["unplanned"] },
+    });
+    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
   });
 
   it("reuses de-duplicated node allow-always metadata for repeated command segments", async () => {

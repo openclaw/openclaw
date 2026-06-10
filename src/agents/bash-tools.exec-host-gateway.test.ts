@@ -9,6 +9,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
+import type { ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
+import {
+  planShellAuthorization,
+  type ExecAuthorizationPlan,
+} from "../infra/exec-authorization-plan.js";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -31,6 +36,8 @@ type MockAllowlistResult = {
   allowlistSatisfied: boolean;
   segments: MockAllowlistSegment[];
   segmentAllowlistEntries: unknown[];
+  segmentSatisfiedBy?: ExecSegmentSatisfiedBy[];
+  authorizationPlan?: ExecAuthorizationPlan;
 };
 
 const INLINE_EVAL_HIT = {
@@ -58,7 +65,7 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
     }),
   ),
 );
-const evaluateShellAllowlistMock = vi.hoisted(() =>
+const evaluateShellAllowlistWithAuthorizationMock = vi.hoisted(() =>
   vi.fn(
     (): MockAllowlistResult => ({
       allowlistMatches: [],
@@ -66,22 +73,9 @@ const evaluateShellAllowlistMock = vi.hoisted(() =>
       allowlistSatisfied: true,
       segments: [{ resolution: null, argv: ["echo", "ok"] }],
       segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      segmentSatisfiedBy: [],
     }),
   ),
-);
-const analyzeShellCommandMock = vi.hoisted(() =>
-  vi.fn((params: { command: string }) => ({
-    ok: true,
-    segments: params.command
-      .split(";")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => ({
-        raw: part,
-        resolution: null,
-        argv: part.split(/\s+/).map((token) => token.replace(/^['"]|['"]$/g, "")),
-      })),
-  })),
 );
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
@@ -134,8 +128,7 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
-  evaluateShellAllowlist: evaluateShellAllowlistMock,
-  analyzeShellCommand: analyzeShellCommandMock,
+  evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistWithAuthorizationMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
   buildEnforcedShellCommand: buildEnforcedShellCommandMock,
   requiresExecApproval: requiresExecApprovalMock,
@@ -258,27 +251,15 @@ describe("processGatewayAllowlist", () => {
       approvedByAsk: false,
       deniedReason: "approval-required",
     });
-    evaluateShellAllowlistMock.mockReset();
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReset();
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
       segments: [{ resolution: null, argv: ["echo", "ok"] }],
       segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      segmentSatisfiedBy: [],
     });
-    analyzeShellCommandMock.mockReset();
-    analyzeShellCommandMock.mockImplementation((params: { command: string }) => ({
-      ok: true,
-      segments: params.command
-        .split(";")
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .map((part) => ({
-          raw: part,
-          resolution: null,
-          argv: part.split(/\s+/).map((token) => token.replace(/^['"]|['"]$/g, "")),
-        })),
-    }));
     hasDurableExecApprovalMock.mockReset();
     hasDurableExecApprovalMock.mockReturnValue(true);
     requiresExecApprovalMock.mockReset();
@@ -535,7 +516,7 @@ describe("processGatewayAllowlist", () => {
 
   it("auto-reviews simple read-only approval misses without prompting", async () => {
     requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: false,
@@ -577,7 +558,7 @@ describe("processGatewayAllowlist", () => {
       ok: true,
       command,
     });
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
@@ -613,8 +594,8 @@ describe("processGatewayAllowlist", () => {
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({
-      execCommandOverride: command,
-      allowWithoutEnforcedCommand: false,
+      execCommandOverride: undefined,
+      allowWithoutEnforcedCommand: true,
     });
   });
 
@@ -626,7 +607,7 @@ describe("processGatewayAllowlist", () => {
       ok: true,
       command,
     });
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
@@ -669,8 +650,45 @@ describe("processGatewayAllowlist", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(warnings[0]).toContain("reviewer or explicit approval");
     expect(result).toEqual({
-      execCommandOverride: command,
-      allowWithoutEnforcedCommand: false,
+      execCommandOverride: undefined,
+      allowWithoutEnforcedCommand: true,
+    });
+  });
+
+  it("uses a plan-backed enforced command when the allowlist plan is usable", async () => {
+    const command = "head -c 16";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    requiresExecApprovalMock.mockReturnValue(false);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ raw: command, resolution: null, argv: ["head", "-c", "16"] }],
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: ["safeBins"],
+      authorizationPlan,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "off",
+    });
+
+    expect(result).toEqual({
+      execCommandOverride: "/usr/bin/head -c 16",
     });
   });
 
@@ -681,7 +699,7 @@ describe("processGatewayAllowlist", () => {
       ok: false,
       reason: "segment execution plan unavailable",
     });
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
@@ -718,7 +736,7 @@ describe("processGatewayAllowlist", () => {
 
   it("requests human approval when auto-review asks on an approval miss", async () => {
     requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: false,
@@ -753,7 +771,7 @@ describe("processGatewayAllowlist", () => {
 
   it("requests human approval when auto-review cannot bind a single parsed command", async () => {
     requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: false,
@@ -783,7 +801,7 @@ describe("processGatewayAllowlist", () => {
 
   it("does not use fallback-full when auto-review cannot parse the command", async () => {
     requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: false,
       allowlistSatisfied: false,
@@ -831,7 +849,7 @@ describe("processGatewayAllowlist", () => {
 
   it("does not use fallback-full when auto-review asks for human approval", async () => {
     requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: false,
@@ -940,7 +958,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("does not require suppression edit approval for read-only suppression inspection", async () => {
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
@@ -966,7 +984,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("does not require suppression edit approval for profile-scoped read-only inspection", async () => {
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
@@ -995,7 +1013,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("requires suppression edit approval when a mutating segment follows read-only inspection", async () => {
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
@@ -1027,7 +1045,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("requires suppression edit approval when allowlist analysis only returns a read-only prefix", async () => {
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: false,
@@ -1055,20 +1073,10 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("requires suppression edit approval when a heredoc patch follows read-only inspection", async () => {
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: false,
-      segments: [
-        {
-          resolution: null,
-          argv: ["openclaw", "config", "get", "security.audit.suppressions"],
-        },
-      ],
-      segmentAllowlistEntries: [],
-    });
-    analyzeShellCommandMock.mockReturnValueOnce({
-      ok: true,
       segments: [
         {
           raw: "openclaw config get security.audit.suppressions",
@@ -1081,6 +1089,7 @@ describe("processGatewayAllowlist", () => {
           argv: ["openclaw", "config", "patch", "--stdin"],
         },
       ],
+      segmentAllowlistEntries: [],
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -1102,7 +1111,7 @@ EOF`,
   });
 
   it("allows durable exact-command trust to bypass the synchronous allowlist miss", async () => {
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: false,
       allowlistSatisfied: false,
@@ -1124,7 +1133,7 @@ EOF`,
   });
 
   it("keeps denying allowlist misses when durable trust does not match", async () => {
-    evaluateShellAllowlistMock.mockReturnValue({
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: false,
       allowlistSatisfied: false,

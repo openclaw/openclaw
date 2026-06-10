@@ -9,19 +9,20 @@ import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
-  addDurableCommandApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
   buildEnforcedShellCommand,
-  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
-  persistAllowAlwaysPatterns,
+  persistAllowAlwaysDecision,
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
+  resolveAllowAlwaysPersistenceDecision,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
   defaultExecAutoReviewer,
   type ExecAutoReviewer,
@@ -408,7 +409,7 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
-  const allowlistEval = evaluateShellAllowlist({
+  const allowlistEval = await evaluateShellAllowlistWithAuthorization({
     command: params.command,
     allowlist: approvals.allowlist,
     safeBins: params.safeBins,
@@ -430,6 +431,16 @@ export async function processGatewayAllowlist(
   });
   const inlineEvalHit =
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
+  const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+    segments: allowlistEval.segments,
+    cwd: params.workdir,
+    env: params.env,
+    platform: process.platform,
+    commandText: params.command,
+    strictInlineEval: params.strictInlineEval === true,
+    authorizationPlan: allowlistEval.authorizationPlan,
+    runtimePayload: inlineEvalHit !== null,
+  });
   if (inlineEvalHit) {
     params.warnings.push(
       `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
@@ -440,13 +451,23 @@ export async function processGatewayAllowlist(
   let enforcedCommand: string | undefined;
   let allowlistPlanUnavailableReason: string | null = null;
   if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
-    const enforced = buildEnforcedShellCommand({
-      command: params.command,
-      segments: allowlistEval.segments,
-      platform: process.platform,
-    });
+    const enforced =
+      process.platform === "win32"
+        ? buildEnforcedShellCommand({
+            command: params.command,
+            segments: allowlistEval.segments,
+            platform: process.platform,
+          })
+        : allowlistEval.authorizationPlan
+          ? buildAuthorizedShellCommandFromPlan({
+              plan: allowlistEval.authorizationPlan,
+              mode: "enforced",
+              segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+            })
+          : { ok: false, reason: "authorization plan unavailable" };
     if (!enforced.ok || !enforced.command) {
-      allowlistPlanUnavailableReason = enforced.reason ?? "unsupported platform";
+      allowlistPlanUnavailableReason =
+        ("reason" in enforced ? enforced.reason : undefined) ?? "unsupported platform";
     } else {
       enforcedCommand = enforced.command;
     }
@@ -588,6 +609,10 @@ export async function processGatewayAllowlist(
         host: "gateway",
         security: hostSecurity,
         ask: hostAsk,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({
+          ask: hostAsk,
+          allowAlwaysPersistence,
+        }),
         commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
         ...buildExecApprovalRequesterContext({
@@ -743,20 +768,11 @@ export async function processGatewayAllowlist(
         approvedByAsk = true;
       } else if (decision === "allow-always") {
         approvedByAsk = true;
-        if (!requiresInlineEvalApproval) {
-          const patterns = persistAllowAlwaysPatterns({
-            approvals: approvals.file,
-            agentId: params.agentId,
-            segments: allowlistEval.segments,
-            cwd: params.workdir,
-            env: params.env,
-            platform: process.platform,
-            strictInlineEval: params.strictInlineEval === true,
-          });
-          if (patterns.length === 0) {
-            addDurableCommandApproval(approvals.file, params.agentId, params.command);
-          }
-        }
+        persistAllowAlwaysDecision({
+          approvals: approvals.file,
+          agentId: params.agentId,
+          decision: allowAlwaysPersistence,
+        });
       }
 
       const strictBoundaryDecision = enforceStrictInlineEvalApprovalBoundary({
@@ -918,7 +934,10 @@ export async function processGatewayAllowlist(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
-        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
+        allowedDecisions: resolveExecApprovalAllowedDecisions({
+          ask: hostAsk,
+          allowAlwaysPersistence,
+        }),
       }),
     };
   }
