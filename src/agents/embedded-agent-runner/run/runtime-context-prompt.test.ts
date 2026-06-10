@@ -131,6 +131,7 @@ describe("runtime context prompt submission", () => {
       resolveRuntimeContextPromptParts({
         effectivePrompt,
         transcriptPrompt: "[OpenClaw heartbeat poll]",
+        unmatchedTranscriptMode: "runtime-context",
       }),
     ).toEqual({
       prompt: "[OpenClaw heartbeat poll]",
@@ -150,10 +151,24 @@ describe("runtime context prompt submission", () => {
       resolveRuntimeContextPromptParts({
         effectivePrompt: [effectiveText, "", explicitRuntimeContext].join("\n"),
         transcriptPrompt: "[OpenClaw heartbeat poll]",
+        unmatchedTranscriptMode: "runtime-context",
       }),
     ).toEqual({
       prompt: "[OpenClaw heartbeat poll]",
       runtimeContext: [effectiveText, "", explicitRuntimeContext].join("\n"),
+    });
+  });
+
+  it("does not treat unmatched user prompt text as implicit runtime context", () => {
+    const effectivePrompt = ["media note", "reply hint", "user body"].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: ["media note", "user body"].join("\n\n"),
+      }),
+    ).toEqual({
+      prompt: ["media note", "user body"].join("\n\n"),
     });
   });
 

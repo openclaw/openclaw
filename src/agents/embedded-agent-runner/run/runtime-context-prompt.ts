@@ -86,6 +86,7 @@ export function resolveRuntimeContextPromptParts(params: {
   transcriptPrompt?: string;
   modelPrompt?: string;
   emptyTranscriptMode?: EmptyTranscriptMode;
+  unmatchedTranscriptMode?: "runtime-context";
 }): RuntimeContextPromptParts {
   const transcriptPrompt = params.transcriptPrompt;
   const shouldExtractInternalRuntimeContext = transcriptPrompt !== undefined;
@@ -124,7 +125,7 @@ export function resolveRuntimeContextPromptParts(params: {
   // use the extracted text as implicit runtime context so it persists via
   // custom_message for subsequent model turns (restored legacy fallback).
   const implicitRuntimeContext =
-    transcriptPrompt !== undefined && hiddenRuntimeContext === undefined
+    params.unmatchedTranscriptMode === "runtime-context" && hiddenRuntimeContext === undefined
       ? extracted.text.trim()
       : undefined;
   const runtimeContext =

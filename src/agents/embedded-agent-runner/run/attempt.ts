@@ -3892,6 +3892,7 @@ export async function runEmbeddedAttempt(
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",
+            unmatchedTranscriptMode: params.trigger === "heartbeat" ? "runtime-context" : undefined,
           });
           const promptForSession = buildCurrentInboundPrompt({
             context: params.currentInboundContext,
