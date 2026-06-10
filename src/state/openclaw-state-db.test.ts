@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import {
   executeSqliteQuerySync,
@@ -448,5 +448,25 @@ describe("openclaw state database", () => {
         );
       }, options),
     ).not.toThrow();
+  });
+
+  it("opens the database even when chmodSync throws on unsupported filesystems", () => {
+    const stateDir = createTempStateDir();
+    const originalChmodSync = fs.chmodSync;
+    let chmodCallCount = 0;
+    // Replace chmodSync to throw on all calls (simulating Docker volumes, NFS, SMB)
+    vi.spyOn(fs, "chmodSync").mockImplementation((...args) => {
+      chmodCallCount++;
+      throw new Error("EPERM: operation not permitted, chmod");
+    });
+
+    try {
+      // Should not throw even though chmodSync always fails
+      expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).not.toThrow();
+      // chmodSync was attempted but gracefully handled
+      expect(chmodCallCount).toBeGreaterThan(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

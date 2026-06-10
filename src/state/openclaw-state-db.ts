@@ -122,12 +122,22 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
   // Default state contains credentials-adjacent metadata; custom existing dirs keep caller modes.
   if (isDefaultStateDatabase || !dirExisted) {
-    chmodSync(dir, OPENCLAW_STATE_DIR_MODE);
+    try {
+      chmodSync(dir, OPENCLAW_STATE_DIR_MODE);
+    } catch {
+      // Some filesystems (Docker volumes, Azure Files SMB/NFS, NFS without
+      // no_root_squash, certain K8s PVCs) do not support POSIX chmod.
+      // Gracefully skip rather than crashing the gateway at startup.
+    }
   }
   for (const suffix of OPENCLAW_STATE_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (existsSync(candidate)) {
-      chmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
+      try {
+        chmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
+      } catch {
+        // Same as above — sidecar files live on the same filesystem.
+      }
     }
   }
 }
