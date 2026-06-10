@@ -1004,7 +1004,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("does not restart a stopped managed gateway after post-core plugin errors", async () => {
+  it("restarts a stopped managed gateway after post-core plugin errors", async () => {
     const root = createCaseDir("openclaw-update");
     const entryPath = path.join(root, "dist", "index.js");
     mockPackageInstallStatus(root);
@@ -1064,9 +1064,14 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expect(serviceStop).toHaveBeenCalled();
-    expect(serviceRestart).not.toHaveBeenCalled();
+    expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(
+      requireValue(serviceStop.mock.invocationCallOrder[0], "service stop call order"),
+    ).toBeLessThan(
+      requireValue(serviceRestart.mock.invocationCallOrder[0], "service restart call order"),
+    );
   });
 
   it("does not carry gateway service markers into the post-core update process", async () => {
@@ -2841,8 +2846,9 @@ describe("update-cli", () => {
   });
 
   it("stops a running managed gateway before git checkout rebuild", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
     serviceReadCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
       environment: {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
@@ -2872,6 +2878,79 @@ describe("update-cli", () => {
         vi.mocked(runGatewayUpdate).mock.invocationCallOrder[0],
         "git update call order",
       ),
+    );
+  });
+
+  it("does not stop or restart a managed gateway owned by another git checkout", async () => {
+    const otherRoot = await createTrackedTempDir("openclaw-update-other-service-root-");
+    const otherEntrypoint = path.join(otherRoot, "dist", "index.js");
+    await fs.mkdir(path.dirname(otherEntrypoint), { recursive: true });
+    await fs.writeFile(
+      path.join(otherRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(otherEntrypoint, "export {};\n", "utf-8");
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", otherEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValueOnce(makeOkUpdateResult({ mode: "git" }));
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(prepareRestartScript).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts a stopped git service before exiting on plugin post-update failure", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    const invalidPostUpdateSnapshot: ConfigFileSnapshot = {
+      ...baseSnapshot,
+      valid: false,
+      issues: [{ path: "plugins", message: "invalid plugin config" }],
+      config: baseConfig,
+      runtimeConfig: baseConfig,
+    };
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce(baseSnapshot)
+      .mockResolvedValueOnce(invalidPostUpdateSnapshot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValueOnce(makeOkUpdateResult({ mode: "git" }));
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(
+      requireValue(serviceStop.mock.invocationCallOrder[0], "service stop call order"),
+    ).toBeLessThan(
+      requireValue(serviceRestart.mock.invocationCallOrder[0], "service restart call order"),
     );
   });
 

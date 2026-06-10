@@ -79,7 +79,7 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(false);
   });
 
-  it("keeps non-package updates tied to the loaded service state", () => {
+  it("keeps non-package updates tied to the matching loaded service state", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({
         updateMode: "git",
@@ -92,6 +92,15 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
         updateMode: "git",
         serviceInstalled: true,
         serviceLoaded: true,
+        serviceMatchesUpdateRoot: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "git",
+        serviceInstalled: true,
+        serviceLoaded: true,
+        serviceMatchesUpdateRoot: true,
       }),
     ).toBe(true);
   });
