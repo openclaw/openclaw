@@ -478,7 +478,11 @@ export function createMemorySearchTool(options: {
                 if (pausedIndexIdentityReason) {
                   return;
                 }
-                if (rawResults.length === 0 && activeMemory.manager.sync) {
+                if (
+                  rawResults.length === 0 &&
+                  activeMemory.manager.sync &&
+                  statusBeforeRetry.backend !== "qmd"
+                ) {
                   await activeMemory.manager.sync({ reason: "search", force: true });
                   rawResults = await activeMemory.manager.search(query, searchOptions);
                   pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(

@@ -259,6 +259,29 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
+  it("does not force sync when qmd backend returns zero hits", async () => {
+    setMemoryBackend("qmd");
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("qmd-zero-hit", {
+      query: "broad nonexistent query",
+    });
+
+    expect((result.details as { results?: Array<unknown> }).results).toEqual([]);
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
   it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
