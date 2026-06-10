@@ -139,6 +139,7 @@ function makeAnthropicTransportModel(
     provider?: string;
     baseUrl?: string;
     reasoning?: boolean;
+    params?: Record<string, unknown>;
     maxTokens?: number;
     thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
     headers?: Record<string, string>;
@@ -153,6 +154,7 @@ function makeAnthropicTransportModel(
       provider: params.provider ?? "anthropic",
       baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
+      ...(params.params ? { params: params.params } : {}),
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
@@ -2054,14 +2056,34 @@ describe("anthropic transport stream", () => {
 
   it("uses always-on adaptive thinking for Claude Fable 5 transport runs", async () => {
     const model = makeAnthropicTransportModel({
-      id: "claude-fable-5",
-      name: "Claude Fable 5",
+      id: "prod-primary",
+      name: "Production Claude",
+      provider: "microsoft-foundry",
+      params: { canonicalModelId: "claude-fable-5" },
       reasoning: false,
-      baseUrl: "https://proxy.example.com/anthropic",
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
       maxTokens: 128_000,
     });
 
-    await runTransportStream(
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_1",
+            model: "claude-fable-5",
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+    const result = await runTransportStream(
       model,
       {
         messages: [{ role: "user", content: "Think." }],
@@ -2078,6 +2100,7 @@ describe("anthropic transport stream", () => {
     expect(payload.output_config).toEqual({ effort: "high" });
     expect(payload.tool_choice).toEqual({ type: "auto" });
     expect(payload).not.toHaveProperty("temperature");
+    expect(result.responseModel).toBe("claude-fable-5");
   });
 
   it("maps Claude Fable 5 transport thinking levels to adaptive effort", async () => {

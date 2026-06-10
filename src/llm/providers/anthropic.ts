@@ -12,6 +12,7 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
+import { usesClaudeFable5MessagesContract } from "../../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../../shared/anthropic-refusal.js";
 import { createDeferredEventBuffer } from "../../shared/deferred-event-buffer.js";
 import { notifyLlmRequestActivity } from "../../shared/llm-request-activity.js";
@@ -538,6 +539,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       for await (const event of iterateAnthropicEvents(response, options?.signal)) {
         if (event.type === "message_start") {
           output.responseId = event.message.id;
+          output.responseModel = event.message.model;
           output.usage.input = event.message.usage.input_tokens || 0;
           output.usage.output = event.message.usage.output_tokens || 0;
           output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
@@ -754,13 +756,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
   return stream;
 };
-
-function usesClaudeFable5MessagesContract(model: Model<"anthropic-messages">): boolean {
-  return (
-    (model.provider === "anthropic" || model.provider === "anthropic-vertex") &&
-    model.id.includes("claude-fable-5")
-  );
-}
 
 function normalizeAnthropicToolChoice(
   model: Model<"anthropic-messages">,

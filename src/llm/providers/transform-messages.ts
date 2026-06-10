@@ -1,4 +1,4 @@
-import { resolveModelBoundThinkingReplayMode } from "../../shared/model-bound-thinking.js";
+import { resolveModelBoundThinkingReplayMode } from "../../shared/anthropic-model-contract.js";
 // Provider message transform helpers convert runtime messages to provider payloads.
 import type {
   Api,
@@ -102,11 +102,13 @@ export function transformMessages<TApi extends Api>(
           provider: assistantMsg.provider,
           api: assistantMsg.api,
           modelId: assistantMsg.model,
+          responseModelId: assistantMsg.responseModel,
         },
         target: {
           provider: model.provider,
           api: model.api,
           modelId: model.id,
+          modelParams: model.params,
         },
       });
       const isSameModel =

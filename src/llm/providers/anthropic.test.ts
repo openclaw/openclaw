@@ -95,7 +95,11 @@ describe("Anthropic provider", () => {
               createSseResponse([
                 {
                   type: "message_start",
-                  message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+                  message: {
+                    id: "msg_1",
+                    model: "claude-fable-5",
+                    usage: { input_tokens: 1, output_tokens: 0 },
+                  },
                 },
                 {
                   type: "message_delta",
@@ -162,7 +166,7 @@ describe("Anthropic provider", () => {
       },
     );
 
-    await stream.result();
+    const result = await stream.result();
 
     const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
@@ -179,6 +183,7 @@ describe("Anthropic provider", () => {
         signature: "sig_omitted",
       },
     ]);
+    expect(result.responseModel).toBe("claude-fable-5");
   });
 
   it.each([
@@ -335,10 +340,12 @@ describe("Anthropic provider", () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(
       makeAnthropicModel({
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
+        id: "prod-primary",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-fable-5" },
         reasoning: false,
-        baseUrl: "https://proxy.example.com/anthropic",
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
       }),
       {
         messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -359,6 +366,40 @@ describe("Anthropic provider", () => {
       output_config: { effort: "high" },
     });
     expect(capturedPayload).not.toHaveProperty("temperature");
+  });
+
+  it.each([
+    {
+      id: "prod-primary",
+      name: "Claude Fable 5",
+      params: undefined,
+    },
+    {
+      id: "claude-fable-5-prod",
+      name: "Production Claude",
+      params: { canonicalModelId: "claude-opus-4-8" },
+    },
+  ])("does not infer the Fable contract from noncanonical metadata", async (overrides) => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        ...overrides,
+        reasoning: false,
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({ temperature: 0.2 });
+    expect(capturedPayload).not.toHaveProperty("thinking");
   });
 
   it("normalizes forced Fable tool choice to auto", async () => {

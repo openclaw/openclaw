@@ -15,6 +15,7 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import { usesClaudeFable5MessagesContract } from "../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
@@ -111,6 +112,7 @@ type MutableAssistantOutput = {
   api: "anthropic-messages";
   provider: string;
   model: string;
+  responseModel?: string;
   usage: {
     input: number;
     output: number;
@@ -134,14 +136,6 @@ function isClaudeOpus47OrNewerModel(modelId: string): boolean {
     modelId.includes("opus-4.8") ||
     modelId.includes("opus-4-7") ||
     modelId.includes("opus-4.7")
-  );
-}
-
-function usesClaudeFable5MessagesContract(model: AnthropicTransportModel): boolean {
-  const provider = normalizeLowercaseStringOrEmpty(model.provider);
-  return (
-    (provider === "anthropic" || provider === "anthropic-vertex") &&
-    model.id.includes("claude-fable-5")
   );
 }
 
@@ -1172,10 +1166,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "message_start") {
             const message = event.message as
-              | { id?: string; usage?: Record<string, unknown> }
+              | { id?: string; model?: string; usage?: Record<string, unknown> }
               | undefined;
             const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
+            output.responseModel = typeof message?.model === "string" ? message.model : undefined;
             output.usage.input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
             output.usage.output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
             output.usage.cacheRead =

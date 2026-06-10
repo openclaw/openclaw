@@ -4,8 +4,16 @@ import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-function makeModel(api: Api, provider: string, id: string): Model {
-  return { api, provider, id, input: [], output: [] } as unknown as Model;
+function makeModel(api: Api, provider: string, id: string, canonicalModelId?: string): Model {
+  return {
+    api,
+    provider,
+    id,
+    name: id,
+    ...(canonicalModelId ? { params: { canonicalModelId } } : {}),
+    input: [],
+    output: [],
+  } as unknown as Model;
 }
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
@@ -56,6 +64,42 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       source: { provider: "anthropic", model: "claude-sonnet-4-6" },
       target: { provider: "anthropic", model: "claude-fable-5" },
     },
+    {
+      source: {
+        provider: "microsoft-foundry",
+        model: "prod-primary",
+        responseModel: "claude-fable-5",
+      },
+      target: { provider: "anthropic", model: "claude-opus-4-8" },
+    },
+    {
+      source: { provider: "legacy-provider", model: "prod-primary" },
+      target: {
+        provider: "microsoft-foundry",
+        model: "prod-primary",
+        canonicalModelId: "claude-fable-5",
+      },
+    },
+    {
+      source: {
+        provider: "anthropic",
+        model: "claude-fable-5",
+        responseModel: "claude-opus-4-8",
+      },
+      target: { provider: "anthropic", model: "claude-fable-5" },
+    },
+    {
+      source: {
+        provider: "microsoft-foundry",
+        model: "prod-primary",
+        responseModel: "claude-opus-4-8",
+      },
+      target: {
+        provider: "microsoft-foundry",
+        model: "prod-primary",
+        canonicalModelId: "claude-fable-5",
+      },
+    },
   ])("drops model-bound thinking for Fable switches", ({ source, target }) => {
     const result = transformTransportMessages(
       [
@@ -64,6 +108,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
           provider: source.provider,
           api: "anthropic-messages",
           model: source.model,
+          responseModel: source.responseModel,
           stopReason: "stop",
           timestamp: Date.now(),
           content: [
@@ -76,7 +121,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
           ],
         },
       ] as Context["messages"],
-      makeModel("anthropic-messages", target.provider, target.model),
+      makeModel("anthropic-messages", target.provider, target.model, target.canonicalModelId),
     );
 
     expect(result[0]).toMatchObject({
@@ -88,24 +133,77 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
   it.each([
     {
       sourceProvider: "anthropic",
+      sourceModel: "claude-fable-5",
+      sourceResponseModel: undefined,
       targetProvider: "anthropic",
       targetApi: "openclaw-anthropic-messages-transport" as const,
+      targetModel: "claude-fable-5",
+      targetCanonicalModelId: undefined,
+    },
+    {
+      sourceProvider: "microsoft-foundry",
+      sourceModel: "prod-primary",
+      sourceResponseModel: undefined,
+      targetProvider: "microsoft-foundry",
+      targetApi: "anthropic-messages" as const,
+      targetModel: "prod-primary",
+      targetCanonicalModelId: "claude-fable-5",
+    },
+    {
+      sourceProvider: "microsoft-foundry",
+      sourceModel: "prod-primary",
+      sourceResponseModel: "prod-primary",
+      targetProvider: "microsoft-foundry",
+      targetApi: "anthropic-messages" as const,
+      targetModel: "prod-primary",
+      targetCanonicalModelId: "claude-fable-5",
     },
     {
       sourceProvider: "anthropic",
+      sourceModel: "claude-fable-5",
+      sourceResponseModel: undefined,
       targetProvider: "anthropic-vertex",
       targetApi: "anthropic-messages" as const,
+      targetModel: "claude-fable-5",
+      targetCanonicalModelId: undefined,
+    },
+    {
+      sourceProvider: "microsoft-foundry",
+      sourceModel: "prod-primary",
+      sourceResponseModel: "claude-fable-5",
+      targetProvider: "anthropic",
+      targetApi: "anthropic-messages" as const,
+      targetModel: "claude-fable-5",
+      targetCanonicalModelId: "claude-fable-5",
+    },
+    {
+      sourceProvider: "anthropic",
+      sourceModel: "claude-fable-5",
+      sourceResponseModel: undefined,
+      targetProvider: "microsoft-foundry",
+      targetApi: "anthropic-messages" as const,
+      targetModel: "prod-primary",
+      targetCanonicalModelId: "claude-fable-5",
     },
   ])(
     "preserves Fable thinking across compatible Anthropic transports",
-    ({ sourceProvider, targetProvider, targetApi }) => {
+    ({
+      sourceProvider,
+      sourceModel,
+      sourceResponseModel,
+      targetProvider,
+      targetApi,
+      targetModel,
+      targetCanonicalModelId,
+    }) => {
       const result = transformTransportMessages(
         [
           {
             role: "assistant",
             provider: sourceProvider,
             api: "anthropic-messages",
-            model: "claude-fable-5",
+            model: sourceModel,
+            responseModel: sourceResponseModel,
             stopReason: "stop",
             timestamp: Date.now(),
             content: [
@@ -117,7 +215,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
             ],
           },
         ] as Context["messages"],
-        makeModel(targetApi, targetProvider, "claude-fable-5"),
+        makeModel(targetApi, targetProvider, targetModel, targetCanonicalModelId),
       );
 
       expect(result[0]).toMatchObject({

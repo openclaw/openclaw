@@ -4,7 +4,7 @@
  * strict provider tool-result gaps when supported.
  */
 import type { Api, Context, Model } from "../llm/types.js";
-import { resolveModelBoundThinkingReplayMode } from "../shared/model-bound-thinking.js";
+import { resolveModelBoundThinkingReplayMode } from "../shared/anthropic-model-contract.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -80,11 +80,13 @@ export function transformTransportMessages(
         provider: msg.provider,
         api: msg.api,
         modelId: msg.model,
+        responseModelId: msg.responseModel,
       },
       target: {
         provider: model.provider,
         api: model.api,
         modelId: model.id,
+        modelParams: model.params,
       },
     });
     const isSameModel =
