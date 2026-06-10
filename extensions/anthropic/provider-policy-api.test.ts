@@ -184,6 +184,18 @@ describe("anthropic provider policy public artifact", () => {
     }
   });
 
+  it("exposes Anthropic thinking profiles for Anthropic Messages custom providers", () => {
+    const profile = resolveThinkingProfile({
+      provider: "jdcloud-anthropic",
+      api: "anthropic-messages",
+      modelId: "claude-opus-4-6",
+    });
+
+    expect(levelIds(profile?.levels)).toContain("adaptive");
+    expect(levelIds(profile?.levels)).toContain("max");
+    expect(profile?.defaultLevel).toBe("adaptive");
+  });
+
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {
     expect(
       resolveThinkingProfile({

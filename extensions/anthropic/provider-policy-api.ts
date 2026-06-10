@@ -26,6 +26,7 @@ export function applyConfigDefaults(params: Parameters<typeof applyAnthropicConf
 /** Resolve Claude thinking profile for Anthropic or Claude CLI providers. */
 export function resolveThinkingProfile(params: {
   provider: string;
+  api?: string;
   modelId: string;
   params?: Record<string, unknown>;
 }) {
@@ -33,6 +34,7 @@ export function resolveThinkingProfile(params: {
     id: params.modelId,
     params: params.params,
   });
+  const api = params.api?.trim().toLowerCase();
   switch (params.provider.trim().toLowerCase()) {
     case "anthropic":
       return resolveClaudeThinkingProfile(contractModelId, undefined, {
@@ -46,6 +48,11 @@ export function resolveThinkingProfile(params: {
         includeNativeMax: true,
       });
     default:
+      if (api === "anthropic-messages") {
+        return resolveClaudeThinkingProfile(contractModelId, undefined, {
+          includeNativeMax: true,
+        });
+      }
       return null;
   }
 }
