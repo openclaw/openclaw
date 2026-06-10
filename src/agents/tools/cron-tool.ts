@@ -55,7 +55,7 @@ const CRON_ACTIONS = [
   "wake",
 ] as const;
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
@@ -139,6 +139,15 @@ function createCronScheduleSchema(): TSchema {
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
+        command: Type.Optional(
+          Type.String({
+            description:
+              'Shell command to watch (kind="on-exit"): the job fires once when this command exits. Runs under the gateway (survives turn end). Use for "ping me when this process/script finishes".',
+          }),
+        ),
+        cwd: Type.Optional(
+          Type.String({ description: 'Working dir for the watched command (kind="on-exit")' }),
+        ),
       },
       { additionalProperties: true },
     ),

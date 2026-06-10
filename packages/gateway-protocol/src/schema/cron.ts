@@ -218,6 +218,17 @@ export const CronScheduleSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  Type.Object(
+    {
+      // Event-driven trigger: fires once when the gateway-owned watcher running
+      // `command` exits. Survives per-turn CLI teardown (runs under the gateway
+      // ProcessSupervisor, not the turn process tree).
+      kind: Type.Literal("on-exit"),
+      command: NonEmptyString,
+      cwd: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 
 /** Full cron payload for new jobs. */

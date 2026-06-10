@@ -789,6 +789,11 @@ export type PluginHookGatewayCronJob = {
         kind: "every";
         everyMs?: number;
         anchorMs?: number;
+      }
+    | {
+        kind: "on-exit";
+        command?: string;
+        cwd?: string;
       };
   sessionTarget?: string;
   wakeMode?: string;

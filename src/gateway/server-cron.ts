@@ -41,6 +41,7 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   normalizeAgentId,
   resolveEventSessionKey,
@@ -48,6 +49,7 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { createCronExitWatchers } from "./cron-exit-watchers.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -57,6 +59,10 @@ export type GatewayCronState = {
   cron: CronServiceContract;
   storePath: string;
   cronEnabled: boolean;
+  /** Arm/cancel on-exit watchers against the current persisted job set. */
+  reconcileExitWatchers?: () => Promise<void>;
+  /** Cancel all on-exit watchers (gateway shutdown). */
+  stopExitWatchers?: () => void;
 };
 
 /** Pick only the keys whose values are not `undefined` from an object. */
@@ -309,6 +315,23 @@ export function buildGatewayCronService(params: {
         "cron_changed hook failed",
       );
     });
+  };
+
+  // Gateway-owned watchers for `on-exit` schedule jobs. The watcher process
+  // runs under the ProcessSupervisor (outside any agent turn's process tree) so
+  // it survives per-turn CLI teardown; on exit it fires the job via enqueueRun.
+  let exitWatchers: ReturnType<typeof createCronExitWatchers> | undefined;
+  const reconcileExitWatchers = async () => {
+    if (!exitWatchers) {
+      return;
+    }
+    try {
+      const result = await cron.list({ includeDisabled: true });
+      const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
+      exitWatchers.reconcile(jobs);
+    } catch (err) {
+      cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
+    }
   };
 
   const cron = new CronService({
@@ -585,6 +608,10 @@ export function buildGatewayCronService(params: {
         ]),
       };
       runCronChangedHook(hookEvt);
+      // Re-arm / cancel on-exit watchers when the job set changes.
+      if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
+        void reconcileExitWatchers();
+      }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
@@ -633,5 +660,17 @@ export function buildGatewayCronService(params: {
     },
   });
 
-  return { cron, storePath, cronEnabled };
+  exitWatchers = createCronExitWatchers({
+    getProcessSupervisor,
+    enqueueRun: (jobId) => cron.enqueueRun(jobId, "force"),
+    logger: cronLogger,
+  });
+
+  return {
+    cron,
+    storePath,
+    cronEnabled,
+    reconcileExitWatchers,
+    stopExitWatchers: () => exitWatchers?.cancelAll(),
+  };
 }
