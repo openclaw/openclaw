@@ -18,7 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
-import { requireSandboxBackendFactory } from "./backend.js";
+import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_STATE_DIR } from "./constants.js";
@@ -26,7 +26,6 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import { resolveSshRuntimePaths } from "./ssh-backend.js";
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
 import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
@@ -181,12 +180,20 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
 function resolveSandboxWorkspaceInfoWorkdir(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  rawSessionKey: string;
   scopeKey: string;
-}): string {
-  if (params.cfg.backend === "ssh") {
-    return resolveSshRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey).remoteWorkspaceDir;
-  }
-  return params.cfg.docker.workdir;
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir: string;
+}): string | undefined {
+  return getSandboxBackendWorkdirResolver(params.cfg.backend)?.({
+    sessionKey: params.rawSessionKey,
+    scopeKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
+    cfg: params.cfg,
+  });
 }
 
 export async function resolveSandboxContext(params: {
@@ -319,7 +326,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   }
   const { rawSessionKey, cfg, runtime } = resolved;
 
-  const { scopeKey, skillsEligibility, skillsWorkspaceDir, workspaceDir } =
+  const { agentWorkspaceDir, scopeKey, skillsEligibility, skillsWorkspaceDir, workspaceDir } =
     await ensureSandboxWorkspaceLayout({
       cfg,
       agentId: runtime.agentId,
@@ -328,9 +335,17 @@ export async function ensureSandboxWorkspaceForSession(params: {
       workspaceDir: params.workspaceDir,
     });
 
+  const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
+    cfg,
+    rawSessionKey,
+    scopeKey,
+    workspaceDir,
+    agentWorkspaceDir,
+    skillsWorkspaceDir,
+  });
   return {
     workspaceDir,
-    containerWorkdir: resolveSandboxWorkspaceInfoWorkdir({ cfg, scopeKey }),
+    ...(containerWorkdir ? { containerWorkdir } : {}),
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
     workspaceAccess: cfg.workspaceAccess,

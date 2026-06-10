@@ -88,6 +88,11 @@ async function resolveCommandSkillsPrompt(params: {
       if (!sandboxWorkspace) {
         return "";
       }
+      if (!sandboxWorkspace.containerWorkdir) {
+        // Prompt inspection cannot safely advertise host skill paths when a
+        // custom backend has not declared its runtime workdir.
+        return "";
+      }
       const {
         skillsEligibility,
         skillsPromptWorkspaceDir,

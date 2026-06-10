@@ -331,6 +331,24 @@ describe("resolveCommandsSystemPromptBundle", () => {
     }
   });
 
+  it("omits sandbox skills when a custom backend has no declared workdir", async () => {
+    const params = makeParams();
+    vi.mocked(resolveSandboxRuntimeStatus).mockReturnValue({
+      sandboxed: true,
+      mode: "workspace-write",
+    } as never);
+    vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
+      workspaceDir: params.workspaceDir,
+      skillsWorkspaceDir: "/tmp/sandbox-skills",
+      workspaceAccess: "rw",
+    });
+
+    const result = await resolveCommandsSystemPromptBundle(params);
+
+    expect(result.skillsPrompt).toBe("");
+    expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).not.toHaveBeenCalled();
+  });
+
   it("uses config-backed prompt settings for the target agent", async () => {
     vi.mocked(resolveSandboxRuntimeStatus).mockReturnValue({
       sandboxed: false,
