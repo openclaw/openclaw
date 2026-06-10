@@ -708,6 +708,7 @@ describe("RealtimeCallHandler path routing", () => {
               brain: string;
               provider: string;
               sessionId: string;
+              text?: string;
               transport: string;
               type: string;
             }>
@@ -728,6 +729,9 @@ describe("RealtimeCallHandler path routing", () => {
         expect(recent?.[0]?.provider).toBe("openai");
         expect(recent?.[0]?.sessionId).toBe("voice-call:call-1:realtime");
         expect(recent?.[0]?.transport).toBe("gateway-relay");
+        expect(recent?.find((event) => event.type === "output.text.done")).toMatchObject({
+          text: "hi there",
+        });
         expect(call.metadata?.lastTalkEventType).toBe("turn.ended");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
@@ -1207,7 +1211,8 @@ describe("RealtimeCallHandler path routing", () => {
         }
       | undefined;
     const sendUserMessage = vi.fn();
-    const bridge = makeBridge({ sendUserMessage });
+    const handleBargeIn = vi.fn();
+    const bridge = makeBridge({ handleBargeIn, sendUserMessage });
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
         callbacks = request;
@@ -1275,6 +1280,10 @@ describe("RealtimeCallHandler path routing", () => {
             'Briefly tell the caller in their language that you are checking, for example: "Alles klar, ich schaue ganz kurz." Then wait for the final OpenClaw result before answering with the actual result.',
           ]);
         });
+        expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true, force: true });
+        expect(handleBargeIn.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER).toBeLessThan(
+          sendUserMessage.mock.invocationCallOrder[0] ?? 0,
+        );
         const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
@@ -1298,6 +1307,7 @@ describe("RealtimeCallHandler path routing", () => {
             "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nI created the smoke test file.",
           );
         });
+        expect(handleBargeIn).toHaveBeenCalledTimes(2);
         const callsAfterFinalResult = sendUserMessage.mock.calls.length;
         await vi.advanceTimersByTimeAsync(24000);
         expect(sendUserMessage).toHaveBeenCalledTimes(callsAfterFinalResult);

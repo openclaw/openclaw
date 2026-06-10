@@ -64,6 +64,7 @@ const CONSULT_PROGRESS_INITIAL_DELAY_MS = 7_000;
 const CONSULT_PROGRESS_INTERVAL_MS = 12_000;
 const CONSULT_PROGRESS_MAX_UPDATES = 3;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
+const RECENT_TALK_EVENT_TEXT_MAX_CHARS = 500;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 const logger = createSubsystemLogger("voice-call/realtime");
@@ -268,6 +269,34 @@ type NativeConsultState = {
   partialUserTranscript?: string;
 };
 
+function readRecentTalkEventPayloadSummary(event: TalkEvent): Record<string, unknown> {
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+  const record = payload as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+  for (const key of ["text", "message", "detail", "reason", "name", "status"] as const) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      summary[key] =
+        value.length <= RECENT_TALK_EVENT_TEXT_MAX_CHARS
+          ? value
+          : `${value.slice(0, RECENT_TALK_EVENT_TEXT_MAX_CHARS - 16).trimEnd()} [truncated]`;
+    }
+  }
+  const result = record.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const text = readSpeakableRealtimeVoiceToolResult(result, {
+      maxChars: RECENT_TALK_EVENT_TEXT_MAX_CHARS,
+    });
+    if (text) {
+      summary.resultText = text;
+    }
+  }
+  return summary;
+}
+
 type TelephonyCloseReason = "completed" | "error";
 
 function appendRecentTalkEventMetadata(
@@ -295,6 +324,7 @@ function appendRecentTalkEventMetadata(
       type: event.type,
       ...(event.turnId ? { turnId: event.turnId } : {}),
       ...(event.final !== undefined ? { final: event.final } : {}),
+      ...readRecentTalkEventPayloadSummary(event),
     },
   ].slice(-12);
   call.metadata = metadata;
@@ -1126,7 +1156,14 @@ export class RealtimeCallHandler {
     console.log(
       `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
     );
-    params.clearAudio();
+    const interruptProviderOutput = (stage: "working" | "final"): void => {
+      params.session.handleBargeIn({ audioPlaybackActive: true, force: true });
+      params.clearAudio();
+      console.log(
+        `[voice-call] realtime forced agent consult interrupted provider output callId=${params.callId} providerCallId=${params.callSid} stage=${stage}`,
+      );
+    };
+    interruptProviderOutput("working");
     const state: ForcedConsultState = {
       sendSpeechPrompt: true,
       promise: Promise.resolve().then(() =>
@@ -1157,7 +1194,11 @@ export class RealtimeCallHandler {
       if (interimSpeechStopped || !state.sendSpeechPrompt || state.completedAt) {
         return false;
       }
-      params.session.sendUserMessage(buildForcedConsultInterimSpeechPrompt(response));
+      const prompt = buildForcedConsultInterimSpeechPrompt(response);
+      console.log(
+        `[voice-call] realtime forced agent consult interim speech callId=${params.callId} providerCallId=${params.callSid} chars=${prompt.length} prompt=${JSON.stringify(prompt)}`,
+      );
+      params.session.sendUserMessage(prompt);
       return true;
     };
     const scheduleProgressResponse = (delayMs: number): void => {
@@ -1207,8 +1248,12 @@ export class RealtimeCallHandler {
         return;
       }
       if (state.sendSpeechPrompt) {
-        params.clearAudio();
-        params.session.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+        interruptProviderOutput("final");
+        const prompt = buildForcedConsultSpeechPrompt(text);
+        console.log(
+          `[voice-call] realtime forced agent consult final speech callId=${params.callId} providerCallId=${params.callSid} chars=${prompt.length}`,
+        );
+        params.session.sendUserMessage(prompt);
       }
       console.log(
         `[voice-call] realtime forced agent consult completed callId=${params.callId} providerCallId=${params.callSid} elapsedMs=${Date.now() - startedAt}`,
