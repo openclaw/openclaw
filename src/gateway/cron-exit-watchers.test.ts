@@ -70,10 +70,10 @@ const flush = async () => {
 describe("createCronExitWatchers", () => {
   it("arms a watcher for an enabled on-exit job and fires the job on exit", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    const enqueueRun = vi.fn(async () => {});
+    const fireOnExit = vi.fn(async () => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      enqueueRun,
+      fireOnExit,
       logger: noopLogger,
     });
 
@@ -81,19 +81,21 @@ describe("createCronExitWatchers", () => {
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
     expect(w.activeJobIds()).toEqual(["job-a"]);
-    expect(enqueueRun).not.toHaveBeenCalled();
+    expect(fireOnExit).not.toHaveBeenCalled();
 
     // Watched command exits → job fires through the run pipeline.
     runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
     await flush();
-    expect(enqueueRun).toHaveBeenCalledWith("job-a");
+    expect(fireOnExit).toHaveBeenCalledTimes(1);
+    expect(fireOnExit.mock.calls[0][0].id).toBe("job-a");
+    expect(fireOnExit.mock.calls[0][1]).toEqual({ exitCode: 0 });
   });
 
   it("does not arm a watcher for time-based or disabled jobs", async () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      enqueueRun: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
     const everyJob = {
@@ -110,7 +112,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      enqueueRun: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
@@ -124,7 +126,7 @@ describe("createCronExitWatchers", () => {
     const { supervisor, cancelled } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      enqueueRun: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
@@ -136,10 +138,10 @@ describe("createCronExitWatchers", () => {
 
   it("does not fire a job whose watcher was cancelled before exit", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    const enqueueRun = vi.fn(async () => {});
+    const fireOnExit = vi.fn(async () => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      enqueueRun,
+      fireOnExit,
       logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);
@@ -147,14 +149,14 @@ describe("createCronExitWatchers", () => {
     w.reconcile([]); // cancel before the command exits
     runs[0].deferred.resolve({ exitCode: 0, reason: "manual-cancel" });
     await flush();
-    expect(enqueueRun).not.toHaveBeenCalled();
+    expect(fireOnExit).not.toHaveBeenCalled();
   });
 
   it("is one-shot: a fired job is not re-armed on a later reconcile", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
-      enqueueRun: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
       logger: noopLogger,
     });
     w.reconcile([onExitJob("job-a")]);

@@ -25,4 +25,5 @@ Everything after "process exited" is the current cron run→system-event→deliv
 
 - PID-watch (`{ kind:"on-exit"; pid }`) — follow-up.
 - Re-arm/repeat on each exit — v1 is one-shot (job disables after firing, like a one-shot `at`).
-- Origin-aware **manual** wake routing — that's #83738; this PR is the run-path trigger and is orthogonal.
+- This PR **stacks on #83738** and reuses its origin-aware wake as the firing
+  mechanism; it adds only the process-exit _trigger_ (the supervisor watcher).

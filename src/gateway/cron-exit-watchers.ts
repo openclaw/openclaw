@@ -44,7 +44,12 @@ function isWatchableExitJob(job: CronJob): boolean {
 
 export function createCronExitWatchers(params: {
   getProcessSupervisor: () => ProcessSupervisor;
-  enqueueRun: (jobId: string) => Promise<unknown>;
+  /**
+   * Fire the job when its watched command exits. The caller routes this to the
+   * origin-aware cron wake (continuing the originating session/thread), with the
+   * exit code available to compose the woken turn's text.
+   */
+  fireOnExit: (job: CronJob, exit: { exitCode: number | null }) => void | Promise<void>;
   logger: Logger;
   /** Shell used to run the watched command (default: bash -lc). */
   shell?: { command: string; argsFor: (command: string) => string[] };
@@ -105,11 +110,11 @@ export function createCronExitWatchers(params: {
           "cron-exit: watched command exited; firing job",
         );
         try {
-          await params.enqueueRun(job.id);
+          await params.fireOnExit(job, { exitCode: exit.exitCode });
         } catch (err) {
           params.logger.warn(
             { err: String(err), jobId: job.id },
-            "cron-exit: enqueueRun after exit failed",
+            "cron-exit: fireOnExit after exit failed",
           );
         }
       } catch (err) {

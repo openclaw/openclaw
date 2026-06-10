@@ -22,6 +22,7 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
+import { resolveJobPayloadTextForMain } from "../cron/service/jobs.js";
 import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
@@ -662,7 +663,22 @@ export function buildGatewayCronService(params: {
 
   exitWatchers = createCronExitWatchers({
     getProcessSupervisor,
-    enqueueRun: (jobId) => cron.enqueueRun(jobId, "force"),
+    // On exit, fire the origin-aware wake on the job's captured session so the
+    // woken turn continues the originating conversation/thread (not a throwaway
+    // cron-run child session). Reuses the same wake path as the cron wake tool.
+    fireOnExit: (job, exit) => {
+      const baseText = resolveJobPayloadTextForMain(job) ?? "A watched process exited.";
+      const exitNote =
+        exit.exitCode === null
+          ? " (watched command terminated by signal)"
+          : ` (watched command exited with code ${exit.exitCode})`;
+      cron.wake({
+        mode: "now",
+        text: `${baseText}${exitNote}`,
+        ...(job.sessionKey ? { sessionKey: job.sessionKey } : {}),
+        ...(job.agentId ? { agentId: job.agentId } : {}),
+      });
+    },
     logger: cronLogger,
   });
 
