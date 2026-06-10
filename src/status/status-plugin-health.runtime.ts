@@ -93,8 +93,20 @@ function collectChannelPluginFailures(params: {
       }
       return failure;
     });
+  const dedupeConcreteFailures = (
+    failures: readonly ChannelPluginFailureRecord[],
+  ): ChannelPluginFailureRecord[] => {
+    const byFailure = new Map<string, ChannelPluginFailureRecord>();
+    for (const failure of failures) {
+      const key = JSON.stringify([failure.channelId, failure.pluginId ?? "", failure.message]);
+      if (!byFailure.has(key)) {
+        byFailure.set(key, failure);
+      }
+    }
+    return [...byFailure.values()];
+  };
   if (!params.config) {
-    return diagnosticFailures;
+    return dedupeConcreteFailures(diagnosticFailures);
   }
   try {
     const resolution = resolveReadOnlyChannelPluginsForConfig(params.config, {
@@ -109,12 +121,10 @@ function collectChannelPluginFailures(params: {
       message: failure.message,
       ...(failure.source ? { source: failure.source } : {}),
     }));
-    const failedChannelIds = new Set(
-      [...diagnosticFailures, ...loadFailures].map((failure) => failure.channelId),
-    );
+    const concreteFailures = dedupeConcreteFailures([...diagnosticFailures, ...loadFailures]);
+    const failedChannelIds = new Set(concreteFailures.map((failure) => failure.channelId));
     return [
-      ...diagnosticFailures,
-      ...loadFailures,
+      ...concreteFailures,
       ...resolution.missingConfiguredChannelIds
         .filter((channelId) => !failedChannelIds.has(channelId))
         .map((channelId) => ({

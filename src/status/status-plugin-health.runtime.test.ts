@@ -157,6 +157,13 @@ describe("runtime plugin health snapshot", () => {
   });
 
   it("does not add a generic missing-channel failure when setup load already failed", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: "broken-channel",
+      message: "failed to load setup entry: boom",
+    } as never);
+    setActivePluginRegistry(registry, "broken-channel", "default", "/tmp/ws");
     resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
       plugins: [],
       configuredChannelIds: ["broken-channel"],
@@ -181,7 +188,7 @@ describe("runtime plugin health snapshot", () => {
         channelId: "broken-channel",
         pluginId: "broken-channel",
         message: "failed to load setup entry: boom",
-        source: "setup",
+        source: "diagnostic",
       },
     ]);
   });
