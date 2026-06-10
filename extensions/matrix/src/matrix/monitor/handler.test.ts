@@ -7,7 +7,11 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { loadSessionStore, saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  saveSessionStore,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
@@ -77,33 +81,27 @@ async function writeMatrixSessionMeta(
     nativeDirectUserId?: string;
   },
 ): Promise<void> {
-  // Read via loadSessionStore + write via saveSessionStore so the seeded
-  // entries land in the SQLite-backed store the handler reads. Raw
-  // writeFileSync(sessions.json) is invisible to the migrated store.
-  const store = loadSessionStore(storePath, { skipCache: true }) as Record<
-    string,
-    Record<string, unknown>
-  >;
-  const existing = store[sessionKey] ?? {
-    sessionId: `sess-${Object.keys(store).length + 1}`,
+  const existing = getSessionEntry({ storePath, sessionKey }) ?? {
+    sessionId: `sess-${sessionKey}`,
     updatedAt: Date.now(),
   };
   const existingOrigin =
     typeof existing.origin === "object" && existing.origin !== null
       ? (existing.origin as Record<string, unknown>)
       : {};
-  store[sessionKey] = {
-    ...existing,
-    origin: {
-      ...existingOrigin,
-      provider: "matrix",
-      surface: "matrix",
-      accountId: "ops",
-      ...origin,
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
+      ...existing,
+      origin: {
+        ...existingOrigin,
+        provider: "matrix",
+        surface: "matrix",
+        accountId: "ops",
+        ...origin,
+      },
     },
-  };
-  await saveSessionStore(storePath, store as Parameters<typeof saveSessionStore>[1], {
-    skipMaintenance: true,
   });
 }
 
@@ -1427,9 +1425,9 @@ describe("matrix monitor handler pairing account scope", () => {
   it("skips the shared-session notice when Matrix DMs are isolated per room", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-room-scope-"));
     const storePath = path.join(tempDir, "sessions.json");
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({
+      {
         "agent:ops:main": {
           sessionId: "sess-main",
           updatedAt: Date.now(),
@@ -1439,8 +1437,8 @@ describe("matrix monitor handler pairing account scope", () => {
             accountId: "ops",
           },
         },
-      }),
-      "utf8",
+      },
+      { skipMaintenance: true },
     );
     const sendNotice = vi.fn(async () => "$notice");
 
@@ -1474,9 +1472,9 @@ describe("matrix monitor handler pairing account scope", () => {
   it("skips the shared-session notice when a Matrix DM is explicitly bound", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-bound-notice-"));
     const storePath = path.join(tempDir, "sessions.json");
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({
+      {
         "agent:bound:session-1": {
           sessionId: "sess-bound",
           updatedAt: Date.now(),
@@ -1486,8 +1484,8 @@ describe("matrix monitor handler pairing account scope", () => {
             accountId: "ops",
           },
         },
-      }),
-      "utf8",
+      },
+      { skipMaintenance: true },
     );
     const sendNotice = vi.fn(async () => "$notice");
     const touch = vi.fn();
@@ -1839,7 +1837,6 @@ describe("matrix monitor handler pairing account scope", () => {
       {
         sessionKey: "agent:ops:main",
         contextKey: "matrix:reaction:add:!room:example.org:$msg1:@user:example.org:👍",
-        forceSenderIsOwnerFalse: true,
       },
     );
   });
@@ -1902,7 +1899,6 @@ describe("matrix monitor handler pairing account scope", () => {
       {
         sessionKey: "agent:bound:session-1",
         contextKey: "matrix:reaction:add:!room:example.org:$reply1:@user:example.org:🎯",
-        forceSenderIsOwnerFalse: true,
       },
     );
   });
@@ -1947,7 +1943,6 @@ describe("matrix monitor handler pairing account scope", () => {
       {
         sessionKey: "agent:ops:main",
         contextKey: "matrix:reaction:add:!dm:example.org:$reply1:@user:example.org:🎯",
-        forceSenderIsOwnerFalse: true,
       },
     );
   });
@@ -1986,7 +1981,6 @@ describe("matrix monitor handler pairing account scope", () => {
       {
         sessionKey: "agent:ops:main:thread:$root",
         contextKey: "matrix:reaction:add:!room:example.org:$root:@user:example.org:🧵",
-        forceSenderIsOwnerFalse: true,
       },
     );
   });

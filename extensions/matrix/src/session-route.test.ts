@@ -2,8 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
-import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
@@ -29,21 +28,16 @@ const defaultAccountPerRoomDmMatrixConfig = {
   },
 } satisfies MatrixChannelConfig;
 
-async function createTempStore(entries: Record<string, unknown>): Promise<string> {
+async function createTempStore(entries: Record<string, SessionEntry>): Promise<string> {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-session-route-"));
   tempDirs.add(tempDir);
   const storePath = path.join(tempDir, "sessions.json");
-  // Seed via saveSessionStore so the entries are written to the SQLite-backed
-  // store that loadSessionStore reads. Raw writeFileSync(sessions.json) is
-  // invisible to the migrated store and leaves entries unresolvable.
-  await saveSessionStore(storePath, entries as Record<string, SessionEntry>, {
-    skipMaintenance: true,
-  });
+  await saveSessionStore(storePath, entries, { skipMaintenance: true });
   return storePath;
 }
 
 async function createMatrixRouteConfig(
-  entries: Record<string, unknown>,
+  entries: Record<string, SessionEntry>,
   matrix: MatrixChannelConfig = perRoomDmMatrixConfig,
 ): Promise<OpenClawConfig> {
   return {
@@ -66,7 +60,7 @@ function createStoredDirectDmSession(
     lastTo?: string;
     lastAccountId?: string;
   } = {},
-): Record<string, unknown> {
+): SessionEntry {
   const accountId = params.accountId === null ? undefined : (params.accountId ?? "ops");
   const to = params.to ?? "room:!dm:example.org";
   const accountMetadata = accountId ? { accountId } : {};
@@ -95,7 +89,7 @@ function createStoredDirectDmSession(
   };
 }
 
-function createStoredChannelSession(): Record<string, unknown> {
+function createStoredChannelSession(): SessionEntry {
   return {
     sessionId: "sess-1",
     updatedAt: Date.now(),
@@ -135,7 +129,7 @@ function resolveUserRoute(params: { cfg: OpenClawConfig; accountId?: string; tar
 }
 
 async function resolveUserRouteForCurrentSession(params: {
-  storedSession: Record<string, unknown>;
+  storedSession: SessionEntry;
   accountId?: string;
   target?: string;
   matrix?: MatrixChannelConfig;
@@ -282,7 +276,7 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expectCurrentDmRoomRoute(route);
   });
 
-  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", async () => {
+  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", () => {
     const route = resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",

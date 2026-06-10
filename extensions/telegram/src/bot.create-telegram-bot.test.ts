@@ -1,4 +1,7 @@
 // Telegram tests cover bot.create telegram bot plugin behavior.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -14,6 +17,8 @@ const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runti
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
+const tempStateDirs: string[] = [];
+let previousStateDir: string | undefined;
 const {
   answerCallbackQuerySpy,
   botCtorSpy,
@@ -60,7 +65,6 @@ const {
 } = await import("./bot-core.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
 const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
-const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const {
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
@@ -73,6 +77,12 @@ const { resolveTelegramGroupPromptSettings } = await import("./group-config-help
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
+
+function createTelegramBotTestStateDir(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-telegram-bot-"));
+  tempStateDirs.push(dir);
+  return dir;
+}
 
 const loadConfig = getLoadConfigMock();
 const loadSessionStore = getLoadSessionStoreMock();
@@ -214,10 +224,19 @@ describe("createTelegramBot", () => {
     }
   });
   afterEach(() => {
-    messageDispatchDedupe.setTelegramMessageDispatchDedupeStoreForTest(undefined);
     pluginStateTestRuntime.resetPluginStateStoreForTests();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    for (const dir of tempStateDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
   beforeEach(async () => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
     clearAccountThrottlersForTest();
     throttlerSpy.mockReset();
@@ -230,14 +249,6 @@ describe("createTelegramBot", () => {
         telegramDeps: telegramBotDepsForTest,
       });
     pluginStateTestRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
-    const store = pluginStateTestRuntime.createPluginStateKeyedStoreForTests("telegram", {
-      namespace: messageDispatchDedupe.TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
-      maxEntries: messageDispatchDedupe.TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
-    }) as NonNullable<
-      Parameters<typeof messageDispatchDedupe.setTelegramMessageDispatchDedupeStoreForTest>[0]
-    >;
-    await store.clear();
-    messageDispatchDedupe.setTelegramMessageDispatchDedupeStoreForTest(store);
   });
 
   // groupPolicy tests
@@ -1089,6 +1100,7 @@ describe("createTelegramBot", () => {
         data: "OC_MULTI|toggle|env|prod",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
+          business_connection_id: "biz-multi-1",
           chat: { id: 1234, type: "private" },
           date: 1736380800,
           message_id: 10,
@@ -1102,6 +1114,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      business_connection_id: "biz-multi-1",
       reply_markup: {
         inline_keyboard: [[{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
       },

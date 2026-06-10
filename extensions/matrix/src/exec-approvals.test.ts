@@ -360,7 +360,7 @@ describe("matrix exec approvals", () => {
           lastTo: "channel:C999",
           lastAccountId: "work",
         },
-      } as Parameters<typeof saveSessionStore>[1],
+      },
       { skipMaintenance: true },
     );
     const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });

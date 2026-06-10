@@ -91,9 +91,11 @@ describe("qa scenario catalog", () => {
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
-    expect(JSON.stringify(readQaScenarioById("memory-failure-fallback").execution.flow)).toContain(
-      "liveTurnTimeoutMs(env, 180000)",
+    const fallbackFlow = JSON.stringify(
+      readQaScenarioById("memory-failure-fallback").execution.flow,
     );
+    expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -412,7 +414,10 @@ describe("qa scenario catalog", () => {
       "kitchen-sink-realtime-voice-provider",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
-      "only bundled plugins can register agent tool result middleware",
+      "agent tool result middleware must be a function",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "trusted tool policy registration requires id, description, and evaluate()",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
       "control UI descriptor registration requires id, surface, label, and valid optional fields",
