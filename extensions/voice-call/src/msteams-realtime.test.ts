@@ -286,14 +286,17 @@ describe("createMsteamsRealtimeCall", () => {
       deps: {
         provider: mock.provider,
         providerConfig: {},
-        getLatestFrame: () => ({
-          source: "screenshare",
-          dataBase64: frameData,
-          mime: "image/jpeg",
-          width: 100,
-          height: 100,
-          ts: 0,
-        }),
+        getLatestFrame: (source) =>
+          source === "camera"
+            ? undefined
+            : {
+                source: "screenshare",
+                dataBase64: frameData,
+                mime: "image/jpeg",
+                width: 100,
+                height: 100,
+                ts: 0,
+              },
       },
     });
 
@@ -306,6 +309,33 @@ describe("createMsteamsRealtimeCall", () => {
 
     // Scene change → pushed again.
     frameData = "BBB";
+    call.notifyInboundFrame();
+    expect(mock.sendImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("pushes camera and screen-share simultaneously when the caller shares both", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        getLatestFrame: (source) => ({
+          source: source === "camera" ? "camera" : "screenshare",
+          dataBase64: source === "camera" ? "CAM" : "SCREEN",
+          mime: "image/jpeg",
+          width: 100,
+          height: 100,
+          ts: 0,
+        }),
+      },
+    });
+
+    call.notifyInboundFrame();
+    // Both sources present and distinct → one push each (screen-share + camera).
+    expect(mock.sendImage).toHaveBeenCalledTimes(2);
+    // Unchanged on the next tick → deduped per source.
     call.notifyInboundFrame();
     expect(mock.sendImage).toHaveBeenCalledTimes(2);
   });
@@ -916,14 +946,17 @@ describe("createMsteamsRealtimeCall", () => {
         deps: {
           provider: mock.provider,
           providerConfig: {},
-          getLatestFrame: () => ({
-            source: "screenshare",
-            dataBase64: frameData,
-            mime: "image/jpeg",
-            width: 1,
-            height: 1,
-            ts: 0,
-          }),
+          getLatestFrame: (source) =>
+            source === "camera"
+              ? undefined
+              : {
+                  source: "screenshare",
+                  dataBase64: frameData,
+                  mime: "image/jpeg",
+                  width: 1,
+                  height: 1,
+                  ts: 0,
+                },
           visionBudget: new VisionBudget(0), // unlimited
         },
       });

@@ -436,7 +436,7 @@ export function createMsteamsRealtimeCall(params: {
   let lastLookText: string | undefined;
 
   /** Phase 4 proactive vision: the last frame bytes pushed into the session (skip unchanged), + timer. */
-  let lastPushedFrameData: string | undefined;
+  const lastPushedFrameData: { camera?: string; screenshare?: string } = {};
   let visionPushTimer: ReturnType<typeof setInterval> | undefined;
   /** Phase 6b: last emotion cued to the worker, so we only send on change (early + self-correcting). */
   let lastSentExpression: string | undefined;
@@ -645,26 +645,32 @@ export function createMsteamsRealtimeCall(params: {
     if (closed || recordingGateBlocks() || !deps.getLatestFrame) {
       return;
     }
-    const frame = deps.getLatestFrame();
-    if (!frame || frame.dataBase64 === lastPushedFrameData) {
-      return; // no frame yet, or unchanged since the last push
-    }
-    if (deps.visionBudget && !deps.visionBudget.tryConsume(callId, Date.now())) {
-      return; // over the per-call vision budget
-    }
-    lastPushedFrameData = frame.dataBase64;
-    logger?.debug?.(`MsteamsRealtime: ambient vision push (${frame.source}) for ${callId}`);
-    try {
-      const owner = describeMsteamsVideoFrameOwner(frame);
-      realtime.sendImage({
-        dataBase64: frame.dataBase64,
-        mime: frame.mime,
-        text: owner ? `Live view — ${owner}.` : "Live view of the call.",
-      });
-    } catch (err) {
-      logger?.debug?.(
-        `MsteamsRealtime: vision push failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
-      );
+    // Push BOTH sources the caller is sharing (screen-share first, then camera) so the model is
+    // simultaneously aware of, e.g., the person on camera AND their screen — not just one. Per-source
+    // change-check skips a static source; each push draws from the shared per-call vision budget.
+    for (const source of ["screenshare", "camera"] as const) {
+      const frame = deps.getLatestFrame(source);
+      if (!frame || frame.dataBase64 === lastPushedFrameData[source]) {
+        continue; // no frame for this source, or unchanged since the last push
+      }
+      if (deps.visionBudget && !deps.visionBudget.tryConsume(callId, Date.now())) {
+        break; // over the per-call vision budget — stop for this round
+      }
+      lastPushedFrameData[source] = frame.dataBase64;
+      const label = source === "camera" ? "camera" : "screen-share";
+      logger?.debug?.(`MsteamsRealtime: ambient vision push (${label}) for ${callId}`);
+      try {
+        const owner = describeMsteamsVideoFrameOwner(frame);
+        realtime.sendImage({
+          dataBase64: frame.dataBase64,
+          mime: frame.mime,
+          text: owner ? `Live ${label} — ${owner}.` : `Live ${label} of the call.`,
+        });
+      } catch (err) {
+        logger?.debug?.(
+          `MsteamsRealtime: vision push failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
