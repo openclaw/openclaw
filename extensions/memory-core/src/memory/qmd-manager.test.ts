@@ -703,6 +703,55 @@ describe("QmdMemoryManager", () => {
     await manager?.close();
   });
 
+  it("keeps one-shot CLI searches from scheduling session-start updates", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          workspace: workspaceDir,
+          memorySearch: {
+            ...cfg.agents?.defaults?.memorySearch,
+            sync: { watch: false, onSessionStart: true, onSearch: true },
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "cli" });
+
+    await expect(
+      manager.search("glacier", { sessionKey: "agent:main:cli:memory-search" }),
+    ).resolves.toStrictEqual([]);
+    await manager.close();
+
+    const updateCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(updateCalls).toStrictEqual([]);
+    expect(
+      spawnMock.mock.calls.some((call: unknown[]) => (call[1] as string[])?.[0] === "search"),
+    ).toBe(true);
+  });
+
   it("can be configured to block startup on boot update", async () => {
     cfg = {
       ...cfg,

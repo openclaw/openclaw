@@ -54,6 +54,7 @@ export function resolveCodexProtocolPnpmCommand(
   const env = options.env ?? process.env;
   const command = resolvePnpmRunner({
     comSpec: options.comSpec ?? resolveEnvValue(env, "ComSpec"),
+    env,
     npmExecPath: options.npmExecPath ?? env.npm_execpath,
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,

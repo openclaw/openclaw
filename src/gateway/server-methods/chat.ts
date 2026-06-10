@@ -3068,7 +3068,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       },
     );
     const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
-    const { cfg, entry, canonicalKey: sessionKey } = sessionLoadResult;
+    const { cfg, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
@@ -3080,7 +3080,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const requestedSessionId = normalizeOptionalText(p.sessionId);
     const backingSessionId = entry?.sessionId ?? requestedSessionId;
-    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
+    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry, {
+      acpMetadataSessionKey: legacyKey ?? sessionKey,
+    });
     if (deletedAgentId !== null) {
       respond(
         false,

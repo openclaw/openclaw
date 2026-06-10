@@ -57,7 +57,6 @@ import type {
   PluginHealthErrorSummary,
   PluginHealthSummary,
 } from "./health.types.js";
-import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type {
@@ -234,8 +233,7 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = async (storePath: string, cfg: OpenClawConfig) => {
-  await ensureSessionStateMigratedForCommand(cfg);
+const buildSessionSummary = async (storePath: string) => {
   const { loadSessionStore } = await import("../config/sessions/store.js");
   const store = loadSessionStore(storePath, { clone: false });
   const sessions = Object.entries(store)
@@ -426,7 +424,7 @@ export async function getHealthSnapshot(params?: {
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath, cfg));
+    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
     sessionCache.set(storePath, sessions);
     agents.push({
       agentId: entry.id,
@@ -442,10 +440,7 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    (await buildSessionSummary(
-      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
-      cfg,
-    ));
+    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
 
   const start = Date.now();
   const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
@@ -739,7 +734,7 @@ export async function healthCommand(
                 name: entry.name,
                 isDefault: entry.id === localAgents.defaultAgentId,
                 heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-                sessions: await buildSessionSummary(storePath, cfg),
+                sessions: await buildSessionSummary(storePath),
               } satisfies AgentHealthSummary;
             }),
           );
