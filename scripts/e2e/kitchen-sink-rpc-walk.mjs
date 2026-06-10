@@ -1366,12 +1366,16 @@ export function assertCreatedKitchenSinkSession(payload, expectedKey = SESSION_K
   return created;
 }
 
-export function assertKitchenSinkUiDescriptors(payload) {
+export function assertKitchenSinkUiDescriptors(payload, options = {}) {
+  const expectDescriptor = options.expectDescriptor !== false;
   const descriptorPayload = assertObjectPayload(payload, "plugins.uiDescriptors");
   if (descriptorPayload.ok !== true || !Array.isArray(descriptorPayload.descriptors)) {
     throw new Error(
       `plugins.uiDescriptors returned invalid payload: ${boundedJsonPreview(payload)}`,
     );
+  }
+  if (!expectDescriptor) {
+    return undefined;
   }
   const descriptor = descriptorPayload.descriptors.find((entry) => entry?.pluginId === PLUGIN_ID);
   if (!descriptor) {
@@ -2171,7 +2175,9 @@ export async function main() {
     assertTtsProviderCoverage(ttsStatus, "status");
 
     const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, rpcOptions);
-    assertKitchenSinkUiDescriptors(uiDescriptors);
+    assertKitchenSinkUiDescriptors(uiDescriptors, {
+      expectDescriptor: env.OPENCLAW_KITCHEN_SINK_PERSONALITY !== "conformance",
+    });
     const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);
     assertDiagnosticStabilityClean(stability);
     await sampleInFlight?.catch(() => {});

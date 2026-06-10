@@ -405,7 +405,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
     - `config.get` returns the current config snapshot and hash.
     - `config.set` writes a validated config payload.
-    - `config.patch` merges a partial config update.
+    - `config.patch` merges a partial config update. Destructive array
+      replacement requires the affected path in `replacePaths`; nested arrays
+      under array entries use `[]` paths such as `agents.list[].skills`.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` and mirrors the Gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
@@ -778,16 +780,19 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
-  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
-    gateway token/password.
-- Omitting device identity has scope consequences. When a Control UI connection
-  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity`
-  clears self-declared scopes to an empty set for token, password, and
-  trusted-proxy auth. The connection is allowed on explicit trust paths, but
-  scope-gated methods fail. The exception is local Control UI token/password
-  sessions with `allowInsecureAuth`, which preserve scopes. For other cases,
-  set `gateway.controlUi.dangerouslyDisableDeviceAuth=true` only as a
-  break-glass scope-preservation path.
+  - direct-loopback `gateway-client` backend RPCs on the reserved internal
+    helper path.
+- Omitting device identity has scope consequences. When a device-less operator
+  connection is allowed through an explicit trust path, OpenClaw still clears
+  self-declared scopes to an empty set unless that path has a named
+  scope-preservation exception. Scope-gated methods then fail with
+  `missing scope`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth=true` is a Control UI
+  break-glass scope-preservation path. It does not grant scopes to arbitrary
+  custom backend or CLI-shaped WebSocket clients.
+- The reserved direct-loopback `gateway-client` backend helper path preserves
+  scopes only for internal local control-plane RPCs; custom backend IDs do not
+  receive this exception.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics
