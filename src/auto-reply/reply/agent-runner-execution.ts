@@ -2932,6 +2932,17 @@ export async function runAgentTurnWithFallback(params: {
         cfg: params.followupRun.run.config,
       });
 
+      emitAgentEvent({
+        runId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: message,
+          endedAt: Date.now(),
+          fallbackExhaustedFailure: true,
+        },
+      });
       params.replyOperation?.fail("run_failed", err);
       return {
         kind: "final",
