@@ -166,6 +166,17 @@ function readFalQueueResponse(payload: unknown): FalQueueResponse {
   };
 }
 
+function readFalQueueResultResponse(payload: unknown): FalQueueResponse {
+  const queueResponse = readFalQueueResponse(payload);
+  if (queueResponse.response || !isRecord(payload)) {
+    return queueResponse;
+  }
+  if (payload.video !== undefined || payload.videos !== undefined) {
+    return { ...queueResponse, response: readFalVideoPayload(payload) };
+  }
+  return queueResponse;
+}
+
 function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
@@ -509,7 +520,7 @@ async function waitForFalQueueResult(params: {
     }
     lastStatus = status;
     if (status === "COMPLETED") {
-      return readFalQueueResponse(
+      return readFalQueueResultResponse(
         await fetchFalJson({
           url: params.responseUrl,
           init: {

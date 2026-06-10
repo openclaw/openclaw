@@ -61,6 +61,7 @@ describe("fal video generation provider", () => {
     videoUrl: string;
     bytes: string;
     contentType?: string;
+    resultPayload?: Record<string, unknown>;
     responseExtras?: Record<string, unknown>;
   }) {
     fetchGuardMock
@@ -73,13 +74,15 @@ describe("fal video generation provider", () => {
       )
       .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
       .mockResolvedValueOnce(
-        releasedJson({
-          status: "COMPLETED",
-          response: {
-            video: { url: params.videoUrl },
-            ...params.responseExtras,
+        releasedJson(
+          params.resultPayload ?? {
+            status: "COMPLETED",
+            response: {
+              video: { url: params.videoUrl },
+              ...params.responseExtras,
+            },
           },
-        }),
+        ),
       )
       .mockResolvedValueOnce(
         releasedVideo({ contentType: params.contentType ?? "video/mp4", bytes: params.bytes }),
@@ -169,6 +172,37 @@ describe("fal video generation provider", () => {
     expect(result.videos[0]?.url).toBe("https://fal.run/files/video.mp4");
     expect(result.metadata).toEqual({
       requestId: "req-123",
+    });
+  });
+
+  it("preserves raw fal video results fetched from the queue response URL", async () => {
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "req-raw",
+      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-raw/status",
+      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-raw",
+      videoUrl: "https://fal.run/files/raw-video.mp4",
+      bytes: "raw-mp4-bytes",
+      resultPayload: {
+        video: { url: "https://fal.run/files/raw-video.mp4" },
+        prompt: "A raw queue result",
+        seed: 443600358,
+      },
+    });
+
+    const provider = buildFalVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "fal",
+      model: "fal-ai/minimax/video-01-live",
+      prompt: "A raw queue result",
+      cfg: {},
+    });
+
+    expect(result.videos[0]?.url).toBe("https://fal.run/files/raw-video.mp4");
+    expect(result.metadata).toEqual({
+      requestId: "req-raw",
+      prompt: "A raw queue result",
+      seed: 443600358,
     });
   });
 
