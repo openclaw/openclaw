@@ -373,6 +373,10 @@ export async function inspectGatewayRestart(params: {
     try {
       const reachable = await loadReachability();
       if (reachable.reachable) {
+        const staleGatewayPids = portUsage.listeners
+          .filter((listener) => classifyPortListener(listener, params.port) === "gateway")
+          .map((listener) => listener.pid)
+          .filter((pid): pid is number => Number.isFinite(pid));
         return applyChannelProbeErrors(
           applyActivatedPluginErrors(
             applyExpectedVersion(
@@ -380,7 +384,7 @@ export async function inspectGatewayRestart(params: {
                 runtime,
                 portUsage,
                 healthy: true,
-                staleGatewayPids: [],
+                staleGatewayPids,
                 gatewayVersion: reachable.gatewayVersion,
                 ...(reachable.activatedPluginErrors.length > 0
                   ? { activatedPluginErrors: reachable.activatedPluginErrors }

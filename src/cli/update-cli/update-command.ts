@@ -2049,6 +2049,7 @@ async function maybeRestartService(params: {
   invocationCwd?: string;
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
+  requireRunningServiceAfterRestart?: boolean;
 }): Promise<boolean> {
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
@@ -2154,7 +2155,7 @@ async function maybeRestartService(params: {
       }
     }
 
-    if (isPackageManagerUpdateMode(params.result.mode)) {
+    if (isPackageManagerUpdateMode(params.result.mode) || opts.requireRunningService) {
       return false;
     }
 
@@ -2269,8 +2270,10 @@ async function maybeRestartService(params: {
         restartInitiated ||
         (restarted && expectedGatewayVersion !== undefined);
       if (shouldVerifyRestart) {
+        const requireRunningService =
+          updatedInstallRestartNeedsServiceRootProof || params.requireRunningServiceAfterRestart;
         const restartHealthy = await verifyRestartedGateway(expectedGatewayVersion, {
-          requireRunningService: updatedInstallRestartNeedsServiceRootProof,
+          requireRunningService,
         });
         if (!restartHealthy) {
           if (!params.opts.json) {
@@ -3861,6 +3864,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     invocationCwd,
     nodeRunner: managedServiceNodeRunner,
     skipLegacyServiceRestart,
+    requireRunningServiceAfterRestart:
+      resultWithPostUpdate.mode === "git" && preManagedServiceStop?.stopped === true,
   });
   if (!restartOk) {
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({
