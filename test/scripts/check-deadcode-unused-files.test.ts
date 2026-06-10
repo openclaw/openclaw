@@ -196,6 +196,7 @@ src/a.ts: src/a.ts
     const calls: unknown[] = [];
 
     const resultPromise = runKnipUnusedFiles({
+      env: { PATH: "" },
       npmExecPath: "",
       spawnCommand(command: string, args: string[], options: unknown) {
         calls.push({ args, command, options });
