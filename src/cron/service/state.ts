@@ -52,6 +52,8 @@ export type CronServiceDeps = {
   nowMs?: () => number;
   log: Logger;
   storePath: string;
+  /** Optional user-facing storage location reported by cron.status / CLI. */
+  statusStorePath?: string;
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;

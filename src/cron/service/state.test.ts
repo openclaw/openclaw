@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { status } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 
 describe("cron service state seam coverage", () => {
@@ -18,6 +19,7 @@ describe("cron service state seam coverage", () => {
         error: vi.fn(),
       },
       storePath: "/tmp/cron/jobs.json",
+      statusStorePath: "/tmp/state/openclaw.sqlite",
       cronEnabled: true,
       defaultAgentId: "ops",
       sessionStorePath: "/tmp/sessions.json",
@@ -36,6 +38,7 @@ describe("cron service state seam coverage", () => {
     expect(state.storeFileMtimeMs).toBeNull();
 
     expect(state.deps.storePath).toBe("/tmp/cron/jobs.json");
+    expect(state.deps.statusStorePath).toBe("/tmp/state/openclaw.sqlite");
     expect(state.deps.cronEnabled).toBe(true);
     expect(state.deps.defaultAgentId).toBe("ops");
     expect(state.deps.sessionStorePath).toBe("/tmp/sessions.json");
@@ -66,5 +69,25 @@ describe("cron service state seam coverage", () => {
     expect(state.deps.nowMs()).toBe(789_000);
 
     nowSpy.mockRestore();
+  });
+
+  it("reports statusStorePath instead of the internal cron mirror path", async () => {
+    const state = createCronServiceState({
+      log: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      storePath: "/tmp/cron/jobs.json",
+      statusStorePath: "/tmp/state/openclaw.sqlite",
+      cronEnabled: true,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const summary = await status(state);
+    expect(summary.storePath).toBe("/tmp/state/openclaw.sqlite");
   });
 });

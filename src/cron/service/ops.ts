@@ -247,7 +247,7 @@ export async function status(state: CronServiceState) {
     await ensureLoadedForRead(state);
     return {
       enabled: state.deps.cronEnabled,
-      storePath: state.deps.storePath,
+      storePath: state.deps.statusStorePath ?? state.deps.storePath,
       jobs: state.store?.jobs.length ?? 0,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
     };
