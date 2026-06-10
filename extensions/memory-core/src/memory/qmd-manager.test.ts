@@ -2684,6 +2684,77 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("applies temporal decay to qmd search results when enabled", async () => {
+    const toDatedMemoryName = (date: Date) => `memory/${date.toISOString().slice(0, 10)}.md`;
+    const recentPath = toDatedMemoryName(new Date());
+    const stalePath = toDatedMemoryName(new Date(Date.now() - 60 * 24 * 60 * 60 * 1000));
+
+    const baseDefaults = (cfg as { agents?: { defaults?: Record<string, unknown> } }).agents
+      ?.defaults;
+    cfg = {
+      ...cfg,
+      agents: {
+        ...(cfg as { agents?: Record<string, unknown> }).agents,
+        defaults: {
+          ...baseDefaults,
+          memorySearch: {
+            ...(baseDefaults?.memorySearch as Record<string, unknown>),
+            query: { hybrid: { temporalDecay: { enabled: true, halfLifeDays: 30 } } },
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit(
+            "data",
+            JSON.stringify([
+              {
+                file: `qmd://workspace-main/${stalePath}`,
+                score: 0.9,
+                snippet: "@@ -3,1\nrouter glacier backup",
+              },
+              {
+                file: `qmd://workspace-main/${recentPath}`,
+                score: 0.6,
+                snippet: "@@ -5,1\nrouter glacier backup today",
+              },
+            ]),
+          );
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    const results = await manager.search("router glacier backup", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    // The stale dated memory file has the higher raw score, but a 60-day age
+    // at a 30-day half-life decays it to ~0.225, below the fresh file's ~0.6.
+    expect(results.map((entry) => entry.path)).toEqual([recentPath, stalePath]);
+    const recent = results[0];
+    const stale = results[1];
+    expect(recent.score).toBeGreaterThan(0.55);
+    expect(stale.score).toBeLessThan(0.3);
+    await manager.close();
+  });
+
   it("keeps invalid qmd query stdout failed after a non-zero exit", async () => {
     cfg = {
       ...cfg,

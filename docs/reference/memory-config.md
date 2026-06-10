@@ -332,6 +332,9 @@ All under `memorySearch.query.hybrid`:
 
     Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 
+    Temporal decay applies to both the builtin hybrid engine and QMD search
+    results, so dated memory recency is consistent across backends.
+
   </Tab>
 </Tabs>
 
