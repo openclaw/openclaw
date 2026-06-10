@@ -267,7 +267,9 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   const labelKey = list.sessions[0].key;
-  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
+  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey], {
+    acpMetadataSessionKey: labelKey,
+  });
   if (agentCheckLabel) {
     return agentCheckLabel;
   }

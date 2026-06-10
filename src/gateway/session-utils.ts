@@ -977,6 +977,10 @@ export function resolveDeletedAgentIdFromSessionKey(
     return null;
   }
   const agentId = normalizeAgentId(parsed.agentId);
+  if (entry?.hubDelegated) {
+    // Hub-delegated workers use harness agent ids in the key, not configured owners.
+    return null;
+  }
   if (listAgentIds(cfg).includes(agentId)) {
     return null;
   }

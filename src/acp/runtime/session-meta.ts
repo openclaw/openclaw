@@ -167,7 +167,7 @@ function acpSessionRowMatchesEntry(
 
 function selectAcpSessionRowForEntry(
   row: AcpSessionRow | undefined,
-  entry: SessionEntry | undefined,
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
 ): AcpSessionRow | undefined {
   if (!row || !acpSessionRowMatchesEntry(row, entry)) {
     return undefined;
