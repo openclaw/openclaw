@@ -55,3 +55,55 @@ export function assignClientContextAttributes(
     attributes[attrKey] = JSON.stringify(value).slice(0, MAX_CLIENT_CONTEXT_ATTRIBUTE_CHARS);
   }
 }
+
+/** Bound on remembered entries (counts each candidate key separately). */
+const DEFAULT_MAX_REMEMBERED_ENTRIES = 1024;
+
+export type ClientContextCache = {
+  remember(keys: string[], clientContext: ClientContextBag | undefined): void;
+  resolve(keys: string[]): ClientContextBag | undefined;
+  clear(): void;
+};
+
+/**
+ * Per-run cache of the seeded clientContext. Populated from the lifecycle seed
+ * events (`session.state` / `message.queued`) and read when building the child
+ * `model.call.*` spans, which do not carry the bag themselves. Bounded by
+ * insertion order so a long-lived gateway process cannot accumulate stale runs.
+ */
+export function createClientContextCache(
+  maxEntries = DEFAULT_MAX_REMEMBERED_ENTRIES,
+): ClientContextCache {
+  const byKey = new Map<string, ClientContextBag>();
+  return {
+    remember(keys, clientContext) {
+      if (!clientContext || keys.length === 0) {
+        return;
+      }
+      for (const key of keys) {
+        // Refresh insertion order so the most-recently-seen run survives eviction.
+        byKey.delete(key);
+        byKey.set(key, clientContext);
+      }
+      while (byKey.size > maxEntries) {
+        const oldest = byKey.keys().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        byKey.delete(oldest);
+      }
+    },
+    resolve(keys) {
+      for (const key of keys) {
+        const hit = byKey.get(key);
+        if (hit) {
+          return hit;
+        }
+      }
+      return undefined;
+    },
+    clear() {
+      byKey.clear();
+    },
+  };
+}
