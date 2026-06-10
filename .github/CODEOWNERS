@@ -64,3 +64,25 @@
 /scripts/openclaw-npm-publish.sh @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-release-check.ts @openclaw/openclaw-release-managers
 /scripts/release-check.ts @openclaw/openclaw-release-managers
+
+# Area ownership for runtime code paths.
+# These entries route PRs to the maintainers documented in CONTRIBUTING.md.
+# Note: security-sensitive paths above take precedence via last-match-wins.
+
+# Gateway subsystem
+/src/gateway/ @frankekn @joshavant
+/docs/gateway/ @frankekn @joshavant
+
+# Agents and subagents runtime
+/src/agents/ @frankekn @tyler6204 @vincentkoc
+/docs/agents/ @frankekn @tyler6204 @vincentkoc
+
+# CLI surface
+/src/cli/ @joshavant @gumadeiras
+/docs/cli/ @joshavant @gumadeiras
+
+# Cron subsystem
+/src/cron/ @tyler6204
+
+# Commands
+/src/commands/ @joshavant @gumadeiras
