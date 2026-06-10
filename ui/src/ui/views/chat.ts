@@ -94,13 +94,6 @@ function isCurrentSessionSubmittedProgress(item: ChatQueueItem, sessionKey: stri
   );
 }
 
-function isNewerThanTerminalStatus(
-  item: ChatQueueItem,
-  status: ChatRunUiStatus | null | undefined,
-): boolean {
-  return !hasTerminalRunStatus(status) || item.createdAt > status.occurredAt;
-}
-
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -1586,10 +1579,8 @@ export function renderChat(props: ChatProps) {
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
   const showAbortableUi = canAbort && !hasTerminalStatus;
-  const showSubmittedProgressUi = props.queue.some(
-    (item) =>
-      isCurrentSessionSubmittedProgress(item, props.sessionKey) &&
-      isNewerThanTerminalStatus(item, props.runStatus),
+  const showSubmittedProgressUi = props.queue.some((item) =>
+    isCurrentSessionSubmittedProgress(item, props.sessionKey),
   );
   const composerRunStatus =
     showAbortableUi || showSubmittedProgressUi

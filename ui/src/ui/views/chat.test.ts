@@ -1243,7 +1243,7 @@ describe("chat loading skeleton", () => {
     expect(status?.textContent).toContain("In progress");
   });
 
-  it("shows newer model-switch progress over the previous run's terminal status", () => {
+  it("shows active model-switch progress over the previous run's terminal status", () => {
     const container = renderChatView({
       runStatus: {
         phase: "done",
@@ -1255,7 +1255,7 @@ describe("chat loading skeleton", () => {
         {
           id: "send-main",
           text: "hello",
-          createdAt: 1_001,
+          createdAt: 999,
           sendRunId: "run-main",
           sendState: "waiting-model",
           sessionKey: "main",
