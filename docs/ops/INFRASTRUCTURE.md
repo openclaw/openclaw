@@ -205,8 +205,29 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
 
 ## 11. Risks & open items
 
-1. **RAM pressure (high):** EU `~7.5/7.6 GiB`, US `~7.2/7.6 GiB` — both near saturation. The
-   US Graphiti stack adds load on the smallest box (2 vCPU). Consider resizing or rebalancing.
+> **Ops changes 2026-06-10** (bug-list sweep — see `scripts/ops/bug_list.md` for full detail):
+> - **US docker daemon** now has `/etc/docker/daemon.json` with json-file rotation (10m×3) +
+>   `live-restore` (same as EU); all 12 US agent containers recreated so rotation is live.
+>   ⚠️ Staging rule learned the hard way: recreate/boot gateways in batches of ~3 on the
+>   2-vCPU US host — 12 simultaneous node boots drove load to 117 and stalled sshd.
+> - **mcp-bridge plugin v1.0.1** (EPIPE hardening) deployed to canonical + all per-agent
+>   copies on both hosts (`.bak.pre-epipe-fix` kept). Source of truth is now
+>   `openclaw-dashboard` `assets/mcp-bridge/` (PR #114); `ensureMcpBridgePlugin` converges
+>   host copies by sha. The canonical extension (`/root/.openclaw/extensions/mcp-bridge`)
+>   now ships `mcp-server-filesystem`, `mcp-server-brave-search`, and `exa-mcp-server@3.1.9`
+>   as real package.json deps. Hosts have no npm — bootstrap/update via a one-off container:
+>   `docker run --rm --entrypoint sh -e HOME=/tmp -v /root/.openclaw/extensions/mcp-bridge:/work -w /work <gateway-image> -c 'npm install …'`
+>   then `chown -R 1000:1000` the dir.
+> - **productguy (US) is stopped** (invalid Telegram token, 401 loop). Re-enable = new
+>   BotFather token into its `docker.env`, then `docker start productguy-openclaw-gateway-1`.
+> - `diagnostic-cron.sh` now archives stale `*.bak` / `.archive-*` (>7 days) from
+>   `/opt/openclaw` on both hosts into `/root/openclaw-cruft-archive/<date>/` (never deletes;
+>   `soul.md` + `status/` untouched — soul.md seeds new agents' SOUL.md at deploy).
+
+1. **RAM pressure:** EU `~7.5/7.6 GiB` near saturation. US relieved by the 2026-06-10 sweep
+   (~3.4 GiB available after stopping the productguy loop + fixing the mcp-bridge crash-loops +
+   full recreate); watch the daily AUTOSCAN — rescale only if `swap_used` stays >1 GiB. The
+   US Graphiti stack still adds load on the smallest box (2 vCPU).
 2. **Image drift on US:** `designer`, `agentav`, `gems` run a **stale local image
    `openclaw:v2026.05.05.1`** (not from the registry); `raingame` `v2026.05.24.2`; `life`
    `v2026.06.01.1`; the rest `v2026.05.24.1`. EU is uniform on `v2026.05.24.1`. The fleet is

@@ -33,6 +33,25 @@ git pull -q --rebase origin main || echo "WARN: git pull failed; continuing with
 REPORT="$(/bin/bash scripts/ops/agents_server_diagnostic.sh all 2>&1)"
 echo "$REPORT"
 
+# 2.5 Archive untracked cruft from the hosts' /opt/openclaw checkouts (OB-7)
+#     so it can't collide with deploy-time `git pull`. Move — never delete —
+#     into /root/openclaw-cruft-archive/<date>/ on each host. Only clearly
+#     stale patterns (*.bak, .archive-*) older than 7 days are touched;
+#     soul.md and status/ are deliberately left alone (soul.md seeds new
+#     agents' SOUL.md during provisioning).
+for H in 89.167.70.46 5.161.84.219; do
+  ssh -i "$SSH_KEY" -o ConnectTimeout=15 -o BatchMode=yes "root@$H" '
+    cd /opt/openclaw 2>/dev/null || exit 0
+    ARCHIVE="/root/openclaw-cruft-archive/$(date +%F)"
+    FILES=$(find . -maxdepth 2 \( -name "*.bak" -o -name ".archive-*" \) -mtime +7 2>/dev/null)
+    [ -n "$FILES" ] || exit 0
+    mkdir -p "$ARCHIVE"
+    N=$(printf "%s\n" "$FILES" | wc -l)
+    printf "%s\n" "$FILES" | xargs -I{} mv {} "$ARCHIVE/"
+    echo "→ cruft-archive: moved $N item(s) to $ARCHIVE"
+  ' 2>/dev/null || echo "WARN: cruft-archive skipped for $H (ssh failed)"
+done
+
 # 3. Commit + push the refreshed bug list (only if it actually changed).
 if ! git diff --quiet scripts/ops/bug_list.md 2>/dev/null; then
   git add scripts/ops/bug_list.md
