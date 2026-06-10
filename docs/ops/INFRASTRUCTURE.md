@@ -24,7 +24,7 @@
   DEV / BUILD                 EU PROD  (ssh alias 1stclaw)                     US PROD (ssh alias 2ndclaw)
   204.168.223.245             89.167.70.46                                     5.161.84.219
   8 vCPU / 30G / 226G         4 vCPU / 7.6G / 75G                              2 vCPU / 7.6G / 75G
-  • builds gateway images     • 13 agent gateways                              • 13 agent gateways
+  • builds gateway images     • 12 agent gateways                              • 12 agent gateways
   • all source repos          • uniform image v2026.05.24.1                    • + graphiti-life (Graphiti + FalkorDB)
   • dev DBs (pg + mysql)      • RAM ~99% used ⚠                               • RAM ~94% used ⚠ · image drift ⚠
 
@@ -38,8 +38,8 @@
 | Role            | IP                | SSH alias¹           | Specs            | Disk         | Uptime | What runs                                                                                                        |
 | --------------- | ----------------- | -------------------- | ---------------- | ------------ | ------ | ---------------------------------------------------------------------------------------------------------------- |
 | **Dev / Build** | `204.168.223.245` | — (run scripts here) | 8 vCPU · 30 GiB  | 226 GB (81%) | ~67 d  | Gateway image builds, all git repos, dev Postgres + MySQL, 1 dev agent `main`. Coolify present but **inactive**. |
-| **EU Prod**     | `89.167.70.46`    | `1stclaw` (default)  | 4 vCPU · 7.6 GiB | 75 GB (44%)  | ~98 d  | 13 production agent gateways. **RAM ~7.5/7.6 GiB.**                                                              |
-| **US Prod**     | `5.161.84.219`    | `2ndclaw`            | 2 vCPU · 7.6 GiB | 75 GB (61%)  | ~97 d  | 13 agent gateways + **Graphiti memory stack**. **RAM ~7.2/7.6 GiB.**                                             |
+| **EU Prod**     | `89.167.70.46`    | `1stclaw` (default)  | 4 vCPU · 7.6 GiB | 75 GB (44%)  | ~98 d  | 12 production agent gateways. **RAM ~7.5/7.6 GiB.**                                                              |
+| **US Prod**     | `5.161.84.219`    | `2ndclaw`            | 2 vCPU · 7.6 GiB | 75 GB (61%)  | ~97 d  | 12 agent gateways + **Graphiti memory stack**. **RAM ~7.2/7.6 GiB.**                                             |
 
 ¹ Aliases `1stclaw`/`2ndclaw` are defined in the **dev host's** `~/.ssh/config` and used by `deploy.sh`. From a laptop, connect by IP with the key above.
 
@@ -71,20 +71,20 @@ host is legacy/inactive — this is the live one.)
 
 ---
 
-## 4. Agent fleet (26 live gateways)
+## 4. Agent fleet (24 live gateways)
 
 Each agent = its own `docker compose` project named after the agent. The gateway container
 `<agent>-openclaw-gateway-1` listens on container port `18789` (WS), published to a unique
 host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with secrets in
 `/root/.openclaw/agents/<agent>/docker.env`.
 
-### EU (`89.167.70.46`) — 13 agents, all on `gateway:v2026.05.24.1`
+### EU (`89.167.70.46`) — 12 agents, all on `gateway:v2026.05.24.1`
 
-`braveisrael, kycbot, mikyhelper, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell`
+`braveisrael, kycbot, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell` (mikyhelper deleted — invalid bot token)
 
-### US (`5.161.84.219`) — 13 agents (image versions vary — see §10)
+### US (`5.161.84.219`) — 12 agents (image versions vary — see §10)
 
-`agentav, bob-the-project-manager, designer, familyorganizer, gems, jim-the-ceo, life, productguy, projectmanager, raingame, social-bob, thebook, vcode1bot`
+`agentav, bob-the-project-manager, designer, familyorganizer, gems, jim-the-ceo, life, projectmanager, raingame, social-bob, thebook, vcode1bot` (productguy deleted 2026-06-10 — invalid bot token)
 
 > `testingbot` (EU) is the safe smoke-test target (config-empty, no MCP deps).
 > `life` (US) carries the per-user memory subsystem (§6).
@@ -218,8 +218,8 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
 >   as real package.json deps. Hosts have no npm — bootstrap/update via a one-off container:
 >   `docker run --rm --entrypoint sh -e HOME=/tmp -v /root/.openclaw/extensions/mcp-bridge:/work -w /work <gateway-image> -c 'npm install …'`
 >   then `chown -R 1000:1000` the dir.
-> - **productguy (US) is stopped** (invalid Telegram token, 401 loop). Re-enable = new
->   BotFather token into its `docker.env`, then `docker start productguy-openclaw-gateway-1`.
+> - **productguy (US) deleted 2026-06-10** (invalid Telegram token, 401 loop — stopped first,
+>   then removed by owner; verified no container/dir/volume remnants). US fleet = 12 agents.
 > - `diagnostic-cron.sh` now archives stale `*.bak` / `.archive-*` (>7 days) from
 >   `/opt/openclaw` on both hosts into `/root/openclaw-cruft-archive/<date>/` (never deletes;
 >   `soul.md` + `status/` untouched — soul.md seeds new agents' SOUL.md at deploy).
@@ -274,5 +274,5 @@ mystory 18807 · onlyclaw 18805 · researcher 18829 · specy 18819 · stillasyst
 testingbot 18817 · thebook 18809 · tzahi1 18821 · wellwell 18823
 
 **US (`5.161.84.219`):** agentav 18809 · bob-the-project-manager 18793 · designer 18807 ·
-familyorganizer 18803 · gems 18815 · jim-the-ceo 18797 · life 18813 · productguy 18795 ·
+familyorganizer 18803 · gems 18815 · jim-the-ceo 18797 · life 18813 ·
 projectmanager 18789–18790 · raingame 18811 · social-bob 18791 · thebook 18801 · vcode1bot 18799
