@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.hydration behavior.
 import {
   MessageReferenceType,
   MessageType,
