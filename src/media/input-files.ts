@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
+import { DOCX_MIME_TYPE, extractDocxContent } from "./docx-extract.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
@@ -120,6 +121,7 @@ export const DEFAULT_INPUT_FILE_MIMES = [
   "text/csv",
   "application/json",
   "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
 /** Default decoded-byte cap for input_image payloads. */
 export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -455,6 +457,15 @@ export async function extractFileContentFromSource(params: {
       text,
       images: extracted.images.length > 0 ? extracted.images : undefined,
     };
+  }
+
+  if (mimeType === DOCX_MIME_TYPE) {
+    const extracted = await extractDocxContent({
+      buffer,
+      ...(params.config ? { config: params.config } : {}),
+    });
+    const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
+    return { filename, text };
   }
 
   const text = clampText(decodeTextContent(buffer, charset), limits.maxChars);

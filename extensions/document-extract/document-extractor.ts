@@ -112,3 +112,5 @@ export function createPdfDocumentExtractor(): DocumentExtractorPlugin {
     extract: extractPdfContent,
   };
 }
+
+export { createDocxDocumentExtractor } from "./docx-extractor.js";

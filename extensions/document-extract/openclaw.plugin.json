@@ -7,7 +7,7 @@
   "name": "Document Extraction",
   "description": "Extract text and fallback page images from local document attachments.",
   "contracts": {
-    "documentExtractors": ["pdf"]
+    "documentExtractors": ["pdf", "docx"]
   },
   "configSchema": {
     "type": "object",
