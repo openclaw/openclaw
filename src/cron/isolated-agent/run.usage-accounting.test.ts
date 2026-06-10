@@ -49,6 +49,11 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     expect(cronSession.sessionEntry.outputTokens).toBe(2000);
     expect(cronSession.sessionEntry.totalTokens).toBe(56000);
     expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
+    expect(result.usage).toMatchObject({
+      input_tokens: 75000,
+      output_tokens: 2000,
+      total_tokens: 77000,
+    });
     expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
       usage: {
         input: 55000,

@@ -1011,10 +1011,13 @@ async function finalizeCronRun(params: {
       input_tokens: input,
       output_tokens: output,
     };
+    const aggregateTotalTokens = usage.total ?? input + output;
+    if (aggregateTotalTokens > 0) {
+      telemetryUsage.total_tokens = aggregateTotalTokens;
+    }
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
-      telemetryUsage.total_tokens = totalTokens;
     } else {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
