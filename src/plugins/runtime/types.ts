@@ -17,6 +17,7 @@ export type SubagentRunParams = {
   lightContext?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
+  toolsAllow?: string[];
 };
 
 export type SubagentRunResult = {
