@@ -351,6 +351,31 @@ describe("createMsteamsRealtimeCall", () => {
     expect(mock.sendImage).toHaveBeenCalledTimes(2);
   });
 
+  it("cues a 'thinking' expression while a waiting tool runs", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {}, tools: [CONSULT_TOOL] },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "item-1",
+      callId: "tool-call-1",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: { question: "do a thing" },
+    });
+
+    const thinking = ctx.sent.find(
+      (m) =>
+        typeof m === "object" &&
+        m !== null &&
+        (m as { type?: string }).type === "expression" &&
+        (m as { emotion?: string }).emotion === "thinking",
+    );
+    expect(thinking).toBeDefined();
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();
