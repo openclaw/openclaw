@@ -70,6 +70,13 @@ export function resolveSameModelRateLimitBackoffMs(retriesSoFar: number): number
   return Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, delay);
 }
 
+export function resolveNextSameModelRateLimitRetryCount(params: {
+  retriesSoFar: number;
+  retriedSameModelRateLimit: boolean;
+}): number {
+  return params.retriedSameModelRateLimit ? Math.max(0, params.retriesSoFar) + 1 : 0;
+}
+
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 

@@ -156,6 +156,7 @@ import {
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
+  resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitBackoffMs,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
@@ -1214,7 +1215,7 @@ export async function runEmbeddedAgent(
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
-      let sameModelRateLimitRetries = 0;
+      let consecutiveSameModelRateLimitRetries = 0;
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
@@ -1376,12 +1377,12 @@ export async function runEmbeddedAgent(
         }
       };
       const maybeRetrySameModelRateLimit = async (): Promise<boolean> => {
-        if (sameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+        if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
           return false;
         }
-        const delayMs = resolveSameModelRateLimitBackoffMs(sameModelRateLimitRetries);
+        const delayMs = resolveSameModelRateLimitBackoffMs(consecutiveSameModelRateLimitRetries);
         log.warn(
-          `rate-limit same-model retry ${sameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
+          `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
         );
         try {
           await sleepWithAbort(delayMs, params.abortSignal);
@@ -1393,7 +1394,10 @@ export async function runEmbeddedAgent(
           }
           throw err;
         }
-        sameModelRateLimitRetries += 1;
+        consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retriedSameModelRateLimit: true,
+        });
         return true;
       };
       // Resolve the context engine once and reuse across retries to avoid
@@ -2926,9 +2930,19 @@ export async function runEmbeddedAgent(
             if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
               sameModelIdleTimeoutRetries += 1;
             }
+            if (assistantFailoverOutcome.retryKind !== "same_model_rate_limit") {
+              consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+                retriesSoFar: consecutiveSameModelRateLimitRetries,
+                retriedSameModelRateLimit: false,
+              });
+            }
             lastRetryFailoverReason = assistantFailoverOutcome.lastRetryFailoverReason;
             continue;
           }
+          consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+            retriesSoFar: consecutiveSameModelRateLimitRetries,
+            retriedSameModelRateLimit: false,
+          });
           if (assistantFailoverOutcome.action === "throw") {
             traceAttempts.push({
               provider: activeErrorContext.provider,

@@ -7,6 +7,7 @@ import {
   buildErrorAgentMeta,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitBackoffMs,
 } from "./helpers.js";
 
@@ -99,6 +100,34 @@ describe("resolveSameModelRateLimitBackoffMs", () => {
 
   it("is deterministic so RPM windows clear predictably", () => {
     expect(resolveSameModelRateLimitBackoffMs(2)).toBe(resolveSameModelRateLimitBackoffMs(2));
+  });
+});
+
+describe("resolveNextSameModelRateLimitRetryCount", () => {
+  it("counts only consecutive same-model rate-limit retries", () => {
+    let retriesSoFar = 0;
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    expect(retriesSoFar).toBe(2);
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: false,
+    });
+    expect(retriesSoFar).toBe(0);
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    expect(retriesSoFar).toBe(1);
   });
 });
 
