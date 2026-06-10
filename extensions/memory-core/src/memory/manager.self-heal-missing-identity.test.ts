@@ -8,24 +8,12 @@ import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js
 import type { MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
-let providerInitCallCount = 0;
-
 const createEmbeddingProviderMock = vi.hoisted(() =>
-  vi.fn(async () => {
-    providerInitCallCount++;
-    return {
-      requestedProvider: "auto",
-      provider: {
-        id: "openai",
-        model: "text-embedding-3-small",
-        embedBatch: vi.fn(async () => ({
-          embeddings: [[0.1, 0.2, 0.3]],
-          tokensUsed: 10,
-        })),
-      },
-      providerUnavailableReason: undefined,
-    };
-  }),
+  vi.fn(async () => ({
+    requestedProvider: "auto",
+    provider: null,
+    providerUnavailableReason: "No embeddings provider available.",
+  })),
 );
 
 vi.mock("./embeddings.js", () => ({
@@ -36,7 +24,7 @@ vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 
-describe("memory manager self-heal missing identity with provider init", () => {
+describe("memory manager self-heal missing identity with FTS-only chunks", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let workspaceDir = "";
@@ -51,7 +39,6 @@ describe("memory manager self-heal missing identity with provider init", () => {
 
   beforeEach(async () => {
     createEmbeddingProviderMock.mockClear();
-    providerInitCallCount = 0;
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
@@ -86,8 +73,8 @@ describe("memory manager self-heal missing identity with provider init", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            provider: params.provider ?? "openai",
-            model: "text-embedding-3-small",
+            provider: params.provider ?? "auto",
+            model: "",
             store,
             cache: { enabled: false },
             sync: { watch: false, onSessionStart: false, onSearch: false },
@@ -104,7 +91,7 @@ describe("memory manager self-heal missing identity with provider init", () => {
     return manager;
   }
 
-  async function seedChunksWithNoMeta(): Promise<void> {
+  async function seedFtsOnlyChunksWithNoMeta(): Promise<void> {
     const db = new DatabaseSync(indexPath);
     db.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -135,18 +122,19 @@ describe("memory manager self-heal missing identity with provider init", () => {
     db.close();
   }
 
-  it("self-heals missing index identity by initializing provider during sync", async () => {
-    await seedChunksWithNoMeta();
+  it("self-heals missing identity on non-forced gateway sync when all chunks are FTS-only and provider is unavailable", async () => {
+    await seedFtsOnlyChunksWithNoMeta();
     const memoryManager = await createManager({ vectorEnabled: false });
 
     const statusBefore = memoryManager.status();
     expect(statusBefore.custom?.indexIdentity?.status).toBe("missing");
 
-    await memoryManager.sync({ force: true });
+    // Non-forced sync simulates the gateway's periodic sync loop
+    await memoryManager.sync();
 
-    expect(providerInitCallCount).toBeGreaterThanOrEqual(1);
     const statusAfter = memoryManager.status();
     expect(statusAfter.custom?.indexIdentity?.status).toBe("valid");
     expect(statusAfter.chunks).toBeGreaterThan(0);
+    expect(statusAfter.dirty).toBe(false);
   });
 });
