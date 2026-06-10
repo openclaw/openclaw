@@ -70,8 +70,10 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
 vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
   consumePendingDelegates: vi.fn(() => []),
   markPendingDelegateFailed: vi.fn(),
+  stagePostCompactionDelegate: vi.fn(),
 }));
 
+import { stagePostCompactionDelegate } from "../auto-reply/continuation-delegate-store.js";
 import {
   retainContinuationTimerRef,
   registerContinuationTimerHandle,
@@ -261,10 +263,16 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
 
   // -- 6. Post-compaction modifier (#975 gap) --
 
-  it("dispatches exactly once for [[CONTINUE_DELEGATE: task | post-compaction]] (current behavior: modifier dropped)", async () => {
-    // On this tree, parseDelegateDirective does NOT recognize "post-compaction"
-    // (the #975 gap, fixed in PR #978 not yet merged). The unknown modifier
-    // is treated as part of the task body. The delegate still dispatches once.
+  it("stages exactly once (NOT immediate-spawn) for [[CONTINUE_DELEGATE: task | post-compaction]] (#978 lifeboat-drop fix)", async () => {
+    // Post-#978 (merged): parseDelegateDirective recognizes "post-compaction"
+    // and the announce/completion path routes it to stagePostCompactionDelegate
+    // (staged at the compaction seam) INSTEAD of an immediate chain-spawn — the
+    // lifeboat-drop fix (subagent-announce.ts:995-996). So spawnSubagentDirect
+    // is NOT called; the delegate is staged. The modifier is consumed as a
+    // directive, not left in the task body. Mirrors the dedicated assertion in
+    // subagent-announce.postcompaction-route.test.ts.
+    const stageMock = vi.mocked(stagePostCompactionDelegate);
+    stageMock.mockClear();
     const params = buildParityParams(
       "[[CONTINUE_DELEGATE: post-compact research | post-compaction]]",
     );
@@ -273,18 +281,17 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
       setTimeout(resolve, 50);
     });
 
-    expect(spawnSpy).toHaveBeenCalledTimes(1);
-    const spawnArgs = spawnSpy.mock.calls[0][0] as Record<string, unknown>;
-    expect(spawnArgs.task).toContain("[continuation:chain-hop:2]");
-    // "post-compaction" is unknown → remains in the task body (not consumed)
-    expect(spawnArgs.task).toContain("post-compact research | post-compaction");
+    // Exactly-once invariant, post-compaction form: staged once, spawned zero.
+    expect(stageMock).toHaveBeenCalledTimes(1);
+    expect(spawnSpy).not.toHaveBeenCalled();
+    const stagedTask = (stageMock.mock.calls[0][1] as Record<string, unknown>).task as string;
+    // The staged task is the cleaned delegate body (no immediate chain-hop
+    // annotation — that is applied at spawn time, which the post-compaction
+    // path bypasses by staging instead).
+    expect(stagedTask).toContain("post-compact research");
+    // "post-compaction" consumed as a directive → NOT left in the task body.
+    expect(stagedTask).not.toContain("| post-compaction");
   });
-
-  // Desired post-#978 behavior: post-compaction is recognized as a directive
-  // and applied as a spawn mode, NOT included in the task body.
-  it.todo(
-    "#978: post-compaction modifier should be consumed as a directive and applied to spawn mode (not part of task body)",
-  );
 
   // -- 7. Negative control: no bracket --
 
