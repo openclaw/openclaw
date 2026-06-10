@@ -17,7 +17,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import {
+  buildGoogleVertexHeaders,
+  normalizeGoogleModelId,
+  resolveGoogleGenerativeAiHttpRequestConfig,
+  resolveGoogleVertexHttpRequestConfig,
+  resolveGoogleVertexBaseOrigin,
+  resolveGoogleVertexLocation,
+  resolveGoogleVertexProject,
+} from "./api.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
@@ -169,19 +177,56 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       },
     },
     async generateImage(req) {
+      const providerKey = req.provider === "google-vertex" ? "google-vertex" : "google";
       const auth = await resolveApiKeyForProvider({
-        provider: "google",
+        provider: providerKey,
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
       });
       if (!auth.apiKey) {
-        throw new Error("Google API key missing");
+        throw new Error(
+          `${providerKey === "google-vertex" ? "Google Vertex" : "Google"} API key missing`,
+        );
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveGoogleGenerativeAiHttpRequestConfig({
+      const isVertex = providerKey === "google-vertex";
+      let requestUrl: string;
+      let requestHeaders: Record<string, string>;
+      let allowPrivateNetwork: boolean | undefined;
+      let dispatcherPolicy:
+        | ReturnType<typeof resolveGoogleGenerativeAiHttpRequestConfig>["dispatcherPolicy"]
+        | undefined;
+
+      if (isVertex) {
+        const project = resolveGoogleVertexProject();
+        const location = resolveGoogleVertexLocation();
+
+        const config = resolveGoogleVertexHttpRequestConfig({
+          apiKey: auth.apiKey,
+          baseUrl: req.cfg?.models?.providers?.["google-vertex"]?.baseUrl,
+          location,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.["google-vertex"]?.request,
+          ),
+          capability: "image",
+          transport: "http",
+        });
+
+        const origin = resolveGoogleVertexBaseOrigin({ baseUrl: config.baseUrl }, location);
+        requestUrl = `${origin}/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+
+        requestHeaders = await buildGoogleVertexHeaders(
+          { headers: Object.fromEntries(config.headers.entries()) },
+          auth.apiKey,
+          undefined,
+          fetch,
+        );
+        allowPrivateNetwork = config.allowPrivateNetwork;
+        dispatcherPolicy = config.dispatcherPolicy;
+      } else {
+        const config = resolveGoogleGenerativeAiHttpRequestConfig({
           apiKey: auth.apiKey,
           baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
           request: sanitizeConfiguredModelProviderRequest(
@@ -190,6 +235,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           capability: "image",
           transport: "http",
         });
+        requestUrl = `${config.baseUrl}/models/${model}:generateContent`;
+        requestHeaders = config.headers;
+        allowPrivateNetwork = config.allowPrivateNetwork;
+        dispatcherPolicy = config.dispatcherPolicy;
+      }
+
       const imageConfig = mapSizeToImageConfig(req.size);
       const inputParts = (req.inputImages ?? []).map((image) => ({
         inlineData: {
@@ -204,8 +255,8 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       };
 
       const { response: res, release } = await postJsonRequest({
-        url: `${baseUrl}/models/${model}:generateContent`,
-        headers,
+        url: requestUrl,
+        headers: requestHeaders,
         body: {
           contents: [
             {

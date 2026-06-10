@@ -27,6 +27,10 @@ export {
 export {
   buildGoogleGenerativeAiParams,
   createGoogleGenerativeAiTransportStreamFn,
+  resolveGoogleVertexProject,
+  resolveGoogleVertexLocation,
+  resolveGoogleVertexBaseOrigin,
+  buildGoogleVertexHeaders,
 } from "./transport-stream.js";
 export {
   DEFAULT_GOOGLE_API_BASE_URL,
@@ -69,6 +73,45 @@ function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
     );
   }
   return normalized;
+}
+
+function resolveTrustedGoogleVertexBaseUrl(baseUrl: string | undefined, location: string): string {
+  const defaultBaseUrl = `https://${location}-aiplatform.googleapis.com`;
+  const normalized = normalizeGoogleGenerativeAiBaseUrl(baseUrl) ?? defaultBaseUrl;
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    throw new Error("Google Vertex AI baseUrl must be a valid https URL");
+  }
+  if (url.protocol !== "https:") {
+    throw new Error("Google Vertex AI baseUrl must use https");
+  }
+  return normalized;
+}
+
+export function resolveGoogleVertexHttpRequestConfig(params: {
+  apiKey: string;
+  baseUrl?: string;
+  location: string;
+  headers?: Record<string, string>;
+  request?: GoogleGenerativeAiRequestOverrides;
+  capability: "image" | "audio" | "video";
+  transport: "http" | "media-understanding";
+}) {
+  const defaultBaseUrl = `https://${params.location}-aiplatform.googleapis.com`;
+  return resolveProviderHttpRequestConfig({
+    baseUrl: resolveTrustedGoogleVertexBaseUrl(params.baseUrl, params.location),
+    defaultBaseUrl,
+    allowPrivateNetwork: params.request?.allowPrivateNetwork,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: { "x-goog-api-key": params.apiKey },
+    provider: "google-vertex",
+    api: "google-vertex",
+    capability: params.capability,
+    transport: params.transport,
+  });
 }
 
 export function resolveGoogleGenerativeAiHttpRequestConfig(params: {

@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 type GoogleManifest = {
+  contracts?: {
+    imageGenerationProviders?: string[];
+    videoGenerationProviders?: string[];
+  };
   modelIdNormalization?: {
     providers?: Record<
       string,
@@ -57,12 +61,24 @@ const RETIRED_GEMINI_CHAT_MODELS = [
 ] as const;
 
 const GOOGLE_CHAT_PROVIDERS = ["google", "google-gemini-cli", "google-vertex"] as const;
+const GOOGLE_MEDIA_GENERATION_PROVIDERS = ["google", "google-vertex"] as const;
 
 function loadManifest(): GoogleManifest {
   return JSON.parse(readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"));
 }
 
 describe("google manifest model catalog", () => {
+  it("registers Vertex for Google media generation contracts", () => {
+    const manifest = loadManifest();
+
+    expect(manifest.contracts?.imageGenerationProviders).toEqual([
+      ...GOOGLE_MEDIA_GENERATION_PROVIDERS,
+    ]);
+    expect(manifest.contracts?.videoGenerationProviders).toEqual([
+      ...GOOGLE_MEDIA_GENERATION_PROVIDERS,
+    ]);
+  });
+
   it("suppresses retired Gemini chat model identifiers for all Google chat providers", () => {
     const manifest = loadManifest();
     const suppressionRefs = new Set(

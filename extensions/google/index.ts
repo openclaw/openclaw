@@ -3,6 +3,7 @@ import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generati
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -94,12 +95,19 @@ async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMed
   return provider as GoogleMediaUnderstandingProvider;
 }
 
-function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
+function createLazyGoogleImageGenerationProvider(
+  providerId: "google" | "google-vertex",
+): ImageGenerationProvider {
   return {
-    id: "google",
-    label: "Google",
+    id: providerId,
+    label: providerId === "google-vertex" ? "Google Vertex AI" : "Google",
     defaultModel: "gemini-3.1-flash-image-preview",
     models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: providerId,
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 4,
@@ -327,9 +335,11 @@ function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
   };
 }
 
-function createLazyGoogleVideoGenerationProvider(): VideoGenerationProvider {
+function createLazyGoogleVideoGenerationProvider(
+  providerId: "google" | "google-vertex",
+): VideoGenerationProvider {
   return {
-    ...createGoogleVideoGenerationProviderMetadata(),
+    ...createGoogleVideoGenerationProviderMetadata(providerId),
     generateVideo: async (...args) =>
       await (await loadGoogleVideoGenerationProvider()).generateVideo(...args),
   };
@@ -344,12 +354,14 @@ export default definePluginEntry({
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
     api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
-    api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
+    api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider("google"));
+    api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider("google-vertex"));
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());
     api.registerRealtimeVoiceProvider(createLazyGoogleRealtimeVoiceProvider());
     api.registerSpeechProvider(buildGoogleSpeechProvider());
-    api.registerVideoGenerationProvider(createLazyGoogleVideoGenerationProvider());
+    api.registerVideoGenerationProvider(createLazyGoogleVideoGenerationProvider("google"));
+    api.registerVideoGenerationProvider(createLazyGoogleVideoGenerationProvider("google-vertex"));
     api.registerWebSearchProvider(createGeminiWebSearchProvider());
   },
 });

@@ -54,7 +54,7 @@ describe("memory-core doctor dreaming migration", () => {
   }
 
   function migrationParams(
-    config: OpenClawConfig = {
+    config: any = {
       agents: {
         list: [{ id: "main", workspace: workspaceDir }],
       },
