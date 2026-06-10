@@ -1,8 +1,8 @@
+// Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import { saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
@@ -15,19 +15,18 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
 async function writeSingleJobStore(storePath: string, job: Record<string, unknown>) {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(
-    storePath,
-    JSON.stringify(
-      {
-        version: 1,
-        jobs: [job],
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
+  await writeJobStore(storePath, [job]);
+}
+
+async function writeJobStore(storePath: string, jobs: unknown[]) {
+  await saveCronStore(storePath, {
+    version: 1,
+    jobs: jobs as CronJob[],
+  });
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function createStoreTestState(storePath: string) {
@@ -57,19 +56,6 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
     ...params,
   };
 }
-
-function expectWarnedJob(params: { storePath: string; jobId: string; message: string }) {
-  const warnCalls = logger.warn.mock.calls as unknown as Array<
-    [{ storePath?: string; jobId?: string }, string]
-  >;
-  const warning = warnCalls.find(
-    ([metadata, message]) => metadata.jobId === params.jobId && message.includes(params.message),
-  );
-  expect(warning?.[0].storePath).toBe(params.storePath);
-  expect(warning?.[0].jobId).toBe(params.jobId);
-  expect(warning?.[1]).toContain(params.message);
-}
-
 describe("cron service store seam coverage", () => {
   it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
     const { storePath } = await makeStorePath();
@@ -104,12 +90,9 @@ describe("cron service store seam coverage", () => {
     expect(job.delivery?.mode).toBe("announce");
     expect(job.delivery?.channel).toBe("telegram");
     expect(job.delivery?.to).toBe("123");
-    expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW);
+    expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW + 60_000);
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    const persistedJob = persisted.jobs[0];
+    const persistedJob = (await loadCronStore(storePath)).jobs[0];
     const persistedPayload = persistedJob?.payload as
       | { kind?: string; message?: string }
       | undefined;
@@ -121,16 +104,12 @@ describe("cron service store seam coverage", () => {
     expect(persistedDelivery?.mode).toBe("announce");
     expect(persistedDelivery?.channel).toBe("telegram");
     expect(persistedDelivery?.to).toBe("123");
-
-    const firstMtime = state.storeFileMtimeMs;
-    expect(typeof firstMtime).toBe("number");
+    await expectPathMissing(storePath);
 
     await persist(state);
-    expect(typeof state.storeFileMtimeMs).toBe("number");
-    expect((state.storeFileMtimeMs ?? 0) >= (firstMtime ?? 0)).toBe(true);
   });
 
-  it("normalizes jobId-only jobs in memory so scheduler lookups resolve by stable id", async () => {
+  it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {
     const { storePath } = await makeStorePath();
 
     await writeSingleJobStore(storePath, {
@@ -150,17 +129,10 @@ describe("cron service store seam coverage", () => {
 
     await ensureLoaded(state);
 
-    expectWarnedJob({ storePath, jobId: "repro-stable-id", message: "legacy jobId" });
-
     const job = findJobOrThrow(state, "repro-stable-id");
     expect(job.id).toBe("repro-stable-id");
     expect((job as { jobId?: unknown }).jobId).toBeUndefined();
-
-    const raw = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    expect(raw.jobs[0]?.jobId).toBe("repro-stable-id");
-    expect(raw.jobs[0]?.id).toBeUndefined();
+    await expectPathMissing(`${storePath}.migrated`);
   });
 
   it("preserves disabled jobs when persisted booleans roundtrip through string values", async () => {
@@ -179,29 +151,27 @@ describe("cron service store seam coverage", () => {
       state: {},
     });
 
-    const before = await fs.readFile(storePath, "utf8");
     const state = createStoreTestState(storePath);
 
     await ensureLoaded(state);
 
     const job = findJobOrThrow(state, "disabled-string-job");
     expect(job.enabled).toBe(false);
-
-    const after = await fs.readFile(storePath, "utf8");
-    expect(after).toBe(before);
+    await expectPathMissing(`${storePath}.migrated`);
   });
 
-  it("loads persisted jobs with unsafe custom session ids so run paths can fail closed", async () => {
+  it("loads persisted jobs with opaque custom session ids containing separators", async () => {
     const { storePath } = await makeStorePath();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
 
     await writeSingleJobStore(storePath, {
-      id: "unsafe-session-target-job",
-      name: "unsafe session target job",
+      id: "opaque-session-target-job",
+      name: "opaque session target job",
       enabled: true,
       createdAtMs: STORE_TEST_NOW - 60_000,
       updatedAtMs: STORE_TEST_NOW - 60_000,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "session:../../outside",
+      sessionTarget,
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "ping" },
       state: {},
@@ -211,13 +181,18 @@ describe("cron service store seam coverage", () => {
 
     await ensureLoaded(state, { skipRecompute: true });
 
-    const job = findJobOrThrow(state, "unsafe-session-target-job");
-    expect(job.sessionTarget).toBe("session:../../outside");
-    expectWarnedJob({
-      storePath,
-      jobId: "unsafe-session-target-job",
-      message: "invalid persisted sessionTarget",
-    });
+    const job = findJobOrThrow(state, "opaque-session-target-job");
+    expect(job.sessionTarget).toBe(sessionTarget);
+    const warnCalls = logger.warn.mock.calls as unknown as Array<
+      [{ storePath?: string; jobId?: string }, string]
+    >;
+    expect(
+      warnCalls.some(
+        ([metadata, message]) =>
+          metadata.jobId === "opaque-session-target-job" &&
+          message.includes("invalid persisted sessionTarget"),
+      ),
+    ).toBe(false);
   });
 
   it("clears stale nextRunAtMs after force reload when cron schedule expression changes", async () => {
@@ -237,17 +212,15 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state, { skipRecompute: true });
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(staleNextRunAtMs);
 
-    await writeSingleJobStore(storePath, {
-      id: "reload-cron-expr-job",
-      name: "reload cron expr job",
-      enabled: true,
-      createdAtMs: STORE_TEST_NOW - 60_000,
-      updatedAtMs: STORE_TEST_NOW - 30_000,
-      schedule: { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          updatedAtMs: STORE_TEST_NOW - 30_000,
+          schedule: { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" },
+          state: {},
+        }),
+      ],
     });
 
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -273,52 +246,20 @@ describe("cron service store seam coverage", () => {
     const state = createStoreTestState(storePath);
     await ensureLoaded(state, { skipRecompute: true });
 
-    await writeSingleJobStore(storePath, {
-      id: "reload-cron-expr-job",
-      name: "reload cron expr job",
-      enabled: true,
-      createdAtMs: STORE_TEST_NOW - 60_000,
-      updatedAtMs: STORE_TEST_NOW - 30_000,
-      schedule: { expr: "0 6 * * *", kind: "cron", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          updatedAtMs: STORE_TEST_NOW - 30_000,
+          schedule: { expr: "0 6 * * *", kind: "cron", tz: "UTC" },
+          state: { nextRunAtMs: dueNextRunAtMs },
+        }),
+      ],
     });
 
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
-  });
-
-  it("clears stale nextRunAtMs without throwing when a force-reloaded schedule is malformed", async () => {
-    const { storePath } = await makeStorePath();
-    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
-
-    await writeSingleJobStore(storePath, {
-      ...createReloadCronJob({
-        state: { nextRunAtMs: staleNextRunAtMs },
-      }),
-    });
-
-    const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
-
-    await writeSingleJobStore(storePath, {
-      ...createReloadCronJob({
-        updatedAtMs: STORE_TEST_NOW,
-        state: { nextRunAtMs: staleNextRunAtMs },
-      }),
-      schedule: "0 17 * * *",
-    });
-
-    await expect(ensureLoaded(state, { forceReload: true, skipRecompute: true })).resolves.toBe(
-      undefined,
-    );
-
-    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
-    expect(reloadedJob.schedule).toBe("0 17 * * *");
-    expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
   });
 
   it("preserves nextRunAtMs after force reload when scheduling inputs are unchanged", async () => {
@@ -331,11 +272,14 @@ describe("cron service store seam coverage", () => {
 
     const state = createStoreTestState(storePath);
     await ensureLoaded(state, { skipRecompute: true });
-    await writeSingleJobStore(storePath, {
-      ...createReloadCronJob({
-        updatedAtMs: STORE_TEST_NOW,
-        state: { nextRunAtMs: originalNextRunAtMs + 60_000 },
-      }),
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          updatedAtMs: STORE_TEST_NOW,
+          state: { nextRunAtMs: originalNextRunAtMs + 60_000 },
+        }),
+      ],
     });
 
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -358,12 +302,15 @@ describe("cron service store seam coverage", () => {
 
     const state = createStoreTestState(storePath);
     await ensureLoaded(state, { skipRecompute: true });
-    await writeSingleJobStore(storePath, {
-      ...createReloadCronJob({
-        enabled: false,
-        updatedAtMs: STORE_TEST_NOW,
-        state: { nextRunAtMs: staleNextRunAtMs },
-      }),
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          enabled: false,
+          updatedAtMs: STORE_TEST_NOW,
+          state: { nextRunAtMs: staleNextRunAtMs },
+        }),
+      ],
     });
 
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -386,13 +333,16 @@ describe("cron service store seam coverage", () => {
 
     const state = createStoreTestState(storePath);
     await ensureLoaded(state, { skipRecompute: true });
-    await writeSingleJobStore(storePath, {
-      ...createReloadCronJob({
-        id: jobId,
-        updatedAtMs: STORE_TEST_NOW,
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: STORE_TEST_NOW },
-        state: { nextRunAtMs: staleNextRunAtMs },
-      }),
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          id: jobId,
+          updatedAtMs: STORE_TEST_NOW,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: STORE_TEST_NOW },
+          state: { nextRunAtMs: staleNextRunAtMs },
+        }),
+      ],
     });
 
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -415,13 +365,16 @@ describe("cron service store seam coverage", () => {
 
     const state = createStoreTestState(storePath);
     await ensureLoaded(state, { skipRecompute: true });
-    await writeSingleJobStore(storePath, {
-      ...createReloadCronJob({
-        id: jobId,
-        updatedAtMs: STORE_TEST_NOW,
-        schedule: { kind: "at", at: "2026-03-23T14:00:00.000Z" },
-        state: { nextRunAtMs: staleNextRunAtMs },
-      }),
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          id: jobId,
+          updatedAtMs: STORE_TEST_NOW,
+          schedule: { kind: "at", at: "2026-03-23T14:00:00.000Z" },
+          state: { nextRunAtMs: staleNextRunAtMs },
+        }),
+      ],
     });
 
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });

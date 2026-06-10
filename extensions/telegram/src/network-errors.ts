@@ -1,9 +1,11 @@
+// Telegram plugin module implements network errors behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
@@ -12,6 +14,7 @@ const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
   "EPIPE",
+  "ENETDOWN",
   "ETIMEDOUT",
   "ESOCKETTIMEDOUT",
   "ENETUNREACH",
@@ -41,6 +44,7 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED", // Server actively refused the connection (never reached Telegram)
   "ENOTFOUND", // DNS resolution failed (never sent)
   "EAI_AGAIN", // Transient DNS failure (never sent)
+  "ENETDOWN", // Local network interface is down before connect completes (never sent)
   "ENETUNREACH", // No route to host (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
 ]);
@@ -103,6 +107,40 @@ function getErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
+function getNumericHttpStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as { error_code?: unknown; status?: unknown; statusCode?: unknown };
+  for (const value of [candidate.error_code, candidate.status, candidate.statusCode]) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return parseStrictNonNegativeInteger(trimmed);
+      }
+    }
+  }
+  return undefined;
+}
+
+export function isTelegramMisdirectedRequestError(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code === "421" || getNumericHttpStatus(candidate) === 421) {
+      return true;
+    }
+
+    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
+    if (/\b421\b/.test(message) && message.includes("misdirected request")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;
@@ -161,6 +199,9 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
+  }
+  if (isTelegramMisdirectedRequestError(err)) {
+    return true;
   }
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));

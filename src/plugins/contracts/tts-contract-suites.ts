@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+// TTS contract suites provide reusable text-to-speech plugin contract assertions.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
@@ -7,7 +7,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMessage } from "../../llm/types.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -23,7 +24,7 @@ let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("@earendil-works/pi-ai").completeSimple;
+let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
 let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
@@ -33,16 +34,16 @@ let summarizeTextCore: TtsCoreModule["summarizeText"];
 let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
 let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
 let getTtsProvider: TtsRuntimeModule["getTtsProvider"];
-let parseTtsDirectives: TtsRuntimeModule["_test"]["parseTtsDirectives"];
-let resolveModelOverridePolicy: TtsRuntimeModule["_test"]["resolveModelOverridePolicy"];
-let getResolvedSpeechProviderConfig: TtsRuntimeModule["_test"]["getResolvedSpeechProviderConfig"];
-let formatTtsProviderError: TtsRuntimeModule["_test"]["formatTtsProviderError"];
-let sanitizeTtsErrorForLog: TtsRuntimeModule["_test"]["sanitizeTtsErrorForLog"];
+let parseTtsDirectives: TtsRuntimeModule["testApi"]["parseTtsDirectives"];
+let resolveModelOverridePolicy: TtsRuntimeModule["testApi"]["resolveModelOverridePolicy"];
+let getResolvedSpeechProviderConfig: TtsRuntimeModule["testApi"]["getResolvedSpeechProviderConfig"];
+let formatTtsProviderError: TtsRuntimeModule["testApi"]["formatTtsProviderError"];
+let sanitizeTtsErrorForLog: TtsRuntimeModule["testApi"]["sanitizeTtsErrorForLog"];
 
 const SPEECH_PROVIDER_ENV_KEYS = [
   ...new Set(
     pluginRegistrationContractRegistry.flatMap((entry) =>
-      entry.speechProviderIds.flatMap((providerId) => entry.providerAuthEnvVars[providerId] ?? []),
+      entry.speechProviderIds.flatMap((providerId) => entry.providerEnvVars[providerId] ?? []),
     ),
   ),
 ].toSorted((left, right) => left.localeCompare(right));
@@ -70,7 +71,7 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("@earendil-works/pi-ai", () => {
+vi.mock("openclaw/plugin-sdk/llm", () => {
   const getApiProvider = vi.fn(() => undefined);
   return {
     completeSimple: vi.fn(),
@@ -78,17 +79,7 @@ vi.mock("@earendil-works/pi-ai", () => {
     getApiProvider,
     getModel: vi.fn(),
     registerApiProvider: vi.fn(),
-    streamAnthropic: vi.fn(),
     streamSimple: vi.fn(),
-    streamSimpleOpenAICompletions: vi.fn(),
-  };
-});
-
-vi.mock("@earendil-works/pi-ai/oauth", () => {
-  return {
-    getOAuthProviders: () => [],
-    getOAuthApiKey: vi.fn(async () => null),
-    loginOpenAICodex: vi.fn(),
   };
 });
 
@@ -456,7 +447,7 @@ async function setupTtsRuntime() {
     getResolvedSpeechProviderConfig,
     formatTtsProviderError,
     sanitizeTtsErrorForLog,
-  } = ttsRuntime._test);
+  } = ttsRuntime.testApi);
   ttsRuntimeInitialized = true;
 }
 
@@ -504,7 +495,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("@earendil-works/pi-ai"));
+  ({ completeSimple } = await import("openclaw/plugin-sdk/llm"));
   getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];
@@ -1234,6 +1225,7 @@ export function describeTtsProviderRuntimeContract() {
 
 export function describeTtsAutoApplyContract() {
   describe("tts auto-apply contract", () => {
+    beforeAll(setupTtsRuntime);
     beforeEach(setupTtsContractTest);
 
     const baseCfg: OpenClawConfig = asLegacyOpenClawConfig({
@@ -1286,10 +1278,8 @@ export function describeTtsAutoApplyContract() {
         expect(fetchMock).toHaveBeenCalledTimes(params.expectedFetchCalls);
         if (params.expectSamePayload) {
           expect(result).toBe(params.payload);
-        } else {
-          if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
-            throw new Error("expected auto TTS to attach mediaUrl");
-          }
+        } else if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
+          throw new Error("expected auto TTS to attach mediaUrl");
         }
       });
     }

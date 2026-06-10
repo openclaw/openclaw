@@ -1,5 +1,8 @@
+// Persists commitment records and claims due work for heartbeat processing.
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
@@ -9,6 +12,7 @@ import {
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
   resolveCommitmentsConfig,
 } from "./config.js";
+import { runExclusiveCommitmentsStoreWrite } from "./store-writer.js";
 import type {
   CommitmentCandidate,
   CommitmentExtractionItem,
@@ -20,6 +24,15 @@ import type {
 
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
+const COMMITMENT_KINDS = new Set([
+  "event_check_in",
+  "deadline_check",
+  "care_check_in",
+  "open_loop",
+]);
+const COMMITMENT_SENSITIVITIES = new Set(["routine", "personal", "care"]);
+const COMMITMENT_SOURCES = new Set(["inferred_user_context", "agent_promise"]);
+const COMMITMENT_STATUSES = new Set(["pending", "sent", "dismissed", "snoozed", "expired"]);
 
 type LoadedCommitmentStore = {
   store: CommitmentStoreFile;
@@ -45,8 +58,12 @@ function emptyStore(): CommitmentStoreFile {
   return { version: STORE_VERSION, commitments: [] };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function normalizeNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
@@ -57,35 +74,94 @@ function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
   if (!dueWindow) {
     return undefined;
   }
-  const requiredStrings = [
-    raw.id,
-    raw.agentId,
-    raw.sessionKey,
-    raw.channel,
-    raw.kind,
-    raw.sensitivity,
-    raw.source,
-    raw.status,
-    raw.reason,
-    raw.suggestedText,
-    raw.dedupeKey,
-  ];
-  if (requiredStrings.some((value) => typeof value !== "string" || !value.trim())) {
-    return undefined;
-  }
+
+  const id = normalizeOptionalString(raw.id);
+  const agentId = normalizeOptionalString(raw.agentId);
+  const sessionKey = normalizeOptionalString(raw.sessionKey);
+  const channel = normalizeOptionalString(raw.channel);
+  const reason = normalizeOptionalString(raw.reason);
+  const suggestedText = normalizeOptionalString(raw.suggestedText);
+  const dedupeKey = normalizeOptionalString(raw.dedupeKey);
+  const kind = normalizeOptionalString(raw.kind);
+  const sensitivity = normalizeOptionalString(raw.sensitivity);
+  const source = normalizeOptionalString(raw.source);
+  const status = normalizeOptionalString(raw.status);
+  const confidence = normalizeNonNegativeNumber(raw.confidence);
+  const createdAtMs = normalizeNonNegativeNumber(raw.createdAtMs);
+  const updatedAtMs = normalizeNonNegativeNumber(raw.updatedAtMs);
+  const attempts = normalizeNonNegativeInteger(raw.attempts);
+  const earliestMs = normalizeNonNegativeNumber(dueWindow.earliestMs);
+  const latestMs = normalizeNonNegativeNumber(dueWindow.latestMs);
+  const timezone = normalizeOptionalString(dueWindow.timezone);
+  const accountId = normalizeOptionalString(raw.accountId);
+  const to = normalizeOptionalString(raw.to);
+  const threadId = normalizeOptionalString(raw.threadId);
+  const senderId = normalizeOptionalString(raw.senderId);
+  const sourceMessageId = normalizeOptionalString(raw.sourceMessageId);
+  const sourceRunId = normalizeOptionalString(raw.sourceRunId);
+  const lastAttemptAtMs = normalizeNonNegativeNumber(raw.lastAttemptAtMs);
+  const sentAtMs = normalizeNonNegativeNumber(raw.sentAtMs);
+  const dismissedAtMs = normalizeNonNegativeNumber(raw.dismissedAtMs);
+  const snoozedUntilMs = normalizeNonNegativeNumber(raw.snoozedUntilMs);
+  const expiredAtMs = normalizeNonNegativeNumber(raw.expiredAtMs);
+
   if (
-    typeof raw.confidence !== "number" ||
-    typeof raw.createdAtMs !== "number" ||
-    typeof raw.updatedAtMs !== "number" ||
-    typeof raw.attempts !== "number" ||
-    typeof dueWindow.earliestMs !== "number" ||
-    typeof dueWindow.latestMs !== "number" ||
-    typeof dueWindow.timezone !== "string"
+    !id ||
+    !agentId ||
+    !sessionKey ||
+    !channel ||
+    !reason ||
+    !suggestedText ||
+    !dedupeKey ||
+    !kind ||
+    !sensitivity ||
+    !source ||
+    !status ||
+    !COMMITMENT_KINDS.has(kind) ||
+    !COMMITMENT_SENSITIVITIES.has(sensitivity) ||
+    !COMMITMENT_SOURCES.has(source) ||
+    !COMMITMENT_STATUSES.has(status) ||
+    confidence === undefined ||
+    createdAtMs === undefined ||
+    updatedAtMs === undefined ||
+    attempts === undefined ||
+    earliestMs === undefined ||
+    latestMs === undefined ||
+    !timezone ||
+    latestMs < earliestMs
   ) {
     return undefined;
   }
-  const commitment = { ...raw } as CommitmentRecord;
-  return stripLegacySourceText(commitment);
+
+  return {
+    id,
+    agentId,
+    sessionKey,
+    channel,
+    ...(accountId ? { accountId } : {}),
+    ...(to ? { to } : {}),
+    ...(threadId ? { threadId } : {}),
+    ...(senderId ? { senderId } : {}),
+    kind: kind as CommitmentRecord["kind"],
+    sensitivity: sensitivity as CommitmentRecord["sensitivity"],
+    source: source as CommitmentRecord["source"],
+    status: status as CommitmentRecord["status"],
+    reason,
+    suggestedText,
+    dedupeKey,
+    confidence,
+    dueWindow: { earliestMs, latestMs, timezone },
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(sourceRunId ? { sourceRunId } : {}),
+    createdAtMs,
+    updatedAtMs,
+    attempts,
+    ...(lastAttemptAtMs !== undefined ? { lastAttemptAtMs } : {}),
+    ...(sentAtMs !== undefined ? { sentAtMs } : {}),
+    ...(dismissedAtMs !== undefined ? { dismissedAtMs } : {}),
+    ...(snoozedUntilMs !== undefined ? { snoozedUntilMs } : {}),
+    ...(expiredAtMs !== undefined ? { expiredAtMs } : {}),
+  };
 }
 
 function hasLegacySourceText(raw: unknown): boolean {
@@ -243,12 +319,24 @@ function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number
   return changed;
 }
 
-async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
+// Unchecked variant — runs without queue protection. Callers that already hold
+// the commitments-store writer queue must use this to avoid re-entry deadlock.
+async function loadAndMarkExpiredUnchecked(
+  nowMs: number,
+): Promise<{ store: CommitmentStoreFile; needsSave: boolean }> {
   const { store, hadLegacySourceText } = await loadCommitmentStoreInternal();
-  if (expireStaleCommitmentsInStore(store, nowMs) || hadLegacySourceText) {
-    await saveCommitmentStore(undefined, store);
-  }
-  return store;
+  const expireChanged = expireStaleCommitmentsInStore(store, nowMs);
+  return { store, needsSave: expireChanged || hadLegacySourceText };
+}
+
+async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
+  return await runExclusiveCommitmentsStoreWrite(resolveCommitmentStorePath(), async () => {
+    const { store, needsSave } = await loadAndMarkExpiredUnchecked(nowMs);
+    if (needsSave) {
+      await saveCommitmentStore(undefined, store);
+    }
+    return store;
+  });
 }
 
 export async function listPendingCommitmentsForScope(params: {
@@ -289,47 +377,48 @@ export async function upsertInferredCommitments(params: {
     return [];
   }
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
-  const created: CommitmentRecord[] = [];
   const scopeKey = buildCommitmentScopeKey(params.item);
-
-  for (const entry of params.candidates) {
-    const dedupeKey = entry.candidate.dedupeKey.trim();
-    const existingIndex = store.commitments.findIndex(
-      (commitment) =>
-        buildCommitmentScopeKey(commitment) === scopeKey &&
-        commitment.dedupeKey === dedupeKey &&
-        isActiveStatus(commitment.status),
-    );
-    if (existingIndex >= 0) {
-      const existing = store.commitments[existingIndex];
-      store.commitments[existingIndex] = {
-        ...existing,
-        reason: entry.candidate.reason.trim() || existing.reason,
-        suggestedText: entry.candidate.suggestedText.trim() || existing.suggestedText,
-        confidence: Math.max(existing.confidence, entry.candidate.confidence),
-        dueWindow: {
-          earliestMs: Math.min(existing.dueWindow.earliestMs, entry.earliestMs),
-          latestMs: Math.max(existing.dueWindow.latestMs, entry.latestMs),
-          timezone: entry.timezone,
-        },
-        updatedAtMs: nowMs,
-      };
-      continue;
+  return await runExclusiveCommitmentsStoreWrite(resolveCommitmentStorePath(), async () => {
+    const { store } = await loadAndMarkExpiredUnchecked(nowMs);
+    const created: CommitmentRecord[] = [];
+    for (const entry of params.candidates) {
+      const dedupeKey = entry.candidate.dedupeKey.trim();
+      const existingIndex = store.commitments.findIndex(
+        (commitment) =>
+          buildCommitmentScopeKey(commitment) === scopeKey &&
+          commitment.dedupeKey === dedupeKey &&
+          isActiveStatus(commitment.status),
+      );
+      if (existingIndex >= 0) {
+        const existing = store.commitments[existingIndex];
+        store.commitments[existingIndex] = {
+          ...existing,
+          reason: entry.candidate.reason.trim() || existing.reason,
+          suggestedText: entry.candidate.suggestedText.trim() || existing.suggestedText,
+          confidence: Math.max(existing.confidence, entry.candidate.confidence),
+          dueWindow: {
+            earliestMs: Math.min(existing.dueWindow.earliestMs, entry.earliestMs),
+            latestMs: Math.max(existing.dueWindow.latestMs, entry.latestMs),
+            timezone: entry.timezone,
+          },
+          updatedAtMs: nowMs,
+        };
+        continue;
+      }
+      const record = candidateToRecord({
+        item: params.item,
+        candidate: entry.candidate,
+        nowMs,
+        earliestMs: entry.earliestMs,
+        latestMs: entry.latestMs,
+        timezone: entry.timezone,
+      });
+      store.commitments.push(record);
+      created.push(record);
     }
-    const record = candidateToRecord({
-      item: params.item,
-      candidate: entry.candidate,
-      nowMs,
-      earliestMs: entry.earliestMs,
-      latestMs: entry.latestMs,
-      timezone: entry.timezone,
-    });
-    store.commitments.push(record);
-    created.push(record);
-  }
-  await saveCommitmentStore(undefined, store);
-  return created;
+    await saveCommitmentStore(undefined, store);
+    return created;
+  });
 }
 
 function countSentCommitmentsForSession(params: {
@@ -441,23 +530,25 @@ export async function markCommitmentsAttempted(params: {
   }
   const idSet = new Set(params.ids);
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStore();
-  let changed = false;
-  store.commitments = store.commitments.map((commitment) => {
-    if (!idSet.has(commitment.id)) {
-      return commitment;
+  await runExclusiveCommitmentsStoreWrite(resolveCommitmentStorePath(), async () => {
+    const store = await loadCommitmentStore();
+    let changed = false;
+    store.commitments = store.commitments.map((commitment) => {
+      if (!idSet.has(commitment.id)) {
+        return commitment;
+      }
+      changed = true;
+      return {
+        ...commitment,
+        attempts: commitment.attempts + 1,
+        lastAttemptAtMs: nowMs,
+        updatedAtMs: nowMs,
+      };
+    });
+    if (changed) {
+      await saveCommitmentStore(undefined, store);
     }
-    changed = true;
-    return {
-      ...commitment,
-      attempts: commitment.attempts + 1,
-      lastAttemptAtMs: nowMs,
-      updatedAtMs: nowMs,
-    };
   });
-  if (changed) {
-    await saveCommitmentStore(undefined, store);
-  }
 }
 
 export async function markCommitmentsStatus(params: {
@@ -471,25 +562,27 @@ export async function markCommitmentsStatus(params: {
   }
   const idSet = new Set(params.ids);
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStore();
-  let changed = false;
-  store.commitments = store.commitments.map((commitment) => {
-    if (!idSet.has(commitment.id) || !isActiveStatus(commitment.status)) {
-      return commitment;
+  await runExclusiveCommitmentsStoreWrite(resolveCommitmentStorePath(), async () => {
+    const store = await loadCommitmentStore();
+    let changed = false;
+    store.commitments = store.commitments.map((commitment) => {
+      if (!idSet.has(commitment.id) || !isActiveStatus(commitment.status)) {
+        return commitment;
+      }
+      changed = true;
+      return {
+        ...commitment,
+        status: params.status,
+        updatedAtMs: nowMs,
+        ...(params.status === "sent" ? { sentAtMs: nowMs } : {}),
+        ...(params.status === "dismissed" ? { dismissedAtMs: nowMs } : {}),
+        ...(params.status === "expired" ? { expiredAtMs: nowMs } : {}),
+      };
+    });
+    if (changed) {
+      await saveCommitmentStore(undefined, store);
     }
-    changed = true;
-    return {
-      ...commitment,
-      status: params.status,
-      updatedAtMs: nowMs,
-      ...(params.status === "sent" ? { sentAtMs: nowMs } : {}),
-      ...(params.status === "dismissed" ? { dismissedAtMs: nowMs } : {}),
-      ...(params.status === "expired" ? { expiredAtMs: nowMs } : {}),
-    };
   });
-  if (changed) {
-    await saveCommitmentStore(undefined, store);
-  }
 }
 
 export async function listCommitments(params?: {

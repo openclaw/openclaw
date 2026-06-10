@@ -1,3 +1,4 @@
+// Covers plugin approval forwarding through channel capabilities.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -69,7 +70,7 @@ async function flushPendingDelivery(): Promise<void> {
 }
 
 type DeliveryArgs = {
-  payloads?: Array<{ text?: string; interactive?: unknown }>;
+  payloads?: Array<{ text?: string; presentation?: unknown; interactive?: unknown }>;
 };
 
 function deliveryArgs(deliver: ReturnType<typeof vi.fn>): DeliveryArgs | undefined {
@@ -137,23 +138,35 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("Sensitive tool call");
       expect(text).toContain("plugin-req-1");
       expect(text).toContain("/approve");
-      expect(payload?.interactive).toEqual({
+      expect(payload?.presentation).toEqual({
         blocks: [
           {
             type: "buttons",
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-once",
+                },
                 value: "/approve plugin-req-1 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-always",
+                },
                 value: "/approve plugin-req-1 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 deny",
+                },
                 value: "/approve plugin-req-1 deny",
                 style: "danger",
               },
@@ -161,6 +174,7 @@ describe("plugin approval forwarding", () => {
           },
         ],
       });
+      expect(payload?.interactive).toBeUndefined();
     });
 
     it("renders only request-scoped plugin approval decisions", async () => {
@@ -177,20 +191,28 @@ describe("plugin approval forwarding", () => {
       expect(result).toBe(true);
       await flushPendingDelivery();
       const payload = firstDeliveredPayload(deliver);
-      expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
+      expect(payload?.text).toContain("Reply with: /approve plugin-req-1 allow-once|deny");
       expect(payload?.text).not.toContain("allow-always");
-      expect(payload?.interactive).toEqual({
+      expect(payload?.presentation).toEqual({
         blocks: [
           {
             type: "buttons",
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 allow-once",
+                },
                 value: "/approve plugin-req-1 allow-once",
                 style: "success",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-req-1 deny",
+                },
                 value: "/approve plugin-req-1 deny",
                 style: "danger",
               },
@@ -198,6 +220,7 @@ describe("plugin approval forwarding", () => {
           },
         ],
       });
+      expect(payload?.interactive).toBeUndefined();
     });
 
     it("includes severity icon for critical", async () => {

@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor gating plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   evaluateMattermostMentionGate,
@@ -11,7 +12,9 @@ describe("mattermost monitor gating", () => {
     expect(mapMattermostChannelTypeToChatType("G")).toBe("group");
     expect(mapMattermostChannelTypeToChatType("P")).toBe("group");
     expect(mapMattermostChannelTypeToChatType("O")).toBe("channel");
-    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("channel");
+    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("direct");
+    expect(mapMattermostChannelTypeToChatType(null)).toBe("direct");
+    expect(mapMattermostChannelTypeToChatType("")).toBe("direct");
   });
 
   it("derives chat kind from trusted channel lookup before fallback state", () => {
@@ -28,7 +31,7 @@ describe("mattermost monitor gating", () => {
       }),
     ).toBe("direct");
     expect(resolveMattermostTrustedChatKind({ fallback: "group" })).toBe("group");
-    expect(resolveMattermostTrustedChatKind({})).toBe("channel");
+    expect(resolveMattermostTrustedChatKind({})).toBe("direct");
   });
 
   it("drops non-mentioned traffic when onchar is enabled but not triggered", () => {

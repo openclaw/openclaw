@@ -1,5 +1,7 @@
+// PID liveness tests cover process existence checks across platforms.
 import fsSync from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { getProcessStartTime, isPidAlive, isPidDefinitelyDead } from "./pid-alive.js";
 
 afterEach(() => {
@@ -15,30 +17,6 @@ function mockProcReads(entries: Record<string, string>) {
     }
     return originalReadFileSync(filePath as never, encoding as never) as never;
   });
-}
-
-async function withLinuxProcessPlatform<T>(run: () => Promise<T>): Promise<T> {
-  return withProcessPlatform("linux", run);
-}
-
-async function withProcessPlatform<T>(
-  platform: NodeJS.Platform,
-  run: () => Promise<T>,
-): Promise<T> {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-  if (!originalPlatformDescriptor) {
-    throw new Error("missing process.platform descriptor");
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
-  try {
-    return await run();
-  } finally {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    vi.restoreAllMocks();
-  }
 }
 
 describe("isPidAlive", () => {
@@ -64,7 +42,7 @@ describe("isPidAlive", () => {
     mockProcReads({
       [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`,
     });
-    await withLinuxProcessPlatform(async () => {
+    await withMockedPlatform("linux", async () => {
       expect(isPidAlive(zombiePid)).toBe(false);
     });
   });
@@ -75,7 +53,7 @@ describe("isPidAlive", () => {
     });
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
-    await withLinuxProcessPlatform(async () => {
+    await withMockedPlatform("linux", async () => {
       expect(isPidAlive(42)).toBe(true);
     });
 
@@ -100,7 +78,7 @@ describe("isPidDefinitelyDead", () => {
     });
 
     expect(isPidDefinitelyDead(42)).toBe(true);
-    expect(process.kill).toHaveBeenCalledWith(42, 0);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
   it("returns false when process probing reports EPERM", () => {
@@ -110,7 +88,7 @@ describe("isPidDefinitelyDead", () => {
     });
 
     expect(isPidDefinitelyDead(42)).toBe(false);
-    expect(process.kill).toHaveBeenCalledWith(42, 0);
+    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
 
   it("returns true for zombie processes on Linux", async () => {
@@ -120,7 +98,7 @@ describe("isPidDefinitelyDead", () => {
       [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`,
     });
 
-    await withLinuxProcessPlatform(async () => {
+    await withMockedPlatform("linux", async () => {
       expect(isPidDefinitelyDead(zombiePid)).toBe(true);
     });
   });
@@ -132,7 +110,7 @@ describe("isPidDefinitelyDead", () => {
       [`/proc/${livePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t${livePid}\nPid:\t${livePid}\n`,
     });
 
-    await withLinuxProcessPlatform(async () => {
+    await withMockedPlatform("linux", async () => {
       expect(isPidDefinitelyDead(livePid)).toBe(false);
     });
   });
@@ -152,7 +130,7 @@ describe("getProcessStartTime", () => {
       "/proc/46/stat": `${fakeStatPrefix}1.5${fakeStatSuffix}`,
     });
 
-    await withLinuxProcessPlatform(async () => {
+    await withMockedPlatform("linux", async () => {
       expect(getProcessStartTime(process.pid)).toBe(98765);
       expect(getProcessStartTime(42)).toBe(55555);
       expect(getProcessStartTime(43)).toBeNull();
@@ -163,7 +141,7 @@ describe("getProcessStartTime", () => {
   });
 
   it("returns null on non-Linux platforms", () => {
-    return withProcessPlatform("darwin", async () => {
+    return withMockedPlatform("darwin", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
     });
   });

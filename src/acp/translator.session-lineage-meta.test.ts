@@ -1,7 +1,8 @@
+/** Tests ACP session lineage metadata in list/load session responses. */
 import type { ListSessionsRequest, LoadSessionRequest } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -68,12 +69,12 @@ describe("acp session lineage metadata", () => {
       _meta: {},
     } as unknown as ListSessionsRequest);
 
-    expect(result.sessions[0]?._meta).toEqual({
+    expect(result.sessions[0]?.["_meta"]).toEqual({
       sessionKey: "agent:main:main",
       kind: "direct",
       channel: "telegram",
     });
-    expect(result.sessions[1]?._meta).toEqual({
+    expect(result.sessions[1]?.["_meta"]).toEqual({
       sessionKey: "agent:main:subagent:child",
       kind: "direct",
       channel: "telegram",
@@ -89,7 +90,7 @@ describe("acp session lineage metadata", () => {
   it("includes lineage metadata in initial session snapshot updates", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
@@ -155,7 +156,7 @@ describe("acp session lineage metadata", () => {
   it("keeps snapshot lineage in the Gateway session key namespace", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const gatewaySessionKey = "agent:main:subagent:child";
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {

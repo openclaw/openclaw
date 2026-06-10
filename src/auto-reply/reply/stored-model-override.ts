@@ -1,3 +1,6 @@
+// Persists and resolves per-session model override choices.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import {
   modelKey,
   normalizeModelRef,
@@ -5,8 +8,8 @@ import {
 } from "../../agents/model-selection.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
+/** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
   provider?: string;
   model: string;
@@ -28,6 +31,7 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
+/** Resolves the persisted model override visible to the current session. */
 export function resolveStoredModelOverride(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -75,6 +79,7 @@ function resolveModelRefKey(params: {
   return modelKey(normalized.provider, normalized.model);
 }
 
+/** Detects heartbeat auto-fallback overrides that no longer match the primary model. */
 export function isStaleHeartbeatAutoFallbackOverride(params: {
   isHeartbeat?: boolean;
   hasResolvedHeartbeatModelOverride?: boolean;
@@ -91,7 +96,16 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   if (params.storedOverride?.source !== "session") {
     return false;
   }
-  if (params.sessionEntry?.modelOverrideSource !== "auto") {
+  const entry = params.sessionEntry;
+  const recoveredAutoFallbackOverride =
+    entry !== undefined &&
+    entry.modelOverrideSource === undefined &&
+    hasSessionAutoModelFallbackProvenance(entry);
+  // Older sessions may lack modelOverrideSource; provenance recovers the auto-fallback state.
+  if (entry?.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return false;
+  }
+  if (!entry) {
     return false;
   }
 
@@ -106,8 +120,8 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
 
   const originKey = resolveModelRefKey({
     defaultProvider: params.defaultProvider,
-    overrideProvider: params.sessionEntry.modelOverrideFallbackOriginProvider,
-    overrideModel: params.sessionEntry.modelOverrideFallbackOriginModel,
+    overrideProvider: entry.modelOverrideFallbackOriginProvider,
+    overrideModel: entry.modelOverrideFallbackOriginModel,
   });
   if (originKey) {
     return originKey !== primaryKey;
@@ -115,7 +129,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
 
   const noticeSelectedKey = resolveModelRefKey({
     defaultProvider: params.defaultProvider,
-    overrideModel: normalizeOptionalString(params.sessionEntry.fallbackNoticeSelectedModel),
+    overrideModel: normalizeOptionalString(entry.fallbackNoticeSelectedModel),
   });
   if (noticeSelectedKey) {
     return noticeSelectedKey !== primaryKey;

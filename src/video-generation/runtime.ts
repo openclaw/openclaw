@@ -1,3 +1,4 @@
+// Video generation runtime coordinates provider auth, fallbacks, and job polling.
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,6 +8,7 @@ import {
   buildNoCapabilityModelConfiguredMessage,
   recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
+  resolveMediaProviderRequestTimeoutMs,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
@@ -117,7 +119,7 @@ export async function generateVideo(
   const getProvider = deps.getProvider ?? getVideoGenerationProvider;
   const listProviders = deps.listProviders ?? listVideoGenerationProviders;
   const logger = deps.log ?? log;
-  const timeoutMs =
+  const requestedTimeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.videoGenerationModel);
   const candidates = resolveCapabilityModelCandidates({
@@ -159,6 +161,10 @@ export async function generateVideo(
       lastError = new Error(error);
       continue;
     }
+    const timeoutMs = resolveMediaProviderRequestTimeoutMs({
+      timeoutMs: requestedTimeoutMs,
+      providerDefaultTimeoutMs: provider.defaultTimeoutMs,
+    });
     const activeProvider = await resolveProviderWithModelCapabilities({
       provider,
       providerId: candidate.provider,

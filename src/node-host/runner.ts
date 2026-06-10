@@ -1,9 +1,14 @@
+/** CLI runner for node-host stdin/stdout command dispatch. */
+import fs from "node:fs";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
-import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
@@ -24,6 +29,7 @@ import {
 } from "./plugin-node-host.js";
 
 export { buildNodeInvokeResultParams };
+export { buildNodeEventParams } from "./invoke.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -72,6 +78,7 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
 type NodeHostReconnectPausedDeps = {
@@ -114,6 +121,18 @@ function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | nu
   return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
 }
 
+function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string): string | null {
+  const resolvedPath = resolveExecutablePathFromEnv(bin, pathEnv);
+  if (!resolvedPath) {
+    return null;
+  }
+  try {
+    return fs.realpathSync(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
 function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
   const trustEntries: SkillBinTrustEntry[] = [];
   const seen = new Set<string>();
@@ -122,7 +141,7 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
     if (!name) {
       continue;
     }
-    const resolvedPath = resolveExecutablePathFromEnv(name, pathEnv);
+    const resolvedPath = resolveExecutableTrustPathFromEnv(name, pathEnv);
     if (!resolvedPath) {
       continue;
     }

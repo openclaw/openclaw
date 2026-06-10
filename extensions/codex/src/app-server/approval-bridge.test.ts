@@ -1,5 +1,14 @@
+// Codex tests cover approval bridge plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { reviewExecRequestWithConfiguredModel } from "openclaw/plugin-sdk/agent-harness-exec-review-runtime";
 import {
   callGatewayTool,
+  hasNativeHookRelayInvocation,
+  invokeNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
+  runBeforeToolCallHook,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,9 +17,30 @@ import { buildApprovalResponse, handleCodexAppServerApprovalRequest } from "./ap
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   callGatewayTool: vi.fn(),
+  hasNativeHookRelayInvocation: vi.fn(() => false),
+  invokeNativeHookRelay: vi.fn(),
+  resolveNativeHookRelayDeferredToolApproval: vi.fn(),
+  runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
+    blocked: false,
+    params,
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-exec-review-runtime", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("openclaw/plugin-sdk/agent-harness-exec-review-runtime")
+  >()),
+  reviewExecRequestWithConfiguredModel: vi.fn(),
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+const mockHasNativeHookRelayInvocation = vi.mocked(hasNativeHookRelayInvocation);
+const mockInvokeNativeHookRelay = vi.mocked(invokeNativeHookRelay);
+const mockResolveNativeHookRelayDeferredToolApproval = vi.mocked(
+  resolveNativeHookRelayDeferredToolApproval,
+);
+const mockReviewExecRequestWithConfiguredModel = vi.mocked(reviewExecRequestWithConfiguredModel);
+const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -41,7 +71,13 @@ function gatewayCallMethod(callIndex = 0) {
 
 function findApprovalEvent(
   params: EmbeddedRunAttemptParams,
-  fields: { status?: string; approvalId?: string; command?: string; reason?: string },
+  fields: {
+    status?: string;
+    approvalId?: string;
+    command?: string;
+    reason?: string;
+    message?: string;
+  },
 ) {
   const onAgentEvent = params.onAgentEvent as unknown as { mock?: { calls?: unknown[][] } };
   const calls = onAgentEvent.mock?.calls;
@@ -58,7 +94,8 @@ function findApprovalEvent(
       (!fields.status || data.status === fields.status) &&
       (!fields.approvalId || data.approvalId === fields.approvalId) &&
       (!fields.command || data.command === fields.command) &&
-      (!fields.reason || data.reason === fields.reason)
+      (!fields.reason || data.reason === fields.reason) &&
+      (!fields.message || data.message === fields.message)
     ) {
       return data;
     }
@@ -81,6 +118,79 @@ function createParams(): EmbeddedRunAttemptParams {
 describe("Codex app-server approval bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
+    mockHasNativeHookRelayInvocation.mockReset();
+    mockHasNativeHookRelayInvocation.mockReturnValue(false);
+    mockInvokeNativeHookRelay.mockReset();
+    mockResolveNativeHookRelayDeferredToolApproval.mockReset();
+    mockResolveNativeHookRelayDeferredToolApproval.mockResolvedValue(undefined);
+    mockReviewExecRequestWithConfiguredModel.mockReset();
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValue({
+      decision: "ask",
+      rationale: "test reviewer asks for approval",
+      risk: "unknown",
+    });
+    mockRunBeforeToolCallHook.mockReset();
+    mockRunBeforeToolCallHook.mockImplementation(async ({ params }) => ({
+      blocked: false,
+      params,
+    }));
+  });
+
+  it("auto-accepts app-server command approvals in yolo mode without opening plugin approvals", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-yolo",
+        command: "/bin/bash -lc 'node -v'",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        approvalMode: "request",
+      }),
+    );
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
+  it("auto-accepts app-server file approvals in yolo mode without opening plugin approvals", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-yolo",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      reason: "needs write access",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
   });
 
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
@@ -116,8 +226,1506 @@ describe("Codex app-server approval bridge", () => {
     expect(requestPayload.turnSourceChannel).toBe("telegram");
     expect(requestPayload.turnSourceTo).toBe("chat-1");
     expect(gatewayCallOptions()).toEqual({ expectFinal: false });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith({
+      toolName: "exec",
+      params: {
+        command: "pnpm test extensions/codex/src/app-server",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          command: "pnpm test extensions/codex/src/app-server",
+        },
+      },
+      toolCallId: "cmd-1",
+      approvalMode: "request",
+      signal: undefined,
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        channelId: "chat-1",
+      },
+    });
     findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
     findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
+  });
+
+  it("uses the configured OpenClaw exec auto-review model before plugin approvals", async () => {
+    const params = createParams();
+    params.workspaceDir = "/workspace";
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+            timeoutMs: 12_000,
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "read-only version check",
+      risk: "low",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      execReviewerAgentId: "main",
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockReviewExecRequestWithConfiguredModel).toHaveBeenCalledWith({
+      cfg: params.config,
+      agentId: "main",
+      reviewer: {
+        model: "openai/gpt-5.5-mini",
+        timeoutMs: 12_000,
+      },
+      input: {
+        command: "node --version",
+        argv: ["node", "--version"],
+        cwd: "/workspace",
+        envKeys: undefined,
+        host: "codex-app-server",
+        reason: "approval-required",
+        analysis: {
+          parsed: true,
+          allowlistMatched: false,
+          inlineEval: false,
+        },
+        agent: {
+          id: "main",
+          sessionKey: "agent:main:session-1",
+        },
+      },
+    });
+    findApprovalEvent(params, {
+      status: "approved",
+      message:
+        "Codex app-server command approval granted by OpenClaw exec auto-reviewer: read-only version check",
+    });
+  });
+
+  it("falls back to plugin approval when no exec auto-review model is configured", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-no-reviewer", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-no-reviewer", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-missing",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("falls back to plugin approval for managed-network command approvals", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "network request looks fine",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-network", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-network", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-network",
+        command: "curl https://example.test",
+        networkApprovalContext: {
+          host: "example.test",
+          port: 443,
+          protocol: "https",
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it.each(["lmstudio/local-model", "local-model"])(
+    "falls back to plugin approval for unsafe exec auto-review model %s",
+    async (model) => {
+      const params = createParams();
+      params.config = {
+        tools: {
+          exec: {
+            mode: "auto",
+            reviewer: {
+              model,
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"];
+      mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+        decision: "allow-once",
+        rationale: "unsafe self review",
+        risk: "low",
+      });
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "plugin:approval-local-reviewer", status: "accepted" })
+        .mockResolvedValueOnce({ id: "plugin:approval-local-reviewer", decision: "allow-once" });
+
+      const result = await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-auto-review-local",
+          command: "node --version",
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        execPolicy: { mode: "auto" },
+        internalExecAutoReview: true,
+      });
+
+      expect(result).toEqual({ decision: "accept" });
+      expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+      expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+        "plugin.approval.request",
+        "plugin.approval.waitDecision",
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      name: "provider base URL",
+      reviewerModel: "openai/gpt-5.5-mini",
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [],
+          },
+        },
+      },
+    },
+    {
+      name: "provider key casing with custom base URL",
+      reviewerModel: "openai/gpt-5.5-mini",
+      models: {
+        providers: {
+          OpenAI: {
+            baseUrl: "http://localhost:8080/v1",
+            models: [],
+          },
+        },
+      },
+    },
+    {
+      name: "provider local service",
+      reviewerModel: "openai/gpt-5.5-mini",
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            localService: { command: "local-openai-compatible" },
+            models: [],
+          },
+        },
+      },
+    },
+    {
+      name: "model base URL",
+      reviewerModel: "openai/gpt-5.5-mini@work",
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "gpt-5.5-mini",
+                name: "Local GPT-compatible reviewer",
+                baseUrl: "http://localhost:8080/v1",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    },
+  ])(
+    "falls back to plugin approval for OpenAI reviewer with custom $name",
+    async ({ models, reviewerModel }) => {
+      const params = createParams();
+      params.config = {
+        tools: {
+          exec: {
+            mode: "auto",
+            reviewer: {
+              model: reviewerModel,
+            },
+          },
+        },
+        models,
+      } as unknown as EmbeddedRunAttemptParams["config"];
+      mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+        decision: "allow-once",
+        rationale: "custom endpoint reviewer",
+        risk: "low",
+      });
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "plugin:approval-custom-openai", status: "accepted" })
+        .mockResolvedValueOnce({ id: "plugin:approval-custom-openai", decision: "allow-once" });
+
+      const result = await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-auto-review-custom-openai",
+          command: "node --version",
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        execPolicy: { mode: "auto" },
+        internalExecAutoReview: true,
+      });
+
+      expect(result).toEqual({ decision: "accept" });
+      expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+      expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+        "plugin.approval.request",
+        "plugin.approval.waitDecision",
+      ]);
+    },
+  );
+
+  it("falls back to plugin approval when an OpenAI-looking reviewer is a configured model alias", async () => {
+    const params = createParams();
+    params.config = {
+      agents: {
+        defaults: {
+          models: {
+            "lmstudio/local-reviewer": {
+              alias: "OpenAI/Reviewer",
+            },
+          },
+        },
+      },
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/reviewer@work",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "aliased local reviewer",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-aliased-openai", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-aliased-openai", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-aliased-openai",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("keeps exec auto-review when only an agent-specific alias matches the OpenAI reviewer", async () => {
+    const params = createParams();
+    params.config = {
+      agents: {
+        list: [
+          {
+            id: "sidecar",
+            models: {
+              "lmstudio/local-reviewer": {
+                alias: "openai/gpt-5.5-mini",
+              },
+            },
+          },
+        ],
+      },
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini@work",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "real OpenAI reviewer",
+      risk: "low",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-agent-alias",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      execReviewerAgentId: "main",
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: params.config,
+        agentId: "main",
+        reviewer: {
+          model: "openai/gpt-5.5-mini@work",
+        },
+      }),
+    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plugin approval when OpenAI reviewer uses a custom environment base URL", async () => {
+    const params = createParams();
+    vi.stubEnv("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1");
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "custom env endpoint reviewer",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-env-openai", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-env-openai", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-env-openai",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("falls back to plugin approval when Codex native OpenAI config uses a local base URL", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-approval-"));
+    try {
+      await fs.mkdir(path.join(tempDir, "codex-home"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "codex-home", "config.toml"),
+        'openai_base_url = "http://127.0.0.1:11434/v1"\n',
+      );
+      const params = createParams();
+      params.agentDir = tempDir;
+      params.config = {
+        tools: {
+          exec: {
+            mode: "auto",
+            reviewer: {
+              model: "openai/gpt-5.5-mini",
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams["config"];
+      mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+        decision: "allow-once",
+        rationale: "custom native endpoint reviewer",
+        risk: "low",
+      });
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "plugin:approval-native-openai", status: "accepted" })
+        .mockResolvedValueOnce({ id: "plugin:approval-native-openai", decision: "allow-once" });
+
+      const result = await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-auto-review-native-openai",
+          command: "node --version",
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        execPolicy: { mode: "auto" },
+        internalExecAutoReview: true,
+      });
+
+      expect(result).toEqual({ decision: "accept" });
+      expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+      expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+        "plugin.approval.request",
+        "plugin.approval.waitDecision",
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps permission amendment command approvals on the plugin approval route", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "safe command",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-amendment", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-amendment", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-amendment",
+        command: "node --version",
+        additionalPermissions: {
+          network: {
+            allowHosts: ["example.com"],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    expect(gatewayRequestPayload().description).toContain("Additional permissions: network");
+  });
+
+  it("keeps object-shaped execpolicy amendment command approvals on the plugin approval route", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "safe command",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-execpolicy-object", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-execpolicy-object", decision: "allow-always" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-execpolicy-object",
+        command: "node --version",
+        proposedExecpolicyAmendment: {
+          permissions: [{ permission: "allow", command: ["node"] }],
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("keeps unbound shell command approvals on the plugin approval route", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "safe command",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-unbound", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-unbound", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-unbound",
+        command: "node --version && echo ok",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it.each([
+    "/approve abc123 allow-once",
+    "bash -lc '/approve abc123 allow-once'",
+    "openclaw channels login --channel whatsapp",
+    "sudo -EH bash -lc 'openclaw channels login --channel whatsapp'",
+  ])("keeps unsafe control command approvals on the plugin approval route: %s", async (command) => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "unsafe control command",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-control-command", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-control-command", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-control-command",
+        command,
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("keeps security audit suppression edits on the plugin approval route", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "safe command",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-security-suppression", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-security-suppression",
+        decision: "allow-once",
+      });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-security-suppression",
+        command: "openclaw config set security.audit.suppressions '[]'",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("keeps amendment-only decision command approvals on the plugin approval route", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "safe command",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-amendment-only", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-amendment-only", decision: "allow-always" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-amendment-only",
+        command: "node --version",
+        availableDecisions: [
+          {
+            acceptWithExecpolicyAmendment: {
+              patterns: ["node"],
+            },
+          },
+        ],
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({
+      decision: {
+        acceptWithExecpolicyAmendment: {
+          patterns: ["node"],
+        },
+      },
+    });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("falls back to plugin approval when the exec auto-review model asks", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: { primary: "openai/gpt-5.5-mini" },
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "ask",
+      rationale: "needs human review",
+      risk: "medium",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-reviewer-ask", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-reviewer-ask", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-ask",
+        command: "git status",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("cancels command approvals when the run aborts during exec auto-review", async () => {
+    const params = createParams();
+    params.config = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    const abortController = new AbortController();
+    mockReviewExecRequestWithConfiguredModel.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                decision: "allow-once",
+                rationale: "late allow",
+                risk: "low",
+              }),
+            50,
+          );
+        }),
+    );
+
+    const resultPromise = handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-abort",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+      signal: abortController.signal,
+    });
+    abortController.abort(new Error("run stopped"));
+
+    await expect(resultPromise).resolves.toEqual({ decision: "cancel" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "failed",
+      message: "Codex app-server approval cancelled because the run stopped.",
+    });
+  });
+
+  it("normalizes prefixed channel targets for OpenClaw tool policy context", async () => {
+    const params = createParams();
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.currentChannelId = "telegram:-100123";
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-prefixed", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-prefixed", decision: "allow-once" });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-prefixed",
+        command: "pnpm test extensions/codex/src/app-server",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          channelId: "-100123",
+        }),
+      }),
+    );
+    expect(gatewayRequestPayload().turnSourceTo).toBe("telegram:-100123");
+  });
+
+  it("denies command approvals before prompting when OpenClaw tool policy blocks", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-before-tool-call",
+      reason: "blocked by policy",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-blocked",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("routes command approvals through the active native hook relay before prompting", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: `${JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "blocked by native relay",
+        },
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay",
+        command: "cat /tmp/private_key",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledWith({
+      provider: "codex",
+      relayId: "relay-1",
+      generation: "generation-1",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        tool_name: "exec_command",
+        tool_use_id: "cmd-native-relay",
+        cwd: "/workspace",
+        turn_id: "turn-1",
+        tool_input: {
+          command: "cat /tmp/private_key",
+          cwd: "/workspace",
+          approval: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "cmd-native-relay",
+            command: "cat /tmp/private_key",
+            cwd: "/workspace",
+          },
+          cmd: "cat /tmp/private_key",
+        },
+      },
+      requireGeneration: true,
+    });
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "blocked by native relay",
+    });
+  });
+
+  it("falls through to plugin approval when the native hook relay has no decision", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-native-noop", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-native-noop", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-noop",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
+      relayId: "relay-1",
+      toolUseId: "cmd-native-relay-noop",
+      signal: undefined,
+    });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    findApprovalEvent(params, {
+      status: "pending",
+      approvalId: "plugin:approval-native-noop",
+    });
+    findApprovalEvent(params, {
+      status: "approved",
+      approvalId: "plugin:approval-native-noop",
+    });
+  });
+
+  it("does not invoke the app-server relay when native PreToolUse already ran", async () => {
+    const params = createParams();
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-native-observed", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-native-observed", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-observed",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockHasNativeHookRelayInvocation).toHaveBeenCalledWith({
+      relayId: "relay-1",
+      event: "pre_tool_use",
+      toolUseId: "cmd-native-relay-observed",
+    });
+    expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
+      relayId: "relay-1",
+      toolUseId: "cmd-native-relay-observed",
+      signal: undefined,
+    });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("accepts command approvals from deferred native PreToolUse plugin approvals", async () => {
+    const params = createParams();
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockResolveNativeHookRelayDeferredToolApproval.mockResolvedValueOnce({
+      handled: true,
+      outcome: "approved-once",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-deferred",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval granted for this turn.",
+    });
+  });
+
+  it("fails closed when the native hook relay returns unreadable approval output", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: "not-json",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-unreadable",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw native hook relay returned an unreadable Codex app-server approval result.",
+    });
+  });
+
+  it("fails closed when the native hook relay returns a non-deny decision", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout:
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "allow",
+          },
+        }) + "\n",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-allow",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "OpenClaw native hook relay returned a non-deny Codex app-server approval decision.",
+    });
+  });
+
+  it("fails closed when the native hook relay exits non-zero", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: "ignored stdout",
+      stderr: "blocked from stderr",
+      exitCode: 1,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-exit",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "blocked from stderr",
+    });
+  });
+
+  it("fails closed when the expected native hook relay cannot be invoked", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay not found"));
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-missing",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-missing",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw native hook relay unavailable for Codex app-server approval: native hook relay not found",
+    });
+  });
+
+  it("keeps non-command approvals on the app-server approval route when a native relay is registered", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:file-approval", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:file-approval", decision: "allow-once" })
+      .mockResolvedValueOnce({ id: "plugin:permission-approval", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:permission-approval", decision: "deny" });
+    const nativeHookRelay = {
+      relayId: "relay-1",
+      generation: "generation-1",
+      allowedEvents: ["pre_tool_use" as const],
+    };
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-native-relay-registered",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay,
+    });
+    await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "permission-native-relay-registered",
+        permissions: {
+          network: { allowHosts: ["example.com"] },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay,
+    });
+
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("denies command approvals when OpenClaw tool policy rewrites params", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: {
+        command: "echo rewritten",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-rewritten",
+          command: "echo rewritten",
+        },
+      },
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-rewritten",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    });
+  });
+
+  it("keeps OpenClaw plugin allow-always approvals scoped to one Codex request", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: {
+        command: "pnpm test",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-needs-approval",
+          command: "pnpm test",
+        },
+      },
+      approvalResolution: "allow-always",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-needs-approval",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval granted for this turn.",
+    });
+  });
+
+  it("denies command approvals when OpenClaw tool policy requires approval", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Plugin approval required",
+    });
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-needs-approval",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "Plugin approval required",
+    });
   });
 
   it("describes command approvals from parsed command actions when available", async () => {
@@ -143,6 +1751,12 @@ describe("Codex app-server approval bridge", () => {
     const requestPayload = gatewayRequestPayload();
     expect(String(requestPayload.description)).toContain("Command: pnpm test extensions/codex");
     expect(String(requestPayload.description)).not.toContain("bash -lc");
+    expect(mockRunBeforeToolCallHook.mock.calls.at(0)?.[0]).toMatchObject({
+      toolName: "exec",
+      params: {
+        command: "bash -lc 'pnpm test extensions/codex'",
+      },
+    });
     findApprovalEvent(params, { command: "pnpm test extensions/codex" });
   });
 

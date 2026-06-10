@@ -1,9 +1,17 @@
-import { installSkill } from "../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+/**
+ * Interactive skill dependency setup for onboarding.
+ *
+ * It reports workspace skill readiness, offers safe dependency installs, and
+ * records per-skill API keys entered during setup.
+ */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBrewExecutable } from "../infra/brew.js";
+import { isContainerEnvironment } from "../infra/container-environment.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { patchSkillConfigEntry } from "../skills/config/mutations.js";
+import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import { installSkill } from "../skills/lifecycle/install.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
@@ -31,23 +39,18 @@ function formatSkillHint(skill: {
   return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
 }
 
-function upsertSkillEntry(
-  cfg: OpenClawConfig,
-  skillKey: string,
-  patch: { apiKey?: string },
-): OpenClawConfig {
-  const entries = { ...cfg.skills?.entries };
-  const existing = (entries[skillKey] as { apiKey?: string } | undefined) ?? {};
-  entries[skillKey] = { ...existing, ...patch };
-  return {
-    ...cfg,
-    skills: {
-      ...cfg.skills,
-      entries,
-    },
-  };
+function isBrewOnlyInstallableSkill(skill: {
+  install: Array<{ kind: string }>;
+  missing: { bins: string[] };
+}): boolean {
+  return (
+    skill.install.length > 0 &&
+    skill.missing.bins.length > 0 &&
+    skill.install.every((option) => option.kind === "brew")
+  );
 }
 
+/** Runs the interactive skills setup step and returns the updated config. */
 export async function setupSkills(
   cfg: OpenClawConfig,
   workspaceDir: string,
@@ -82,10 +85,42 @@ export async function setupSkills(
     return cfg;
   }
 
-  const installable = missing.filter(
+  const baseInstallable = missing.filter(
     (skill) => skill.install.length > 0 && skill.missing.bins.length > 0,
   );
+  let brewAvailable: boolean | undefined;
+  const detectBrewOnce = async () => {
+    // Brew detection can shell out; cache it for the whole skills step because
+    // install filtering and prompts both need the same answer.
+    brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
+    return brewAvailable;
+  };
+  const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
+  let installable = baseInstallable;
+  if (inLinuxContainer && baseInstallable.length > 0 && !(await detectBrewOnce())) {
+    // Linux containers without brew cannot use brew-only recipes reliably; hide
+    // them from install selection and leave manual instructions in the note.
+    const hiddenBrewOnly = baseInstallable.filter(isBrewOnlyInstallableSkill);
+    installable = baseInstallable.filter((skill) => !isBrewOnlyInstallableSkill(skill));
+    if (hiddenBrewOnly.length > 0) {
+      await prompter.note(
+        [t("wizard.skills.containerBrewHidden"), t("wizard.skills.containerBrewManual")].join("\n"),
+        t("wizard.skills.containerInstallsTitle"),
+      );
+    }
+  }
   let next: OpenClawConfig = cfg;
+  if (installable.length === 0 && missing.length === 0) {
+    await prompter.note(
+      [
+        "No missing skill dependencies to install.",
+        `To inspect available skills, run: ${formatCliCommand("openclaw skills list --verbose")}`,
+        `To check skill status, run: ${formatCliCommand("openclaw skills check")}`,
+      ].join("\n"),
+      t("wizard.skills.allReadyTitle") ?? "All skills ready",
+    );
+    return next;
+  }
   if (installable.length > 0) {
     const toInstall = await prompter.multiselect({
       message: t("wizard.skills.installDeps"),
@@ -112,7 +147,7 @@ export async function setupSkills(
     const needsBrewPrompt =
       process.platform !== "win32" &&
       selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
-      !(await detectBinary("brew"));
+      !(await detectBrewOnce());
 
     if (needsBrewPrompt) {
       await prompter.note(
@@ -141,6 +176,8 @@ export async function setupSkills(
       skill.install.some((option) => option.kind === "node"),
     );
     if (needsNodeManagerPrompt) {
+      // Persist the package manager before invoking installers so node recipes
+      // and later skill lifecycle commands agree on the selected tool.
       const nodeManager = (await prompter.select({
         message: t("wizard.skills.nodeManager"),
         options: resolveNodeManagerOptions(),
@@ -166,6 +203,8 @@ export async function setupSkills(
       if (!installId) {
         continue;
       }
+      // Onboarding installs the primary recipe only; alternative recipes remain
+      // visible through `openclaw skills list --verbose`.
       const spin = prompter.progress(t("wizard.skills.installing", { name }));
       const result = await installSkill({
         workspaceDir,
@@ -209,6 +248,8 @@ export async function setupSkills(
     if (!skill.primaryEnv || skill.missing.env.length === 0) {
       continue;
     }
+    // API keys entered here patch the skill entry, not process.env, so future
+    // agent sessions can resolve the same skill configuration.
     const wantsKey = await prompter.confirm({
       message: t("wizard.skills.setEnv", { env: skill.primaryEnv, name: skill.name }),
       initialValue: false,
@@ -221,7 +262,7 @@ export async function setupSkills(
       validate: (value) => (value?.trim() ? undefined : t("common.required")),
       sensitive: true,
     });
-    next = upsertSkillEntry(next, skill.skillKey, { apiKey: normalizeSecretInput(apiKey) });
+    next = patchSkillConfigEntry(next, skill.skillKey, { apiKey });
   }
 
   return next;

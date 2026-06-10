@@ -1,3 +1,4 @@
+// Xai plugin module implements stt behavior.
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -78,6 +79,9 @@ export async function transcribeXaiAudio(
 }
 
 export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider {
+  // Auth is resolved by media-understanding core via resolveProviderExecutionContext
+  // before transcribeAudio runs, so an OAuth profile (when configured) reaches
+  // here as `params.apiKey` already. No plugin-side fallback required.
   return {
     id: "xai",
     capabilities: ["audio"],

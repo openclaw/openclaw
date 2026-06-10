@@ -1,9 +1,12 @@
+/** Tests SecretRef provider resolution for env, file, and exec sources. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   resolveSecretRefString,
   resolveSecretRefValue,
@@ -53,6 +56,8 @@ describe("secret ref resolver", () => {
     allowSymlinkCommand?: boolean;
     trustedDirs?: string[];
     args?: string[];
+    timeoutMs?: number;
+    noOutputTimeoutMs?: number;
   };
   type FileProviderConfig = {
     source: "file";
@@ -202,6 +207,18 @@ describe("secret ref resolver", () => {
   itPosix("resolves exec refs with protocolVersion 1 response", async () => {
     const value = await resolveExecSecret(execProtocolV1ScriptPath);
     expect(value).toBe("value:openai/api-key");
+  });
+
+  itPosix("clamps oversized exec provider timeouts", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const value = await resolveExecSecret(execProtocolV1ScriptPath, {
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(value).toBe("value:openai/api-key");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   itPosix("uses timeoutMs as the default no-output timeout for exec providers", async () => {
@@ -503,9 +520,7 @@ describe("secret ref resolver", () => {
   });
 
   it("fails closed on Windows when file provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -524,15 +539,11 @@ describe("secret ref resolver", () => {
           },
         ),
       ).rejects.toThrow(/ACL verification unavailable on Windows/);
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl-opt-out");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -550,20 +561,14 @@ describe("secret ref resolver", () => {
         },
       );
       expect(value).toBe("abc123");
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
         /ACL verification unavailable on Windows/,
       );
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 });

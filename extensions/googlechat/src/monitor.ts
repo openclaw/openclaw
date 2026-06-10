@@ -1,7 +1,8 @@
+// Googlechat plugin module implements monitor behavior.
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   type ChannelBotLoopProtectionFacts,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+} from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -9,9 +10,10 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
 } from "../runtime-api.js";
-import { type ResolvedGoogleChatAccount } from "./accounts.js";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
-import { type GoogleChatAudienceType } from "./auth.js";
+import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
+import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
@@ -120,6 +122,10 @@ function shouldSuppressGoogleChatBotLoop(params: {
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
   const eventType = event.type ?? (event as { eventType?: string }).eventType;
+  if (eventType === "CARD_CLICKED") {
+    await maybeHandleGoogleChatApprovalCardClick({ event, target });
+    return;
+  }
   if (eventType !== "MESSAGE") {
     return;
   }
@@ -221,7 +227,7 @@ async function processMessageWithPipeline(params: {
     senderEmail,
     rawBody,
     statusSink,
-    logVerbose: (message) => logVerbose(core, runtime, message),
+    logVerbose: (messageLocal) => logVerbose(core, runtime, messageLocal),
   });
   if (!access.ok) {
     return;
@@ -272,19 +278,21 @@ async function processMessageWithPipeline(params: {
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
     : senderName || `user:${senderId}`;
+  const timestampMs = resolveGoogleChatTimestampMs(event.eventTime);
   const { storePath, body } = buildEnvelope({
     channel: "Google Chat",
     from: fromLabel,
-    timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+    timestamp: timestampMs,
     body: rawBody,
   });
 
-  const ctxPayload = core.channel.turn.buildContext({
+  const replyThreadName = isGroup ? message.thread?.name : undefined;
+  const ctxPayload = core.channel.inbound.buildContext({
     channel: "googlechat",
     accountId: route.accountId,
     messageId: message.name,
     messageIdFull: message.name,
-    timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+    timestamp: timestampMs,
     from: `googlechat:${senderId}`,
     sender: {
       id: senderId,
@@ -295,10 +303,6 @@ async function processMessageWithPipeline(params: {
       kind: isGroup ? "channel" : "direct",
       id: spaceId,
       label: fromLabel,
-      routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: spaceId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -308,15 +312,14 @@ async function processMessageWithPipeline(params: {
     reply: {
       to: `googlechat:${spaceId}`,
       originatingTo: `googlechat:${spaceId}`,
-      replyToId: message.thread?.name,
-      replyToIdFull: message.thread?.name,
+      replyToId: replyThreadName,
+      replyToIdFull: replyThreadName,
     },
     message: {
       body,
       bodyForAgent: rawBody,
       rawBody,
       commandBody: rawBody,
-      envelopeFrom: fromLabel,
     },
     media:
       mediaPath || mediaType
@@ -364,7 +367,7 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: message.thread?.name,
+        thread: replyThreadName,
       });
       typingMessageName = result?.messageName;
     } catch (err) {
@@ -372,14 +375,14 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  await core.channel.turn.run({
+  await core.channel.inbound.run({
     channel: "googlechat",
     accountId: route.accountId,
     raw: message,
     adapter: {
       ingest: () => ({
         id: message.name ?? spaceId,
-        timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+        timestamp: timestampMs,
         rawText: rawBody,
         textForAgent: rawBody,
         textForCommands: rawBody,
@@ -438,7 +441,7 @@ async function processMessageWithPipeline(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   processMessageWithPipeline,
   resolveGoogleChatBotLoopProtection,
   resolveGoogleChatBotLoopProtectionConfig,
@@ -524,3 +527,4 @@ export function resolveGoogleChatWebhookPath(params: {
     }) ?? "/googlechat"
   );
 }
+export { testing as __testing };

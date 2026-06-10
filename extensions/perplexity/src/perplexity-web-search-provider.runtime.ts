@@ -1,5 +1,6 @@
+// Perplexity provider module implements model/runtime integration.
 import {
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -7,6 +8,7 @@ import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   normalizeToIsoDate,
   readCachedSearchPayload,
@@ -22,7 +24,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_PERPLEXITY_BASE_URL,
   inferPerplexityBaseUrlFromApiKey,
@@ -174,7 +176,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
     Boolean(normalizeOptionalString(url)),
   );
   if (topLevel.length > 0) {
-    return [...new Set(topLevel)];
+    return uniqueStrings(topLevel);
   }
   const citations: string[] = [];
   for (const choice of data.choices ?? []) {
@@ -194,7 +196,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
       }
     }
   }
-  return [...new Set(citations)];
+  return uniqueStrings(citations);
 }
 
 async function runPerplexitySearchApi(params: {
@@ -326,7 +328,12 @@ export async function executePerplexitySearch(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const rawFreshness = readStringParam(args, "freshness");
   const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "perplexity") : undefined;
   if (rawFreshness && !freshness) {
@@ -343,8 +350,13 @@ export async function executePerplexitySearch(
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
   const domainFilter = readStringArrayParam(args, "domain_filter");
-  const maxTokens = readNumberParam(args, "max_tokens", { integer: true });
-  const maxTokensPerPage = readNumberParam(args, "max_tokens_per_page", { integer: true });
+  const maxTokens = readPositiveIntegerParam(args, "max_tokens", {
+    max: 1_000_000,
+    message: "max_tokens must be a positive integer.",
+  });
+  const maxTokensPerPage = readPositiveIntegerParam(args, "max_tokens_per_page", {
+    message: "max_tokens_per_page must be a positive integer.",
+  });
 
   if (!structured) {
     if (country) {
@@ -536,7 +548,7 @@ export async function executePerplexitySearch(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   resolvePerplexityModel,
@@ -548,3 +560,4 @@ export const __testing = {
   normalizeToIsoDate,
   isoToPerplexityDate,
 } as const;
+export { testing as __testing };

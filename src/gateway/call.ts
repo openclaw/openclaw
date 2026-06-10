@@ -1,25 +1,39 @@
+// Gateway RPC call helper.
+// Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
-import { getRuntimeConfig } from "../config/io.js";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/version.js";
+import { readGatewayDispatchConfig } from "../config/gateway-dispatch-config.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../utils/message-channel.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
+import { resolveGatewayAuth } from "./auth-resolve.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import {
+  GatewayClient,
+  isGatewayConnectAssemblyError,
+  type GatewayClientOptions,
+  type GatewayClientRequestOptions,
+} from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
   type GatewayConnectionDetails,
@@ -41,8 +55,13 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
+
+export type GatewayRequestFunction = <T = Record<string, unknown>>(
+  method: string,
+  params?: unknown,
+  opts?: GatewayClientRequestOptions,
+) => Promise<T>;
 
 type CallGatewayBaseOptions = {
   url?: string;
@@ -54,11 +73,15 @@ type CallGatewayBaseOptions = {
   params?: unknown;
   expectFinal?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  onAccepted?: GatewayClientRequestOptions["onAccepted"];
+  onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
   platform?: string;
   mode?: GatewayClientMode;
+  approvalRuntimeToken?: string;
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -116,6 +139,85 @@ export class GatewayTransportError extends Error {
   }
 }
 
+export class GatewayCredentialsRequiredError extends Error {
+  readonly method: string;
+  readonly configPath: string;
+
+  constructor(params: { method: string; configPath: string }) {
+    super(
+      [
+        `gateway ${params.method} requires credentials before opening a websocket`,
+        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+        `Config: ${params.configPath}`,
+      ].join("\n"),
+    );
+    this.name = "GatewayCredentialsRequiredError";
+    this.method = params.method;
+    this.configPath = params.configPath;
+  }
+}
+
+export class GatewayExplicitAuthRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayExplicitAuthRequiredError";
+  }
+}
+
+export type GatewayTransportErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_transport_error";
+    kind: GatewayTransportErrorKind;
+    message: string;
+    code?: number;
+    reason?: string;
+    timeoutMs?: number;
+  };
+  gateway: {
+    url: string;
+    urlSource: string;
+    bindDetail?: string;
+    remoteFallbackNote?: string;
+  };
+};
+
+export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
+};
+
+function firstGatewayErrorLine(message: string): string {
+  return message.split("\n", 1)[0]?.trim() || message;
+}
+
+export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
+  if (!isGatewayTransportError(value)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_transport_error",
+      kind: value.kind,
+      message: firstGatewayErrorLine(value.message),
+      ...(value.code !== undefined ? { code: value.code } : {}),
+      ...(value.reason !== undefined ? { reason: value.reason } : {}),
+      ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
+    },
+    gateway: {
+      url: redactSensitiveUrlLikeString(value.connectionDetails.url),
+      urlSource: value.connectionDetails.urlSource,
+      ...(value.connectionDetails.bindDetail
+        ? { bindDetail: value.connectionDetails.bindDetail }
+        : {}),
+      ...(value.connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: value.connectionDetails.remoteFallbackNote }
+        : {}),
+    },
+  };
+}
+
 export function isGatewayTransportError(value: unknown): value is GatewayTransportError {
   if (value instanceof GatewayTransportError) {
     return true;
@@ -131,15 +233,47 @@ export function isGatewayTransportError(value: unknown): value is GatewayTranspo
   );
 }
 
+export function isGatewayCredentialsRequiredError(
+  value: unknown,
+): value is GatewayCredentialsRequiredError {
+  if (value instanceof GatewayCredentialsRequiredError) {
+    return true;
+  }
+  if (!(value instanceof Error) || value.name !== "GatewayCredentialsRequiredError") {
+    return false;
+  }
+  const candidate = value as Partial<GatewayCredentialsRequiredError>;
+  return typeof candidate.method === "string" && typeof candidate.configPath === "string";
+}
+
+export function isGatewayExplicitAuthRequiredError(
+  value: unknown,
+): value is GatewayExplicitAuthRequiredError {
+  return value instanceof Error && value.name === "GatewayExplicitAuthRequiredError";
+}
+
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
-const defaultGatewayCallDeps = {
+type GatewayRuntimeConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
+const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
+  (await import("../config/io.js")).getRuntimeConfig();
+const defaultGatewayCallDeps: {
+  createGatewayClient: typeof defaultCreateGatewayClient;
+  getRuntimeConfig: GatewayRuntimeConfigLoader;
+  loadOrCreateDeviceIdentity: typeof loadOrCreateDeviceIdentity;
+  resolveGatewayPort: typeof resolveGatewayPortFromPaths;
+  resolveConfigPath: typeof resolveConfigPathFromPaths;
+  resolveStateDir: typeof resolveStateDirFromPaths;
+  loadGatewayTlsRuntime: typeof loadGatewayTlsRuntime;
+  loadDeviceAuthToken: typeof loadDeviceAuthToken;
+} = {
   createGatewayClient: defaultCreateGatewayClient,
-  getRuntimeConfig,
+  getRuntimeConfig: defaultGetRuntimeConfig,
   loadOrCreateDeviceIdentity,
   resolveGatewayPort: resolveGatewayPortFromPaths,
   resolveConfigPath: resolveConfigPathFromPaths,
   resolveStateDir: resolveStateDirFromPaths,
   loadGatewayTlsRuntime,
+  loadDeviceAuthToken,
 };
 const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
@@ -166,14 +300,28 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
   return method ? `gateway:${method}` : "gateway:request";
 }
 
-function loadGatewayConfig(): OpenClawConfig {
+async function loadGatewayConfig(): Promise<OpenClawConfig> {
   const loadConfigFn =
     typeof gatewayCallDeps.getRuntimeConfig === "function"
       ? gatewayCallDeps.getRuntimeConfig
       : typeof defaultGatewayCallDeps.getRuntimeConfig === "function"
         ? defaultGatewayCallDeps.getRuntimeConfig
-        : getRuntimeConfig;
-  return loadConfigFn();
+        : defaultGetRuntimeConfig;
+  return await loadConfigFn();
+}
+
+function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
+  if (
+    gatewayCallDeps.getRuntimeConfig !== defaultGetRuntimeConfig &&
+    typeof gatewayCallDeps.getRuntimeConfig === "function"
+  ) {
+    const config = gatewayCallDeps.getRuntimeConfig();
+    if (config && typeof (config as Promise<OpenClawConfig>).then === "function") {
+      throw new Error("async gateway config loader is not supported for connection details");
+    }
+    return config as OpenClawConfig;
+  }
+  return readGatewayDispatchConfig();
 }
 
 function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
@@ -209,13 +357,13 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
-    getRuntimeConfig: () => loadGatewayConfig(),
+    getRuntimeConfig: () => loadGatewayConfigForConnectionDetails(),
     resolveConfigPath: (env) => resolveGatewayConfigPath(env),
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
     gatewayCallDeps.createGatewayClient =
       deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
@@ -231,6 +379,8 @@ export const __testing = {
       deps?.resolveStateDir ?? defaultGatewayCallDeps.resolveStateDir;
     gatewayCallDeps.loadGatewayTlsRuntime =
       deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
+    gatewayCallDeps.loadDeviceAuthToken =
+      deps?.loadDeviceAuthToken ?? defaultGatewayCallDeps.loadDeviceAuthToken;
   },
   setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void {
     gatewayCallDeps.createGatewayClient =
@@ -244,6 +394,7 @@ export const __testing = {
     gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
     gatewayCallDeps.resolveStateDir = defaultGatewayCallDeps.resolveStateDir;
     gatewayCallDeps.loadGatewayTlsRuntime = defaultGatewayCallDeps.loadGatewayTlsRuntime;
+    gatewayCallDeps.loadDeviceAuthToken = defaultGatewayCallDeps.loadDeviceAuthToken;
   },
 };
 
@@ -293,6 +444,58 @@ function resolveDeviceIdentityForGatewayCall(params: {
   }
 }
 
+function hasStoredOperatorDeviceAuthToken(deviceIdentity: DeviceIdentity | null): boolean {
+  if (!deviceIdentity) {
+    return false;
+  }
+  try {
+    return Boolean(
+      gatewayCallDeps.loadDeviceAuthToken({
+        deviceId: deviceIdentity.deviceId,
+        role: "operator",
+        env: process.env,
+      })?.token,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveGatewayCallAuth(config: OpenClawConfig) {
+  return resolveGatewayAuth({
+    authConfig: config.gateway?.auth,
+    env: process.env,
+    tailscaleMode: config.gateway?.tailscale?.mode,
+  });
+}
+
+function ensureGatewayCallCanAuthenticate(params: {
+  opts: CallGatewayBaseOptions;
+  context: ResolvedGatewayCallContext;
+  token?: string;
+  password?: string;
+  deviceIdentity: DeviceIdentity | null;
+}): void {
+  const resolvedAuth = resolveGatewayCallAuth(params.context.config);
+  const authMode = resolvedAuth.mode;
+  if (authMode !== "token" && authMode !== "password") {
+    return;
+  }
+  if (params.token || params.password || params.opts.approvalRuntimeToken) {
+    return;
+  }
+  if (resolvedAuth.allowTailscale) {
+    return;
+  }
+  if (hasStoredOperatorDeviceAuthToken(params.deviceIdentity)) {
+    return;
+  }
+  throw new GatewayCredentialsRequiredError({
+    method: params.opts.method,
+    configPath: params.context.configPath,
+  });
+}
+
 export type { ExplicitGatewayAuth } from "./credentials.js";
 
 export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
@@ -340,7 +543,7 @@ export function ensureExplicitGatewayAuth(params: {
   ]
     .filter(Boolean)
     .join("\n");
-  throw new Error(message);
+  throw new GatewayExplicitAuthRequiredError(message);
 }
 
 type GatewayRemoteSettings = {
@@ -396,7 +599,9 @@ function resolveGatewayCallTimeout(
   return { timeoutMs, safeTimerTimeoutMs };
 }
 
-function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
+async function resolveGatewayCallContext(
+  opts: CallGatewayBaseOptions,
+): Promise<ResolvedGatewayCallContext> {
   const cliUrlOverride = trimToUndefined(opts.url);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const envUrlOverride = cliUrlOverride
@@ -409,7 +614,8 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
     urlOverride,
     explicitAuth,
   });
-  const config = opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : loadGatewayConfig());
+  const config =
+    opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : await loadGatewayConfig());
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
@@ -564,6 +770,12 @@ function createGatewayTimeoutTransportError(params: {
   });
 }
 
+function createGatewayRequestAbortError(method: string): Error {
+  const err = new Error(`gateway request aborted for ${method}`);
+  err.name = "AbortError";
+  return err;
+}
+
 function ensureGatewaySupportsRequiredMethods(params: {
   requiredMethods: string[] | undefined;
   methods: string[] | undefined;
@@ -604,6 +816,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   timeoutMs: number;
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
+  deviceIdentity: DeviceIdentity | null;
 }): Promise<T> {
   const {
     opts,
@@ -615,28 +828,75 @@ async function executeGatewayRequestWithScopes<T>(params: {
     preauthHandshakeTimeoutMs,
     timeoutMs,
     safeTimerTimeoutMs,
+    deviceIdentity,
   } = params;
   return await new Promise<T>((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(createGatewayRequestAbortError(opts.method));
+      return;
+    }
     let settled = false;
     let ignoreClose = false;
     const startAbort = new AbortController();
-    const stop = (err?: Error, value?: T) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
+    let primaryRequestStarted = false;
+    const cleanup = () => {
       startAbort.abort();
-      clearTimeout(timer);
-      void stopGatewayClient(client).finally(() => {
+      if (abortHandler) {
+        opts.signal?.removeEventListener("abort", abortHandler);
+      }
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+    const stopClientThenSettle = (
+      activeClient: GatewayClient | undefined,
+      err?: Error,
+      value?: T,
+    ) => {
+      const complete = () => {
         if (err) {
           reject(err);
         } else {
           resolve(value as T);
         }
-      });
+      };
+      if (!activeClient) {
+        complete();
+        return;
+      }
+      void stopGatewayClient(activeClient).finally(complete);
     };
+    const stop = (err?: Error, value?: T) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      stopClientThenSettle(client, err, value);
+    };
+    const abortHandler: (() => void) | undefined = () => {
+      if (settled) {
+        return;
+      }
+      ignoreClose = true;
+      settled = true;
+      cleanup();
+      const err = createGatewayRequestAbortError(opts.method);
+      const activeClient = client;
+      const stopAfterAbortHook = () => stopClientThenSettle(activeClient, err);
+      if (!activeClient || !opts.onSignalAbort || !primaryRequestStarted) {
+        stopAfterAbortHook();
+        return;
+      }
+      const request: GatewayRequestFunction = activeClient.request.bind(activeClient);
+      void Promise.resolve()
+        .then(() => opts.onSignalAbort?.(request))
+        .catch(() => {})
+        .finally(stopAfterAbortHook);
+    };
+    opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    const client = gatewayCallDeps.createGatewayClient({
+    const client: GatewayClient | undefined = gatewayCallDeps.createGatewayClient({
       url,
       token,
       password,
@@ -648,31 +908,38 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
       role: "operator",
       scopes,
-      deviceIdentity:
-        opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
-          : opts.deviceIdentity,
+      deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
-      onHelloOk: async (hello) => {
-        try {
-          ensureGatewaySupportsRequiredMethods({
-            requiredMethods: opts.requiredMethods,
-            methods: hello.features?.methods,
-            attemptedMethod: opts.method,
-          });
-          const result = await client.request<T>(opts.method, opts.params, {
-            expectFinal: opts.expectFinal,
-            timeoutMs: opts.timeoutMs,
-          });
-          ignoreClose = true;
-          stop(undefined, result);
-        } catch (err) {
-          ignoreClose = true;
-          stop(err as Error);
-        }
+      onHelloOk: (hello) => {
+        void (async () => {
+          try {
+            ensureGatewaySupportsRequiredMethods({
+              requiredMethods: opts.requiredMethods,
+              methods: hello.features?.methods,
+              attemptedMethod: opts.method,
+            });
+            const activeClient = client;
+            if (!activeClient) {
+              throw new Error("gateway client not initialized");
+            }
+            primaryRequestStarted = true;
+            const result = await activeClient.request<T>(opts.method, opts.params, {
+              expectFinal: opts.expectFinal,
+              timeoutMs: opts.timeoutMs,
+              signal: opts.signal,
+              onAccepted: opts.onAccepted,
+            });
+            ignoreClose = true;
+            stop(undefined, result);
+          } catch (err) {
+            ignoreClose = true;
+            stop(err as Error);
+          }
+        })();
       },
       onClose: (code, reason) => {
         if (settled || ignoreClose) {
@@ -687,9 +954,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
           }),
         );
       },
+      onConnectError: (err) => {
+        if (settled || !isGatewayConnectAssemblyError(err)) {
+          return;
+        }
+        ignoreClose = true;
+        stop(err);
+      },
     });
 
-    const timer = setTimeout(() => {
+    const timer: NodeJS.Timeout | undefined = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({
@@ -715,7 +989,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           }),
         );
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (settled) {
           return;
         }
@@ -729,7 +1003,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
 ): Promise<T> {
-  const context = resolveGatewayCallContext(opts);
+  const context = await resolveGatewayCallContext(opts);
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
     context.config.gateway?.handshakeTimeoutMs,
@@ -753,6 +1027,17 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
+  const deviceIdentity =
+    opts.deviceIdentity === undefined
+      ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+      : opts.deviceIdentity;
+  ensureGatewayCallCanAuthenticate({
+    opts,
+    context,
+    token,
+    password,
+    deviceIdentity,
+  });
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,
@@ -764,7 +1049,40 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     timeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,
+    deviceIdentity,
   });
+}
+
+export async function buildGatewayProbeConnectionDetails(
+  opts: Pick<
+    CallGatewayBaseOptions,
+    "config" | "configPath" | "password" | "tlsFingerprint" | "token" | "url"
+  > = {},
+): Promise<GatewayProbeConnectionDetails> {
+  const callOpts = {
+    ...opts,
+    method: "status",
+  } satisfies CallGatewayBaseOptions;
+  const context = await resolveGatewayCallContext(callOpts);
+  ensureRemoteModeUrlConfigured(context);
+  const connectionDetails = buildGatewayConnectionDetails({
+    config: context.config,
+    url: context.urlOverride,
+    urlSource: context.urlOverrideSource,
+    ...(opts.configPath ? { configPath: opts.configPath } : {}),
+  });
+  const tlsFingerprint = await resolveGatewayTlsFingerprint({
+    opts: callOpts,
+    context,
+    url: connectionDetails.url,
+  });
+  return {
+    ...connectionDetails,
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
+    ...(context.config.gateway?.handshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
+      : {}),
+  };
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(
@@ -819,3 +1137,4 @@ export async function callGateway<T = Record<string, unknown>>(
 export function randomIdempotencyKey() {
   return randomUUID();
 }
+export { testing as __testing };

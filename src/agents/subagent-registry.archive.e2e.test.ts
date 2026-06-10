@@ -1,3 +1,5 @@
+// Subagent registry archive tests cover keep/delete cleanup modes, retryable
+// session deletion, and context-engine lifecycle callbacks.
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +12,8 @@ let currentConfig = {
 };
 const loadConfigMock = vi.fn(() => currentConfig);
 const flushSweepMicrotasks = async () => {
+  // Archive sweeps schedule follow-up work through microtasks; drain them before
+  // asserting registry and context-engine side effects.
   await Promise.resolve();
   await Promise.resolve();
 };
@@ -59,9 +63,9 @@ describe("subagent registry archive behavior", () => {
   });
 
   const setRegistryTestDeps = (
-    overrides: NonNullable<Parameters<typeof mod.__testing.setDepsForTest>[0]> = {},
+    overrides: NonNullable<Parameters<typeof mod.testing.setDepsForTest>[0]> = {},
   ) => {
-    mod.__testing.setDepsForTest({
+    mod.testing.setDepsForTest({
       callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       ...overrides,
@@ -89,7 +93,7 @@ describe("subagent registry archive behavior", () => {
   });
 
   afterEach(() => {
-    mod.__testing.setDepsForTest();
+    mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
   });
@@ -175,7 +179,7 @@ describe("subagent registry archive behavior", () => {
       attachmentsRootDir,
     });
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
     await flushSweepMicrotasks();
 
     expect(deleteAttempts).toBe(1);
@@ -183,7 +187,7 @@ describe("subagent registry archive behavior", () => {
     expect(onSubagentEnded).not.toHaveBeenCalled();
     await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
     await flushSweepMicrotasks();
 
     expect(deleteAttempts).toBe(2);
@@ -221,7 +225,7 @@ describe("subagent registry archive behavior", () => {
       archiveAtMs: Date.now(),
     });
 
-    const firstSweep = mod.__testing.sweepOnceForTests();
+    const firstSweep = mod.testing.sweepOnceForTests();
     await flushSweepMicrotasks();
     expect(
       vi
@@ -231,7 +235,7 @@ describe("subagent registry archive behavior", () => {
         ),
     ).toHaveLength(1);
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
     expect(
       vi
         .mocked(callGateway)

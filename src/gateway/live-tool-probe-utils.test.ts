@@ -1,3 +1,6 @@
+/**
+ * Tests for nonce matching and retry heuristics used by live tool probes.
+ */
 import { describe, expect, it } from "vitest";
 import {
   hasExpectedSingleNonce,
@@ -274,6 +277,17 @@ describe("live tool probe utils", () => {
           text: "Let me try reading the file again:",
           nonce: "nonce-c",
           provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "retries alternate exec readback retry wording",
+        params: {
+          text: "Let me try again with a slightly different approach:",
+          nonce: "nonce-c",
+          provider: "minimax-portal",
           attempt: 0,
           maxAttempts: 3,
         },

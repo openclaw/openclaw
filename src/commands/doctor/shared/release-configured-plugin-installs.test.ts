@@ -1,3 +1,4 @@
+// Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -202,6 +203,60 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects provider plugins from channel-only model overrides", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "anthropic-provider",
+        providerId: "anthropic",
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              default: "anthropic/claude-opus-4-7",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["anthropic-provider"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects provider plugins from provider-keyed channel model aliases", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "anthropic-provider",
+        providerId: "anthropic",
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            anthropic: {
+              discord: "claude-opus-4-7",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["anthropic-provider"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
@@ -352,16 +407,58 @@ describe("configured plugin install release step", () => {
       },
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
-      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+      },
     });
 
     const repairCall = readOnlyMissingPluginInstallRepairCall();
     expect(repairCall.pluginIds).toEqual(["codex"]);
-    expect(repairCall.env).toEqual({ OPENCLAW_UPDATE_IN_PROGRESS: "1" });
+    expect(repairCall.env).toEqual({
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+    });
     expect(result).toEqual({
       changes: [
         'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
+      warnings: [],
+      completed: false,
+      touchedConfig: false,
+    });
+  });
+
+  it("defers package-manager plugin release completion for writable legacy parents", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured plugin "discord".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
+      touchedVersion: "2026.5.1",
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+    });
+
+    expect(readOnlyMissingPluginInstallRepairCall().env).toEqual({
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+    });
+    expect(result).toEqual({
+      changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
       completed: false,
       touchedConfig: false,
@@ -395,6 +492,38 @@ describe("configured plugin install release step", () => {
     expect(repairCall.env).toEqual({});
     expect(result).toEqual({
       changes: ['Installed missing configured plugin "discord".'],
+      warnings: [],
+      completed: true,
+      touchedConfig: false,
+    });
+  });
+
+  it("repairs same-id externalized channel installs from channel config after prior update writes", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured channel plugin "whatsapp".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+      },
+      currentVersion: "2026.5.12",
+      touchedVersion: "2026.5.12",
+      env: {},
+    });
+
+    const repairCall = readOnlyMissingPluginInstallRepairCall();
+    expect(repairCall.pluginIds).toEqual([]);
+    expect(repairCall.channelIds).toEqual(["whatsapp"]);
+    expect(result).toEqual({
+      changes: ['Installed missing configured channel plugin "whatsapp".'],
       warnings: [],
       completed: true,
       touchedConfig: false,

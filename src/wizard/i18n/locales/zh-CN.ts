@@ -1,3 +1,4 @@
+// Simplified Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const zh_CN = {
@@ -29,14 +30,18 @@ export const zh_CN = {
       compatibilityAnthropicHint: "使用 /messages",
       compatibilityOpenAi: "兼容 OpenAI",
       compatibilityOpenAiHint: "使用 /chat/completions",
+      compatibilityOpenAiResponses: "兼容 OpenAI Responses",
+      compatibilityOpenAiResponsesHint: "使用 /responses",
       compatibilityUnknown: "未知（自动检测）",
-      compatibilityUnknownHint: "先探测 OpenAI，再探测 Anthropic 端点",
+      compatibilityUnknownHint: "先探测 OpenAI Chat、OpenAI Responses，再探测 Anthropic 端点",
       detectionFailed: "无法检测端点类型。",
-      detectionFailedNote: "这个端点没有响应 OpenAI 或 Anthropic 风格的请求。",
+      detectionFailedNote:
+        "这个端点没有响应 OpenAI Chat、OpenAI Responses 或 Anthropic 风格的请求。",
       detectionNoteTitle: "端点检测",
       detectionProgress: "正在检测端点类型...",
       detectedAnthropic: "检测到兼容 Anthropic 的端点。",
       detectedOpenAi: "检测到兼容 OpenAI 的端点。",
+      detectedOpenAiResponses: "检测到兼容 OpenAI Responses 的端点。",
       endpointId: "端点 ID",
       endpointIdRequired: "端点 ID 必填。",
       endpointIdRenamed: '端点 ID "{from}" 已用于不同的基础 URL。将使用 "{to}"。',
@@ -115,7 +120,7 @@ export const zh_CN = {
       cacheFailed: "生成 completion 缓存失败。稍后运行 `{command}`。",
       enable: "为 {cli} 启用 {shell} shell completion？",
       installed: "Shell completion 已安装。{reloadHint}",
-      reloadPowerShell: "重启 shell（或重新加载 PowerShell profile）。",
+      reloadPowerShell: "重启 shell 或运行：{command}",
       reloadShell: "重启 shell 或运行：source {profile}",
       title: "Shell completion",
     },
@@ -300,6 +305,10 @@ export const zh_CN = {
     },
     skills: {
       configure: "现在配置技能？（推荐）",
+      containerBrewHidden:
+        "在 Linux 容器中会隐藏仅支持 brew 的技能安装项，因为官方镜像不包含 Homebrew。",
+      containerBrewManual: "请使用预装 Homebrew 的自定义镜像，或手动安装这些依赖。",
+      containerInstallsTitle: "容器技能安装",
       docsLine: "文档：https://docs.openclaw.ai/skills",
       enterEnv: "输入 {env}",
       homebrewCommand: "显示 Homebrew 安装命令？",
@@ -314,6 +323,7 @@ export const zh_CN = {
       setEnv: "为 {name} 设置 {env}？",
       skipDepsHint: "继续，不安装依赖",
       statusTitle: "技能状态",
+      allReadyTitle: "所有技能已就绪",
     },
     channels: {
       account: "{label} 账号",
@@ -950,11 +960,13 @@ export const zh_CN = {
       webSearchDisabled: "Web search（{provider}）已配置但被禁用。",
       webSearchEnabled: "Web search 已启用，agent 可在需要时在线查询。",
       webSearchGetKey: "获取 key：{url}",
+      webSearchAuthProfile: "凭据：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：通过 {env} 环境变量提供。",
       webSearchKeyRef: "API key：通过 secret reference 配置。",
       webSearchKeyStored: "API key：已存入配置。",
       webSearchNeedsKey: "添加 key 前 web_search 无法工作。",
       webSearchNoKey: "已选择 provider {provider}，但没有找到 API key。",
+      webSearchOAuthProfile: "凭据：使用已有 {provider} OAuth 登录。",
       webSearchProvider: "Provider：{provider}",
       webSearchProviderUnavailable:
         "已选择 Web search provider {provider}，但当前插件策略下不可用。",

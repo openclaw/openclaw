@@ -1,3 +1,4 @@
+// Measures plugin lifecycle matrix E2E command timings.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,9 +9,44 @@ if (!summaryPath || !phase || separator !== "--" || !command) {
   process.exit(2);
 }
 
-const pageSize = Number.parseInt(process.env.OPENCLAW_PROC_PAGE_SIZE || "4096", 10);
-const clockTicks = Number.parseInt(process.env.OPENCLAW_PROC_CLK_TCK || "100", 10);
-const pollMs = Number.parseInt(process.env.OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS || "100", 10);
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer; got: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer; got: ${text}`);
+  }
+  return value;
+}
+
+function readPositiveNumberEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+(?:\.\d+)?$/u.test(text)) {
+    throw new Error(`${name} must be a positive number; got: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number; got: ${text}`);
+  }
+  return value;
+}
+
+const pageSize = readPositiveIntEnv("OPENCLAW_PROC_PAGE_SIZE", 4096);
+const clockTicks = readPositiveIntEnv("OPENCLAW_PROC_CLK_TCK", 100);
+const pollMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100);
+const timeoutMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000);
+const timeoutKillGraceMs = readPositiveIntEnv(
+  "OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS",
+  2000,
+);
+const maxRssKbThreshold = readPositiveIntEnv(
+  "OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB",
+  4 * 1024 * 1024,
+);
+const maxWallMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS", timeoutMs);
+const maxCpuCoreRatio = readPositiveNumberEnv("OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO", 16);
 
 if (!fs.existsSync("/proc")) {
   console.error("plugin lifecycle resource sampler requires Linux /proc");
@@ -68,8 +104,8 @@ function descendantsOf(rootPid, stats) {
   }
   const seen = new Set([rootPid]);
   const queue = [rootPid];
-  for (let index = 0; index < queue.length; index += 1) {
-    for (const child of children.get(queue[index]) ?? []) {
+  for (const queuedPid of queue) {
+    for (const child of children.get(queuedPid) ?? []) {
       if (!seen.has(child)) {
         seen.add(child);
         queue.push(child);
@@ -99,11 +135,19 @@ const started = performance.now();
 const child = spawn(command, args, {
   cwd: process.cwd(),
   env: process.env,
+  detached: true,
   stdio: "inherit",
 });
 
 let maxRssBytes = 0;
 let maxCpuTicks = 0;
+let timedOut = false;
+let finished = false;
+let parentSignalInFlight = false;
+let forwardedParentSignal = null;
+let killTimer;
+let parentSignalTimer;
+let parentSignalPollTimer;
 const updateMetrics = () => {
   if (!child.pid) {
     return;
@@ -115,24 +159,175 @@ const updateMetrics = () => {
 
 updateMetrics();
 const interval = setInterval(updateMetrics, pollMs);
+const timeoutTimer =
+  Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        terminateChildGroup("SIGTERM");
+        killTimer = setTimeout(() => {
+          terminateChildGroup("SIGKILL");
+          finish(124);
+        }, timeoutKillGraceMs);
+        killTimer.unref?.();
+      }, timeoutMs)
+    : null;
+timeoutTimer?.unref?.();
 
-child.on("exit", (code, signal) => {
-  updateMetrics();
+function terminateChildGroup(signal) {
+  if (!child.pid) {
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+    return;
+  } catch {}
+  try {
+    child.kill(signal);
+  } catch {}
+}
+
+function childGroupExists() {
+  if (!child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+}
+
+function clearRuntimeTimers() {
   clearInterval(interval);
+  if (timeoutTimer) {
+    clearTimeout(timeoutTimer);
+  }
+  if (killTimer) {
+    clearTimeout(killTimer);
+  }
+  if (parentSignalTimer) {
+    clearTimeout(parentSignalTimer);
+  }
+  if (parentSignalPollTimer) {
+    clearInterval(parentSignalPollTimer);
+  }
+}
+
+function rethrowParentSignal(signal) {
+  clearRuntimeTimers();
+  process.removeAllListeners(signal);
+  process.kill(process.pid, signal);
+  process.exit(128);
+}
+
+function handleParentSignal(signal) {
+  if (parentSignalInFlight) {
+    terminateChildGroup("SIGKILL");
+    rethrowParentSignal(signal);
+    return;
+  }
+  parentSignalInFlight = true;
+  if (finished) {
+    rethrowParentSignal(signal);
+    return;
+  }
+  finished = true;
+  forwardedParentSignal = signal;
+  clearRuntimeTimers();
+  terminateChildGroup(signal);
+  parentSignalTimer = setTimeout(() => {
+    terminateChildGroup("SIGKILL");
+    rethrowParentSignal(signal);
+  }, timeoutKillGraceMs);
+  parentSignalPollTimer = setInterval(
+    () => {
+      if (!childGroupExists()) {
+        rethrowParentSignal(signal);
+      }
+    },
+    Math.min(50, timeoutKillGraceMs),
+  );
+}
+
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.once(signal, () => handleParentSignal(signal));
+}
+
+process.once("exit", () => {
+  if (!finished) {
+    terminateChildGroup("SIGTERM");
+  }
+});
+
+function finish(code, signal) {
+  if (finished) {
+    return;
+  }
+  finished = true;
+  updateMetrics();
+  clearRuntimeTimers();
   const wallMs = performance.now() - started;
   const cpuSeconds = maxCpuTicks / clockTicks;
   const maxRssKb = Math.round(maxRssBytes / 1024);
   const cpuCoreRatio = wallMs > 0 ? cpuSeconds / (wallMs / 1000) : 0;
+  const summarySignal = timedOut ? "timeout" : (signal ?? "");
   fs.appendFileSync(
     summaryPath,
-    `${phase}\t${maxRssKb}\t${cpuSeconds.toFixed(3)}\t${wallMs.toFixed(0)}\t${cpuCoreRatio.toFixed(3)}\t${signal ?? ""}\n`,
+    `${phase}\t${maxRssKb}\t${cpuSeconds.toFixed(3)}\t${wallMs.toFixed(0)}\t${cpuCoreRatio.toFixed(3)}\t${summarySignal}\n`,
   );
   console.log(
-    `plugin lifecycle resource: phase=${phase} max_rss_kb=${maxRssKb} cpu_s=${cpuSeconds.toFixed(3)} wall_ms=${wallMs.toFixed(0)} cpu_core_ratio=${cpuCoreRatio.toFixed(3)}`,
+    `plugin lifecycle resource: phase=${phase} max_rss_kb=${maxRssKb} cpu_s=${cpuSeconds.toFixed(3)} wall_ms=${wallMs.toFixed(0)} cpu_core_ratio=${cpuCoreRatio.toFixed(3)} signal=${summarySignal}`,
   );
+  const violations = [];
+  if (maxRssKb > maxRssKbThreshold) {
+    violations.push(`max_rss_kb=${maxRssKb} > ${maxRssKbThreshold}`);
+  }
+  if (wallMs > maxWallMs) {
+    violations.push(`wall_ms=${wallMs.toFixed(0)} > ${maxWallMs}`);
+  }
+  if (cpuCoreRatio > maxCpuCoreRatio) {
+    violations.push(`cpu_core_ratio=${cpuCoreRatio.toFixed(3)} > ${maxCpuCoreRatio}`);
+  }
+  if (violations.length > 0) {
+    console.error(
+      `plugin lifecycle resource ceiling exceeded: phase=${phase} ${violations.join("; ")}`,
+    );
+    if (!timedOut && !signal && (code ?? 0) === 0) {
+      process.exit(1);
+      return;
+    }
+  }
+  if (timedOut) {
+    process.exit(124);
+    return;
+  }
   if (signal) {
     process.kill(process.pid, signal);
     return;
   }
   process.exit(code ?? 0);
+}
+
+child.on("error", (error) => {
+  finished = true;
+  clearRuntimeTimers();
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
+
+child.on("exit", (code, signal) => {
+  if (parentSignalInFlight && forwardedParentSignal) {
+    if (!childGroupExists()) {
+      rethrowParentSignal(forwardedParentSignal);
+    }
+    return;
+  }
+  if (timedOut && killTimer) {
+    return;
+  }
+  finish(code, signal);
 });

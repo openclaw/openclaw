@@ -1,8 +1,10 @@
+// Isolated agent session identity tests cover stable session ids for cron runs.
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -21,10 +23,13 @@ import {
 } from "./isolated-agent.turn-test-helpers.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
+  dispatchCronDeliveryMock,
   mockRunCronFallbackPassthrough,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   updateSessionStoreMock,
 } from "./isolated-agent/run.test-harness.js";
+import { normalizeCronJobCreate } from "./normalize.js";
+import type { CronJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
 
@@ -36,14 +41,14 @@ function lastEmbeddedAgentCall(): {
   workspaceDir?: string;
   sessionFile?: string;
 } {
-  const calls = runEmbeddedPiAgentMock.mock.calls;
+  const calls = runEmbeddedAgentMock.mock.calls;
   const call = calls[calls.length - 1];
   if (!call) {
-    throw new Error("expected runEmbeddedPiAgent call");
+    throw new Error("expected runEmbeddedAgent call");
   }
   const value = call[0];
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("expected runEmbeddedPiAgent call payload");
+    throw new Error("expected runEmbeddedAgent call payload");
   }
   return value as {
     agentDir?: string;
@@ -58,11 +63,11 @@ function lastEmbeddedAgentCall(): {
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
     vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
-    runEmbeddedPiAgentMock.mockClear();
+    runEmbeddedAgentMock.mockClear();
     mockRunCronFallbackPassthrough();
   });
 
-  it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
+  it("passes resolved agentDir to runEmbeddedAgent", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
@@ -148,7 +153,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it("persists rotated transcript identity for session-bound cron runs", async () => {
+  it("persists rotated transcript identity for current-bound cron runs", async () => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
       const boundSessionKey = "agent:main:telegram:direct:42";
@@ -163,7 +168,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           systemSent: true,
         },
       });
-      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 5,
@@ -177,27 +182,25 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           },
         },
       });
-      updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-        const store = {
-          [boundSessionKey]: {
-            sessionId: "bound-session",
-            sessionFile: originalSessionFile,
-            updatedAt: Date.now(),
-            lastInteractionAt: Date.now() - 1_000,
-            systemSent: true,
-          },
-        };
+      updateSessionStoreMock.mockImplementation(async (targetStorePath, update) => {
+        const raw = await fs.readFile(targetStorePath, "utf-8");
+        const store = JSON.parse(raw) as Record<string, SessionEntry>;
         update(store);
+        await fs.writeFile(targetStorePath, JSON.stringify(store, null, 2), "utf-8");
       });
+      const currentBoundJob = normalizeCronJobCreate(
+        {
+          ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
+          sessionTarget: "current",
+          delivery: { mode: "none" },
+        },
+        { sessionContext: { sessionKey: boundSessionKey } },
+      ) as CronJob;
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),
         deps,
-        job: {
-          ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
-          sessionTarget: `session:${boundSessionKey}`,
-          delivery: { mode: "none" },
-        },
+        job: currentBoundJob,
         message: DEFAULT_MESSAGE,
         sessionKey: boundSessionKey,
         lane: "cron",
@@ -205,17 +208,27 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
       expect(res.status).toBe("ok");
       expect(res.sessionId).toBe("bound-session-rotated");
+      expect(dispatchCronDeliveryMock.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({ sessionId: "bound-session-rotated" }),
+      );
 
       const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
       expect(finalPersist?.[0]).toBe(storePath);
       const persistedStore: Record<string, { [key: string]: unknown }> = {};
-      (finalPersist?.[1] as (store: typeof persistedStore) => void)(persistedStore);
+      (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
       expect(persistedStore[boundSessionKey]).toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",
           sessionFile: rotatedSessionFile,
           usageFamilyKey: boundSessionKey,
           usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
+        }),
+      );
+
+      await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
+        expect.objectContaining({
+          sessionId: "bound-session-rotated",
+          sessionFile: rotatedSessionFile,
         }),
       );
     });

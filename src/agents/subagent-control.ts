@@ -1,11 +1,11 @@
+/**
+ * Implements subagent control operations: list, kill, steer, and send-message.
+ * The module enforces controller ownership before mutating child sessions or
+ * routing internal follow-up messages.
+ */
 import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
-import {
-  resolveSubagentLabel,
-  resolveSubagentTargetFromRuns,
-  sortSubagentRuns,
-  type SubagentTargetResolution,
-} from "../auto-reply/reply/subagents-utils.js";
+import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -39,9 +39,10 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
+/** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
+/** Maximum recent-run window accepted by subagent control UI/tools. */
 export const MAX_RECENT_MINUTES = 24 * 60;
-export const MAX_STEER_MESSAGE_CHARS = 4_000;
 const STEER_RATE_LIMIT_MS = 2_000;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
@@ -50,7 +51,7 @@ const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
 type UpdateSessionStore = typeof updateSessionStore;
-type AbortEmbeddedPiRun = (sessionId: string) => boolean;
+type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
@@ -61,7 +62,7 @@ const defaultSubagentControlDeps = {
 let subagentControlDeps: {
   callGateway: GatewayCaller;
   updateSessionStore: UpdateSessionStore;
-  abortEmbeddedPiRun?: AbortEmbeddedPiRun;
+  abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
   clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
 
@@ -74,28 +75,31 @@ function loadSubagentControlRuntime() {
 }
 
 async function resolveSubagentControlRuntime(): Promise<{
-  abortEmbeddedPiRun: AbortEmbeddedPiRun;
+  abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
   clearSessionQueues: ClearSessionQueues;
 }> {
-  if (subagentControlDeps.abortEmbeddedPiRun && subagentControlDeps.clearSessionQueues) {
+  if (subagentControlDeps.abortEmbeddedAgentRun && subagentControlDeps.clearSessionQueues) {
     return {
-      abortEmbeddedPiRun: subagentControlDeps.abortEmbeddedPiRun,
+      abortEmbeddedAgentRun: subagentControlDeps.abortEmbeddedAgentRun,
       clearSessionQueues: subagentControlDeps.clearSessionQueues,
     };
   }
   const runtime = await loadSubagentControlRuntime();
   return {
-    abortEmbeddedPiRun: subagentControlDeps.abortEmbeddedPiRun ?? runtime.abortEmbeddedPiRun,
+    abortEmbeddedAgentRun:
+      subagentControlDeps.abortEmbeddedAgentRun ?? runtime.abortEmbeddedAgentRun,
     clearSessionQueues: subagentControlDeps.clearSessionQueues ?? runtime.clearSessionQueues,
   };
 }
 
+/** Controller identity and capability scope resolved from the caller session. */
 export type ResolvedSubagentController = {
   controllerSessionKey: string;
   callerSessionKey: string;
   callerIsSubagent: boolean;
   controlScope: "children" | "none";
 };
+/** Resolves which subagent runs the caller is allowed to control. */
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
@@ -126,6 +130,7 @@ export function resolveSubagentController(params: {
   };
 }
 
+/** Lists latest child runs controlled by a session key. */
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
   const key = controllerSessionKey.trim();
   if (!key) {
@@ -153,6 +158,10 @@ function ensureControllerOwnsRun(params: {
   return "Subagents can only control runs spawned from their own session.";
 }
 
+function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendants: boolean) {
+  return Boolean(entry.endedAt) && entry.pauseReason !== "sessions_yield" && !hasPendingDescendants;
+}
+
 async function killSubagentRun(params: {
   cfg: OpenClawConfig;
   entry: SubagentRunRecord;
@@ -169,7 +178,7 @@ async function killSubagentRun(params: {
   });
   const sessionId = resolved.entry?.sessionId;
   const runtime = await resolveSubagentControlRuntime();
-  const aborted = sessionId ? runtime.abortEmbeddedPiRun(sessionId) : false;
+  const aborted = sessionId ? runtime.abortEmbeddedAgentRun(sessionId) : false;
   const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
@@ -266,6 +275,7 @@ async function cascadeKillChildren(params: {
   return { killed, labels };
 }
 
+/** Kills every currently controlled child run and its descendants. */
 export async function killAllControlledSubagentRuns(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -314,6 +324,7 @@ export async function killAllControlledSubagentRuns(params: {
   return { status: "ok" as const, killed, labels: killedLabels };
 }
 
+/** Kills one controlled subagent run and any active descendants. */
 export async function killControlledSubagentRun(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -390,6 +401,7 @@ export async function killControlledSubagentRun(params: {
   };
 }
 
+/** Admin kill path for a subagent session key, bypassing caller ownership checks. */
 export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessionKey: string }) {
   const targetSessionKey = params.sessionKey.trim();
   if (!targetSessionKey) {
@@ -424,6 +436,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
   };
 }
 
+/** Restarts a controlled subagent run with a new steering message. */
 export async function steerControlledSubagentRun(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -469,7 +482,7 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const targetHasPendingDescendants = countPendingDescendantRuns(params.entry.childSessionKey) > 0;
-  if (params.entry.endedAt && !targetHasPendingDescendants) {
+  if (isFinishedForSteerControl(params.entry, targetHasPendingDescendants)) {
     return {
       status: "done",
       runId: params.entry.runId,
@@ -486,12 +499,13 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  const currentHasPendingDescendants =
-    currentEntry && countPendingDescendantRuns(currentEntry.childSessionKey) > 0;
+  const currentHasPendingDescendants = currentEntry
+    ? countPendingDescendantRuns(currentEntry.childSessionKey) > 0
+    : false;
   if (
     !currentEntry ||
     currentEntry.runId !== params.entry.runId ||
-    (currentEntry.endedAt && !currentHasPendingDescendants)
+    isFinishedForSteerControl(currentEntry, currentHasPendingDescendants)
   ) {
     return {
       status: "done",
@@ -527,10 +541,11 @@ export async function steerControlledSubagentRun(params: {
     typeof targetSession.entry?.sessionId === "string" && targetSession.entry.sessionId.trim()
       ? targetSession.entry.sessionId.trim()
       : undefined;
+  const restartSessionId = sessionId ? crypto.randomUUID() : undefined;
 
   if (sessionId) {
     const runtime = await resolveSubagentControlRuntime();
-    runtime.abortEmbeddedPiRun(sessionId);
+    runtime.abortEmbeddedAgentRun(sessionId);
   }
   const runtime = await resolveSubagentControlRuntime();
   const cleared = runtime.clearSessionQueues([params.entry.childSessionKey, sessionId]);
@@ -561,7 +576,7 @@ export async function steerControlledSubagentRun(params: {
       params: {
         message: params.message,
         sessionKey: params.entry.childSessionKey,
-        sessionId,
+        sessionId: restartSessionId,
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -580,7 +595,7 @@ export async function steerControlledSubagentRun(params: {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error,
     };
   }
@@ -597,7 +612,7 @@ export async function steerControlledSubagentRun(params: {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error: "failed to replace steered subagent run",
     };
   }
@@ -606,13 +621,14 @@ export async function steerControlledSubagentRun(params: {
     status: "accepted",
     runId,
     sessionKey: params.entry.childSessionKey,
-    sessionId,
+    sessionId: restartSessionId,
     mode: "restart",
     label: resolveSubagentLabel(params.entry),
     text: `steered ${resolveSubagentLabel(params.entry)}.`,
   };
 }
 
+/** Sends a follow-up message to a controlled subagent and waits for a reply. */
 export async function sendControlledSubagentMessage(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -704,36 +720,12 @@ export async function sendControlledSubagentMessage(params: {
   }
 }
 
-export function resolveControlledSubagentTarget(
-  runs: SubagentRunRecord[],
-  token: string | undefined,
-  options?: { recentMinutes?: number; isActive?: (entry: SubagentRunRecord) => boolean },
-): SubagentTargetResolution {
-  return resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: options?.recentMinutes ?? DEFAULT_RECENT_MINUTES,
-    label: (entry) => resolveSubagentLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
-    isActive: options?.isActive,
-    errors: {
-      missingTarget: "Missing subagent target.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous subagent run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent target: ${value}`,
-    },
-  });
-}
-
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
       updateSessionStore: UpdateSessionStore;
-      abortEmbeddedPiRun: AbortEmbeddedPiRun;
+      abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
       clearSessionQueues: ClearSessionQueues;
     }>,
   ) {
@@ -745,3 +737,4 @@ export const __testing = {
       : defaultSubagentControlDeps;
   },
 };
+export { testing as __testing };

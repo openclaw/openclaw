@@ -1,3 +1,4 @@
+// Feishu plugin module implements policy behavior.
 import {
   normalizeAccountId,
   resolveMergedAccountConfig,
@@ -39,7 +40,7 @@ const feishuIngressIdentity = defineStableChannelIngressIdentity({
   resolveEntryId: ({ entryIndex }) => `feishu-entry-${entryIndex + 1}`,
 });
 
-function normalizeFeishuAllowEntry(raw: string): string {
+export function normalizeFeishuAllowEntry(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";
@@ -257,7 +258,7 @@ export function hasExplicitFeishuGroupConfig(params: {
   if (!groupId) {
     return false;
   }
-  if (Object.prototype.hasOwnProperty.call(groups, groupId) && groupId !== "*") {
+  if (Object.hasOwn(groups, groupId) && groupId !== "*") {
     return true;
   }
 

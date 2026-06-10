@@ -1,3 +1,4 @@
+/** Verifies ClawHub plugin spec parsing and install metadata handling. */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -172,6 +173,11 @@ type PackageLookupCall = {
 type ArchiveInstallCall = {
   archivePath?: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  installPolicyRequest?: {
+    kind?: string;
+    requestedSpecifier?: string;
+    source?: { kind?: string; authority?: string; mutable?: boolean; network?: boolean };
+  };
   trustedSourceLinkedOfficialInstall?: boolean;
 };
 
@@ -323,12 +329,36 @@ describe("installPluginFromClawHub", () => {
       archivePath: "/tmp/clawhub-demo/archive.zip",
     });
     expectSuccessfulClawHubInstall(result);
+    expect(archiveInstallCall().installPolicyRequest).toEqual({
+      kind: "plugin-archive",
+      requestedSpecifier: "clawhub:demo",
+      source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
+    });
     expect(logger.info).toHaveBeenCalledWith("ClawHub code-plugin demo@2026.3.22 channel=official");
     expect(logger.info).toHaveBeenCalledWith(
       "Compatibility: pluginApi=>=2026.3.22 minGateway=2026.3.0",
     );
     expect(logger.warn).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks custom ClawHub registries as third-party install policy authority", async () => {
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.internal.example",
+    });
+
+    expectClawHubInstallFlow({
+      baseUrl: "https://clawhub.internal.example",
+      version: "2026.3.22",
+      archivePath: "/tmp/clawhub-demo/archive.zip",
+    });
+    expectSuccessfulClawHubInstall(result);
+    expect(archiveInstallCall().installPolicyRequest).toMatchObject({
+      kind: "plugin-archive",
+      requestedSpecifier: "clawhub:demo",
+      source: { kind: "clawhub", authority: "third-party", mutable: false, network: true },
+    });
   });
 
   it("marks official source-linked OpenClaw packages as trusted for install scanning", async () => {
@@ -750,6 +780,7 @@ describe("installPluginFromClawHub", () => {
     expect(failure.error).toBe(
       'ClawHub artifact download for "demo@2026.3.22" is not available yet (ClawHub /api/v1/packages/demo/versions/2026.3.22/artifact/download failed (404): Not Found). Use "npm:demo@2026.3.22" for launch installs while ClawHub artifact routing is being rolled out.',
     );
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE);
     expect(archiveDownloadCall().artifact).toBe("clawpack");
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });
@@ -828,7 +859,7 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("installs when a CalVer correction runtime satisfies the base plugin API range", async () => {
+  it("installs when a release correction runtime satisfies the base plugin API range", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.3-1");
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {
@@ -838,6 +869,32 @@ describe("installPluginFromClawHub", () => {
         sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
         compatibility: {
           pluginApiRange: ">=2026.5.3",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expectSuccessfulClawHubInstall(result);
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledTimes(1);
+    expect(archiveInstallCall().archivePath).toBe("/tmp/clawhub-demo/archive.zip");
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs when a beta runtime is on the same plugin API floor", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.5.27",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+        compatibility: {
+          pluginApiRange: ">=2026.5.27",
           minGatewayVersion: "2026.3.0",
         },
       },
@@ -1124,7 +1181,7 @@ describe("installPluginFromClawHub", () => {
     });
 
     const failure = expectInstallFailure(result);
-    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY);
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE);
     expect(failure.error).toBe(
       'ClawHub package "demo@2026.3.22" does not expose a downloadable plugin artifact yet. Use "npm:demo@2026.3.22" for launch installs while ClawHub artifact routing is being rolled out.',
     );
@@ -1149,7 +1206,7 @@ describe("installPluginFromClawHub", () => {
     });
 
     const failure = expectInstallFailure(result);
-    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY);
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE);
     expect(failure.error).toBe(
       'ClawHub package "demo@2026.3.22" does not expose a downloadable plugin artifact yet. Use "npm:demo@2026.3.22" for launch installs while ClawHub artifact routing is being rolled out.',
     );

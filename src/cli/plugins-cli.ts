@@ -1,8 +1,10 @@
+// Commander registration for plugin list/search/inspect/install/update/authoring commands.
 import type { Command } from "commander";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
+import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginUpdateOptions = {
@@ -33,6 +35,34 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
+export type PluginAuthoringBuildOptions = {
+  root?: string;
+  entry?: string;
+  check?: boolean;
+};
+
+export type PluginAuthoringValidateOptions = {
+  root?: string;
+  entry?: string;
+};
+
+export type PluginAuthoringInitOptions = {
+  directory?: string;
+  force?: boolean;
+  name?: string;
+};
+
+function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  // Plugin runtime modules are heavy; load each command surface once on first use.
+  let promise: Promise<T> | undefined;
+  return () => (promise ??= load());
+}
+
+const loadPluginsRuntime = createModuleLoader(() => import("./plugins-cli.runtime.js"));
+const loadPluginsAuthoringCommands = createModuleLoader(
+  () => import("./plugins-authoring-command.js"),
+);
+
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -58,7 +88,7 @@ export function registerPluginsCli(program: Command) {
     .command("search")
     .description("Search ClawHub plugin packages")
     .argument("[query...]", "Search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Print JSON", false)
     .action(async (queryParts: string[], opts: PluginSearchOptions) => {
       const { runPluginsSearchCommand } = await import("./plugins-search-command.js");
@@ -83,7 +113,7 @@ export function registerPluginsCli(program: Command) {
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const { runPluginsEnableCommand } = await import("./plugins-cli.runtime.js");
+      const { runPluginsEnableCommand } = await loadPluginsRuntime();
       await runPluginsEnableCommand(id);
     });
 
@@ -92,7 +122,7 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const { runPluginsDisableCommand } = await import("./plugins-cli.runtime.js");
+      const { runPluginsDisableCommand } = await loadPluginsRuntime();
       await runPluginsDisableCommand(id);
     });
 
@@ -106,7 +136,7 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
-      await runPluginUninstallCommand(id, opts);
+      await runPluginUninstallCommand(id, { ...opts, invalidateRuntimeCache: false });
     });
 
   plugins
@@ -123,7 +153,7 @@ export function registerPluginsCli(program: Command) {
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code install blocking (plugin hooks may still block)",
+      "Deprecated no-op; install policy and plugin hooks may still block",
       false,
     )
     .option(
@@ -141,7 +171,7 @@ export function registerPluginsCli(program: Command) {
           marketplace?: string;
         },
       ) => {
-        const { runPluginsInstallAction } = await import("./plugins-cli.runtime.js");
+        const { runPluginsInstallAction } = await loadPluginsRuntime();
         await runPluginsInstallAction(raw, opts);
       },
     );
@@ -154,7 +184,7 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would change without writing", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
+      "Deprecated no-op; install policy and plugin hooks may still block",
       false,
     )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
@@ -168,7 +198,7 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--refresh", "Rebuild the persisted registry from current plugin manifests", false)
     .action(async (opts: PluginRegistryOptions) => {
-      const { runPluginsRegistryCommand } = await import("./plugins-cli.runtime.js");
+      const { runPluginsRegistryCommand } = await loadPluginsRuntime();
       await runPluginsRegistryCommand(opts);
     });
 
@@ -176,8 +206,41 @@ export function registerPluginsCli(program: Command) {
     .command("doctor")
     .description("Report plugin load issues")
     .action(async () => {
-      const { runPluginsDoctorCommand } = await import("./plugins-cli.runtime.js");
+      const { runPluginsDoctorCommand } = await loadPluginsRuntime();
       await runPluginsDoctorCommand();
+    });
+
+  plugins
+    .command("build")
+    .description("Generate simple tool plugin metadata")
+    .option("--root <path>", "Plugin package root")
+    .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--check", "Fail if generated metadata is out of date", false)
+    .action(async (opts: PluginAuthoringBuildOptions) => {
+      const { runPluginsBuildCommand } = await loadPluginsAuthoringCommands();
+      await runPluginsBuildCommand(opts);
+    });
+
+  plugins
+    .command("validate")
+    .description("Validate simple tool plugin metadata")
+    .option("--root <path>", "Plugin package root")
+    .option("--entry <path>", "Plugin entry module relative to --root")
+    .action(async (opts: PluginAuthoringValidateOptions) => {
+      const { runPluginsValidateCommand } = await loadPluginsAuthoringCommands();
+      await runPluginsValidateCommand(opts);
+    });
+
+  plugins
+    .command("init")
+    .description("Create a simple tool plugin project")
+    .argument("<id>", "Plugin id")
+    .option("--directory <path>", "Output directory")
+    .option("--name <name>", "Display name")
+    .option("--force", "Overwrite an existing output directory", false)
+    .action(async (id: string, opts: PluginAuthoringInitOptions) => {
+      const { runPluginsInitCommand } = await loadPluginsAuthoringCommands();
+      await runPluginsInitCommand(id, opts);
     });
 
   const marketplace = plugins
@@ -190,7 +253,7 @@ export function registerPluginsCli(program: Command) {
     .argument("<source>", "Local marketplace path/repo or git/GitHub source")
     .option("--json", "Print JSON")
     .action(async (source: string, opts: PluginMarketplaceListOptions) => {
-      const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
+      const { runPluginMarketplaceListCommand } = await loadPluginsRuntime();
       await runPluginMarketplaceListCommand(source, opts);
     });
 

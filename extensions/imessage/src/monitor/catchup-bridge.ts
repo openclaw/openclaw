@@ -1,3 +1,5 @@
+// Imessage plugin module implements catchup bridge behavior.
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type { IMessageRpcClient } from "../client.js";
 import {
@@ -53,6 +55,12 @@ export type RunIMessageCatchupParams = {
    * (including non-error drops, which mirrors the live pipeline).
    */
   dispatchPayload: (message: IMessagePayload) => Promise<void>;
+  /**
+   * Called for `is_from_me=true` rows that catchup intentionally does not
+   * dispatch. The live inbound path still needs to observe those rows so
+   * self-chat reflected companion rows can be deduped.
+   */
+  observeSkippedFromMePayload?: (message: IMessagePayload) => Promise<void> | void;
   runtime?: RuntimeLogger;
   /** Override clock for tests. */
   now?: () => number;
@@ -88,6 +96,11 @@ export async function runIMessageCatchup(
   const payloadByGuid = new Map<string, IMessagePayload>();
 
   const fetchFn: CatchupFetchFn = async ({ sinceMs, sinceRowid, limit }) => {
+    const sinceISO = timestampMsToIsoString(sinceMs);
+    if (!sinceISO) {
+      warnLog(`imessage catchup: invalid since timestamp ${sinceMs}`);
+      return { resolved: false, rows: [] };
+    }
     let chatsResult: { chats?: ChatsListEntry[] } | undefined;
     try {
       chatsResult = await client.request<{ chats?: ChatsListEntry[] }>(
@@ -100,9 +113,9 @@ export async function runIMessageCatchup(
       return { resolved: false, rows: [] };
     }
     const chats = chatsResult?.chats ?? [];
-    const sinceISO = new Date(sinceMs).toISOString();
     const collected: IMessageCatchupRow[] = [];
     const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
+    let historyFetchFailed = false;
     // Track the highest rowid / date the imsg bridge actually returned across
     // all chats, regardless of whether each row passed the parser. The catchup
     // loop uses this as a cursor-advance floor so an unparseable row (corrupt
@@ -140,6 +153,7 @@ export async function runIMessageCatchup(
       } catch (err) {
         // Best-effort per chat. A single broken chat must not poison the
         // whole pass — drop and continue.
+        historyFetchFailed = true;
         warnLog(`imessage catchup: messages.history failed for chat_id=${chatId}: ${String(err)}`);
         continue;
       }
@@ -237,6 +251,7 @@ export async function runIMessageCatchup(
     return {
       resolved: true,
       rows: capped,
+      fullyCaughtUp: !historyFetchFailed && !isCapTruncated,
       ...(Number.isFinite(effectiveWatermarkRowid)
         ? { highWatermarkRowid: effectiveWatermarkRowid }
         : {}),
@@ -268,6 +283,14 @@ export async function runIMessageCatchup(
     config,
     fetch: fetchFn,
     dispatch: dispatchFn,
+    observeSkippedFromMe: async (row) => {
+      const payload = payloadByGuid.get(row.guid);
+      if (!payload) {
+        warnLog(`imessage catchup: missing skipped from-me payload for guid=${row.guid}`);
+        return;
+      }
+      await params.observeSkippedFromMePayload?.(payload);
+    },
     log,
     warn: warnLog,
     ...(params.now ? { now: params.now() } : {}),

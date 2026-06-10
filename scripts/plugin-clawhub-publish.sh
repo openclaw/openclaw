@@ -4,9 +4,12 @@ set -euo pipefail
 
 mode="${1:-}"
 package_dir="${2:-}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+invocation_root="$(pwd)"
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish] <package-dir>" >&2
+if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" && "${mode}" != "--pack" ]]; then
+  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>" >&2
   exit 2
 fi
 
@@ -20,7 +23,9 @@ if [[ ! "${package_dir}" =~ ^extensions/[a-z0-9][a-z0-9._-]*$ ]]; then
   exit 2
 fi
 
-if [[ ! -f "${package_dir}/package.json" ]]; then
+package_source="${invocation_root}/${package_dir}"
+
+if [[ ! -f "${package_source}/package.json" ]]; then
   echo "package.json not found under ${package_dir}" >&2
   exit 2
 fi
@@ -30,20 +35,13 @@ if ! command -v clawhub >/dev/null 2>&1; then
   exit 1
 fi
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
-package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
-package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
+package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_source}")"
+package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_source}")"
 publish_tag="${PACKAGE_TAG:-latest}"
 source_repo="${SOURCE_REPO:-${GITHUB_REPOSITORY:-openclaw/openclaw}}"
-source_commit="${SOURCE_COMMIT:-$(git rev-parse HEAD)}"
-source_ref="${SOURCE_REF:-$(git symbolic-ref -q HEAD || true)}"
-clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-$(pwd)}}"
-package_source="${package_dir}"
-
-if [[ "${package_source}" != /* && "${package_source}" != ./* ]]; then
-  package_source="./${package_source}"
-fi
+source_commit="${SOURCE_COMMIT:-$(git -C "${invocation_root}" rev-parse HEAD)}"
+source_ref="${SOURCE_REF:-$(git -C "${invocation_root}" symbolic-ref -q HEAD || true)}"
+clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-${invocation_root}}}"
 
 pack_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-clawhub-pack.XXXXXX")"
 cleanup() {
@@ -53,6 +51,8 @@ trap cleanup EXIT
 
 pack_cmd=(
   clawhub
+  --workdir
+  "${clawhub_workdir}"
   package
   pack
   "${package_source}"
@@ -119,8 +119,25 @@ if [[ ! -f "${pack_path}" ]]; then
   exit 1
 fi
 
+echo "Resolved ClawPack: ${pack_path}"
+
+if [[ "${mode}" == "--pack" ]]; then
+  output_dir="${OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR:-}"
+  if [[ -z "${output_dir}" ]]; then
+    echo "OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR is required for --pack" >&2
+    exit 2
+  fi
+  mkdir -p "${output_dir}"
+  output_path="${output_dir}/$(basename "${pack_path}")"
+  cp "${pack_path}" "${output_path}"
+  echo "Packed ClawPack: ${output_path}"
+  exit 0
+fi
+
 publish_cmd=(
   clawhub
+  --workdir
+  "${clawhub_workdir}"
   package
   publish
   "${pack_path}"
@@ -140,8 +157,6 @@ if [[ -n "${source_ref}" ]]; then
     "${source_ref}"
   )
 fi
-
-echo "Resolved ClawPack: ${pack_path}"
 
 printf 'Publish command: CLAWHUB_WORKDIR=%q' "${clawhub_workdir}"
 printf ' %q' "${publish_cmd[@]}"

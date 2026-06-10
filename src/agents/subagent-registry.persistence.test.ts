@@ -1,3 +1,5 @@
+// Subagent registry persistence tests cover JSON registry restore, child
+// session timing writes, and restart cleanup behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -12,8 +14,9 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
-  __testing,
+  testing,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
   getLatestSubagentRunByChildSessionKey,
@@ -122,6 +125,8 @@ describe("subagent registry persistence", () => {
     persisted: Record<string, unknown>,
     opts?: { seedChildSessions?: boolean },
   ) => {
+    // Each persisted-registry fixture gets its own state dir so session stores
+    // and registry files are tested through the same paths production resolves.
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
@@ -186,6 +191,8 @@ describe("subagent registry persistence", () => {
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) => {
+    // Most tests assert restore semantics, not async writer behavior, so this
+    // synchronous writer keeps registry state immediately observable.
     const registryPath = tempStateDir
       ? path.join(tempStateDir, "subagents", "runs.json")
       : resolveSubagentRegistryPath();
@@ -200,7 +207,7 @@ describe("subagent registry persistence", () => {
   beforeEach(() => {
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       persistSubagentRunsToDisk: fastPersistSubagentRunsToDisk,
       runSubagentAnnounceFlow: announceSpy,
@@ -216,7 +223,7 @@ describe("subagent registry persistence", () => {
   });
 
   afterEach(async () => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
     await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();
@@ -404,6 +411,45 @@ describe("subagent registry persistence", () => {
     );
 
     expect(loadSubagentRegistryFromDisk().has("run-updated")).toBe(true);
+  });
+
+  it("reuses the persisted registry cache on hot internal read snapshots", async () => {
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-cached-read": {
+            runId: "run-cached-read",
+            childSessionKey: "agent:main:subagent:cached-read",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "cached persisted run",
+            cleanup: "keep",
+            createdAt: 1,
+            startedAt: 1,
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+    const previousFlag = process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK;
+    let cloneSpy: { mockRestore(): void } | undefined;
+    try {
+      process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK = "1";
+      getSubagentRunsSnapshotForRead(new Map());
+      cloneSpy = vi.spyOn(globalThis, "structuredClone");
+      const snapshot = getSubagentRunsSnapshotForRead(new Map());
+
+      expect(snapshot.has("run-cached-read")).toBe(true);
+      expect(cloneSpy).not.toHaveBeenCalled();
+    } finally {
+      cloneSpy?.mockRestore();
+      if (previousFlag === undefined) {
+        delete process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK;
+      } else {
+        process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK = previousFlag;
+      }
+    }
   });
 
   it("returns empty maps for unchanged invalid persisted registry snapshots", async () => {

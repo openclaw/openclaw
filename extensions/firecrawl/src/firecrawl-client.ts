@@ -1,3 +1,4 @@
+// Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -417,17 +418,17 @@ export async function runFirecrawlSearch(
       errorLabel: "Firecrawl Search",
     },
     async (response) => {
-      const payload = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
-      if (payload.success === false) {
+      const payloadValue = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
+      if (payloadValue.success === false) {
         const error =
-          typeof payload.error === "string"
-            ? payload.error
-            : typeof payload.message === "string"
-              ? payload.message
+          typeof payloadValue.error === "string"
+            ? payloadValue.error
+            : typeof payloadValue.message === "string"
+              ? payloadValue.message
               : "unknown error";
         throw new Error(`Firecrawl Search API error: ${error}`);
       }
-      return payload;
+      return payloadValue;
     },
   );
   const result = buildSearchPayload({
@@ -573,19 +574,19 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
-      const payload = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed");
-      if (payload.success === false) {
+      const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed");
+      if (payloadLocal.success === false) {
         const detail =
-          typeof payload.error === "string"
-            ? payload.error
-            : typeof payload.message === "string"
-              ? payload.message
+          typeof payloadLocal.error === "string"
+            ? payloadLocal.error
+            : typeof payloadLocal.message === "string"
+              ? payloadLocal.message
               : response.statusText;
         throw new Error(
           `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail, "web_fetch")}`.trim(),
         );
       }
-      return payload;
+      return payloadLocal;
     },
   );
   const result = parseFirecrawlScrapePayload({
@@ -603,7 +604,7 @@ export async function runFirecrawlScrape(
   return result;
 }
 
-export const __testing = {
+export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
@@ -611,3 +612,4 @@ export const __testing = {
   validateFirecrawlBaseUrl,
   resolveSearchItems,
 };
+export { testing as __testing };

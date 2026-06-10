@@ -1,3 +1,4 @@
+// Tests ACP dispatch wiring, command bypass, and runtime event handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -169,13 +170,13 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
     async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
       const attachment = this.attachments.find((item) => item.index === attachmentIndex);
-      const path = attachment?.path;
-      const buffer = path ? acpAttachmentBuffers.get(path) : undefined;
+      const pathLocal = attachment?.path;
+      const buffer = pathLocal ? acpAttachmentBuffers.get(pathLocal) : undefined;
       if (buffer) {
         return {
           buffer,
           mime: "image/png",
-          fileName: path,
+          fileName: pathLocal,
           size: buffer.length,
         };
       }
@@ -193,6 +194,11 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 
 vi.mock("../../logging/diagnostic.js", () => ({
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
+    config?.diagnostics?.enabled !== false,
+  requestStuckDiagnosticSessionRecovery: vi.fn(),
+  resolveStuckSessionWarnMs: () => 120_000,
+  resolveStuckSessionAbortMs: () => 360_000,
 }));
 
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
@@ -212,7 +218,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, _label: string) {
   return source.mock.calls[callIndex]?.[argIndex];
 }
 
@@ -304,6 +310,7 @@ async function runDispatch(params: {
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  toolsAllow?: string[];
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -331,6 +338,7 @@ async function runDispatch(params: {
       : {}),
     shouldSendToolSummaries: true,
     bypassForCommand: false,
+    toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
     recordProcessed: vi.fn(),
     markIdle: vi.fn(),
@@ -1387,6 +1395,35 @@ describe("tryDispatchAcpReply", () => {
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
   });
 
+  it("fails closed when ACP dispatch cannot enforce restrictive runtime toolsAllow", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      toolsAllow: ["message"],
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("runtime toolsAllow");
+  });
+
+  it("allows wildcard runtime toolsAllow through ACP dispatch", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      toolsAllow: ["*"],
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledOnce();
+    expect(runTurnCall().text).toBe("test");
+  });
+
   it("does not unbind stale bindings when ACP dispatch is disabled by policy", async () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
@@ -1850,6 +1887,44 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.queuedFinal).toBe(true);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("CODEX_OK");
+  });
+
+  it("marks accumulated ACP block TTS finals as trusted local media for WebChat", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    } as MockTtsReply);
+    mockVisibleTextTurn("WebChat ACP block reply.");
+    const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 0,
+          maxChunkChars: 64,
+        },
+      },
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ctxOverrides: {
+        Provider: "webchat",
+        Surface: "webchat",
+      },
+    });
+
+    const finalPayload = dispatcherCall(dispatcher.sendFinalReply);
+    expect(finalPayload.mediaUrl).toBe("/tmp/openclaw-media/acp-tts.ogg");
+    expect(finalPayload.audioAsVoice).toBe(true);
+    expect(finalPayload.spokenText).toBe("WebChat ACP block reply.");
+    expect(finalPayload.trustedLocalMedia).toBe(true);
+    expect(result?.queuedFinal).toBe(true);
   });
 
   it("falls back to final text when a later telegram ACP block delivery fails", async () => {

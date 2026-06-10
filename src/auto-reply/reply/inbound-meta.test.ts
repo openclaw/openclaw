@@ -1,3 +1,4 @@
+// Tests inbound metadata normalization before prompt injection.
 import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -300,7 +301,9 @@ describe("buildInboundUserContextPrefix", () => {
       { sourceReplyDeliveryMode: "message_tool_only" },
     );
 
-    expect(text).toContain("Delivery: to send a message, use the `message` tool.");
+    expect(text).toContain(
+      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    );
     expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
     expect(text).toContain("Conversation info (untrusted metadata):");
   });
@@ -420,13 +423,13 @@ describe("buildInboundUserContextPrefix", () => {
       {
         ChatType: "group",
         MessageSid: "msg-with-ts",
-        Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+        Timestamp: Date.UTC(2026, 1, 15, 13, 35, 42),
       } as TemplateContext,
       { timezone: "utc" },
     );
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["timestamp"]).toBe("Sun 2026-02-15T13:35Z");
+    expect(conversationInfo["timestamp"]).toBe("Sun 2026-02-15T13:35:42Z");
   });
 
   it("honors envelope user timezone for conversation timestamps", () => {
@@ -435,7 +438,7 @@ describe("buildInboundUserContextPrefix", () => {
         {
           ChatType: "group",
           MessageSid: "msg-with-user-tz",
-          Timestamp: Date.UTC(2026, 2, 19, 0, 0),
+          Timestamp: Date.UTC(2026, 2, 19, 0, 0, 27),
         } as TemplateContext,
         {
           timezone: "user",
@@ -444,7 +447,7 @@ describe("buildInboundUserContextPrefix", () => {
       );
 
       const conversationInfo = parseConversationInfoPayload(text);
-      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00 GMT+9");
+      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00:27 GMT+9");
     });
   });
 
@@ -595,6 +598,29 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("Reply target of current user message");
   });
 
+  it("preserves Telegram inline ReplyToBody tail content", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " TELEGRAM_INLINE_TAIL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      ReplyToId: "34971",
+      ReplyToBody: longBody,
+      SenderName: "obviyus",
+    } as TemplateContext);
+
+    expect(text).toContain("TELEGRAM_INLINE_TAIL");
+    expect(text).toContain("…[omitted]…");
+    expect(text).not.toContain("…[truncated]");
+    expect(text).not.toContain("Reply target of current user message");
+  });
+
   it("keeps Telegram current-message quote even when context already includes the target", () => {
     const text = buildInboundUserContextPrefix({
       Provider: "telegram",
@@ -648,6 +674,7 @@ describe("buildInboundUserContextPrefix", () => {
   it("includes dynamic per-turn flags in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
+      InboundEventKind: "room_event",
       WasMentioned: true,
       ExplicitlyMentionedBot: false,
       MentionedUserIds: [" U_OTHER ", "", "U_HELPER"],
@@ -661,6 +688,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["inbound_event_kind"]).toBe("room_event");
     expect(conversationInfo["is_group_chat"]).toBe(true);
     expect(conversationInfo["was_mentioned"]).toBe(true);
     expect(conversationInfo["explicitly_mentioned_bot"]).toBe(false);
@@ -941,6 +969,91 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain(oversized);
     expect(text).toContain("…[truncated]");
     expect(text).toContain('"body": "');
+  });
+
+  it("preserves tail content in ReplyChain body via head+tail truncation", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " IMPORTANT_TAIL_SENTINEL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyChain: [{ body: longBody, sender: "Alice" }],
+    } as TemplateContext);
+
+    const [reply] = parseReplyChainPayload(text);
+    expect(reply?.["body"]).toContain("IMPORTANT_TAIL_SENTINEL");
+    expect(reply?.["body"]).toContain("…[omitted]…");
+    expect(reply?.["body"]).not.toContain("…[truncated]");
+  });
+
+  it("preserves tail content in fallback ReplyToBody via head+tail truncation", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " REPLY_TAIL_SENTINEL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToBody: longBody,
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["body"]).toContain("REPLY_TAIL_SENTINEL");
+    expect(reply["body"]).toContain("…[omitted]…");
+    expect(reply["body"]).not.toContain("…[truncated]");
+  });
+
+  it("preserves fallback ReplyToBody tail when the head is emoji-heavy", () => {
+    const head = "😀".repeat(1_200);
+    const tail = " TAIL_AFTER_EMOJI_HEAD";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ReplyToSender: "Quoter",
+      ReplyToBody: longBody,
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["body"]).toContain("TAIL_AFTER_EMOJI_HEAD");
+    expect(reply["body"]).toContain("…[omitted]…");
+    expect(reply["body"]).not.toContain("…[truncated]");
+  });
+
+  it("preserves chat window reply-target body tail content", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " CHAT_WINDOW_TAIL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToId: "msg-1",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          type: "chat_window",
+          payload: {
+            relation: "around_reply_target",
+            messages: [
+              {
+                message_id: "msg-1",
+                sender: "Avery",
+                body: longBody,
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).toContain("CHAT_WINDOW_TAIL");
+    expect(text).toContain("…[omitted]…");
+    expect(text).not.toContain("…[truncated]");
+    expect(text).not.toContain("Reply target of current user message");
   });
 
   it("caps serialized inbound history to the most recent bounded tail", () => {

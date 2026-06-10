@@ -1,7 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+// Lmstudio tests cover stream plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+import { resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -163,7 +164,7 @@ function runWrappedLmstudioStream(
 
 describe("lmstudio stream wrapper", () => {
   beforeEach(() => {
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   afterEach(() => {
@@ -173,7 +174,7 @@ describe("lmstudio stream wrapper", () => {
     resolveLmstudioRuntimeApiKeyMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue(undefined);
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   it("preloads LM Studio model before inference using model context window", async () => {
@@ -217,6 +218,32 @@ describe("lmstudio stream wrapper", () => {
       baseUrl: "http://lmstudio.internal:1234/v1",
       modelKey: "qwen3-8b-instruct",
       requestedContextLength: 64000,
+      apiKey: "lmstudio-token",
+      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+    });
+  });
+
+  it("omits malformed preload context lengths", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      baseUrl: "http://lmstudio.internal:1234/v1",
+    });
+    const stream = runWrappedLmstudioStream(
+      wrapped,
+      {
+        contextTokens: 64000.5,
+        contextWindow: Number.POSITIVE_INFINITY,
+      },
+      { apiKey: "lmstudio-token" },
+    );
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expectEnsureLoadedFields({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+      requestedContextLength: undefined,
       apiKey: "lmstudio-token",
       ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
     });

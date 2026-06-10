@@ -1,10 +1,11 @@
+// Qa Lab tests cover discord live plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
 } from "../shared/live-transport-scenarios.js";
-import { __testing } from "./discord-live.runtime.js";
+import { testing } from "./discord-live.runtime.js";
 
 describe("discord live qa runtime", () => {
   afterEach(() => {
@@ -14,7 +15,7 @@ describe("discord live qa runtime", () => {
 
   it("resolves required Discord QA env vars", () => {
     expect(
-      __testing.resolveDiscordQaRuntimeEnv({
+      testing.resolveDiscordQaRuntimeEnv({
         OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
         OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
         OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
@@ -32,7 +33,7 @@ describe("discord live qa runtime", () => {
 
   it("resolves optional Discord QA voice channel env var", () => {
     expect(
-      __testing.resolveDiscordQaRuntimeEnv({
+      testing.resolveDiscordQaRuntimeEnv({
         OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
         OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
         OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID: "523456789012345678",
@@ -52,7 +53,7 @@ describe("discord live qa runtime", () => {
 
   it("fails when a required Discord QA env var is missing", () => {
     expect(() =>
-      __testing.resolveDiscordQaRuntimeEnv({
+      testing.resolveDiscordQaRuntimeEnv({
         OPENCLAW_QA_DISCORD_GUILD_ID: "123456789012345678",
         OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
         OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
@@ -63,7 +64,7 @@ describe("discord live qa runtime", () => {
 
   it("fails when Discord IDs are not snowflakes", () => {
     expect(() =>
-      __testing.resolveDiscordQaRuntimeEnv({
+      testing.resolveDiscordQaRuntimeEnv({
         OPENCLAW_QA_DISCORD_GUILD_ID: "qa-guild",
         OPENCLAW_QA_DISCORD_CHANNEL_ID: "223456789012345678",
         OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN: "driver",
@@ -75,7 +76,7 @@ describe("discord live qa runtime", () => {
 
   it("parses Discord pooled credential payloads", () => {
     expect(
-      __testing.parseDiscordQaCredentialPayload({
+      testing.parseDiscordQaCredentialPayload({
         guildId: "123456789012345678",
         channelId: "223456789012345678",
         voiceChannelId: "523456789012345678",
@@ -95,7 +96,7 @@ describe("discord live qa runtime", () => {
 
   it("rejects Discord pooled credential payloads with bad snowflakes", () => {
     expect(() =>
-      __testing.parseDiscordQaCredentialPayload({
+      testing.parseDiscordQaCredentialPayload({
         guildId: "123456789012345678",
         channelId: "channel",
         driverBotToken: "driver",
@@ -125,7 +126,7 @@ describe("discord live qa runtime", () => {
       },
     };
 
-    const next = __testing.buildDiscordQaConfig(baseCfg, {
+    const next = testing.buildDiscordQaConfig(baseCfg, {
       guildId: "123456789012345678",
       channelId: "223456789012345678",
       driverBotId: "423456789012345678",
@@ -164,7 +165,7 @@ describe("discord live qa runtime", () => {
   });
 
   it("injects Discord voice auto-join config for the voice smoke", () => {
-    const next = __testing.buildDiscordQaConfig(
+    const next = testing.buildDiscordQaConfig(
       {},
       {
         guildId: "123456789012345678",
@@ -193,7 +194,7 @@ describe("discord live qa runtime", () => {
   });
 
   it("injects tool-only Discord status reaction config for the Mantis scenario", () => {
-    const next = __testing.buildDiscordQaConfig(
+    const next = testing.buildDiscordQaConfig(
       {},
       {
         guildId: "123456789012345678",
@@ -221,7 +222,7 @@ describe("discord live qa runtime", () => {
 
   it("normalizes observed Discord messages", () => {
     expect(
-      __testing.normalizeDiscordObservedMessage({
+      testing.normalizeDiscordObservedMessage({
         id: "523456789012345678",
         channel_id: "223456789012345678",
         guild_id: "123456789012345678",
@@ -249,7 +250,7 @@ describe("discord live qa runtime", () => {
 
   it("matches Discord scenario replies by SUT id and marker", () => {
     expect(
-      __testing.matchesDiscordScenarioReply({
+      testing.matchesDiscordScenarioReply({
         channelId: "223456789012345678",
         sutBotId: "323456789012345678",
         matchText: "DISCORD_QA_ECHO_TOKEN",
@@ -263,7 +264,7 @@ describe("discord live qa runtime", () => {
       }),
     ).toBe(true);
     expect(
-      __testing.matchesDiscordScenarioReply({
+      testing.matchesDiscordScenarioReply({
         channelId: "223456789012345678",
         sutBotId: "323456789012345678",
         matchText: "DISCORD_QA_ECHO_TOKEN",
@@ -278,20 +279,27 @@ describe("discord live qa runtime", () => {
     ).toBe(false);
   });
 
+  it("computes Discord RTT from trigger and reply timestamps", () => {
+    expect(
+      testing.computeDiscordRttMs("2026-04-22T11:59:59.125Z", "2026-04-22T12:00:00.875Z"),
+    ).toBe(1750);
+    expect(testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
+  });
+
   it("includes the Discord live scenarios", () => {
-    expect(__testing.findScenario().map((scenario) => scenario.id)).toEqual([
+    expect(testing.findScenario().map((scenario) => scenario.id)).toEqual([
       "discord-canary",
       "discord-mention-gating",
       "discord-native-help-command-registration",
     ]);
     expect(
-      __testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
+      testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
     ).toEqual(["discord-status-reactions-tool-only"]);
+    expect(testing.findScenario(["discord-voice-autojoin"]).map((scenario) => scenario.id)).toEqual(
+      ["discord-voice-autojoin"],
+    );
     expect(
-      __testing.findScenario(["discord-voice-autojoin"]).map((scenario) => scenario.id),
-    ).toEqual(["discord-voice-autojoin"]);
-    expect(
-      __testing
+      testing
         .findScenario(["discord-thread-reply-filepath-attachment"])
         .map((scenario) => scenario.id),
     ).toEqual(["discord-thread-reply-filepath-attachment"]);
@@ -299,7 +307,7 @@ describe("discord live qa runtime", () => {
 
   it("collects the status reaction sequence across timeline snapshots", () => {
     expect(
-      __testing.collectSeenReactionSequence(
+      testing.collectSeenReactionSequence(
         [
           {
             elapsedMs: 0,
@@ -327,7 +335,7 @@ describe("discord live qa runtime", () => {
 
   it("normalizes reaction snapshots from Discord messages", () => {
     expect(
-      __testing.normalizeDiscordReactionSnapshot({
+      testing.normalizeDiscordReactionSnapshot({
         startedAtMs: new Date("2026-05-03T12:00:00.000Z").getTime(),
         observedAt: new Date("2026-05-03T12:00:01.000Z"),
         message: {
@@ -350,7 +358,7 @@ describe("discord live qa runtime", () => {
   });
 
   it("renders a human-readable status reaction timeline artifact", () => {
-    const html = __testing.renderDiscordStatusReactionHtml({
+    const html = testing.renderDiscordStatusReactionHtml({
       scenarioTitle: "Discord status reactions",
       expectedSequence: ["👀", "🤔", "👍"],
       seenSequence: ["👀", "🤔"],
@@ -369,7 +377,7 @@ describe("discord live qa runtime", () => {
   });
 
   it("renders a human-readable thread attachment artifact", () => {
-    const html = __testing.renderDiscordThreadReplyAttachmentHtml({
+    const html = testing.renderDiscordThreadReplyAttachmentHtml({
       attachmentFilenames: [],
       expectedAttachmentFilename: "mantis-thread-report.md",
       messageContent: "Mantis thread attachment reply",
@@ -385,7 +393,7 @@ describe("discord live qa runtime", () => {
 
   it("builds Discord Web message URLs for logged-in Mantis capture", () => {
     expect(
-      __testing.buildDiscordWebMessageUrl({
+      testing.buildDiscordWebMessageUrl({
         guildId: "111111111111111111",
         messageId: "333333333333333333",
         threadId: "222222222222222222",
@@ -413,13 +421,13 @@ describe("discord live qa runtime", () => {
               ],
             },
           }),
-      } as unknown as Parameters<typeof __testing.waitForDiscordChannelRunning>[0];
+      } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
 
-      const readyPromise = __testing.waitForDiscordChannelRunning(gateway, "sut");
+      const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
       await vi.advanceTimersByTimeAsync(600);
 
       await expect(readyPromise).resolves.toBeUndefined();
-      expect(gateway.call).toHaveBeenCalledTimes(2);
+      expect(gateway["call"]).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -443,9 +451,9 @@ describe("discord live qa runtime", () => {
             ],
           },
         }),
-      } as unknown as Parameters<typeof __testing.waitForDiscordChannelRunning>[0];
+      } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
 
-      const readyPromise = __testing.waitForDiscordChannelRunning(gateway, "sut");
+      const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
       const assertion = expect(readyPromise).rejects.toThrow(
         'discord account "sut" did not become connected (last status: running=true connected=false',
       );
@@ -457,16 +465,16 @@ describe("discord live qa runtime", () => {
   });
 
   it("fails when any requested Discord scenario id is unknown", () => {
-    expect(() => __testing.findScenario(["discord-canary", "typo-scenario"])).toThrow(
+    expect(() => testing.findScenario(["discord-canary", "typo-scenario"])).toThrow(
       "unknown Discord QA scenario id(s): typo-scenario",
     );
   });
 
   it("tracks Discord live coverage against the shared transport contract", () => {
-    expect(__testing.DISCORD_QA_STANDARD_SCENARIO_IDS).toEqual(["canary", "mention-gating"]);
+    expect(testing.DISCORD_QA_STANDARD_SCENARIO_IDS).toEqual(["canary", "mention-gating"]);
     expect(
       findMissingLiveTransportStandardScenarios({
-        coveredStandardScenarioIds: __testing.DISCORD_QA_STANDARD_SCENARIO_IDS,
+        coveredStandardScenarioIds: testing.DISCORD_QA_STANDARD_SCENARIO_IDS,
         expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
@@ -477,7 +485,7 @@ describe("discord live qa runtime", () => {
       "fetch",
       vi.fn(async (_input: string | URL | globalThis.Request, init?: RequestInit) => {
         expect(init?.headers).toBeInstanceOf(Headers);
-        expect((init?.headers as Headers).get("authorization")).toBe("Bot token");
+        expect((init!.headers as Headers).get("authorization")).toBe("Bot token");
         return new Response(
           JSON.stringify([
             { id: "623456789012345678", name: "help" },
@@ -494,7 +502,7 @@ describe("discord live qa runtime", () => {
     );
 
     await expect(
-      __testing.listApplicationCommands({
+      testing.listApplicationCommands({
         token: "token",
         applicationId: "323456789012345678",
       }),
@@ -525,7 +533,7 @@ describe("discord live qa runtime", () => {
       ),
     );
 
-    const voiceChannel = await __testing.resolveDiscordQaVoiceChannel({
+    const voiceChannel = await testing.resolveDiscordQaVoiceChannel({
       token: "token",
       guildId: "123456789012345678",
     });
@@ -548,7 +556,7 @@ describe("discord live qa runtime", () => {
     );
 
     await expect(
-      __testing.getCurrentDiscordVoiceState({
+      testing.getCurrentDiscordVoiceState({
         token: "token",
         guildId: "123456789012345678",
       }),
@@ -586,7 +594,7 @@ describe("discord live qa runtime", () => {
           ),
       );
 
-      const registeredPromise = __testing.assertDiscordApplicationCommandsRegistered({
+      const registeredPromise = testing.assertDiscordApplicationCommandsRegistered({
         token: "token",
         applicationId: "323456789012345678",
         expectedCommandNames: ["help"],
@@ -619,7 +627,7 @@ describe("discord live qa runtime", () => {
       }),
     );
 
-    await expect(__testing.getCurrentDiscordUser("token")).resolves.toEqual({
+    await expect(testing.getCurrentDiscordUser("token")).resolves.toEqual({
       id: "423456789012345678",
     });
     expect(timeoutSpy).toHaveBeenCalledWith(15_000);
@@ -652,7 +660,7 @@ describe("discord live qa runtime", () => {
         ),
     );
 
-    await expect(__testing.getCurrentDiscordUser("token")).resolves.toEqual({
+    await expect(testing.getCurrentDiscordUser("token")).resolves.toEqual({
       id: "423456789012345678",
     });
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -660,7 +668,7 @@ describe("discord live qa runtime", () => {
 
   it("redacts observed message content by default in artifacts", () => {
     expect(
-      __testing.buildObservedMessagesArtifact({
+      testing.buildObservedMessagesArtifact({
         includeContent: false,
         redactMetadata: false,
         observedMessages: [
@@ -689,6 +697,41 @@ describe("discord live qa runtime", () => {
         triggerMessageId: "423456789012345678",
         triggerTimestamp: "2026-04-22T11:59:59.000Z",
         replyToMessageId: undefined,
+        timestamp: "2026-04-22T12:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("preserves observed message timing when metadata is redacted", () => {
+    expect(
+      testing.buildObservedMessagesArtifact({
+        includeContent: false,
+        redactMetadata: true,
+        observedMessages: [
+          {
+            messageId: "523456789012345678",
+            channelId: "223456789012345678",
+            guildId: "123456789012345678",
+            senderId: "323456789012345678",
+            senderIsBot: true,
+            senderUsername: "sut",
+            scenarioId: "canary",
+            scenarioTitle: "Canary",
+            matchedScenario: true,
+            text: "secret text",
+            triggerMessageId: "423456789012345678",
+            triggerTimestamp: "2026-04-22T11:59:59.000Z",
+            timestamp: "2026-04-22T12:00:00.000Z",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        senderIsBot: true,
+        scenarioId: "canary",
+        scenarioTitle: "Canary",
+        matchedScenario: true,
+        triggerTimestamp: "2026-04-22T11:59:59.000Z",
         timestamp: "2026-04-22T12:00:00.000Z",
       },
     ]);

@@ -1,17 +1,27 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeModelCatalogProviderRows } from "./normalize.js";
-import { buildModelCatalogMergeKey, normalizeModelCatalogProviderId } from "./refs.js";
+// Manifest model-catalog planner turns plugin catalog declarations into normalized rows and suppressions.
+import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import {
+  buildModelCatalogMergeKey,
+  normalizeModelCatalogProviderId,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalog,
   ModelCatalogAlias,
   ModelCatalogDiscovery,
   NormalizedModelCatalogRow,
-} from "./types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 
+// Manifest planners convert plugin modelCatalog declarations into normalized
+// rows and suppression entries while enforcing plugin ownership boundaries.
 type ManifestModelCatalogPlugin = {
   id: string;
   providers?: readonly string[];
-  modelCatalog?: Pick<ModelCatalog, "providers" | "aliases" | "suppressions" | "discovery">;
+  modelCatalog?: Pick<
+    ModelCatalog,
+    "providers" | "aliases" | "suppressions" | "discovery" | "runtimeAugment"
+  >;
 };
 
 type ManifestModelCatalogRegistry = {
@@ -75,6 +85,8 @@ export function planManifestModelCatalogRows(params: {
     for (const row of entry.rows) {
       const seen = seenRows.get(row.mergeKey);
       if (seen) {
+        // Conflicting plugin-owned declarations are dropped entirely so no
+        // plugin silently wins another plugin's model ref in the merged catalog.
         if (!conflicts.has(row.mergeKey)) {
           conflicts.set(row.mergeKey, {
             mergeKey: row.mergeKey,
@@ -156,7 +168,9 @@ function planManifestModelCatalogPluginEntries(params: {
 }
 
 function buildOwnedProviderSet(plugin: ManifestModelCatalogPlugin): ReadonlySet<string> {
-  return new Set((plugin.providers ?? []).map(normalizeModelCatalogProviderId).filter(Boolean));
+  return new Set(
+    normalizeUniqueStringEntries((plugin.providers ?? []).map(normalizeModelCatalogProviderId)),
+  );
 }
 
 function buildModelCatalogProviderAliasTargets(
@@ -167,6 +181,7 @@ function buildModelCatalogProviderAliasTargets(
   for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
     const aliasProvider = normalizeModelCatalogProviderId(rawAlias);
     const targetProvider = normalizeModelCatalogProviderId(alias.provider);
+    // Aliases are honored only when they point at a provider this plugin owns.
     if (!aliasProvider || !targetProvider || !ownedProviders.has(targetProvider)) {
       continue;
     }
@@ -231,6 +246,8 @@ export function planManifestModelCatalogSuppressions(params: {
       if (modelFilter && model !== modelFilter) {
         continue;
       }
+      // Suppressions can affect owned providers and their declared aliases only;
+      // otherwise one plugin could hide another plugin's catalog entries.
       if (!providerRefs.has(provider)) {
         continue;
       }

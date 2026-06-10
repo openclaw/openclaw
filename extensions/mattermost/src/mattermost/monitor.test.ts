@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor plugin behavior.
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
@@ -412,7 +413,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       resolvePreviewFinalText: (text) => text?.trim(),
       previewState: { finalizedViaPreviewPost: false },
       logVerboseMessage: vi.fn(),
-      deliverFinal,
+      deliverPayload: deliverFinal,
     });
 
     expect(deliverFinal).not.toHaveBeenCalled();
@@ -435,7 +436,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       resolvePreviewFinalText: (text) => text?.trim(),
       previewState: { finalizedViaPreviewPost: false },
       logVerboseMessage: vi.fn(),
-      deliverFinal,
+      deliverPayload: deliverFinal,
     });
 
     expect(deliverFinal).toHaveBeenCalledTimes(1);
@@ -463,13 +464,120 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       resolvePreviewFinalText: (text) => text?.trim(),
       previewState: { finalizedViaPreviewPost: false },
       logVerboseMessage: vi.fn(),
-      deliverFinal,
+      deliverPayload: deliverFinal,
     });
 
     expect(deliverFinal).toHaveBeenCalledTimes(1);
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the preview and sends media-only for TTS supplement finals", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
+      message: "Spoken answer",
+    });
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverFinal).toHaveBeenCalledWith({
+      mediaUrl: "https://example.com/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "Spoken answer",
+      ttsSupplement: { spokenText: "Spoken answer" },
+    });
+  });
+
+  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+    updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverFinal).toHaveBeenCalledWith({
+      text: "Spoken answer",
+      mediaUrl: "https://example.com/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "Spoken answer",
+      ttsSupplement: { spokenText: "Spoken answer" },
+    });
+  });
+
+  it("keeps already-delivered TTS supplement fallback audio-only", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+    updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: {
+          spokenText: "Spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledWith({
+      mediaUrl: "https://example.com/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "Spoken answer",
+      ttsSupplement: {
+        spokenText: "Spoken answer",
+        visibleTextAlreadyDelivered: true,
+      },
+    });
   });
 
   it("does not flush error finals before normal delivery", async () => {
@@ -486,7 +594,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       resolvePreviewFinalText: (text) => text?.trim(),
       previewState: { finalizedViaPreviewPost: false },
       logVerboseMessage: vi.fn(),
-      deliverFinal,
+      deliverPayload: deliverFinal,
     });
 
     expect(draftStream.flush).not.toHaveBeenCalled();
@@ -509,7 +617,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       resolvePreviewFinalText: (text) => text?.trim(),
       previewState: { finalizedViaPreviewPost: false },
       logVerboseMessage: vi.fn(),
-      deliverFinal,
+      deliverPayload: deliverFinal,
     });
 
     expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
@@ -546,7 +654,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
         resolvePreviewFinalText: (text) => text?.trim(),
         previewState: { finalizedViaPreviewPost: false },
         logVerboseMessage: vi.fn(),
-        deliverFinal,
+        deliverPayload: deliverFinal,
       }),
     ).rejects.toThrow("send failed");
 
@@ -665,13 +773,23 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("thread-root-456");
   });
 
-  it("suppresses existing thread roots when replyToMode is off", () => {
+  it("keeps an existing thread root when replyToMode is off", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "channel",
         postId: "post-123",
         replyToMode: "off",
         threadRootId: "thread-root-456",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("does not start a new thread for top-level messages when replyToMode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "off",
       }),
     ).toBeUndefined();
   });
@@ -750,7 +868,7 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps threaded messages top-level when replyToMode is off", () => {
+  it("keeps threaded messages in their Mattermost thread when replyToMode is off", () => {
     expect(
       resolveMattermostThreadSessionContext({
         baseSessionKey: "agent:main:mattermost:default:chan-1",
@@ -758,6 +876,21 @@ describe("resolveMattermostThreadSessionContext", () => {
         postId: "post-123",
         replyToMode: "off",
         threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "root-456",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps top-level messages on the base session when replyToMode is off", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "off",
       }),
     ).toEqual({
       effectiveReplyToId: undefined,

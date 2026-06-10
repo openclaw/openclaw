@@ -1,3 +1,4 @@
+// Qa Lab API module exposes the plugin public contract.
 export {
   buildQaTarget,
   callGatewayFromCli,
@@ -39,8 +40,3 @@ export {
   setQaChannelRuntime,
 } from "./src/runtime-api.js";
 export { startQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
-export {
-  TELEGRAM_USER_QA_CREDENTIAL_KIND,
-  parseTelegramUserQaCredentialPayload,
-  type TelegramUserQaCredentialPayload,
-} from "./src/live-transports/telegram/telegram-user-credential.runtime.js";

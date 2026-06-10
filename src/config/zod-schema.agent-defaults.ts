@@ -1,12 +1,13 @@
+// Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentContextLimitsSchema,
-  AgentEmbeddedHarnessSchema,
-  AgentRuntimePolicySchema,
+  AgentModelRuntimeEntrySchema,
   AgentModelSchema,
+  AgentToolModelSchema,
   MemorySearchSchema,
   AgentRunRetriesConfigSchema,
 } from "./zod-schema.agent-runtime.js";
@@ -32,19 +33,19 @@ const OptionalBootstrapFileNameSchema = z.enum([
   "IDENTITY.md",
 ]);
 
-export const SilentReplyPolicyConfigSchema = z
+const EmbeddedAgentConfigSchema = z
   .object({
-    direct: SilentReplyPolicySchema.optional(),
-    group: SilentReplyPolicySchema.optional(),
-    internal: SilentReplyPolicySchema.optional(),
+    projectSettingsPolicy: z
+      .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
+      .optional(),
+    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
   })
   .strict();
 
-export const SilentReplyRewriteConfigSchema = z
+export const SilentReplyPolicyConfigSchema = z
   .object({
-    direct: z.boolean().optional(),
-    group: z.boolean().optional(),
-    internal: z.boolean().optional(),
+    group: SilentReplyPolicySchema.optional(),
+    internal: SilentReplyPolicySchema.optional(),
   })
   .strict();
 
@@ -52,38 +53,21 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
-    agentRuntime: AgentRuntimePolicySchema,
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
-    imageModel: AgentModelSchema.optional(),
-    imageGenerationModel: AgentModelSchema.optional(),
-    videoGenerationModel: AgentModelSchema.optional(),
-    musicGenerationModel: AgentModelSchema.optional(),
+    imageModel: AgentToolModelSchema.optional(),
+    imageGenerationModel: AgentToolModelSchema.optional(),
+    videoGenerationModel: AgentToolModelSchema.optional(),
+    musicGenerationModel: AgentToolModelSchema.optional(),
+    voiceModel: AgentToolModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
-    pdfModel: AgentModelSchema.optional(),
+    pdfModel: AgentToolModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
-            params: z.record(z.string(), z.unknown()).optional(),
-            agentRuntime: AgentRuntimePolicySchema,
-            /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
+    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
-    silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
     repoRoot: z.string().optional(),
-    systemPromptOverride: z.string().optional(),
     promptOverlays: z
       .object({
         gpt5: z
@@ -220,15 +204,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
-    embeddedPi: z
-      .object({
-        projectSettingsPolicy: z
-          .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
-          .optional(),
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-      })
-      .strict()
-      .optional(),
+    embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),
@@ -255,6 +231,7 @@ export const AgentDefaultsSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
+    imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,

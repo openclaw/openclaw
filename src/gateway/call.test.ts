@@ -1,3 +1,5 @@
+// Gateway call tests cover connection detail resolution, local/remote URL choice,
+// auth token assembly, device identity, and client command metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -23,6 +26,9 @@ const deviceIdentityState = vi.hoisted(() => ({
   } satisfies DeviceIdentity,
   throwOnLoad: false,
 }));
+const loadDeviceAuthTokenMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
 
 const eventLoopReadyState = vi.hoisted(() => ({
   calls: [] as Array<{ maxWaitMs?: number } | undefined>,
@@ -42,6 +48,20 @@ const eventLoopReadyState = vi.hoisted(() => ({
   },
 }));
 
+const connectAssemblyErrorState = vi.hoisted(() => {
+  const errors = new WeakSet<Error>();
+  return {
+    create(message: string): Error {
+      const error = new Error(message);
+      errors.add(error);
+      return error;
+    },
+    has(value: unknown): value is Error {
+      return value instanceof Error && errors.has(value);
+    },
+  };
+});
+
 let lastClientOptions: {
   url?: string;
   token?: string;
@@ -51,17 +71,24 @@ let lastClientOptions: {
   clientName?: string;
   clientDisplayName?: string;
   mode?: string;
+  approvalRuntimeToken?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
+  onConnectError?: (err: Error) => void;
 } | null = null;
 let lastRequestOptions: {
   method?: string;
   params?: unknown;
-  opts?: { expectFinal?: boolean; timeoutMs?: number | null };
+  opts?: {
+    expectFinal?: boolean;
+    timeoutMs?: number | null;
+    signal?: AbortSignal;
+    onAccepted?: (payload: unknown) => void;
+  };
 } | null = null;
-type StartMode = "hello" | "close" | "silent" | "startup-retry-then-hello";
+type StartMode = "hello" | "close" | "connect-error" | "silent" | "startup-retry-then-hello";
 let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
@@ -78,6 +105,7 @@ vi.mock("./client.js", () => ({
     }
     return undefined;
   },
+  isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: {
       url?: string;
@@ -87,9 +115,11 @@ vi.mock("./client.js", () => ({
       clientName?: string;
       clientDisplayName?: string;
       mode?: string;
+      approvalRuntimeToken?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
+      onConnectError?: (err: Error) => void;
     }) {
       lastClientOptions = opts;
     }
@@ -115,6 +145,10 @@ vi.mock("./client.js", () => ({
             methods: helloMethods,
           },
         });
+      } else if (startMode === "connect-error") {
+        lastClientOptions?.onConnectError?.(
+          connectAssemblyErrorState.create("device private key invalid"),
+        );
       } else if (startMode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
@@ -134,11 +168,13 @@ vi.mock("./event-loop-ready.js", () => ({
 }));
 
 const {
-  __testing,
+  testing,
   buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
   callGatewayScoped,
+  formatGatewayTransportErrorJson,
   isGatewayTransportError,
 } = await import("./call.js");
 
@@ -154,13 +190,19 @@ class StubGatewayClient {
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
+    onConnectError?: (err: Error) => void;
   }) {
     lastClientOptions = opts;
   }
   async request(
     method: string,
     params: unknown,
-    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    opts?: {
+      expectFinal?: boolean;
+      timeoutMs?: number | null;
+      signal?: AbortSignal;
+      onAccepted?: (payload: unknown) => void;
+    },
   ) {
     lastRequestOptions = { method, params, opts };
     return { ok: true };
@@ -179,6 +221,10 @@ class StubGatewayClient {
           methods: helloMethods,
         },
       });
+    } else if (startMode === "connect-error") {
+      lastClientOptions?.onConnectError?.(
+        connectAssemblyErrorState.create("device private key invalid"),
+      );
     } else if (startMode === "close") {
       lastClientOptions?.onClose?.(closeCode, closeReason);
     }
@@ -213,7 +259,7 @@ function resetGatewayCallMocks() {
     cfg?: OpenClawConfig,
     env?: NodeJS.ProcessEnv,
   ) => number;
-  __testing.setDepsForTests({
+  testing.setDepsForTests({
     createGatewayClient: (opts) =>
       new StubGatewayClient(opts as ConstructorParameters<typeof StubGatewayClient>[0]) as never,
     getRuntimeConfig: loadConfigForTests,
@@ -223,9 +269,17 @@ function resetGatewayCallMocks() {
       }
       return deviceIdentityState.value;
     },
+    loadDeviceAuthToken: loadDeviceAuthTokenMock,
     resolveGatewayPort: resolveGatewayPortForTests,
   });
   deviceIdentityState.throwOnLoad = false;
+  loadDeviceAuthTokenMock.mockReset();
+  loadDeviceAuthTokenMock.mockReturnValue({
+    token: "paired-device-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 123,
+  });
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -271,7 +325,7 @@ describe("callGateway url resolution", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    __testing.resetDepsForTests();
+    testing.resetDepsForTests();
   });
 
   it.each([
@@ -386,6 +440,95 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
     expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
     expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("fails before opening a websocket when backend token auth has no shared or paired credential", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "token" } },
+    });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+
+    await expect(callGateway({ method: "sessions.list" })).rejects.toThrow(
+      "requires credentials before opening a websocket",
+    );
+
+    expect(lastClientOptions).toBeNull();
+    expect(startCalls).toBe(0);
+    expect(loadDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: "test-device-identity",
+      role: "operator",
+      env: process.env,
+    });
+  });
+
+  it("fails before opening a websocket when default token auth has no shared or paired credential", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+
+    await expect(callGateway({ method: "sessions.list" })).rejects.toThrow(
+      "requires credentials before opening a websocket",
+    );
+
+    expect(lastClientOptions).toBeNull();
+    expect(startCalls).toBe(0);
+  });
+
+  it("allows paired backend device auth without explicit shared credentials", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "token" } },
+    });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGateway({ method: "sessions.list" });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("allows Tailscale-authenticated backend calls without client-side credentials", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://openclaw.example.test" },
+        auth: { mode: "token", allowTailscale: true },
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "sessions.list" });
+
+    expect(lastClientOptions?.url).toBe("wss://openclaw.example.test");
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("allows Tailscale Serve backend calls without explicit allowTailscale", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://openclaw.example.test" },
+        auth: { mode: "token" },
+        tailscale: { mode: "serve" },
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "sessions.list" });
+
+    expect(lastClientOptions?.url).toBe("wss://openclaw.example.test");
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
   });
 
   it("keeps device identity enabled for explicit CLI loopback shared-token auth", async () => {
@@ -627,6 +770,40 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
   });
 
+  it("sends internal agent handoffs as backend gateway calls", async () => {
+    setLocalLoopbackGatewayConfig();
+    helloMethods = ["agent"];
+
+    await callGateway({
+      method: "agent",
+      params: {
+        message: "resume",
+        sessionEffects: "internal",
+        suppressPromptPersistence: true,
+      },
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastRequestOptions?.method).toBe("agent");
+    expect(lastRequestOptions?.params).toMatchObject({
+      sessionEffects: "internal",
+      suppressPromptPersistence: true,
+    });
+  });
+
+  it("passes approval runtime tokens to backend gateway clients", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "exec.approval.waitDecision",
+      scopes: ["operator.approvals"],
+      approvalRuntimeToken: "runtime-token",
+    });
+
+    expect(lastClientOptions?.approvalRuntimeToken).toBe("runtime-token");
+  });
+
   it("does not synthesize display names for CLI calls", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -693,6 +870,48 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.remoteFallbackNote).toBeUndefined();
     expect(details.message).toContain("Gateway target: wss://example.com/ws");
     expect(details.message).toContain("Source: cli --url");
+  });
+
+  it("reuses gateway call TLS resolution for local probe connection details", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        tls: { enabled: true },
+        handshakeTimeoutMs: 4321,
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockReturnValue(18800);
+    testing.setDepsForTests({
+      getRuntimeConfig: () => config,
+      resolveGatewayPort: () => 18800,
+      loadGatewayTlsRuntime: async () => ({
+        enabled: true,
+        fingerprintSha256: "sha256:test-local-gateway-fingerprint",
+        required: true,
+      }),
+    });
+
+    const details = await buildGatewayProbeConnectionDetails({ config });
+
+    expect(details.url).toBe("wss://127.0.0.1:18800");
+    expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
+    expect(details.preauthHandshakeTimeoutMs).toBe(4321);
+  });
+
+  it("redacts credential-bearing target URLs from connection messages", () => {
+    setLocalLoopbackGatewayConfig(18800);
+
+    const details = buildGatewayConnectionDetails({
+      url: "wss://user:pass@example.com/ws?token=secret-token&keep=visible",
+    });
+
+    expect(details.url).toBe("wss://user:pass@example.com/ws?token=secret-token&keep=visible");
+    expect(details.message).toContain(
+      "Gateway target: wss://***:***@example.com/ws?token=***&keep=visible",
+    );
+    expect(details.message).not.toContain("user:pass");
+    expect(details.message).not.toContain("secret-token");
   });
 
   it("emits a remote fallback note when remote url is missing", () => {
@@ -785,7 +1004,7 @@ describe("buildGatewayConnectionDetails", () => {
     try {
       getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
       resolveGatewayPort.mockReturnValue(18800);
-      __testing.setDepsForTests({
+      testing.setDepsForTests({
         getRuntimeConfig: {} as never,
         resolveGatewayPort: () => 18789,
       });
@@ -824,8 +1043,29 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
   });
 
-  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("redacts credential-bearing target URLs from insecure ws:// errors", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://user:pass@remote.example.com:18789/ws?token=secret-token" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    expect(() => buildGatewayConnectionDetails()).toThrow(
+      'Gateway URL "ws://***:***@remote.example.com:18789/ws?token=***" uses plaintext',
+    );
+    try {
+      buildGatewayConnectionDetails();
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain("user:pass");
+      expect((error as Error).message).not.toContain("secret-token");
+    }
+  });
+
+  it("allows ws:// private remote URLs for trusted LAN and Tailnet configs", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -915,13 +1155,27 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
   });
 
+  it("rejects immediately when the client reports a connect error", async () => {
+    startMode = "connect-error";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("device private key invalid");
+    expect(lastRequestOptions).toBeNull();
+  });
+
   it("includes connection details on timeout", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -940,7 +1194,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let err: unknown;
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -954,6 +1208,34 @@ describe("callGateway error details", () => {
     expect(transportError.timeoutMs).toBe(5);
   });
 
+  it("formats typed transport errors for CLI JSON output", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    expect(formatGatewayTransportErrorJson(err)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    });
+  });
+
   it("charges event-loop readiness against the wrapper timeout", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
@@ -961,7 +1243,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -989,7 +1271,7 @@ describe("callGateway error details", () => {
     };
 
     let err: unknown;
-    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       err = caught;
     });
     expect(isGatewayTransportError(err)).toBe(true);
@@ -1012,7 +1294,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health" }).catch((caught) => {
+    const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -1033,7 +1315,7 @@ describe("callGateway error details", () => {
 
       vi.useFakeTimers();
       let errMessage = "";
-      const promise = callGateway({ method: "health" }).catch((caught) => {
+      const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
         errMessage = caught instanceof Error ? caught.message : String(caught);
       });
 
@@ -1054,9 +1336,11 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
+    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch(
+      (caught: unknown) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      },
+    );
 
     await vi.advanceTimersByTimeAsync(1);
     expect(errMessage).toBe("");
@@ -1074,6 +1358,168 @@ describe("callGateway error details", () => {
 
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("forwards caller abort signal and accepted callback to client requests", async () => {
+    setLocalLoopbackGatewayConfig();
+    const controller = new AbortController();
+    const onAccepted = vi.fn();
+
+    await callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onAccepted,
+    });
+
+    expect(lastRequestOptions?.method).toBe("agent");
+    expect(lastRequestOptions?.opts?.signal).toBe(controller.signal);
+    expect(lastRequestOptions?.opts?.onAccepted).toBe(onAccepted);
+  });
+
+  it("runs the signal abort hook on the active gateway connection before teardown", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    const controller = new AbortController();
+    const abortRequests: Array<{
+      method: string;
+      params: unknown;
+      opts?: { timeoutMs?: number | null };
+    }> = [];
+    let stopStarted = false;
+
+    testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: {
+              expectFinal?: boolean;
+              timeoutMs?: number | null;
+              signal?: AbortSignal;
+            },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            if (method === "agent") {
+              return await new Promise((_, reject) => {
+                requestOpts?.signal?.addEventListener(
+                  "abort",
+                  () => {
+                    const err = new Error("gateway request aborted for agent");
+                    err.name = "AbortError";
+                    reject(err);
+                  },
+                  { once: true },
+                );
+              });
+            }
+            abortRequests.push({ method, params, opts: requestOpts });
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {
+            stopStarted = true;
+          },
+        }) as never,
+      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      loadDeviceAuthToken: loadDeviceAuthTokenMock,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    const promise = callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onSignalAbort: async (request) => {
+        await request("chat.abort", { sessionKey: "main", runId: "run-1" }, { timeoutMs: 5_000 });
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(lastRequestOptions?.method).toBe("agent");
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("gateway request aborted for agent");
+    expect(abortRequests).toEqual([
+      {
+        method: "chat.abort",
+        params: { sessionKey: "main", runId: "run-1" },
+        opts: { timeoutMs: 5_000 },
+      },
+    ]);
+    expect(stopStarted).toBe(true);
+  });
+
+  it("skips the signal abort hook before the primary request starts", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn(async () => undefined);
+    let startCalled = false;
+    let stopStarted = false;
+
+    testing.setDepsForTests({
+      createGatewayClient: () =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: {
+              expectFinal?: boolean;
+              timeoutMs?: number | null;
+              signal?: AbortSignal;
+            },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            startCalled = true;
+          },
+          stop() {},
+          async stopAndWait() {
+            stopStarted = true;
+          },
+        }) as never,
+      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      loadDeviceAuthToken: loadDeviceAuthTokenMock,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    const promise = callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onSignalAbort,
+    });
+
+    await vi.waitFor(() => {
+      expect(startCalled).toBe(true);
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("gateway request aborted for agent");
+    expect(onSignalAbort).not.toHaveBeenCalled();
+    expect(lastRequestOptions).toBeNull();
+    expect(stopStarted).toBe(true);
   });
 
   it("passes configured gateway handshake timeout to the client watchdog", async () => {
@@ -1105,7 +1551,7 @@ describe("callGateway error details", () => {
     let stopFinished = false;
     let callResolved = false;
 
-    __testing.setDepsForTests({
+    testing.setDepsForTests({
       createGatewayClient: (opts) =>
         ({
           async request(
@@ -1137,6 +1583,7 @@ describe("callGateway error details", () => {
         }) as never,
       getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
       loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      loadDeviceAuthToken: loadDeviceAuthTokenMock,
       resolveGatewayPort: resolveGatewayPort as unknown as (
         cfg?: OpenClawConfig,
         env?: NodeJS.ProcessEnv,
@@ -1169,7 +1616,7 @@ describe("callGateway error details", () => {
     let releaseStop: (() => void) | undefined;
     let stopStarted = false;
 
-    __testing.setDepsForTests({
+    testing.setDepsForTests({
       createGatewayClient: (opts) =>
         ({
           async request(
@@ -1198,6 +1645,7 @@ describe("callGateway error details", () => {
         }) as never,
       getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
       loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      loadDeviceAuthToken: loadDeviceAuthTokenMock,
       resolveGatewayPort: resolveGatewayPort as unknown as (
         cfg?: OpenClawConfig,
         env?: NodeJS.ProcessEnv,

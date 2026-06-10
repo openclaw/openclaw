@@ -1,3 +1,4 @@
+// Configure wizard model/auth selection and gateway auth config helpers.
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -104,6 +105,31 @@ function resolveSingleConfiguredProvider(cfg: OpenClawConfig): string | undefine
   return configuredProviders.length === 1 ? configuredProviders[0] : undefined;
 }
 
+function resolveProviderFromModelRef(model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 ? trimmed?.slice(0, slashIndex) : undefined;
+}
+
+function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+  cfg: OpenClawConfig,
+  selectedModels: readonly string[],
+): string | undefined {
+  const currentModel = cfg.agents?.defaults?.model;
+  const primary =
+    typeof currentModel === "string"
+      ? currentModel.trim()
+      : currentModel && typeof currentModel === "object" && typeof currentModel.primary === "string"
+        ? currentModel.primary.trim()
+        : undefined;
+  const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
+  if (!modelId) {
+    return undefined;
+  }
+  const canonical = `openai/${modelId}`;
+  return selectedModels.find((model) => model.trim() === canonical);
+}
+
 function resolveConfiguredProviderFromAuthChange(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
@@ -131,6 +157,7 @@ function resolveConfiguredProviderFromAuthChange(params: {
   );
 }
 
+/** Build gateway auth config, preserving Tailscale allowance and generating missing tokens. */
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
   mode: GatewayAuthChoice;
@@ -171,13 +198,14 @@ export function buildGatewayAuthConfig(params: {
   return base;
 }
 
+/** Prompt for model provider credentials and default model allowlist settings. */
 export async function promptAuthConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   let next = cfg;
-  let authChoice: string = "skip";
+  let authChoice = "skip";
   let preferredProvider: string | undefined;
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
@@ -210,7 +238,8 @@ export async function promptAuthConfig(
         allowKeep: true,
         ignoreAllowlist: true,
         includeProviderPluginSetups: false,
-        loadCatalog: false,
+        loadCatalog: true,
+        browseCatalogOnDemand: true,
         preferredProvider,
         workspaceDir: resolveDefaultAgentWorkspaceDir(),
         runtime,
@@ -220,6 +249,7 @@ export async function promptAuthConfig(
       }
       if (modelSelection.model) {
         next = applyPrimaryModel(next, modelSelection.model);
+        preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
       }
       break;
     }
@@ -254,6 +284,16 @@ export async function promptAuthConfig(
     });
     const promptProvider =
       modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
+    const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
+    const hasPromptProviderStaticManifestRows = hasStaticManifestCatalogRows(next, promptProvider);
+    const shouldLoadModelCatalog =
+      modelPrompt?.loadCatalog ??
+      (hasPromptProviderConfiguredModels || hasPromptProviderStaticManifestRows);
+    const useProviderScopedCatalog = Boolean(
+      promptProvider &&
+      shouldLoadModelCatalog &&
+      (modelPrompt?.loadCatalog === true || hasPromptProviderConfiguredModels),
+    );
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
@@ -263,12 +303,17 @@ export async function promptAuthConfig(
       initialSelections: modelPrompt?.initialSelections,
       message: modelPrompt?.message,
       preferredProvider: promptProvider,
-      loadCatalog:
-        modelPrompt?.loadCatalog ??
-        (hasConfiguredProviderModels(next, promptProvider) ||
-          hasStaticManifestCatalogRows(next, promptProvider)),
+      providerScopedCatalog: useProviderScopedCatalog,
+      loadCatalog: shouldLoadModelCatalog,
     });
     if (allowlistSelection.models) {
+      const canonicalPrimary = resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+        next,
+        allowlistSelection.models,
+      );
+      if (canonicalPrimary) {
+        next = applyPrimaryModel(next, canonicalPrimary);
+      }
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {
         scopeKeys: allowlistSelection.scopeKeys,
       });

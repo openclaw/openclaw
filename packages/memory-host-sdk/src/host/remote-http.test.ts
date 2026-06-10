@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover remote http behavior.
 import { describe, expect, it } from "vitest";
 import { MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE, withRemoteHttpResponse } from "./remote-http.js";
 
@@ -42,5 +43,19 @@ describe("package withRemoteHttpResponse", () => {
 
     expect(deps.calls).toHaveLength(1);
     expect(deps.calls[0]).not.toHaveProperty("mode");
+  });
+
+  it("passes abort signals to the guarded fetch", async () => {
+    const deps = makeFetchDeps();
+    const controller = new AbortController();
+
+    await withRemoteHttpResponse({
+      url: "https://memory.example/v1/embeddings",
+      signal: controller.signal,
+      onResponse: async () => undefined,
+      ...deps,
+    });
+
+    expect(deps.calls[0]).toHaveProperty("signal", controller.signal);
   });
 });

@@ -1,3 +1,5 @@
+// Gateway server chat tests cover WebSocket chat flow, history construction,
+// NO_REPLY handling, agent events, and connected control-UI delivery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +8,6 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { __testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -147,9 +148,13 @@ describe("gateway server chat", () => {
     return actual.runId as string;
   };
 
-  const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>) => {
+  const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>, error?: string) => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("timeout");
+    if (error !== undefined) {
+      expect(res.payload?.error).toBe(error);
+      expect(res.payload?.pendingError).toBe(true);
+    }
   };
 
   const expectAgentWaitStartedAt = (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) => {
@@ -178,11 +183,6 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("ok");
     return res;
   };
-
-  const waitForLifecycleWaiter = async (runId: string) => {
-    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
-  };
-
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
       sessionKey: "main",
@@ -444,7 +444,9 @@ describe("gateway server chat", () => {
         headers: { origin: `http://127.0.0.1:${port}` },
       });
       trackConnectChallengeNonce(webchatWs);
-      await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        webchatWs?.once("open", resolve);
+      });
       await connectOk(webchatWs, {
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -693,6 +695,489 @@ describe("gateway server chat", () => {
     // because entry.text takes precedence over entry.content for the silent check.
     // The user message with NO_REPLY text is preserved (only assistant filtered).
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
+  });
+
+  test("chat.history mirrors current-session message tool sends before NO_REPLY", async () => {
+    const replyText = "Here, love. Eva, not Evo.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Evo, you there?" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-1",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-1",
+        content: { ok: true, messageId: "24268", chatId: "8455538490" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["Evo, you there?", replyText]);
+    expect(
+      historyMessages.some((message) => {
+        if (!message || typeof message !== "object") {
+          return false;
+        }
+        const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
+        return entry.role === "assistant" && Boolean(entry.openclawMessageToolMirror);
+      }),
+    ).toBe(true);
+  });
+
+  test("chat.history hides raw delivery-mirror rows but keeps message-tool mirrors", async () => {
+    const replyText = "One visible send.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "send once" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-transcript-only",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-transcript-only",
+        content: { ok: true, messageId: "24271", chatId: "current-run" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }],
+        timestamp: 4,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 5,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["send once", replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history keeps message-tool mirrors before silent completion rows", async () => {
+    const replyText = "Visible before completion.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-before-completion",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-before-completion",
+        content: { ok: true, messageId: "24272", chatId: "current-run" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history hides delivery mirrors that precede successful tool results", async () => {
+    const replyText = "Visible after result.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-before-result",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-before-result",
+        content: { ok: true, messageId: "24273", chatId: "current-run" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history preserves other pending message-tool mirrors while deduping one send", async () => {
+    const firstText = "First visible send.";
+    const secondText = "Second visible send.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-first",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: firstText,
+            },
+          },
+          {
+            type: "toolCall",
+            id: "call-message-second",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: secondText,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-first",
+        content: { ok: true, messageId: "24274", chatId: "current-run" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: firstText }],
+        timestamp: 3,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-second",
+        content: { ok: true, messageId: "24275", chatId: "current-run" },
+        timestamp: 4,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: secondText }],
+        timestamp: 5,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([firstText, secondText]);
+    expect(
+      historyMessages.filter(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toHaveLength(2);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history keeps standalone delivery-mirror rows", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "standalone delivered reply" }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["standalone delivered reply"]);
+  });
+
+  test("chat.history mirrors current-session message tool sends with channel hints", async () => {
+    const replyText = "Still the current chat.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-channel-hint",
+            name: "message",
+            arguments: {
+              action: "send",
+              channel: "telegram",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-channel-hint",
+        content: { ok: true, messageId: "24270", chatId: "current-run" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here", replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+  });
+
+  test("chat.history does not mirror explicitly routed message tool sends", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "send that elsewhere" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-remote",
+            name: "message",
+            arguments: {
+              action: "send",
+              to: "8455538490",
+              message: "Remote-only reply",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-remote",
+        content: { ok: true, messageId: "24269", chatId: "8455538490" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["send that elsewhere"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
+  });
+
+  test("chat.history does not mirror message tool sends from unmatched results", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-expected",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "Should wait for matching result.",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        content: { ok: true, messageId: "wrong-result" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["reply here"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
+  });
+
+  test("chat.history does not mirror dry-run message tool sends", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "preview that" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-dry-run",
+            name: "message",
+            arguments: {
+              action: "send",
+              dryRun: true,
+              message: "Preview-only reply",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-dry-run",
+        content: {
+          ok: true,
+          dryRun: true,
+          deliveryStatus: "dry_run",
+        },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["preview that"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
   });
 
   test("chat.history hides commentary-only assistant entries", async () => {
@@ -1087,12 +1572,14 @@ describe("gateway server chat", () => {
         },
       });
 
-      const historyRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
-        sessionKey: "agent:alpha:main",
-      });
+      const historyRes = await rpcReq<{
+        thinkingLevel?: string;
+        sessionInfo?: { thinkingLevel?: string };
+      }>(ws, "chat.history", { sessionKey: "agent:alpha:main" });
 
       expect(historyRes.ok).toBe(true);
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
+      expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
@@ -1102,14 +1589,16 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portValue }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1128,7 +1617,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
           const stored = JSON.parse(raw) as {
             "agent:main:main"?: {
               verboseLevel?: string;
@@ -1143,14 +1636,16 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portLocal }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portLocal}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1169,7 +1664,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
           const stored = JSON.parse(raw) as {
             "agent:main:main"?: {
               sessionId?: string;
@@ -1277,7 +1776,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("agent.wait keeps lifecycle wait active while same-runId chat.send is active", async () => {
+  test("agent.wait ignores lifecycle completion while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
       const releaseBlockedReply = mockBlockedChatReply();
@@ -1285,12 +1784,6 @@ describe("gateway server chat", () => {
       try {
         await sendChatAndExpectStarted(runId, "hold chat run open");
 
-        const waitP = rpcReq(ws, "agent.wait", {
-          runId,
-          timeoutMs: 1_000,
-        });
-
-        await waitForLifecycleWaiter(runId);
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -1302,11 +1795,14 @@ describe("gateway server chat", () => {
           data: { phase: "end", startedAt: 1, endedAt: 2 },
         });
 
-        const waitRes = await waitP;
-        expect(waitRes.ok).toBe(true);
-        expect(waitRes.payload?.status).toBe("ok");
+        const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 40,
+        });
+        expectAgentWaitTimeout(waitWhileChatActive);
 
-        await abortChatRun(runId);
+        releaseBlockedReply();
+        await waitForAgentRunOk(runId);
       } finally {
         releaseBlockedReply();
       }
@@ -1330,7 +1826,9 @@ describe("gateway server chat", () => {
       headers: { origin: `http://127.0.0.1:${port}` },
     });
     trackConnectChallengeNonce(webchatWs);
-    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      webchatWs.once("open", resolve);
+    });
     await connectOk(webchatWs, {
       client: {
         id: GATEWAY_CLIENT_NAMES.WEBCHAT,
@@ -1422,7 +1920,7 @@ describe("gateway server chat", () => {
         });
 
         const res = await waitP;
-        expectAgentWaitTimeout(res);
+        expectAgentWaitTimeout(res, "boom");
       }
 
       {

@@ -1,7 +1,9 @@
+// Covers plugin doctor contract registry discovery and validation.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -62,9 +64,7 @@ describe("doctor-contract-registry module loader", () => {
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    try {
+    withMockedPlatform("win32", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -76,9 +76,7 @@ describe("doctor-contract-registry module loader", () => {
           message: "legacy demo key",
         },
       ]);
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
 
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
@@ -103,9 +101,7 @@ describe("doctor-contract-registry module loader", () => {
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    try {
+    withMockedPlatform("win32", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -117,9 +113,7 @@ describe("doctor-contract-registry module loader", () => {
           message: "typescript contract",
         },
       ]);
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     const [jitiPath, jitiOptions] = requireFirstCreateJitiCall();
@@ -129,7 +123,6 @@ describe("doctor-contract-registry module loader", () => {
 
   it("prefers doctor-contract-api over the broader contract-api surface", () => {
     const pluginRoot = makeTempDir();
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     fs.writeFileSync(
       path.join(pluginRoot, "doctor-contract-api.cjs"),
       "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'doctor'], message: 'doctor contract' }] };\n",
@@ -145,7 +138,7 @@ describe("doctor-contract-registry module loader", () => {
       diagnostics: [],
     });
 
-    try {
+    withMockedPlatform("darwin", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -158,14 +151,11 @@ describe("doctor-contract-registry module loader", () => {
         },
       ]);
       expect(mocks.createJiti).not.toHaveBeenCalled();
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("uses native require for compatible JavaScript contract modules", () => {
     const pluginRoot = makeTempDir();
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     fs.writeFileSync(
       path.join(pluginRoot, "doctor-contract-api.cjs"),
       "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'legacy'], message: 'legacy demo key' }] };\n",
@@ -176,7 +166,7 @@ describe("doctor-contract-registry module loader", () => {
       diagnostics: [],
     });
 
-    try {
+    withMockedPlatform("darwin", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -189,9 +179,7 @@ describe("doctor-contract-registry module loader", () => {
         },
       ]);
       expect(mocks.createJiti).not.toHaveBeenCalled();
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("loads session route-state owners from doctor contract modules", () => {
@@ -223,6 +211,59 @@ describe("doctor-contract-registry module loader", () => {
     ]);
   });
 
+  it("loads multiple bundled CLI route-state owners from doctor contract modules", () => {
+    const anthropicRoot = makeTempDir();
+    const googleRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(anthropicRoot, "doctor-contract-api.cjs"),
+      "module.exports = { sessionRouteStateOwners: [{ id: 'anthropic', label: 'Anthropic', providerIds: ['anthropic', 'claude-cli'], runtimeIds: ['claude-cli'], cliSessionKeys: ['claude-cli'], authProfilePrefixes: ['anthropic:', 'claude-cli:'] }] };\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(googleRoot, "doctor-contract-api.cjs"),
+      "module.exports = { sessionRouteStateOwners: [{ id: 'google', label: 'Google', providerIds: ['google', 'google-antigravity', 'google-gemini-cli', 'google-vertex'], runtimeIds: ['google-gemini-cli'], cliSessionKeys: ['google-gemini-cli', 'gemini-cli'], authProfilePrefixes: ['google:', 'google-antigravity:', 'google-gemini-cli:', 'google-vertex:', 'gemini-cli:'] }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "anthropic", rootDir: anthropicRoot },
+        { id: "google", rootDir: googleRoot },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      listPluginDoctorSessionRouteStateOwners({
+        workspaceDir: "/workspace",
+        env: {},
+        pluginIds: ["anthropic", "google"],
+      }),
+    ).toEqual([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        providerIds: ["anthropic", "claude-cli"],
+        runtimeIds: ["claude-cli"],
+        cliSessionKeys: ["claude-cli"],
+        authProfilePrefixes: ["anthropic:", "claude-cli:"],
+      },
+      {
+        id: "google",
+        label: "Google",
+        providerIds: ["google", "google-antigravity", "google-gemini-cli", "google-vertex"],
+        runtimeIds: ["google-gemini-cli"],
+        cliSessionKeys: ["google-gemini-cli", "gemini-cli"],
+        authProfilePrefixes: [
+          "google:",
+          "google-antigravity:",
+          "google-gemini-cli:",
+          "google-vertex:",
+          "gemini-cli:",
+        ],
+      },
+    ]);
+  });
+
   it("passes active config to manifest registry discovery", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(
@@ -240,7 +281,7 @@ describe("doctor-contract-registry module loader", () => {
         entries: {
           "load-path-doctor": {
             config: {
-              summaryModel: "openai-codex/gpt-5.4-mini",
+              summaryModel: "openai/gpt-5.4-mini",
             },
           },
         },

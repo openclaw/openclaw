@@ -1,3 +1,5 @@
+// Discord plugin module implements native command model picker apply behavior.
+import { randomUUID } from "node:crypto";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
@@ -34,16 +36,18 @@ async function persistDiscordModelPickerOverride(params: {
   provider: string;
   model: string;
   isDefault: boolean;
+  runtime?: string;
 }): Promise<boolean> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,
   });
   let persisted = false;
   await updateSessionStore(storePath, (store) => {
-    const entry = store[params.route.sessionKey];
-    if (!entry) {
-      return;
-    }
+    const entry = store[params.route.sessionKey] ?? {
+      sessionId: randomUUID(),
+      updatedAt: Date.now(),
+    };
+    store[params.route.sessionKey] = entry;
     persisted =
       applyModelOverrideToSessionEntry({
         entry,
@@ -54,6 +58,18 @@ async function persistDiscordModelPickerOverride(params: {
         },
         markLiveSwitchPending: true,
       }).updated || persisted;
+    const runtime = params.runtime?.trim();
+    if (runtime && runtime !== "auto" && runtime !== "default") {
+      if (entry.agentRuntimeOverride !== runtime) {
+        entry.agentRuntimeOverride = runtime;
+        delete entry.agentHarnessId;
+        persisted = true;
+      }
+    } else if (runtime && entry.agentRuntimeOverride) {
+      delete entry.agentRuntimeOverride;
+      delete entry.agentHarnessId;
+      persisted = true;
+    }
   });
   return persisted;
 }
@@ -71,6 +87,7 @@ export async function applyDiscordModelPickerSelection(params: {
   resolvedModelRef: string;
   selectedProvider: string;
   selectedModel: string;
+  selectedRuntime?: string;
   defaultProvider: string;
   defaultModel: string;
   preferenceScope: DiscordModelPickerPreferenceScope;
@@ -103,11 +120,30 @@ export async function applyDiscordModelPickerSelection(params: {
 
     const fallbackRoute = dispatchResult.effectiveRoute ?? params.route;
     if (params.settleMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, params.settleMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, params.settleMs);
+      });
     }
 
     let effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
     let persisted = effectiveModelRef === params.resolvedModelRef;
+    if (params.selectedRuntime?.trim()) {
+      await persistDiscordModelPickerOverride({
+        cfg: params.cfg,
+        route: fallbackRoute,
+        provider: params.selectedProvider,
+        model: params.selectedModel,
+        isDefault:
+          params.selectedProvider === params.defaultProvider &&
+          params.selectedModel === params.defaultModel,
+        runtime: params.selectedRuntime,
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
+      persisted = effectiveModelRef === params.resolvedModelRef;
+    }
 
     if (!persisted) {
       logVerbose(
@@ -122,8 +158,11 @@ export async function applyDiscordModelPickerSelection(params: {
           isDefault:
             params.selectedProvider === params.defaultProvider &&
             params.selectedModel === params.defaultModel,
+          runtime: params.selectedRuntime,
         });
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
         effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
         persisted = effectiveModelRef === params.resolvedModelRef;
         if (!persisted) {

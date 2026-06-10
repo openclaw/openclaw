@@ -1,3 +1,5 @@
+// Plugin node capability tests cover scoped host URLs, request rewriting, and
+// authorization state attached to gateway node clients.
 import { describe, expect, test } from "vitest";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -69,6 +71,19 @@ describe("plugin node capability helpers", () => {
     expect(normalized.malformedScopedPath).toBe(true);
     expect(normalized.capability).toBeUndefined();
     expect(normalized.rewrittenUrl).toBeUndefined();
+  });
+
+  test("marks malformed request targets without throwing", () => {
+    for (const rawUrl of ["//", "///", "//${jndi:ldap://example}.action"]) {
+      const normalized = normalizePluginNodeCapabilityScopedUrl(rawUrl);
+      expect(normalized).toMatchObject({
+        pathname: "/",
+        scopedPath: false,
+        malformedScopedPath: true,
+      });
+      expect(normalized.capability).toBeUndefined();
+      expect(normalized.rewrittenUrl).toBeUndefined();
+    }
   });
 
   test("stores capabilities per plugin surface", () => {
@@ -152,6 +167,29 @@ describe("plugin node capability helpers", () => {
     });
   });
 
+  test("does not refresh client plugin capabilities when the clock is invalid", () => {
+    const client = makeClient({
+      pluginSurfaceUrls: {
+        canvas: "http://127.0.0.1:18789/__openclaw__/cap/old-token",
+      },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+    });
+
+    expect(
+      refreshClientPluginNodeCapability({
+        client,
+        surface: { surface: "canvas" },
+        nowMs: Number.NaN,
+      }),
+    ).toBeUndefined();
+    expect(client.pluginSurfaceUrls?.canvas).toBe(
+      "http://127.0.0.1:18789/__openclaw__/cap/old-token",
+    );
+    expect(client.pluginNodeCapabilities).toBeUndefined();
+  });
+
   test("authorizes matching plugin surface capabilities and slides expiry", () => {
     const client = makeClient({
       pluginNodeCapabilities: {
@@ -180,6 +218,39 @@ describe("plugin node capability helpers", () => {
       hasAuthorizedPluginNodeCapability({
         clients,
         surface: { surface: "files" },
+        capability: "canvas-token",
+        nowMs: 1_000,
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects plugin surface capabilities when the clock is invalid", () => {
+    const client = makeClient({
+      pluginNodeCapabilities: {
+        canvas: { capability: "canvas-token", expiresAtMs: 1_500 },
+      },
+    });
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([client]),
+        surface: { surface: "canvas", ttlMs: 100 },
+        capability: "canvas-token",
+        nowMs: Number.NaN,
+      }),
+    ).toBe(false);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
+  });
+
+  test("rejects plugin surface capabilities with invalid stored expiries", () => {
+    const client = makeClient({
+      pluginNodeCapabilities: {
+        canvas: { capability: "canvas-token", expiresAtMs: Number.POSITIVE_INFINITY },
+      },
+    });
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([client]),
+        surface: { surface: "canvas", ttlMs: 100 },
         capability: "canvas-token",
         nowMs: 1_000,
       }),

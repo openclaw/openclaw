@@ -1,3 +1,5 @@
+// Discord tests cover outbound adapter plugin behavior.
+import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordOutboundHoisted,
@@ -12,6 +14,7 @@ await installDiscordOutboundModuleSpies(hoisted);
 
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
+let beginDiscordInboundEventDeliveryCorrelation: typeof import("./inbound-event-delivery.js").beginDiscordInboundEventDeliveryCorrelation;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -39,6 +42,7 @@ function mockObjectArg(
 beforeAll(async () => {
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
+  ({ beginDiscordInboundEventDeliveryCorrelation } = await import("./inbound-event-delivery.js"));
 });
 
 describe("normalizeDiscordOutboundTarget", () => {
@@ -459,6 +463,47 @@ describe("discordOutbound", () => {
     expect(touchThread).toHaveBeenCalledWith({ threadId: "thread-1" });
   });
 
+  it("notifies inbound event delivery after shared outbound delivery succeeds", async () => {
+    const markDelivered = vi.fn();
+    const end = beginDiscordInboundEventDeliveryCorrelation(
+      "agent:main:discord:channel:c1",
+      {
+        outboundTo: "thread-1",
+        outboundAccountId: "default",
+        markInboundEventDelivered: markDelivered,
+      },
+      { inboundEventKind: "room_event" },
+    );
+
+    try {
+      await discordOutbound.afterDeliverPayload?.({
+        cfg: {},
+        target: {
+          channel: "discord",
+          to: "channel:parent-1",
+          accountId: "default",
+          threadId: "thread-1",
+        },
+        payload: {
+          text: "delivered",
+          channelData: {
+            discord: {
+              __openclawInboundEventDelivery: {
+                sessionKey: "agent:main:discord:channel:c1",
+                inboundEventKind: "room_event",
+              },
+            },
+          },
+        },
+        results: [{ channel: "discord", messageId: "msg-1" }],
+      });
+    } finally {
+      end();
+    }
+
+    expect(markDelivered).toHaveBeenCalledTimes(1);
+  });
+
   it("sends component payload media sequences with the component message first", async () => {
     hoisted.sendDiscordComponentMessageMock.mockResolvedValueOnce({
       messageId: "component-1",
@@ -535,6 +580,56 @@ describe("discordOutbound", () => {
       channel: "discord",
       messageId: "msg-2",
       channelId: "ch-1",
+    });
+  });
+
+  it("preserves disabled presentation buttons through channel adaptation", async () => {
+    const adaptedPresentation = adaptMessagePresentationForChannel({
+      capabilities: discordOutbound.presentationCapabilities,
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Already handled", value: "done", disabled: true },
+              { label: "Open docs", url: "https://example.com/docs", disabled: true },
+            ],
+          },
+        ],
+      },
+    });
+
+    const payload = await discordOutbound.renderPresentation?.({
+      payload: { text: "Action state" },
+      presentation: adaptedPresentation,
+      ctx: {
+        cfg: {},
+        to: "channel:123456",
+      },
+    } as never);
+
+    if (!payload) {
+      throw new Error("expected Discord presentation payload");
+    }
+
+    const discordData = payload.channelData?.discord as
+      | { presentationComponents?: { blocks?: Array<{ type?: string; buttons?: unknown[] }> } }
+      | undefined;
+    const buttons = discordData?.presentationComponents?.blocks?.find(
+      (block) => block.type === "actions",
+    )?.buttons;
+
+    expect(buttons?.[0]).toEqual({
+      label: "Already handled",
+      style: "secondary",
+      callbackData: "done",
+      disabled: true,
+    });
+    expect(buttons?.[1]).toEqual({
+      label: "Open docs",
+      style: "link",
+      url: "https://example.com/docs",
+      disabled: true,
     });
   });
 

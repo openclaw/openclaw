@@ -1,3 +1,4 @@
+// Matrix plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -5,7 +6,10 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAllowlistProviderOpenWarningCollector,
   projectAccountConfigWarningCollector,
@@ -18,7 +22,6 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -83,6 +86,12 @@ const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "matrixChannelRuntime",
 );
+let matrixDoctorModulePromise: Promise<typeof import("./doctor.js")> | null = null;
+
+const loadMatrixDoctorModule = async () => {
+  matrixDoctorModulePromise ??= import("./doctor.js");
+  return await matrixDoctorModulePromise;
+};
 
 const meta = {
   id: "matrix",
@@ -92,6 +101,7 @@ const meta = {
   docsLabel: "matrix",
   blurb: "open protocol; configure a homeserver + access token.",
   order: 70,
+  markdownCapable: true,
   quickstartAllowFrom: true,
 };
 
@@ -115,9 +125,9 @@ const matrixDoctor: ChannelDoctorAdapter = {
   legacyConfigRules: MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
-    await (await import("./doctor.js")).runMatrixDoctorSequence({ cfg, env, shouldRepair }),
+    await (await loadMatrixDoctorModule()).runMatrixDoctorSequence({ cfg, env, shouldRepair }),
   cleanStaleConfig: async ({ cfg }) =>
-    await (await import("./doctor.js")).cleanStaleMatrixPluginConfig(cfg),
+    await (await loadMatrixDoctorModule()).cleanStaleMatrixPluginConfig(cfg),
 };
 
 const listMatrixDirectoryPeersFromConfig =
@@ -341,6 +351,12 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+    limits: {
+      text: {
+        markdownDialect: "markdown",
+        supportsEdit: true,
+      },
+    },
   },
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalMatrixExecApprovalPrompt({
@@ -527,9 +543,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
         probeAccount: async ({ account, timeoutMs, cfg }) =>
           await createMatrixProbeAccount({
-            resolveMatrixAuth: async ({ cfg, accountId }) =>
+            resolveMatrixAuth: async ({ cfg: cfgLocal, accountId }) =>
               (await loadMatrixChannelRuntime()).resolveMatrixAuth({
-                cfg,
+                cfg: cfgLocal,
                 accountId,
               }),
             probeMatrix: async (params) =>

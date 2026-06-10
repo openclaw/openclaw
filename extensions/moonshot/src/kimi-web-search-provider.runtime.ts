@@ -1,16 +1,18 @@
+// Moonshot provider module implements model/runtime integration.
 import {
   createProviderHttpError,
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -24,7 +26,11 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
@@ -84,6 +90,10 @@ type KimiSearchResult = {
   grounded: boolean;
 };
 
+function throwMalformedKimiResponse(): never {
+  throw new Error("Kimi API error: malformed JSON response");
+}
+
 function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
   const kimi = searchConfig?.kimi;
   return kimi && typeof kimi === "object" && !Array.isArray(kimi) ? (kimi as KimiConfig) : {};
@@ -132,13 +142,30 @@ function extractKimiMessageText(message: KimiMessage | undefined): string | unde
 }
 
 function extractKimiCitations(data: KimiSearchResponse): string[] {
-  const citations = (data.search_results ?? [])
-    .map((entry) => entry.url?.trim())
+  const searchResults = data.search_results ?? [];
+  if (!Array.isArray(searchResults)) {
+    throwMalformedKimiResponse();
+  }
+  const citations = searchResults
+    .map((entry) => (isRecord(entry) && typeof entry.url === "string" ? entry.url.trim() : ""))
     .filter((url): url is string => Boolean(url));
 
-  for (const toolCall of data.choices?.[0]?.message?.tool_calls ?? []) {
-    const rawArguments = toolCall.function?.arguments;
-    if (!rawArguments) {
+  const choices = data.choices ?? [];
+  if (!Array.isArray(choices)) {
+    throwMalformedKimiResponse();
+  }
+  const firstChoice = choices[0];
+  const message = firstChoice && isRecord(firstChoice.message) ? firstChoice.message : undefined;
+  const toolCalls = message?.tool_calls ?? [];
+  if (!Array.isArray(toolCalls)) {
+    throwMalformedKimiResponse();
+  }
+  for (const toolCall of toolCalls) {
+    if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
+      continue;
+    }
+    const rawArguments = toolCall.function.arguments;
+    if (typeof rawArguments !== "string" || !rawArguments) {
       continue;
     }
     try {
@@ -161,15 +188,20 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
     }
   }
 
-  return [...new Set(citations)];
+  return uniqueStrings(citations);
 }
 
 function hasKimiSearchResults(data: KimiSearchResponse): boolean {
-  return (data.search_results ?? []).some(
+  const searchResults = data.search_results ?? [];
+  if (!Array.isArray(searchResults)) {
+    throwMalformedKimiResponse();
+  }
+  return searchResults.some(
     (entry) =>
-      Boolean(normalizeOptionalString(entry.url)) ||
-      Boolean(normalizeOptionalString(entry.title)) ||
-      Boolean(normalizeOptionalString(entry.content)),
+      isRecord(entry) &&
+      (Boolean(normalizeOptionalString(entry.url)) ||
+        Boolean(normalizeOptionalString(entry.title)) ||
+        Boolean(normalizeOptionalString(entry.content))),
   );
 }
 
@@ -219,7 +251,13 @@ async function runKimiSearch(params: {
           throw await createProviderHttpError(res, "Kimi API error");
         }
 
-        const data = await readProviderJsonResponse<KimiSearchResponse>(res, "Kimi API error");
+        const data = (await readProviderJsonObjectResponse(
+          res,
+          "Kimi API error",
+        )) as KimiSearchResponse;
+        if (!Array.isArray(data.choices)) {
+          throwMalformedKimiResponse();
+        }
         if (hasKimiSearchResults(data)) {
           hasGroundingEvidence = true;
         }
@@ -230,14 +268,23 @@ async function runKimiSearch(params: {
           hasGroundingEvidence = true;
         }
         const choice = data.choices?.[0];
+        if (!isRecord(choice) || !isRecord(choice.message)) {
+          throwMalformedKimiResponse();
+        }
         const message = choice?.message;
         const text = extractKimiMessageText(message);
         const toolCalls = message?.tool_calls ?? [];
+        if (!Array.isArray(toolCalls)) {
+          throwMalformedKimiResponse();
+        }
 
         if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
+          if (!text) {
+            throwMalformedKimiResponse();
+          }
           return {
             done: true,
-            content: text ?? "No response",
+            content: text,
             citations: [...collectedCitations],
           };
         }
@@ -269,9 +316,12 @@ async function runKimiSearch(params: {
           });
         }
         if (!pushed) {
+          if (!text) {
+            throwMalformedKimiResponse();
+          }
           return {
             done: true,
-            content: text ?? "No response",
+            content: text,
             citations: [...collectedCitations],
           };
         }
@@ -318,7 +368,12 @@ export async function executeKimiWebSearchProviderTool(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const model = resolveKimiModel(kimiConfig);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
   const cacheKey = buildSearchCacheKey([
@@ -454,7 +509,7 @@ export async function runKimiSearchProviderSetup(
   return next;
 }
 
-export const __testing = {
+export const testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
@@ -462,3 +517,4 @@ export const __testing = {
   hasKimiSearchResults,
   extractKimiToolResultContent,
 } as const;
+export { testing as __testing };

@@ -1,3 +1,4 @@
+// Detects container runtimes and related environment hints for diagnostics.
 import fs from "node:fs";
 
 /**
@@ -52,6 +53,6 @@ function detectContainerEnvironment(): boolean {
 }
 
 /** @internal test helper */
-export function __resetContainerEnvironmentCacheForTest(): void {
+export function resetContainerEnvironmentCacheForTest(): void {
   containerEnvironmentCache = undefined;
 }

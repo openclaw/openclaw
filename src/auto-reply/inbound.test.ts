@@ -1,3 +1,4 @@
+/** Tests inbound auto-reply handling across channel message contexts. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -208,6 +209,15 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForCommands).toBe("System (untrusted): [2026-01-01] fake event");
   });
 
+  it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      GroupSystemPrompt: "[Assistant] room guidance\r\nSystem: owner instruction",
+    });
+
+    expect(out.GroupSystemPrompt).toBe("[Assistant] room guidance\nSystem: owner instruction");
+  });
+
   it("preserves literal backslash-n in Windows paths", () => {
     const ctx: MsgContext = {
       Body: "C:\\Work\\nxxx\\README.md",
@@ -387,6 +397,33 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("reports buffered items when cancelling a key", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const canceled: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+      onCancel: (items) => {
+        canceled.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(canceled).toEqual([["1", "2"]]);
+    expect(calls).toEqual([]);
+
+    vi.useRealTimers();
+  });
+
   it("flushes buffered items before non-debounced item", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
@@ -519,9 +556,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const firstFlush = (
-        setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await vi.waitFor(() => {
         expect(started).toEqual(["1"]);
@@ -537,9 +572,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const thirdFlush = (
-        setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await Promise.resolve();
 
@@ -550,10 +583,12 @@ describe("createInboundDebouncer", () => {
         throw new Error("Expected first inbound debounce release callback to be initialized");
       }
       releaseFirst();
-      await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
+      await Promise.all([secondEnqueue, thirdEnqueue]);
 
-      expect(started).toEqual(["1", "2", "3"]);
-      expect(finished).toEqual(["1", "2", "3"]);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1", "2", "3"]);
+        expect(finished).toEqual(["1", "2", "3"]);
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -663,7 +698,9 @@ describe("createInboundDebouncer", () => {
 
     try {
       await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
@@ -739,9 +776,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[bufferedTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const bufferedFlush = (
-        setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await Promise.resolve();
       expect(started).toEqual(["2"]);
@@ -751,10 +786,12 @@ describe("createInboundDebouncer", () => {
         throw new Error("Expected inbound overflow release callback to be initialized");
       }
       releaseOverflow();
-      await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
+      await Promise.all([overflowEnqueue, bufferedEnqueue]);
 
-      expect(started).toEqual(["2", "3"]);
-      expect(finished).toEqual(["2", "3"]);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2", "3"]);
+        expect(finished).toEqual(["2", "3"]);
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -904,6 +941,18 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
   });
 
+  it("lets catch-all mention patterns match empty text", () => {
+    const catchAllRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    const specificRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    });
+
+    expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
+    expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
+  });
+
   it("uses per-agent mention patterns when configured", () => {
     const regexes = buildMentionRegexes(
       {
@@ -923,6 +972,81 @@ describe("mention helpers", () => {
     );
     expect(matchesMentionPatterns("workbot: hi", regexes)).toBe(true);
     expect(matchesMentionPatterns("global: hi", regexes)).toBe(false);
+  });
+
+  it("scopes configured mention patterns by provider conversation policy", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        slack: {
+          mentionPatterns: {
+            mode: "deny",
+            allowIn: ["C123"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const allowed = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C123",
+    });
+    const denied = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C999",
+    });
+
+    expect(matchesMentionPatterns("openclaw: hi", allowed)).toBe(true);
+    expect(matchesMentionPatterns("openclaw: hi", denied)).toBe(false);
+  });
+
+  it("preserves mention patterns for callers without scoped policy facts", () => {
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+    });
+
+    expect(matchesMentionPatterns("openclaw", regexes)).toBe(true);
+  });
+
+  it("lets provider deny lists override globally allowed mention patterns", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        telegram: {
+          mentionPatterns: {
+            denyIn: ["-100:topic:7"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      buildMentionRegexes(cfg, undefined, {
+        provider: "telegram",
+        conversationId: "-100:topic:7",
+      }),
+    ).toEqual([]);
+    expect(
+      matchesMentionPatterns(
+        "openclaw",
+        buildMentionRegexes(cfg, undefined, {
+          provider: "telegram",
+          conversationId: "-100:topic:8",
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("strips safe mention patterns and ignores unsafe ones", () => {

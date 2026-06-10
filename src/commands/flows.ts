@@ -1,8 +1,13 @@
+/** CLI commands for listing, inspecting, and cancelling TaskFlow records. */
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { writeRuntimeJson } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
@@ -11,8 +16,6 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 const ID_PAD = 10;
 const STATUS_PAD = 10;
@@ -48,6 +51,10 @@ function shortToken(value: string | undefined, maxChars = ID_PAD): string {
     return "n/a";
   }
   return truncate(trimmed, maxChars);
+}
+
+function formatFlowTimestamp(value: number | undefined | null): string {
+  return timestampMsToIsoString(value) ?? "n/a";
 }
 
 function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
@@ -141,6 +148,7 @@ function summarizeFlowState(flow: TaskFlowRecord): string | null {
   return null;
 }
 
+/** Lists TaskFlows with optional status filtering and JSON output. */
 export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
@@ -154,21 +162,15 @@ export async function flowsListCommand(
   });
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          count: flows.length,
-          status: statusFilter ?? null,
-          flows: flows.map((flow) => ({
-            ...flow,
-            tasks: listTasksForFlowId(flow.flowId),
-            taskSummary: getFlowTaskSummary(flow.flowId),
-          })),
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      count: flows.length,
+      status: statusFilter ?? null,
+      flows: flows.map((flow) => ({
+        ...flow,
+        tasks: listTasksForFlowId(flow.flowId),
+        taskSummary: getFlowTaskSummary(flow.flowId),
+      })),
+    });
     return;
   }
 
@@ -189,6 +191,7 @@ export async function flowsListCommand(
   }
 }
 
+/** Shows one TaskFlow and its linked task summary. */
 export async function flowsShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
@@ -204,17 +207,11 @@ export async function flowsShowCommand(
   const stateSummary = summarizeFlowState(flow);
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          ...flow,
-          tasks,
-          taskSummary,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      ...flow,
+      tasks,
+      taskSummary,
+    });
     return;
   }
 
@@ -228,11 +225,11 @@ export async function flowsShowCommand(
     `notify: ${flow.notifyPolicy}`,
     ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
     ...(flow.cancelRequestedAt
-      ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
+      ? [`cancelRequestedAt: ${formatFlowTimestamp(flow.cancelRequestedAt)}`]
       : []),
-    `createdAt: ${new Date(flow.createdAt).toISOString()}`,
-    `updatedAt: ${new Date(flow.updatedAt).toISOString()}`,
-    `endedAt: ${flow.endedAt ? new Date(flow.endedAt).toISOString() : "n/a"}`,
+    `createdAt: ${formatFlowTimestamp(flow.createdAt)}`,
+    `updatedAt: ${formatFlowTimestamp(flow.updatedAt)}`,
+    `endedAt: ${formatFlowTimestamp(flow.endedAt)}`,
     `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${taskSummary.failures} issues`,
   ];
   for (const line of lines) {
@@ -249,6 +246,7 @@ export async function flowsShowCommand(
   }
 }
 
+/** Requests cancellation for one TaskFlow selected by id or lookup token. */
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {

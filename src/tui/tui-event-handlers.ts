@@ -1,7 +1,8 @@
-import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
+// Handles TUI keyboard, paste, backend, and command events.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -14,13 +15,15 @@ type EventHandlerChatLog = {
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
   addSystem: (text: string) => void;
+  addPendingSystem: (runId: string, text: string) => void;
+  dismissPendingSystem: (runId: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
   dropAssistant: (runId: string) => void;
 };
 
 type EventHandlerTui = {
-  requestRender: () => void;
+  requestRender: (force?: boolean) => void;
 };
 
 type EventHandlerBtwPresenter = {
@@ -49,8 +52,9 @@ type EventHandlerContext = {
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
-  "This response is taking longer than expected. Send another message to continue.";
+  "This response is taking longer than expected. Still waiting for the current run.";
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -70,12 +74,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalBtwRunIds,
     localMode,
   } = context;
-  const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const finalizedRuns = new Map<string, number>();
+  const finalizedRunsWithDisplay = new Map<string, number>();
+  const completedRuns = new Map<string, number>();
+  const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
   let reconnectPendingRunId: string | null = null;
+  const pendingTerminalLifecycleErrors = new Map<
+    string,
+    { errorMessage: string; timer: ReturnType<typeof setTimeout> }
+  >();
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -87,7 +98,12 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamingWatchdogRunId: string | null = null;
 
   const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
+    if (
+      !pendingHistoryRefresh ||
+      state.activeChatRunId ||
+      state.pendingChatRunId ||
+      state.pendingOptimisticUserMessage
+    ) {
       return;
     }
     pendingHistoryRefresh = false;
@@ -100,6 +116,22 @@ export function createEventHandlers(context: EventHandlerContext) {
       streamingWatchdogTimer = null;
     }
     streamingWatchdogRunId = null;
+  };
+
+  const clearPendingTerminalLifecycleError = (runId: string) => {
+    const pending = pendingTerminalLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingTerminalLifecycleErrors.delete(runId);
+  };
+
+  const clearPendingTerminalLifecycleErrors = () => {
+    for (const pending of pendingTerminalLifecycleErrors.values()) {
+      clearTimeout(pending.timer);
+    }
+    pendingTerminalLifecycleErrors.clear();
   };
 
   const pauseStreamingWatchdog = () => {
@@ -120,18 +152,17 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       streamingWatchdogRunId = null;
-      state.activeChatRunId = null;
-      state.activityStatus = "idle";
-      setActivityStatus("idle");
       if (reconnectPendingRunId === runId) {
         reconnectPendingRunId = null;
+        state.activeChatRunId = null;
+        state.activityStatus = "idle";
+        setActivityStatus("idle");
         pendingHistoryRefresh = false;
         void loadHistory?.();
         tui.requestRender();
         return;
       }
-      flushPendingHistoryRefreshIfIdle();
-      chatLog.addSystem(STREAMING_WATCHDOG_USER_MESSAGE);
+      chatLog.addPendingSystem(runId, STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
@@ -168,8 +199,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     lastSessionKey = state.currentSessionKey;
+    if (state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage) {
+      return;
+    }
     finalizedRuns.clear();
+    finalizedRunsWithDisplay.clear();
+    completedRuns.clear();
     sessionRuns.clear();
+    postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
@@ -177,18 +214,56 @@ export function createEventHandlers(context: EventHandlerContext) {
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
+    clearPendingTerminalLifecycleErrors();
     btw.clear();
     clearStreamingWatchdog();
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
-    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+    if (!localMode) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
+    const failoverReason = classifyFailoverReason(errorMessage, { provider });
+    if (failoverReason === "billing" || failoverReason === "rate_limit") {
+      return undefined;
+    }
+    if (!isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
     return provider
       ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
       : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
+  };
+
+  const parseProviderModelRef = (
+    modelRef: unknown,
+  ): { provider: string; model: string } | undefined => {
+    if (typeof modelRef !== "string") {
+      return undefined;
+    }
+    const trimmed = modelRef.trim();
+    const separator = trimmed.indexOf("/");
+    if (separator <= 0 || separator >= trimmed.length - 1) {
+      return undefined;
+    }
+    const provider = trimmed.slice(0, separator).trim();
+    const model = trimmed.slice(separator + 1).trim();
+    return provider && model ? { provider, model } : undefined;
+  };
+
+  const applyFallbackStepModelUpdate = (evt: AgentEvent): boolean => {
+    const data = evt.data ?? {};
+    if (evt.stream !== "lifecycle" || asString(data.phase, "") !== "fallback_step") {
+      return false;
+    }
+    const target = parseProviderModelRef(data.fallbackStepToModel);
+    if (!target) {
+      return false;
+    }
+    state.sessionInfo.modelProvider = target.provider;
+    state.sessionInfo.model = target.model;
+    return true;
   };
 
   const noteSessionRun = (runId: string) => {
@@ -196,11 +271,28 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(sessionRuns);
   };
 
-  const noteFinalizedRun = (runId: string) => {
+  const markSubmittedRunRegistered = (runId: string) => {
+    if (state.pendingSubmitDraft?.runId === runId) {
+      state.pendingSubmitDraft = null;
+    }
+  };
+
+  const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
     finalizedRuns.set(runId, Date.now());
+    completedRuns.set(runId, Date.now());
+    if (opts?.displayedFinal === true) {
+      finalizedRunsWithDisplay.set(runId, Date.now());
+    }
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
+    pruneRunMap(finalizedRunsWithDisplay);
+    pruneRunMap(completedRuns);
+  };
+
+  const notePostFinalizingRun = (runId: string) => {
+    postFinalizingRuns.set(runId, Date.now());
+    pruneRunMap(postFinalizingRuns);
   };
 
   const clearActiveRunIfMatch = (runId: string) => {
@@ -248,8 +340,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
+    displayedFinal?: boolean;
   }) => {
-    noteFinalizedRun(params.runId);
+    noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -269,6 +362,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     wasActiveRun: boolean;
     status: "aborted" | "error";
   }) => {
+    completedRuns.set(params.runId, Date.now());
+    pruneRunMap(completedRuns);
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
@@ -276,12 +371,50 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else {
-      if (streamingWatchdogRunId === params.runId) {
-        clearStreamingWatchdog();
-      }
+    } else if (streamingWatchdogRunId === params.runId) {
+      clearStreamingWatchdog();
     }
     void refreshSessionInfo?.();
+  };
+
+  const renderTerminalRunError = (params: {
+    runId: string;
+    errorMessage: string;
+    requireActiveOrPending?: boolean;
+  }): boolean => {
+    const { runId, errorMessage } = params;
+    const wasActiveRun = state.activeChatRunId === runId;
+    if (
+      params.requireActiveOrPending === true &&
+      !wasActiveRun &&
+      state.pendingChatRunId !== runId
+    ) {
+      return false;
+    }
+    const renderedError = formatRawAssistantErrorForUi(errorMessage);
+    chatLog.dismissPendingSystem(runId);
+    chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+    noteFinalizedRun(runId, { displayedFinal: true });
+    terminateRun({ runId, wasActiveRun, status: "error" });
+    maybeRefreshHistoryForRun(runId);
+    return true;
+  };
+
+  const renderTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    if (!renderTerminalRunError({ runId, errorMessage, requireActiveOrPending: true })) {
+      return;
+    }
+    tui.requestRender(true);
+  };
+
+  const scheduleTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    clearPendingTerminalLifecycleError(runId);
+    const timer = setTimeout(() => {
+      pendingTerminalLifecycleErrors.delete(runId);
+      renderTerminalLifecycleError(runId, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    pendingTerminalLifecycleErrors.set(runId, { errorMessage, timer });
   };
 
   const hasConcurrentActiveRun = (runId: string) => {
@@ -294,8 +427,13 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const maybeRefreshHistoryForRun = (
     runId: string,
-    opts?: { allowLocalWithoutDisplayableFinal?: boolean },
+    opts?: {
+      allowLocalWithoutDisplayableFinal?: boolean;
+      hasDisplayableFinal?: boolean;
+      wasPendingChatRun?: boolean;
+    },
   ) => {
+    const isPendingChatRun = opts?.wasPendingChatRun === true || state.pendingChatRunId === runId;
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
@@ -310,11 +448,61 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
     }
+    if (!isPendingChatRun && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
+      pendingHistoryRefresh = true;
+      return;
+    }
+    // When the final event already produced displayable output, skip the
+    // reload. loadHistory() does clearAll() + rebuild from server, but the
+    // server may not have persisted this message yet, causing the
+    // just-rendered final message to vanish (#87922).
+    if (opts?.hasDisplayableFinal) {
+      return;
+    }
     if (hasConcurrentActiveRun(runId)) {
       return;
     }
     pendingHistoryRefresh = false;
     void loadHistory?.();
+  };
+
+  const messageHasDisplayableNonTextContent = (message: unknown): boolean => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const record = message as Record<string, unknown>;
+    if (typeof record.mediaUrl === "string" && record.mediaUrl.trim()) {
+      return true;
+    }
+    if (
+      Array.isArray(record.mediaUrls) &&
+      record.mediaUrls.some((media) => typeof media === "string" && media.trim())
+    ) {
+      return true;
+    }
+    if (!Array.isArray(record.content)) {
+      return false;
+    }
+    return record.content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const type = (block as Record<string, unknown>).type;
+      return typeof type === "string" && type !== "text" && type !== "thinking";
+    });
+  };
+
+  const hasDisplayableFinalEvent = (evt: ChatEvent): boolean => {
+    if (typeof evt.errorMessage === "string" && evt.errorMessage.trim()) {
+      return true;
+    }
+    if (!evt.message) {
+      return false;
+    }
+    if (extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim()) {
+      return true;
+    }
+    return messageHasDisplayableNonTextContent(evt.message);
   };
 
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
@@ -340,6 +528,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     return false;
   };
 
+  const isMatchingGlobalAgentEvent = (
+    sessionKey: string | undefined,
+    agentId?: string,
+  ): boolean => {
+    if (normalizeLowercaseStringOrEmpty(sessionKey) !== "global") {
+      return true;
+    }
+    const selectedAgentId = normalizeLowercaseStringOrEmpty(state.currentAgentId);
+    const defaultAgentId = normalizeLowercaseStringOrEmpty(state.agentDefaultId);
+    const eventAgentId = normalizeLowercaseStringOrEmpty(agentId);
+    if (eventAgentId) {
+      return eventAgentId === selectedAgentId;
+    }
+    return selectedAgentId === defaultAgentId;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -349,27 +553,48 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
       }
-      if (evt.state === "final") {
+      if (evt.state === "error" && finalizedRunsWithDisplay.has(evt.runId)) {
         clearStaleStreamingIfNoTrackedRunRemains();
         return;
+      }
+      if (evt.state === "final") {
+        const hasLateDisplayableFinal =
+          hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
+        if (!hasLateDisplayableFinal) {
+          clearStaleStreamingIfNoTrackedRunRemains();
+          return;
+        }
       }
     }
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
+    clearPendingTerminalLifecycleError(evt.runId);
+    chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
-      state.activeChatRunId = evt.runId;
-      if (state.pendingOptimisticUserMessage) {
-        noteLocalRunId?.(evt.runId);
-        state.pendingOptimisticUserMessage = false;
-      }
+    markSubmittedRunRegistered(evt.runId);
+    const isPendingChatRun = state.pendingChatRunId === evt.runId;
+    const isLocalChatRun = isLocalRunId?.(evt.runId) ?? false;
+    const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
+    const isNewOptimisticRun =
+      state.pendingOptimisticUserMessage &&
+      !isLocalBtwRun &&
+      (isPendingChatRun || (isLocalChatRun && evt.runId !== state.activeChatRunId));
+    if (isNewOptimisticRun) {
+      noteLocalRunId?.(evt.runId);
+      state.pendingOptimisticUserMessage = false;
     }
-    if (state.pendingChatRunId === evt.runId) {
+    if (!state.activeChatRunId && !isLocalBtwRun) {
+      state.activeChatRunId = evt.runId;
+    }
+    if (isPendingChatRun) {
       state.pendingChatRunId = null;
     }
     if (evt.state === "delta") {
@@ -387,35 +612,35 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.updateAssistant(displayText, evt.runId);
     }
     if (evt.state === "final") {
-      const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
+      const isLocalBtwRunLocal = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!evt.message && isLocalBtwRun) {
+      if (!evt.message && isLocalBtwRunLocal) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId, {
           allowLocalWithoutDisplayableFinal: true,
+          wasPendingChatRun: isPendingChatRun,
         });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (isCommandMessage(evt.message)) {
-        maybeRefreshHistoryForRun(evt.runId);
+        maybeRefreshHistoryForRun(evt.runId, { wasPendingChatRun: isPendingChatRun });
         const text = extractTextFromMessage(evt.message);
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
+        tui.requestRender(true);
         return;
       }
-      maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
           ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
@@ -431,6 +656,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
+      // Skip the history reload when the final event produced displayable
+      // output. loadHistory() does clearAll() + rebuild from server data,
+      // but the server may not have persisted this message yet — causing
+      // the just-rendered final message to vanish (#87922).
+      maybeRefreshHistoryForRun(evt.runId, {
+        hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
+        wasPendingChatRun: isPendingChatRun,
+      });
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
@@ -440,6 +673,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         runId: evt.runId,
         wasActiveRun,
         status: stopReason === "error" ? "error" : "idle",
+        displayedFinal: !suppressEmptyExternalPlaceholder,
       });
     }
     if (evt.state === "aborted") {
@@ -451,12 +685,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
-      const errorMessage = evt.errorMessage ?? "unknown";
-      const renderedError = formatRawAssistantErrorForUi(errorMessage);
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      renderTerminalRunError({
+        runId: evt.runId,
+        errorMessage: evt.errorMessage ?? "unknown",
+      });
     }
     tui.requestRender();
   };
@@ -471,7 +703,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
     const isActiveRun = evt.runId === state.activeChatRunId;
-    const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
+    const isPendingRun = evt.runId === state.pendingChatRunId;
+    const isSessionRun = sessionRuns.has(evt.runId);
+    if ((isActiveRun || isPendingRun || isSessionRun) && applyFallbackStepModelUpdate(evt)) {
+      if (isActiveRun) {
+        armStreamingWatchdog(evt.runId);
+      }
+      tui.requestRender();
+      return;
+    }
+    const isKnownRun = isActiveRun || isPendingRun || isSessionRun || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
       return;
     }
@@ -514,21 +755,69 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "lifecycle") {
-      if (!isActiveRun) {
-        return;
+      if (isPendingRun) {
+        noteSessionRun(evt.runId);
+        markSubmittedRunRegistered(evt.runId);
+        state.activeChatRunId = evt.runId;
+        state.pendingChatRunId = null;
+        if (state.pendingOptimisticUserMessage) {
+          noteLocalRunId?.(evt.runId);
+          state.pendingOptimisticUserMessage = false;
+        }
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      if (phase && phase !== "end" && phase !== "error") {
+      if (phase && phase !== "error") {
+        clearPendingTerminalLifecycleError(evt.runId);
+      }
+      const isPostFinalizingRun = postFinalizingRuns.has(evt.runId);
+      const isPostFinalTerminalPhase =
+        isPostFinalizingRun && (phase === "end" || phase === "error");
+      if (!isActiveRun && !isPendingRun && phase !== "finishing" && !isPostFinalTerminalPhase) {
+        return;
+      }
+      const canUpdateActivityStatus = !hasConcurrentActiveRun(evt.runId);
+      if (phase && phase !== "end" && phase !== "error" && phase !== "finishing") {
         armStreamingWatchdog(evt.runId);
       }
       if (phase === "start") {
+        if (!canUpdateActivityStatus) {
+          return;
+        }
         setActivityStatus("running");
       }
+      if (phase === "finishing") {
+        notePostFinalizingRun(evt.runId);
+        if (!canUpdateActivityStatus) {
+          return;
+        }
+        clearStreamingWatchdog();
+        setActivityStatus("finishing context");
+      }
       if (phase === "end") {
+        postFinalizingRuns.delete(evt.runId);
+        if (!canUpdateActivityStatus) {
+          return;
+        }
         setActivityStatus("idle");
       }
       if (phase === "error") {
-        setActivityStatus("error");
+        postFinalizingRuns.delete(evt.runId);
+        if (!canUpdateActivityStatus) {
+          return;
+        }
+        const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
+        if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
+          const errorMessage =
+            typeof evt.data?.error === "string"
+              ? evt.data.error
+              : typeof evt.data?.errorMessage === "string"
+                ? evt.data.errorMessage
+                : "unknown";
+          scheduleTerminalLifecycleError(evt.runId, errorMessage);
+          setActivityStatus("error");
+        } else {
+          setActivityStatus("error");
+        }
       }
       tui.requestRender();
     }
@@ -541,6 +830,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as BtwEvent;
     syncSessionKey();
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
     if (evt.kind !== "btw") {
@@ -561,7 +853,21 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const dispose = () => {
     clearStreamingWatchdog();
+    clearPendingTerminalLifecycleErrors();
   };
+
+  const consumeCompletedRunForPendingSend = (runId: string) => {
+    if (!completedRuns.has(runId)) {
+      return false;
+    }
+    completedRuns.delete(runId);
+    return true;
+  };
+
+  // True once any event for this runId has been seen, even before sendChat
+  // resolves. Lets the optimistic-submit path know an accepted run already
+  // registered so it does not re-arm a draft the abort path would then drop.
+  const isRunObserved = (runId: string) => sessionRuns.has(runId);
 
   return {
     handleChatEvent,
@@ -569,6 +875,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     handleBtwEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
+    consumeCompletedRunForPendingSend,
+    isRunObserved,
+    flushPendingHistoryRefreshIfIdle,
     dispose,
   };
 }

@@ -1,3 +1,4 @@
+// Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
@@ -19,7 +20,7 @@ let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
 let unpinMessageDiscord: typeof import("./send.js").unpinMessageDiscord;
 let resolveDiscordTargetChannelId: typeof import("./send.shared.js").resolveDiscordTargetChannelId;
 let loadWebMedia: typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
-let __resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").__resetDiscordDirectoryCacheForTest;
+let resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").resetDiscordDirectoryCacheForTest;
 let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
 
 const DISCORD_TEST_CFG = {
@@ -44,13 +45,13 @@ beforeAll(async () => {
   } = await import("./send.js"));
   ({ resolveDiscordTargetChannelId } = await import("./send.shared.js"));
   ({ loadWebMedia } = await import("openclaw/plugin-sdk/web-media"));
-  ({ __resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
+  ({ resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
     await import("./directory-cache.js"));
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  __resetDiscordDirectoryCacheForTest();
+  resetDiscordDirectoryCacheForTest();
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -469,29 +470,23 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("chan1");
   });
 
-  it("rejects bare numeric IDs as ambiguous", async () => {
-    const { rest } = makeDiscordRest();
-    await expect(
-      sendMessageDiscord("273512430271856640", "hello", {
-        rest,
-        token: "t",
-        cfg: DISCORD_TEST_CFG,
-      }),
-    ).rejects.toThrow(/Ambiguous Discord recipient/);
-    await expect(
-      sendMessageDiscord("273512430271856640", "hello", {
-        rest,
-        token: "t",
-        cfg: DISCORD_TEST_CFG,
-      }),
-    ).rejects.toThrow(/user:273512430271856640/);
-    await expect(
-      sendMessageDiscord("273512430271856640", "hello", {
-        rest,
-        token: "t",
-        cfg: DISCORD_TEST_CFG,
-      }),
-    ).rejects.toThrow(/channel:273512430271856640/);
+  it("treats bare numeric outbound IDs as channels", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValueOnce({
+      id: "msg1",
+      channel_id: "273512430271856640",
+    });
+
+    const result = await sendMessageDiscord("273512430271856640", "hello", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+    });
+
+    expect(result.channelId).toBe("273512430271856640");
+    expectRestRoute(postMock, 0, Routes.channelMessages("273512430271856640"));
+    expect(requireRestBody(postMock).content).toBe("hello");
   });
 
   it("adds missing permission hints on 50013", async () => {

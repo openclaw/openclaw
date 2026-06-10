@@ -1,13 +1,6 @@
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import {
-  TASK_STATUS_DETAIL_MAX_CHARS,
-  formatTaskStatusTitle,
-  sanitizeTaskStatusText,
-} from "../../tasks/task-status.js";
+// Task gateway methods expose detached task list/get/cancel operations with
+// bounded public summaries over the runtime task registry.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -17,7 +10,16 @@ import {
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
+import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import {
+  TASK_STATUS_DETAIL_MAX_CHARS,
+  formatTaskStatusTitle,
+  sanitizeTaskStatusText,
+} from "../../tasks/task-status.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
@@ -25,6 +27,8 @@ const MAX_TASKS_LIST_LIMIT = 500;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
+// Gateway task APIs preserve the older ledger status vocabulary while the
+// runtime registry tracks finer-grained task states such as `lost`.
 const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
   queued: "queued",
   running: "running",
@@ -48,6 +52,8 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
+// Status text can originate from providers, shells, and subprocesses. Keep the
+// public task shape bounded before it reaches control-plane clients.
 function sanitizeOptionalTaskText(
   value: unknown,
   opts?: { errorContext?: boolean },
@@ -96,6 +102,8 @@ function normalizeTaskStatusFilter(status: TasksListParams["status"]): Set<TaskS
   return new Set(statuses.flatMap((value) => LEDGER_STATUS_TO_TASK_STATUSES[value] ?? []));
 }
 
+// Session filtering needs all ownership keys because detached child runs may be
+// queried from the requester, child session, or owner/control-plane view.
 function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): boolean {
   const normalized = normalizeOptionalString(sessionKey);
   if (!normalized) {
@@ -106,6 +114,8 @@ function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): b
   );
 }
 
+// Some records predate a direct `agentId`, so task listings still recover the
+// owning agent from session-style keys instead of hiding those tasks.
 function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
   const normalized = normalizeOptionalString(agentId);
   if (!normalized) {
@@ -119,6 +129,8 @@ function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolea
   );
 }
 
+// Cursor strings are offsets, not opaque tokens; reject malformed values so a
+// client cannot silently restart pagination at the first page.
 function parseCursor(cursor: string | undefined): number | null {
   if (!cursor) {
     return 0;
@@ -130,6 +142,8 @@ function parseCursor(cursor: string | undefined): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+// Control UI task methods expose the stable gateway protocol shape; helpers
+// above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
   "tasks.list": ({ params, respond }) => {
     if (!validateTasksListParams(params)) {
@@ -219,6 +233,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
   },
 };
 
-export const __test = {
+export const testApi = {
   mapTaskSummary,
 };
+export { testApi as __test };

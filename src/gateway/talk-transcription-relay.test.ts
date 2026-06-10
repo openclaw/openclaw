@@ -1,3 +1,6 @@
+/**
+ * Tests talk transcription relay behavior between realtime events and clients.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
@@ -8,28 +11,60 @@ import {
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
 } from "./talk-transcription-relay.js";
+import { expectRecordFields, isRecord, requireRecord } from "./test-helpers.assertions.js";
 
 type BroadcastEvent = { event: string; payload: unknown; connIds: string[] };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function createSttSessionMock(connect: () => Promise<void> = async () => {}) {
+  return {
+    connect: vi.fn(connect),
+    sendAudio: vi.fn(),
+    close: vi.fn(),
+    isConnected: vi.fn(() => true),
+  };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} must be an object`).toBe(true);
-  return value as Record<string, unknown>;
+function createTranscriptionProvider(
+  sttSession: ReturnType<typeof createSttSessionMock>,
+  onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
+): RealtimeTranscriptionProviderPlugin {
+  return {
+    id: "stt-test",
+    label: "STT Test",
+    isConfigured: () => true,
+    createSession: vi.fn((req) => {
+      onRequest?.(req);
+      return sttSession;
+    }),
+  };
 }
 
-function expectRecordFields(
-  value: unknown,
-  label: string,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
-  }
-  return record;
+function createBroadcastContext() {
+  const events: BroadcastEvent[] = [];
+  const context = {
+    getRuntimeConfig: () => ({}),
+    broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+      events.push({ event, payload, connIds: [...connIds] });
+    },
+  } as never;
+  return { context, events };
+}
+
+async function createStartedRelaySession(
+  sttSession: ReturnType<typeof createSttSessionMock>,
+  providerConfig: Record<string, unknown>,
+  onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
+) {
+  const provider = createTranscriptionProvider(sttSession, onRequest);
+  const { context, events } = createBroadcastContext();
+  const session = createTalkTranscriptionRelaySession({
+    context,
+    connId: "conn-1",
+    provider,
+    providerConfig,
+  });
+  await Promise.resolve();
+  return { provider, events, session };
 }
 
 function findPayloadByType(events: BroadcastEvent[], type: string): Record<string, unknown> {
@@ -67,45 +102,24 @@ function expectTalkEventFields(
 
 describe("talk transcription gateway relay", () => {
   afterEach(() => {
+    vi.useRealTimers();
     clearTalkTranscriptionRelaySessionsForTest();
   });
 
   it("bridges browser audio into a transcription-only Talk event stream", async () => {
     let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
-    const sttSession = {
-      connect: vi.fn(async () => {
-        sttRequest?.onSpeechStart?.();
-        sttRequest?.onPartial?.("hel");
-        sttRequest?.onTranscript?.("hello world");
-      }),
-      sendAudio: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "stt-test",
-      label: "STT Test",
-      isConfigured: () => true,
-      createSession: (req) => {
-        sttRequest = req;
-        return sttSession;
-      },
-    };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      getRuntimeConfig: () => ({}),
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
-
-    const session = createTalkTranscriptionRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: { model: "stt-model" },
+    const sttSession = createSttSessionMock(async () => {
+      sttRequest?.onSpeechStart?.();
+      sttRequest?.onPartial?.("hel");
+      sttRequest?.onTranscript?.("hello world");
     });
-    await Promise.resolve();
+    const { events, session } = await createStartedRelaySession(
+      sttSession,
+      { model: "stt-model" },
+      (req) => {
+        sttRequest = req;
+      },
+    );
 
     expectRecordFields(session, "session", {
       provider: "stt-test",
@@ -113,8 +127,8 @@ describe("talk transcription gateway relay", () => {
       transport: "gateway-relay",
     });
     expectRecordFields(session.audio, "session audio", {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
+      inputEncoding: "g711_ulaw",
+      inputSampleRateHz: 8000,
     });
     expectRecordFields(sttRequest, "stt request", {
       providerConfig: { model: "stt-model" },
@@ -200,40 +214,46 @@ describe("talk transcription gateway relay", () => {
     });
   });
 
+  it("rejects provider configs that do not match relay audio input", () => {
+    const provider = createTranscriptionProvider(createSttSessionMock());
+    const { context } = createBroadcastContext();
+
+    expect(() =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId: "conn-1",
+        provider,
+        providerConfig: { encoding: "linear16", sampleRate: 16000 },
+      }),
+    ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
+    expect(provider.createSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects session creation when transcription expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const provider = createTranscriptionProvider(createSttSessionMock());
+    const { context } = createBroadcastContext();
+
+    expect(() =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId: "conn-1",
+        provider,
+        providerConfig: {},
+      }),
+    ).toThrow("Transcription relay session expiry is outside the supported Date range");
+    expect(provider.createSession).not.toHaveBeenCalled();
+  });
+
   it("cancels an active transcription turn and closes the provider session", async () => {
     let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
-    const sttSession = {
-      connect: vi.fn(async () => {
-        sttRequest?.onSpeechStart?.();
-      }),
-      sendAudio: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "stt-test",
-      label: "STT Test",
-      isConfigured: () => true,
-      createSession: (req) => {
-        sttRequest = req;
-        return sttSession;
-      },
-    };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      getRuntimeConfig: () => ({}),
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
-
-    const session = createTalkTranscriptionRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
+    const sttSession = createSttSessionMock(async () => {
+      sttRequest?.onSpeechStart?.();
     });
-    await Promise.resolve();
+    const { events, session } = await createStartedRelaySession(sttSession, {}, (req) => {
+      sttRequest = req;
+    });
 
     cancelTalkTranscriptionRelayTurn({
       transcriptionSessionId: session.transcriptionSessionId,

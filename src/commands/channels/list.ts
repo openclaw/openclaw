@@ -1,3 +1,6 @@
+// Implements `openclaw channels list` across runtime accounts, local config, and catalog-only entries.
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
@@ -11,9 +14,8 @@ import {
   type RuntimeChannelStatusPayload,
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
@@ -124,17 +126,23 @@ function formatAccountLine(params: {
 function formatCatalogOnlyLine(params: {
   entry: ChannelPluginCatalogEntry;
   installed: boolean;
+  configured: boolean;
+  repairHint?: string;
 }): string {
-  const { entry, installed } = params;
+  const { entry, installed, configured, repairHint } = params;
   const channelText = theme.accent(entry.meta.label ?? entry.id);
   const bits: string[] = [
     formatInstalled(installed),
-    formatConfigured(false),
+    formatConfigured(configured),
     formatEnabled(false),
   ];
+  if (repairHint) {
+    bits.push(repairHint);
+  }
   return `- ${channelText}: ${bits.join(", ")}`;
 }
 
+/** Print or serialize configured, available, and installable chat channel accounts. */
 export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -229,8 +237,8 @@ export async function channelsListCommand(
     });
   }
 
-  // --all also surfaces catalog entries that are not already represented
-  // by a plugin row above. Two shapes land here:
+  // Catalog entries that are not already represented by a plugin row above can
+  // still be useful in two shapes:
   //   1. Catalog plugin package is not yet installed on disk — rendered as
   //      `not installed, not configured, disabled` so the channel still
   //      appears in the listing as installable.
@@ -240,9 +248,25 @@ export async function channelsListCommand(
   //      configured channels). These would otherwise silently disappear
   //      from the listing — render them as `installed, not configured,
   //      disabled` so operators can tell the plugin is ready to configure.
-  const catalogOnlyLines: ChannelPluginCatalogEntry[] = showAll
-    ? catalogEntries.filter((entry) => !renderedChannelIds.has(entry.id))
-    : [];
+  // Without --all, keep this limited to configured channels whose official
+  // external plugin owner is missing, otherwise `channels list` can claim
+  // there are no configured channels even though openclaw.json has one.
+  const catalogOnlyLines = catalogEntries
+    .filter((entry) => !renderedChannelIds.has(entry.id))
+    .map((entry) => {
+      const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+        config: cfg,
+        channelId: entry.id,
+        ...(workspaceDir ? { workspaceDir } : {}),
+      });
+      return {
+        entry,
+        installed: isInstalled(entry.id),
+        configured: Boolean(hint),
+        repairHint: hint ? `run ${hint.installCommand} or ${hint.doctorFixCommand}` : undefined,
+      };
+    })
+    .filter((line) => showAll || line.configured);
 
   if (opts.json) {
     type JsonChannelEntry = {
@@ -268,15 +292,12 @@ export async function channelsListCommand(
         };
       }
     }
-    if (showAll) {
-      for (const entry of catalogOnlyLines) {
-        const installed = isInstalled(entry.id);
-        chat[entry.id] = {
-          accounts: [],
-          installed,
-          origin: installed ? "available" : "installable",
-        };
-      }
+    for (const line of catalogOnlyLines) {
+      chat[line.entry.id] = {
+        accounts: [],
+        installed: line.installed,
+        origin: line.configured ? "configured" : line.installed ? "available" : "installable",
+      };
     }
     writeRuntimeJson(runtime, { chat });
     return;
@@ -302,11 +323,13 @@ export async function channelsListCommand(
         }),
       );
     }
-    for (const entry of catalogOnlyLines) {
+    for (const line of catalogOnlyLines) {
       lines.push(
         formatCatalogOnlyLine({
-          entry,
-          installed: isInstalled(entry.id),
+          entry: line.entry,
+          installed: line.installed,
+          configured: line.configured,
+          ...(line.repairHint ? { repairHint: line.repairHint } : {}),
         }),
       );
     }

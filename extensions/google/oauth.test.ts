@@ -1,3 +1,4 @@
+// Google tests cover oauth plugin behavior.
 import { join, parse } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -630,6 +631,7 @@ describe("loginGeminiCliOAuth", () => {
 
   function installGeminiOAuthFetchMock(
     handleRequest: (request: RecordedFetchRequest) => Response | undefined,
+    options: { tokenResponse?: () => Response } = {},
   ) {
     const requests: RecordedFetchRequest[] = [];
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -637,7 +639,7 @@ describe("loginGeminiCliOAuth", () => {
       requests.push(request);
 
       if (request.url === TOKEN_URL) {
-        return tokenResponse();
+        return (options.tokenResponse ?? tokenResponse)();
       }
       if (request.url === USERINFO_URL) {
         return userInfoResponse();
@@ -842,6 +844,21 @@ describe("loginGeminiCliOAuth", () => {
     ).rejects.toThrow("OAuth state mismatch - please try again");
   });
 
+  it("rejects first login when project discovery fails and no stored identity exists", async () => {
+    const { requests } = installGeminiOAuthFetchMock(({ url }) => {
+      if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson({ error: { message: "unavailable" } }, 503);
+      }
+      return undefined;
+    });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    await expect(exchangeCodeForTokens("oauth-code", "pkce-verifier")).rejects.toThrow(
+      /loadCodeAssist failed/i,
+    );
+    expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
+  });
+
   it("falls back to GOOGLE_CLOUD_PROJECT when all loadCodeAssist endpoints fail", async () => {
     process.env.GOOGLE_CLOUD_PROJECT = "env-project";
 
@@ -875,5 +892,126 @@ describe("loginGeminiCliOAuth", () => {
 
     expect(result.projectId).toBeUndefined();
     expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);
+  });
+
+  it("refreshes Gemini CLI OAuth tokens without loadCodeAssist in personal OAuth mode", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const { requests } = installGeminiOAuthFetchMock(() => undefined);
+    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+    const result = await refreshTokensForGeminiCli({
+      refresh: "refresh-token",
+      email: "lobster@openclaw.ai",
+    });
+
+    expect(result).toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+      email: "lobster@openclaw.ai",
+      projectId: undefined,
+    });
+    expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);
+  });
+
+  it("keeps malformed token expiry values out of refreshed Gemini CLI credentials", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const beforeRefresh = Date.now();
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({
+          access_token: "access-token",
+          expires_in: Number.NaN,
+        }),
+    });
+    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+    const result = await refreshTokensForGeminiCli({
+      refresh: "refresh-token",
+      email: "lobster@openclaw.ai",
+    });
+
+    expect(Number.isFinite(result.expires)).toBe(true);
+    expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
+  });
+
+  it("keeps invalid clocks out of refreshed Gemini CLI credential expiry", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({
+          access_token: "access-token",
+          expires_in: 3600,
+        }),
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+      const result = await refreshTokensForGeminiCli({
+        refresh: "refresh-token",
+        email: "lobster@openclaw.ai",
+      });
+
+      expect(result.expires).toBe(0);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("keeps unsafe token expiry values out of refreshed Gemini CLI credentials", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const beforeRefresh = Date.now();
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({
+          access_token: "access-token",
+          expires_in: Number.MAX_SAFE_INTEGER,
+        }),
+    });
+    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+    const result = await refreshTokensForGeminiCli({
+      refresh: "refresh-token",
+      email: "lobster@openclaw.ai",
+    });
+
+    expect(Number.isSafeInteger(result.expires)).toBe(true);
+    expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
 });

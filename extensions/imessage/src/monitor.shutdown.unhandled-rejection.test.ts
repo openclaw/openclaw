@@ -1,10 +1,11 @@
+// Imessage tests cover monitor.shutdown.unhandled rejection plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 
 describe("monitorIMessageProvider", () => {
   it("does not trigger unhandledRejection when aborting during shutdown", async () => {
     const abortController = new AbortController();
-    let subscriptionId: number | null = 1;
+    const subscriptionId: number | null = 1;
     const requestMock = vi.fn((method: string, _params?: Record<string, unknown>) => {
       if (method === "watch.unsubscribe") {
         return Promise.reject(new Error("imsg rpc closed"));
@@ -30,7 +31,9 @@ describe("monitorIMessageProvider", () => {
       });
       abortController.abort();
       // Give the event loop a turn to surface any unhandledRejection, if present.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       detach();
     } finally {
       process.off("unhandledRejection", onUnhandled);

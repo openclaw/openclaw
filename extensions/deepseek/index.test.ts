@@ -1,10 +1,12 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+// Deepseek tests cover index plugin behavior.
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import deepseekPlugin from "./index.js";
@@ -212,6 +214,43 @@ describe("deepseek provider plugin", () => {
     ).toBe(true);
   });
 
+  it("resolves API-key usage auth from DeepSeek config sources", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+
+    await expect(
+      provider.resolveUsageAuth?.({
+        env: {},
+        resolveApiKeyFromConfigAndStore: (options?: { envDirect?: Array<string | undefined> }) => {
+          expect(options?.envDirect).toEqual([undefined]);
+          return "config-deepseek-key";
+        },
+      } as never),
+    ).resolves.toEqual({ token: "config-deepseek-key" });
+  });
+
+  it("fetches DeepSeek usage balance through the provider hook", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        is_available: true,
+        balance_infos: [{ currency: "CNY", total_balance: "8.88", granted_balance: "1.00" }],
+      }),
+    );
+
+    await expect(
+      provider.fetchUsageSnapshot?.({
+        token: "deepseek-key",
+        timeoutMs: 5000,
+        fetchFn: mockFetch,
+      } as never),
+    ).resolves.toMatchObject({
+      provider: "deepseek",
+      displayName: "DeepSeek",
+      windows: [],
+      summary: "Balance ¥8.88 · Granted ¥1.00",
+    });
+  });
+
   it("owns OpenAI-compatible replay policy", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
 
@@ -220,6 +259,51 @@ describe("deepseek provider plugin", () => {
     expect(replayPolicy?.toolCallIdMode).toBe("strict");
     expect(replayPolicy?.validateGeminiTurns).toBe(true);
     expect(replayPolicy?.validateAnthropicTurns).toBe(true);
+  });
+
+  it("owns DeepSeek tool schema compatibility for MCP union schemas", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const mcpTool = {
+      name: "unusual-whales__get_balance_sheet_screener",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          date: {
+            anyOf: [{ type: "string" }, { type: "integer" }],
+          },
+          period: {
+            oneOf: [{ type: "string" }, { type: "null" }],
+          },
+        },
+      },
+      execute: () => undefined,
+    } as never;
+
+    const normalized = provider.normalizeToolSchemas?.({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: deepSeekV4Model("deepseek-v4-pro"),
+      tools: [mcpTool],
+    } as never);
+
+    expect(normalized?.[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        date: { type: "string" },
+        period: { type: "string", nullable: true },
+      },
+    });
+    expect(
+      provider.inspectToolSchemas?.({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: deepSeekV4Model("deepseek-v4-pro"),
+        tools: normalized ?? [],
+      } as never),
+    ).toStrictEqual([]);
   });
 
   it("advertises max thinking levels for DeepSeek V4 models only", async () => {
@@ -401,7 +485,7 @@ describe("deepseek provider plugin", () => {
 
     expect(readThinking(capture.payload)?.type).toBe("disabled");
     expect(capture.payload).not.toHaveProperty("reasoning_effort");
-    expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+    expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",
     );
   });

@@ -1,15 +1,18 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+/** Implementation of `openclaw models list`. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelRef } from "../../agents/model-selection.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import type { Model } from "../../llm/types.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
+import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
@@ -40,6 +43,7 @@ function loadSourcePlanModule(): Promise<SourcePlanModule> {
   return sourcePlanModuleLoader.load();
 }
 
+/** Lists configured, catalog, and runtime-discovered models as text, plain, or JSON. */
 export async function modelsListCommand(
   opts: {
     all?: boolean;
@@ -51,7 +55,7 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const providerFilter = (() => {
+  const parsedProviderFilter = (() => {
     const raw = opts.provider?.trim();
     if (!raw) {
       return undefined;
@@ -66,7 +70,7 @@ export async function modelsListCommand(
     const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
   })();
-  if (providerFilter === null) {
+  if (parsedProviderFilter === null) {
     return;
   }
   const [
@@ -86,16 +90,34 @@ export async function modelsListCommand(
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
-  const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  const providerFilter = parsedProviderFilter
+    ? canonicalizeModelCatalogProviderAlias(parsedProviderFilter, {
+        cfg,
+        metadataSnapshot,
+      })
+    : undefined;
+  const authIndex = createModelListAuthIndex({
+    cfg,
+    authStore,
+    workspaceDir,
+    metadataSnapshot,
+  });
 
   let modelRegistry: ModelRegistry | undefined;
-  let registryModels: Model<Api>[] = [];
+  let registryModels: Model[] = [];
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const { entries } = resolveConfiguredEntries(cfg);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
+  // Full/provider-filtered lists may need runtime, manifest, and registry rows.
+  // Defer that planning so default configured-only output stays cheap.
   const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;
   const sourcePlan = sourcePlanModule
     ? await sourcePlanModule.planAllModelListSources({
@@ -103,18 +125,19 @@ export async function modelsListCommand(
         enableCascade: enableSourcePlanCascade,
         providerFilter,
         cfg,
+        metadataSnapshot,
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
-  const loadRegistryState = async (opts?: {
+  const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
   }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
     const loaded = await loadListModelRegistry(cfg, {
       providerFilter,
-      normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
-      loadAvailability: opts?.loadAvailability,
+      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: optsLocal?.loadAvailability,
       workspaceDir,
     });
     modelRegistry = loaded.registry;
@@ -153,6 +176,8 @@ export async function modelsListCommand(
       local: opts.local,
     },
     skipRuntimeModelSuppression,
+    metadataSnapshot,
+    workspaceDir,
   });
   const rows: ModelRow[] = [];
 
@@ -172,6 +197,8 @@ export async function modelsListCommand(
     });
     if (initialAppend.requiresRegistryFallback) {
       const useScopedRegistryFallback = sourcePlan.kind === "provider-runtime-scoped";
+      // Runtime-scoped providers can fail catalog availability while still being
+      // useful for a provider-filtered list; retry through the registry fallback.
       try {
         await loadRegistryState(
           useScopedRegistryFallback

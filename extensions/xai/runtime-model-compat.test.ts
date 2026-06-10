@@ -1,3 +1,4 @@
+// Xai tests cover runtime model compat plugin behavior.
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
@@ -9,6 +10,10 @@ describe("xai runtime model compat", () => {
       reasoning: true,
     });
 
+    expect(model.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+    });
     expect(model.thinkingLevelMap).toEqual({
       off: null,
       minimal: "low",
@@ -26,6 +31,24 @@ describe("xai runtime model compat", () => {
       reasoning: false,
     });
 
+    expect(model.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
+    });
+  });
+
+  it("does not advertise configurable reasoning effort for older xAI reasoning models", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4.20-beta-latest-reasoning",
+      provider: "xai",
+      reasoning: true,
+    });
+
+    expect(model.compat).toMatchObject({ supportsReasoningEffort: false });
     expect(model.thinkingLevelMap).toEqual({
       off: null,
       minimal: null,

@@ -1,3 +1,7 @@
+/**
+ * Resolves the managed Codex app-server binary shipped with or installed beside
+ * the Codex plugin before stdio startup.
+ */
 import { constants as fsConstants, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -20,6 +24,7 @@ type ResolveManagedCodexAppServerOptions = {
   pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
 };
 
+/** Rewrites managed stdio start options to point at an executable Codex binary path. */
 export async function resolveManagedCodexAppServerStartOptions(
   startOptions: CodexAppServerStartOptions,
   options: ResolveManagedCodexAppServerOptions = {},
@@ -47,6 +52,7 @@ export async function resolveManagedCodexAppServerStartOptions(
   };
 }
 
+/** Returns the preferred and fallback managed Codex binary paths for a plugin root. */
 export function resolveManagedCodexAppServerPaths(params: {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
@@ -90,7 +96,7 @@ function resolveManagedCodexAppServerCandidateRoots(
   platform: NodeJS.Platform,
 ): string[] {
   const pathApi = pathForPlatform(platform);
-  return [
+  const directRoots = [
     pluginRoot,
     pathApi.dirname(pluginRoot),
     pathApi.dirname(pathApi.dirname(pluginRoot)),
@@ -98,6 +104,32 @@ function resolveManagedCodexAppServerCandidateRoots(
       ? pathApi.dirname(pathApi.dirname(pathApi.dirname(pluginRoot)))
       : null,
   ].filter((root): root is string => Boolean(root));
+  return [
+    ...new Set([...directRoots, ...resolveNearestNodeModulesProjectRoots(directRoots, platform)]),
+  ];
+}
+
+function resolveNearestNodeModulesProjectRoots(
+  roots: readonly string[],
+  platform: NodeJS.Platform,
+): string[] {
+  const pathApi = pathForPlatform(platform);
+  const projectRoots: string[] = [];
+  for (const root of roots) {
+    let current = pathApi.resolve(root);
+    while (true) {
+      if (pathApi.basename(current) === "node_modules") {
+        projectRoots.push(pathApi.dirname(current));
+        break;
+      }
+      const parent = pathApi.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+  return projectRoots;
 }
 
 function resolveManagedCodexPackageBinCandidates(
@@ -144,7 +176,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-export const __testing = {
+/** Internal helpers exposed for managed-binary path-resolution tests. */
+export const testing = {
   resolveDefaultCodexPluginRoot,
 };
 
@@ -190,3 +223,4 @@ async function commandPathExists(filePath: string, platform: NodeJS.Platform): P
     return false;
   }
 }
+export { testing as __testing };

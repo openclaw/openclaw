@@ -1,4 +1,6 @@
-import { asPositiveSafeInteger } from "../shared/number-coercion.js";
+// Gateway session-history projection state.
+// Tracks transcript sequence windows for paginated chat-history SSE updates.
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
@@ -9,6 +11,9 @@ import {
   readSessionMessagesAsync,
 } from "./session-utils.js";
 
+// Session history state owns the SSE-friendly projection of transcript JSONL:
+// raw messages are projected for display, paginated by transcript seq, then
+// incrementally updated until cursor/window semantics require a full refresh.
 type SessionHistoryTranscriptMeta = {
   seq?: number;
 };
@@ -47,6 +52,7 @@ type SessionHistoryRawSnapshot = {
   totalRawMessages?: number;
 };
 
+/** Computes an oversized raw transcript tail window for projected chat history. */
 export function resolveSessionHistoryTailReadOptions(limit: number): {
   maxMessages: number;
   maxLines: number;
@@ -64,8 +70,11 @@ function resolveCursorSeq(cursor: string | undefined): number | undefined {
     return undefined;
   }
   const normalized = cursor.startsWith("seq:") ? cursor.slice(4) : cursor;
-  const value = Number.parseInt(normalized, 10);
-  return Number.isFinite(value) && value > 0 ? value : undefined;
+  if (!/^\d+$/.test(normalized)) {
+    return undefined;
+  }
+  const value = Number(normalized);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
@@ -89,7 +98,11 @@ function buildPaginatedSessionHistory(params: {
 }
 
 function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
-  return asPositiveSafeInteger(message?.__openclaw?.seq);
+  return asPositiveSafeInteger(message?.["__openclaw"]?.seq);
+}
+
+function isMessageToolMirrorMessage(message: SessionHistoryMessage): boolean {
+  return message.openclawMessageToolMirror !== undefined;
 }
 
 function paginateSessionMessages(
@@ -97,6 +110,8 @@ function paginateSessionMessages(
   limit: number | undefined,
   cursor: string | undefined,
 ): PaginatedSessionHistory {
+  // Cursors point at transcript sequence watermarks. The returned page is the
+  // window before that cursor, matching "older messages" pagination.
   const cursorSeq = resolveCursorSeq(cursor);
   let endExclusive = messages.length;
   if (typeof cursorSeq === "number") {
@@ -121,6 +136,7 @@ function paginateSessionMessages(
   });
 }
 
+/** Builds the display history snapshot and raw transcript sequence watermark. */
 export function buildSessionHistorySnapshot(params: {
   rawMessages: unknown[];
   maxChars?: number;
@@ -157,6 +173,7 @@ export function buildSessionHistorySnapshot(params: {
   };
 }
 
+/** Tracks session-history SSE state and decides when inline appends are still valid. */
 export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
@@ -198,25 +215,13 @@ export class SessionHistorySseState {
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
     this.cursor = params.cursor;
-    const rawSnapshot = {
+    const snapshot = this.buildSnapshot({
       rawMessages: params.initialRawMessages,
       ...(typeof params.rawTranscriptSeq === "number"
         ? { rawTranscriptSeq: params.rawTranscriptSeq }
         : {}),
       ...(typeof params.totalRawMessages === "number"
         ? { totalRawMessages: params.totalRawMessages }
-        : {}),
-    };
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: rawSnapshot.rawMessages,
-      maxChars: this.maxChars,
-      limit: this.limit,
-      cursor: this.cursor,
-      ...(typeof rawSnapshot.rawTranscriptSeq === "number"
-        ? { rawTranscriptSeq: rawSnapshot.rawTranscriptSeq }
-        : {}),
-      ...(typeof rawSnapshot.totalRawMessages === "number"
-        ? { totalRawMessages: rawSnapshot.totalRawMessages }
         : {}),
     });
     this.sentHistory = snapshot.history;
@@ -248,26 +253,85 @@ export class SessionHistorySseState {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,
     });
+    // Projection can split, drop, or rewrite raw transcript messages. When one
+    // raw append changes multiple visible rows, callers must refresh instead of
+    // emitting a misleading single SSE item.
+    const projectedMessages = toSessionHistoryMessages(
+      projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+        maxChars: this.maxChars,
+      }),
+    );
+    if (projectedMessages.length > this.sentHistory.messages.length) {
+      const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
+      if (addedMessages.length > 1) {
+        this.sentHistory = buildPaginatedSessionHistory({
+          messages: projectedMessages,
+          hasMore: false,
+        });
+        return { shouldRefresh: true };
+      }
+      const projectedMessage = addedMessages[0];
+      if (projectedMessage !== undefined) {
+        const emittedMessage: SessionHistoryMessage =
+          isMessageToolMirrorMessage(projectedMessage) ||
+          resolveMessageSeq(projectedMessage) === undefined
+            ? (attachOpenClawTranscriptMeta(projectedMessage, {
+                seq: this.rawTranscriptSeq,
+              }) as SessionHistoryMessage)
+            : projectedMessage;
+        const nextMessages = [...this.sentHistory.messages, emittedMessage];
+        this.sentHistory = buildPaginatedSessionHistory({
+          messages: nextMessages,
+          hasMore: false,
+        });
+        return {
+          message: emittedMessage,
+          messageSeq: resolveMessageSeq(emittedMessage),
+        };
+      }
+    }
     const [sanitizedMessage] = toSessionHistoryMessages(
       projectChatDisplayMessages([nextMessage], { maxChars: this.maxChars }),
     );
     if (!sanitizedMessage) {
+      if (projectedMessages.length < this.sentHistory.messages.length) {
+        this.sentHistory = buildPaginatedSessionHistory({
+          messages: projectedMessages,
+          hasMore: false,
+        });
+        return { shouldRefresh: true };
+      }
       return null;
     }
-    const nextMessages = [...this.sentHistory.messages, sanitizedMessage];
+    if (projectedMessages.length <= this.sentHistory.messages.length) {
+      this.sentHistory = buildPaginatedSessionHistory({
+        messages: projectedMessages,
+        hasMore: false,
+      });
+      return { shouldRefresh: true };
+    }
+    const projectedMessage = projectedMessages.at(-1) ?? sanitizedMessage;
+    const nextMessages = [...this.sentHistory.messages, projectedMessage];
     this.sentHistory = buildPaginatedSessionHistory({
       messages: nextMessages,
       hasMore: false,
     });
     return {
-      message: sanitizedMessage,
-      messageSeq: resolveMessageSeq(sanitizedMessage),
+      message: projectedMessage,
+      messageSeq: resolveMessageSeq(projectedMessage),
     };
   }
 
   async refreshAsync(): Promise<PaginatedSessionHistory> {
     const rawSnapshot = await this.readRawSnapshotAsync();
-    const snapshot = buildSessionHistorySnapshot({
+    const snapshot = this.buildSnapshot(rawSnapshot);
+    this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.sentHistory = snapshot.history;
+    return snapshot.history;
+  }
+
+  private buildSnapshot(rawSnapshot: SessionHistoryRawSnapshot): SessionHistorySnapshot {
+    return buildSessionHistorySnapshot({
       rawMessages: rawSnapshot.rawMessages,
       maxChars: this.maxChars,
       limit: this.limit,
@@ -279,9 +343,6 @@ export class SessionHistorySseState {
         ? { totalRawMessages: rawSnapshot.totalRawMessages }
         : {}),
     });
-    this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
-    this.sentHistory = snapshot.history;
-    return snapshot.history;
   }
 
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {

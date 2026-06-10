@@ -1,3 +1,4 @@
+// Tests queue directive validation and error copy for invalid queue settings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
@@ -43,5 +44,15 @@ describe("maybeHandleQueueDirective", () => {
     expect(current?.text).toContain(
       "Options: modes steer, followup, collect, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
     );
+  });
+
+  it.each(["cap:1e3", "cap:0x10", "cap:4.9"])("rejects non-decimal-integer caps: %s", (cap) => {
+    const invalid = maybeHandleQueueDirective({
+      directives: parseInlineDirectives(`/queue collect ${cap}`),
+      cfg: {} as OpenClawConfig,
+      channel: "quietchat",
+    });
+
+    expect(invalid?.text).toContain("Invalid cap");
   });
 });

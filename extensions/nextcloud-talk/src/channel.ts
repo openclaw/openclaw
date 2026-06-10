@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements channel behavior.
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
@@ -19,6 +20,7 @@ import {
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { nextcloudTalkGatewayAdapter } from "./gateway.js";
+import { nextcloudTalkMessageActions } from "./message-actions.js";
 import { nextcloudTalkMessageAdapter } from "./message-adapter.js";
 import {
   looksLikeNextcloudTalkTargetId,
@@ -178,6 +180,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       }),
       gateway: nextcloudTalkGatewayAdapter,
       message: nextcloudTalkMessageAdapter,
+      actions: nextcloudTalkMessageActions,
     },
     pairing: {
       text: {

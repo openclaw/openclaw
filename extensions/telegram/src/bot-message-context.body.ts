@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context.body behavior.
 import {
   buildMentionRegexes,
   formatLocationText,
@@ -5,6 +6,7 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  type BuildMentionRegexesOptions,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
@@ -34,13 +36,13 @@ import type {
 import {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
 } from "./bot/body-helpers.js";
-import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -69,6 +71,7 @@ export type TelegramInboundBodyResult = {
   effectiveWasMentioned: boolean;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
+  hasControlCommand: boolean;
   audioTranscribedMediaIndex?: number;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
@@ -141,11 +144,13 @@ export async function resolveTelegramInboundBody(params: {
   sessionKey?: string;
   resolvedThreadId?: number;
   replyThreadId?: number;
+  originatingTo?: string;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  providerMentionPatterns?: BuildMentionRegexesOptions["providerPolicy"];
   requireMention?: boolean;
   options?: TelegramMessageContextOptions;
   groupHistories: Map<string, HistoryEntry[]>;
@@ -165,11 +170,13 @@ export async function resolveTelegramInboundBody(params: {
     sessionKey,
     resolvedThreadId,
     replyThreadId,
+    originatingTo: providedOriginatingTo,
     routeAgentId,
     effectiveGroupAllow,
     effectiveDmAllow,
     groupConfig,
     topicConfig,
+    providerMentionPatterns,
     requireMention,
     options,
     groupHistories,
@@ -177,7 +184,11 @@ export async function resolveTelegramInboundBody(params: {
     logger,
   } = params;
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
-  const mentionRegexes = buildMentionRegexes(cfg, routeAgentId);
+  const mentionRegexes = buildMentionRegexes(cfg, routeAgentId, {
+    provider: "telegram",
+    conversationId: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
+    providerPolicy: providerMentionPatterns,
+  });
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
@@ -203,6 +214,7 @@ export async function resolveTelegramInboundBody(params: {
   });
   const commandAuthorized = commandGate.authorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
+  const originatingTo = providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId);
 
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
   let placeholder = primaryMedia?.placeholder ?? "";
@@ -220,7 +232,10 @@ export async function resolveTelegramInboundBody(params: {
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
-  const rawText = expandTextLinks(messageTextParts.text, messageTextParts.entities).trim();
+  const rawText = renderTelegramTextEntities(
+    messageTextParts.text,
+    messageTextParts.entities,
+  ).trim();
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
@@ -261,7 +276,7 @@ export async function resolveTelegramInboundBody(params: {
         Provider: "telegram",
         Surface: "telegram",
         OriginatingChannel: "telegram",
-        OriginatingTo: `telegram:${chatId}`,
+        OriginatingTo: originatingTo,
         AccountId: accountId,
         MessageThreadId: replyThreadId,
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
@@ -341,7 +356,7 @@ export async function resolveTelegramInboundBody(params: {
       canDetectMention,
       wasMentioned,
       hasAnyMention,
-      implicitMentionKinds: isGroup && Boolean(requireMention) ? implicitMentionKinds : [],
+      implicitMentionKinds: isGroup ? implicitMentionKinds : [],
     },
     policy: {
       isGroup,
@@ -385,12 +400,12 @@ export async function resolveTelegramInboundBody(params: {
             sessionKey,
             toInternalMessageReceivedContext({
               from: `telegram:group:${historyKey ?? chatId}`,
-              to: `telegram:${chatId}`,
+              to: originatingTo,
               content: rawBody,
               timestamp: msg.date ? msg.date * 1000 : undefined,
               channelId: "telegram",
               accountId,
-              conversationId: `telegram:${chatId}`,
+              conversationId: originatingTo,
               messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
               senderId: senderId || undefined,
               senderName: buildSenderName(msg),
@@ -399,7 +414,7 @@ export async function resolveTelegramInboundBody(params: {
               surface: "telegram",
               threadId: resolvedThreadId,
               originatingChannel: "telegram",
-              originatingTo: `telegram:${chatId}`,
+              originatingTo,
               isGroup: true,
               groupId: `telegram:${chatId}`,
             }),
@@ -419,6 +434,7 @@ export async function resolveTelegramInboundBody(params: {
     effectiveWasMentioned,
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,
+    hasControlCommand: hasControlCommandInMessage,
     ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
       ? { audioTranscribedMediaIndex }
       : {}),

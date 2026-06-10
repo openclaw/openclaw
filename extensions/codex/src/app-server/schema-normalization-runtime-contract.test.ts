@@ -1,3 +1,4 @@
+// Codex tests cover schema normalization runtime contract plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +43,7 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
       args: ["app-server"],
       headers: {},
     },
+    codeModeOnly: false,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",

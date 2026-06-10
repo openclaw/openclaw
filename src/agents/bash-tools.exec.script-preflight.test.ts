@@ -1,10 +1,15 @@
+/**
+ * Exec script preflight tests.
+ * Covers Python/Node script file validation, shell-bleed detection, and
+ * symlink/path race handling before execution.
+ */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { __testing, createExecTool } from "./bash-tools.exec.js";
+import { testing, createExecTool } from "./bash-tools.exec.js";
 
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({
   processGatewayAllowlist: async () => ({ allowWithoutEnforcedCommand: true }),
@@ -24,8 +29,8 @@ const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
-const parseOpenClawChannelsLoginShellCommand = __testing.parseOpenClawChannelsLoginShellCommand;
-const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
+const parseOpenClawChannelsLoginShellCommand = testing.parseOpenClawChannelsLoginShellCommand;
+const validateExecScriptPreflight = testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
 

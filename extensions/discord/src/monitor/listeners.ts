@@ -1,3 +1,4 @@
+// Discord plugin module implements listeners behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -47,7 +48,7 @@ export class DiscordMessageListener extends MessageCreateListener {
     // Per-session ordering is owned by the message run queue.
     void Promise.resolve()
       .then(() => this.handler(data, client))
-      .catch((err) => {
+      .catch((err: unknown) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
       });
@@ -74,7 +75,7 @@ export class DiscordInteractionListener extends InteractionCreateListener {
           this.onAcceptedEvent?.();
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord interaction handler failed: ${String(err)}`));
       });

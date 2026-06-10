@@ -1,9 +1,17 @@
+/**
+ * Shared helpers for CLI runner prompts, args, queueing, sessions, and image
+ * payload preparation.
+ */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { extensionForMime } from "@openclaw/media-core/mime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
@@ -13,15 +21,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { MAX_IMAGE_BYTES } from "../../media/constants.js";
-import { extensionForMime } from "../../media/mime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+import type { ImageContent } from "../../llm/types.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
+import { detectImageReferences, loadImageFromRef } from "../embedded-agent-runner/run/images.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
+import type { AgentTool } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
@@ -30,6 +35,7 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
+/** Re-export CLI reliability helpers used by older runner call sites. */
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
@@ -38,10 +44,12 @@ function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
+/** Enqueues a CLI run under a backend/session key to prevent unsafe overlap. */
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
 }
 
+/** Resolves the serialization key for a CLI backend run. */
 export function resolveCliRunQueueKey(params: {
   backendId: string;
   serialize?: boolean;
@@ -65,8 +73,10 @@ export function resolveCliRunQueueKey(params: {
   return params.backendId;
 }
 
+/** Builds the system prompt sent to a CLI-backed agent runtime. */
 export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
+  cwd?: string;
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
@@ -82,6 +92,7 @@ export function buildCliAgentSystemPrompt(params: {
   modelDisplay: string;
   agentId?: string;
 }) {
+  const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -90,8 +101,8 @@ export function buildCliAgentSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-    cwd: process.cwd(),
+    workspaceDir: runtimeWorkspaceDir,
+    cwd: runtimeWorkspaceDir,
     runtime: {
       host: "openclaw",
       os: `${os.type()} ${os.release()}`,
@@ -105,7 +116,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: runtimeWorkspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -116,6 +127,10 @@ export function buildCliAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
+    promptSurface: "cli_backend",
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "cli_backend",
+    }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     skillsPrompt: params.skillsPrompt,
@@ -126,8 +141,10 @@ export function buildCliAgentSystemPrompt(params: {
   });
 }
 
+/** Alternate export name for the CLI system prompt builder. */
 export const buildSystemPrompt = buildCliAgentSystemPrompt;
 
+/** Applies backend model aliases to a requested CLI model id. */
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
@@ -145,6 +162,7 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
   return trimmed;
 }
 
+/** Decides whether a system prompt should be sent for this CLI turn. */
 export function resolveSystemPromptUsage(params: {
   backend: CliBackendConfig;
   isNewSession: boolean;
@@ -171,6 +189,7 @@ export function resolveSystemPromptUsage(params: {
   return systemPrompt;
 }
 
+/** Resolves the CLI session id to send and whether the turn starts a new session. */
 export function resolveSessionIdToSend(params: {
   backend: CliBackendConfig;
   cliSessionId?: string;
@@ -189,6 +208,7 @@ export function resolveSessionIdToSend(params: {
   return { sessionId: crypto.randomUUID(), isNew: true };
 }
 
+/** Routes prompt text to argv or stdin based on backend input policy. */
 export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: string }): {
   argsPrompt?: string;
   stdin?: string;
@@ -230,6 +250,7 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
   return `${trimmed}${separator}${paths.map((entry) => `${prefix}${entry}`).join("\n")}`;
 }
 
+/** Loads and sanitizes image references found in prompt text. */
 export async function loadPromptRefImages(params: {
   prompt: string;
   workspaceDir: string;
@@ -267,6 +288,7 @@ export async function loadPromptRefImages(params: {
   return sanitizedImages;
 }
 
+/** Writes CLI image payloads to private paths and returns their file paths. */
 export async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
@@ -279,8 +301,7 @@ export async function writeCliImages(params: {
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   const store = privateFileStore(imageRoot);
   const paths: string[] = [];
-  for (let i = 0; i < params.images.length; i += 1) {
-    const image = params.images[i];
+  for (const image of params.images) {
     const fileName = path.basename(resolveCliImagePath(image));
     const buffer = Buffer.from(image.data, "base64");
     await store.writeText(fileName, buffer);
@@ -292,6 +313,7 @@ export async function writeCliImages(params: {
   return { paths, cleanup };
 }
 
+/** Writes a temporary system prompt file when the backend needs file-based prompts. */
 export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -316,6 +338,7 @@ export async function writeCliSystemPromptFile(params: {
   };
 }
 
+/** Prepares prompt text and image paths for a CLI backend run. */
 export async function prepareCliPromptImagePayload(params: {
   backend: CliBackendConfig;
   prompt: string;
@@ -358,6 +381,7 @@ export async function prepareCliPromptImagePayload(params: {
   };
 }
 
+/** Builds final CLI argv from backend config and prepared prompt/session inputs. */
 export function buildCliArgs(params: {
   backend: CliBackendConfig;
   baseArgs: string[];
@@ -374,14 +398,14 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -393,7 +417,11 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if (
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

@@ -1,3 +1,4 @@
+// Plugin SDK index tests cover SDK export baselines and public subpath availability.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -97,6 +98,7 @@ describe("plugin-sdk exports", () => {
   it("keeps the root runtime surface intentionally small", async () => {
     const runtimeExports = await readIndexRuntimeExports();
     expect([...runtimeExports].toSorted()).toEqual([
+      "assertContextEngineHostSupport",
       "buildMemorySystemPromptAddition",
       "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",

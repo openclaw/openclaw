@@ -1,8 +1,19 @@
+// Health command tests cover gateway health probes, JSON output, and status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../terminal/ansi.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import {
+  buildCredentialsRequiredHealthDiagnostic,
+  GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+  GATEWAY_HEALTH_REACHABLE_LINE,
+} from "./gateway-health-auth-diagnostic.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
-import { formatHealthChannelLines, healthCommand } from "./health.js";
+import {
+  formatContextEngineHealthLine,
+  formatHealthChannelLines,
+  formatModelPricingHealthLine,
+  healthCommand,
+} from "./health.js";
 
 const runtime = {
   log: vi.fn(),
@@ -52,8 +63,41 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const isGatewayCredentialsRequiredErrorMock = vi.fn((_value: unknown) => false);
+const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
+const TEST_GATEWAY_MESSAGE = `Gateway mode: local\nGateway target: ${TEST_GATEWAY_URL}`;
+const TEST_AUTH_CLOSE_ERROR = "gateway closed (1008):";
+const TEST_TLS_FINGERPRINT = "sha256:test-health-gateway-fingerprint";
+const buildGatewayConnectionDetailsMock = vi.fn(() => ({
+  message: TEST_GATEWAY_MESSAGE,
+  url: TEST_GATEWAY_URL,
+}));
+const buildGatewayProbeConnectionDetailsMock = vi.fn(() => ({
+  message: TEST_GATEWAY_MESSAGE,
+  preauthHandshakeTimeoutMs: 4321,
+  tlsFingerprint: TEST_TLS_FINGERPRINT,
+  url: TEST_GATEWAY_URL,
+}));
+const formatGatewayTransportErrorJsonMock = vi.fn();
+const probeGatewayStatusMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
+  buildGatewayProbeConnectionDetails: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(buildGatewayProbeConnectionDetailsMock, undefined, args),
+  formatGatewayTransportErrorJson: (...args: unknown[]) =>
+    formatGatewayTransportErrorJsonMock(...args),
+  isGatewayCredentialsRequiredError: (value: unknown) =>
+    isGatewayCredentialsRequiredErrorMock(value),
+}));
+
+vi.mock("../cli/daemon-cli/probe.js", () => ({
+  probeGatewayStatus: (...args: unknown[]) => probeGatewayStatusMock(...args),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => [],
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -83,6 +127,19 @@ function requireFirstGatewayRequest(): Record<string, unknown> {
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    buildGatewayConnectionDetailsMock.mockReturnValue({
+      message: TEST_GATEWAY_MESSAGE,
+      url: TEST_GATEWAY_URL,
+    });
+    buildGatewayProbeConnectionDetailsMock.mockReturnValue({
+      message: TEST_GATEWAY_MESSAGE,
+      preauthHandshakeTimeoutMs: 4321,
+      tlsFingerprint: TEST_TLS_FINGERPRINT,
+      url: TEST_GATEWAY_URL,
+    });
+    formatGatewayTransportErrorJsonMock.mockReturnValue(null);
+    isGatewayCredentialsRequiredErrorMock.mockReturnValue(false);
+    probeGatewayStatusMock.mockReset();
   });
 
   it("outputs JSON from gateway", async () => {
@@ -120,6 +177,56 @@ describe("healthCommand", () => {
     expect(parsed.sessions.count).toBe(1);
   });
 
+  it("prints the rich text summary and verbose gateway details", async () => {
+    const recent = [
+      { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
+      { key: "foo", updatedAt: null, age: null },
+    ];
+    const snapshot = createHealthSummary({
+      channels: {
+        whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
+        telegram: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: true,
+            elapsedMs: 7,
+            bot: { username: "bot" },
+            webhook: { url: "https://example.com/h" },
+          },
+        },
+        discord: { accountId: "default", configured: false },
+      },
+      channelOrder: ["whatsapp", "telegram", "discord"],
+      channelLabels: {
+        whatsapp: "WhatsApp",
+        telegram: "Telegram",
+        discord: "Discord",
+      },
+      sessions: {
+        path: "/tmp/sessions.json",
+        count: 2,
+        recent,
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      { json: false, verbose: true, timeoutMs: 1000, config: {} },
+      runtime as never,
+    );
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toMatch(/WhatsApp: linked/i);
+    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+      ["Gateway connection:"],
+      ["  Gateway mode: local"],
+      [`  Gateway target: ${TEST_GATEWAY_URL}`],
+    ]);
+    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+  });
+
   it("passes explicit gateway credentials through to the gateway call", async () => {
     const snapshot = createHealthSummary({
       channels: {},
@@ -146,7 +253,75 @@ describe("healthCommand", () => {
     expect(gatewayRequest.password).toBe("setup-password");
   });
 
-  it("prints degraded model-pricing health without failing the command", async () => {
+  it("outputs JSON for gateway transport failures in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: TEST_GATEWAY_URL,
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+  });
+
+  it.each([
+    { json: true, expectedLogs: 1 },
+    { json: undefined, expectedLogs: 2 },
+  ])(
+    "reports reachable gateway diagnostics when health RPC credentials are missing",
+    async ({ json, expectedLogs }) => {
+      callGatewayMock.mockRejectedValueOnce(new Error());
+      isGatewayCredentialsRequiredErrorMock.mockReturnValueOnce(true);
+      probeGatewayStatusMock.mockResolvedValueOnce({
+        ok: false,
+        kind: "connect",
+        error: TEST_AUTH_CLOSE_ERROR,
+      });
+
+      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
+
+      expect(probeGatewayStatusMock).toHaveBeenCalledWith({
+        url: TEST_GATEWAY_URL,
+        token: undefined,
+        password: undefined,
+        tlsFingerprint: TEST_TLS_FINGERPRINT,
+        preauthHandshakeTimeoutMs: 4321,
+        timeoutMs: 5000,
+        config: {},
+        json,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
+      if (json) {
+        expect(JSON.parse(requireFirstRuntimeLog())).toEqual(
+          buildCredentialsRequiredHealthDiagnostic(),
+        );
+      } else {
+        expect(runtime.log.mock.calls).toEqual([
+          [GATEWAY_HEALTH_REACHABLE_LINE],
+          [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
+        ]);
+      }
+    },
+  );
+
+  it("formats degraded model-pricing health as a warning", () => {
     const snapshot = createHealthSummary({
       channels: {},
       channelOrder: [],
@@ -165,12 +340,8 @@ describe("healthCommand", () => {
       detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
       lastFailureAt: Date.now(),
     };
-    callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(stripAnsi(runtime.log.mock.calls.flat().join("\n"))).toContain(
+    expect(formatModelPricingHealthLine(snapshot)).toBe(
       "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
     );
   });
@@ -248,6 +419,31 @@ describe("healthCommand", () => {
     const lines = formatHealthChannelLines(summary, { accountMode: "default" });
     expect(lines).toContain(
       "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+  });
+});
+
+describe("formatContextEngineHealthLine", () => {
+  it("summarizes quarantined context engines", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.contextEngines = {
+      quarantined: [
+        {
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "assemble",
+          reason: "db corrupt",
+          failedAt: 123,
+        },
+      ],
+    };
+
+    expect(formatContextEngineHealthLine(summary)).toBe(
+      "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
     );
   });
 });

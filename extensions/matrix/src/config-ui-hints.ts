@@ -1,6 +1,23 @@
+// Matrix helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const matrixChannelConfigUiHints = {
+  mentionPatterns: {
+    label: "Matrix Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Matrix room IDs. Native Matrix mention evidence still triggers even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Matrix Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Matrix Mention Pattern Allowlist",
+    help: "Matrix room IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Matrix Mention Pattern Denylist",
+    help: "Matrix room IDs where configured regex mention patterns are disabled. Native mention evidence still triggers.",
+  },
   allowBots: {
     label: "Matrix Allow Bot Messages",
     help: 'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to require a visible room mention.',
@@ -40,6 +57,10 @@ export const matrixChannelConfigUiHints = {
   "streaming.progress.maxLines": {
     label: "Matrix Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.maxLineChars": {
+    label: "Matrix Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
   },
   "streaming.progress.toolProgress": {
     label: "Matrix Progress Tool Lines",

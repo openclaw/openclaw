@@ -1,8 +1,9 @@
+// Telegram plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { TelegramBotInfo } from "./bot-info.js";
+import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import {
   resolveTelegramApiBase,
   resolveTelegramTransport,
@@ -114,37 +115,6 @@ function normalizeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-function normalizeTelegramBotInfo(value: unknown): TelegramBotInfo | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const bot = value as Record<string, unknown>;
-  if (
-    typeof bot.id !== "number" ||
-    bot.is_bot !== true ||
-    typeof bot.first_name !== "string" ||
-    typeof bot.username !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    id: bot.id,
-    is_bot: true,
-    first_name: bot.first_name,
-    username: bot.username,
-    ...(typeof bot.last_name === "string" ? { last_name: bot.last_name } : {}),
-    ...(typeof bot.language_code === "string" ? { language_code: bot.language_code } : {}),
-    can_join_groups: normalizeBoolean(bot.can_join_groups) ?? false,
-    can_read_all_group_messages: normalizeBoolean(bot.can_read_all_group_messages) ?? false,
-    can_manage_bots: normalizeBoolean(bot.can_manage_bots) ?? false,
-    supports_inline_queries: normalizeBoolean(bot.supports_inline_queries) ?? false,
-    can_connect_to_business: normalizeBoolean(bot.can_connect_to_business) ?? false,
-    has_main_web_app: normalizeBoolean(bot.has_main_web_app) ?? false,
-    has_topics_enabled: normalizeBoolean(bot.has_topics_enabled) ?? false,
-    allows_users_to_create_topics: normalizeBoolean(bot.allows_users_to_create_topics) ?? false,
-  };
-}
-
 export async function probeTelegram(
   token: string,
   timeoutMs: number,
@@ -200,14 +170,19 @@ export async function probeTelegram(
           }
           const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
           if (delayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            await new Promise((resolve) => {
+              setTimeout(resolve, delayMs);
+            });
           }
         }
       }
     }
 
     if (!meRes) {
-      throw fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`);
+      throw toLintErrorObject(
+        fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`),
+        "Non-Error thrown",
+      );
     }
 
     const meJson = (await meRes.json()) as {
@@ -282,4 +257,18 @@ export async function probeTelegram(
       elapsedMs: Date.now() - started,
     };
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

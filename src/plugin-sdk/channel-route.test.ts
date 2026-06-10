@@ -1,3 +1,6 @@
+/**
+ * Tests channel route helpers and session route resolution.
+ */
 import { describe, expect, it } from "vitest";
 import {
   channelRouteCompactKey,
@@ -180,7 +183,7 @@ describe("plugin-sdk channel-route", () => {
     ).toBe(false);
   });
 
-  it("resolves parsed route targets through an injected channel grammar", () => {
+  it("keeps deprecated parser wrapper wired for public SDK compatibility", () => {
     expect(
       resolveChannelRouteTargetWithParser({
         channel: "Mock",

@@ -1,3 +1,4 @@
+// English wizard translations provide default onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const en = {
@@ -29,14 +30,18 @@ export const en = {
       compatibilityAnthropicHint: "Uses /messages",
       compatibilityOpenAi: "OpenAI-compatible",
       compatibilityOpenAiHint: "Uses /chat/completions",
+      compatibilityOpenAiResponses: "OpenAI Responses-compatible",
+      compatibilityOpenAiResponsesHint: "Uses /responses",
       compatibilityUnknown: "Unknown (detect automatically)",
-      compatibilityUnknownHint: "Probes OpenAI then Anthropic endpoints",
+      compatibilityUnknownHint: "Probes OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
       detectionFailed: "Could not detect endpoint type.",
-      detectionFailedNote: "This endpoint did not respond to OpenAI or Anthropic style requests.",
+      detectionFailedNote:
+        "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
       detectionNoteTitle: "Endpoint detection",
       detectionProgress: "Detecting endpoint type...",
       detectedAnthropic: "Detected Anthropic-compatible endpoint.",
       detectedOpenAi: "Detected OpenAI-compatible endpoint.",
+      detectedOpenAiResponses: "Detected OpenAI Responses-compatible endpoint.",
       endpointId: "Endpoint ID",
       endpointIdRequired: "Endpoint ID is required.",
       endpointIdRenamed:
@@ -116,7 +121,7 @@ export const en = {
       cacheFailed: "Failed to generate completion cache. Run `{command}` later.",
       enable: "Enable {shell} shell completion for {cli}?",
       installed: "Shell completion installed. {reloadHint}",
-      reloadPowerShell: "Restart your shell (or reload your PowerShell profile).",
+      reloadPowerShell: "Restart your shell or run: {command}",
       reloadShell: "Restart your shell or run: source {profile}",
       title: "Shell completion",
     },
@@ -307,6 +312,11 @@ export const en = {
     },
     skills: {
       configure: "Configure skills now? (recommended)",
+      containerBrewHidden:
+        "Brew-only skill installs are hidden in Linux containers because the official image does not ship Homebrew.",
+      containerBrewManual:
+        "Use a custom image with Homebrew preinstalled or install those dependencies manually.",
+      containerInstallsTitle: "Container skill installs",
       docsLine: "Docs: https://docs.openclaw.ai/skills",
       enterEnv: "Enter {env}",
       homebrewCommand: "Show Homebrew install command?",
@@ -321,6 +331,7 @@ export const en = {
       setEnv: "Set {env} for {name}?",
       skipDepsHint: "Continue without installing dependencies",
       statusTitle: "Skills status",
+      allReadyTitle: "All skills ready",
     },
     channels: {
       account: "{label} account",
@@ -985,11 +996,13 @@ export const en = {
       webSearchEnabled:
         "Web search is enabled, so your agent can look things up online when needed.",
       webSearchGetKey: "Get your key at: {url}",
+      webSearchAuthProfile: "Credential: existing {provider} auth profile.",
       webSearchKeyEnv: "API key: provided via {env} env var.",
       webSearchKeyRef: "API key: configured via secret reference.",
       webSearchKeyStored: "API key: stored in config.",
       webSearchNeedsKey: "web_search will not work until a key is added.",
       webSearchNoKey: "Provider {provider} is selected but no API key was found.",
+      webSearchOAuthProfile: "Credential: existing {provider} OAuth sign-in.",
       webSearchProvider: "Provider: {provider}",
       webSearchProviderUnavailable:
         "Web search provider {provider} is selected but unavailable under the current plugin policy.",

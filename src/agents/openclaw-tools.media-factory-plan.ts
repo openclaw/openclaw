@@ -1,3 +1,9 @@
+/**
+ * Optional media tool factory planner.
+ *
+ * Combines config, tool policy, plugin capability metadata, and auth-profile availability before tool construction.
+ */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -15,6 +21,9 @@ import {
   loadCapabilityMetadataSnapshot,
 } from "./tools/manifest-capability-availability.js";
 
+/**
+ * Plans optional media-tool factory registration from config, policy, capabilities, and auth.
+ */
 export type OptionalMediaToolFactoryPlan = {
   imageGenerate: boolean;
   videoGenerate: boolean;
@@ -65,6 +74,7 @@ function isToolAllowedByFactoryPolicy(params: {
   });
 }
 
+/** Returns true only when an allowlist explicitly enables the requested tool. */
 export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   toolName: string;
   allowlist?: string[];
@@ -76,11 +86,12 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   return isToolAllowedByFactoryPolicy(params);
 }
 
+/** Merges factory policy lists while preserving stable unique entries. */
 export function mergeFactoryPolicyList(
   ...lists: Array<string[] | undefined>
 ): string[] | undefined {
   const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
-  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+  return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
 function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
@@ -95,12 +106,14 @@ function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): st
   const withoutDefaultPluginMarker = allowlist.filter(
     (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   );
-  return Array.from(new Set(["*", ...withoutDefaultPluginMarker]));
+  return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
 
+/** Returns whether the image understanding tool can be constructed for this agent context. */
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   modelHasVision?: boolean;
   authStore?: AuthProfileStore;
 }): boolean {
@@ -112,6 +125,7 @@ export function resolveImageToolFactoryAvailable(params: {
   }
   const snapshot = loadCapabilityMetadataSnapshot({
     config: params.config,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return (
     hasSnapshotCapabilityAvailability({
@@ -161,6 +175,7 @@ function hasConfiguredVisionModelAuthSignal(params: {
   return false;
 }
 
+/** Resolves which optional media tools should be created for the current tool factory call. */
 export function resolveOptionalMediaToolFactoryPlan(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -199,6 +214,8 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
   const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.musicGenerationModel);
   const explicitPdf = hasExplicitPdfModelConfig(params.config);
   if (params.config?.plugins?.enabled === false) {
+    // Optional media tools are plugin/capability backed. Disabling plugins shuts them off even when
+    // stale defaults or env availability would otherwise appear to make a tool available.
     return {
       imageGenerate: false,
       videoGenerate: false,

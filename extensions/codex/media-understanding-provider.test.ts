@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+// Codex tests cover media understanding provider plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import type { CodexAppServerClient } from "./src/app-server/client.js";
 import type { CodexServerNotification, JsonValue } from "./src/app-server/protocol.js";
@@ -173,6 +175,11 @@ function createFakeClient(options?: {
 }
 
 describe("codex media understanding provider", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("runs image understanding through a bounded Codex app-server turn", async () => {
     const { client, requests } = createFakeClient();
     const provider = buildCodexMediaUnderstandingProvider({
@@ -206,6 +213,11 @@ describe("codex media understanding provider", () => {
       serviceName: "OpenClaw",
       developerInstructions:
         "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
+      config: {
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+      },
+      environments: [],
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,
@@ -222,6 +234,34 @@ describe("codex media understanding provider", () => {
       model: "gpt-5.4",
       effort: "low",
     });
+  });
+
+  it("clamps oversized image understanding turn timeouts", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const { client } = createFakeClient();
+      const provider = buildCodexMediaUnderstandingProvider({
+        clientFactory: async () => client,
+      });
+
+      const result = await provider.describeImage?.({
+        buffer: Buffer.from("image-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        provider: "codex",
+        model: "gpt-5.4",
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      });
+
+      expect(result?.text).toBe("A red square.");
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.restoreAllMocks();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("declines approval requests during image understanding", async () => {
@@ -363,6 +403,11 @@ describe("codex media understanding provider", () => {
       serviceName: "OpenClaw",
       developerInstructions:
         "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
+      config: {
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+      },
+      environments: [],
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,

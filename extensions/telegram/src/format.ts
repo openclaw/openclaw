@@ -1,3 +1,4 @@
+// Telegram helper module supports format behavior.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -60,6 +61,13 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   };
 }
 
+function buildTelegramCodeBlockOpen(span: { language?: string }): string {
+  if (!span.language) {
+    return "<pre><code>";
+  }
+  return `<pre><code class="language-${escapeHtmlAttr(span.language)}">`;
+}
+
 function renderTelegramHtml(ir: MarkdownIR): string {
   return renderMarkdownWithMarkers(ir, {
     styleMarkers: {
@@ -67,7 +75,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       italic: { open: "<i>", close: "</i>" },
       strikethrough: { open: "<s>", close: "</s>" },
       code: { open: "<code>", close: "</code>" },
-      code_block: { open: "<pre><code>", close: "</code></pre>" },
+      code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
       spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
       blockquote: { open: "<blockquote>", close: "</blockquote>" },
     },
@@ -191,6 +199,7 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
   ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
   ["tg-time", /^\s+datetime="[^"]+"\s*$/],
 ]);
+const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
 let fileReferencePattern: RegExp | undefined;
 let orphanedTldPattern: RegExp | undefined;
 
@@ -221,17 +230,32 @@ function isSupportedTelegramHtmlTag(rawTag: string): boolean {
   return TELEGRAM_ATTR_HTML_TAG_PATTERNS.get(name)?.test(attrs) ?? false;
 }
 
+function hasOpenTelegramHtmlTag(tags: readonly string[], name: string): boolean {
+  return tags.includes(name);
+}
+
 function preserveTelegramHtmlTag(
   rawTag: string,
   openTags: string[],
   escapeTag: (rawTag: string) => string,
 ): string {
   const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
-  if (!match || !isSupportedTelegramHtmlTag(rawTag)) {
+  if (!match) {
     return escapeTag(rawTag);
   }
   const closing = match[1] === "/";
   const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  const attrs = match[3] ?? "";
+  if (!closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
+    openTags.push(tagName);
+    if (hasOpenTelegramHtmlTag(openTags, "pre")) {
+      return rawTag;
+    }
+    return "<code>";
+  }
+  if (!isSupportedTelegramHtmlTag(rawTag)) {
+    return escapeTag(rawTag);
+  }
   if (closing) {
     return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
   }
@@ -766,6 +790,10 @@ export function markdownToTelegramChunks(
   return renderTelegramChunksWithinHtmlLimit(ir, limit);
 }
 
-export function markdownToTelegramHtmlChunks(markdown: string, limit: number): string[] {
-  return markdownToTelegramChunks(markdown, limit).map((chunk) => chunk.html);
+export function markdownToTelegramHtmlChunks(
+  markdown: string,
+  limit: number,
+  options: { tableMode?: MarkdownTableMode } = {},
+): string[] {
+  return markdownToTelegramChunks(markdown, limit, options).map((chunk) => chunk.html);
 }

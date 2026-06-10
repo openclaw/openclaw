@@ -1,3 +1,4 @@
+// Minimax tests cover video generation provider plugin behavior.
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -46,6 +47,18 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<
     throw new Error(`expected mock call ${index}`);
   }
   return call[0] as Record<string, unknown>;
+}
+
+function streamedVideoResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
 }
 
 describe("minimax video generation provider", () => {
@@ -100,6 +113,38 @@ describe("minimax video generation provider", () => {
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata?.taskId).toBe("task-123");
     expect(result.metadata?.fileId).toBe("file-1");
+  });
+
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          task_id: "task-too-large",
+          base_resp: { status_code: 0 },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          task_id: "task-too-large",
+          status: "Success",
+          video_url: "https://example.com/too-large.mp4",
+          base_resp: { status_code: 0 },
+        }),
+      })
+      .mockResolvedValueOnce(streamedVideoResponse("too-large"));
+
+    const provider = buildMinimaxVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "minimax",
+        model: "MiniMax-Hailuo-2.3",
+        prompt: "short video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("MiniMax generated video download exceeds 1 bytes");
   });
 
   it("downloads via file_id when the status response omits video_url", async () => {

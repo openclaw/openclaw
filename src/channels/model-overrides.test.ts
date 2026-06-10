@@ -1,3 +1,4 @@
+// Model override tests cover channel-level model selection and override precedence.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -179,6 +180,26 @@ describe("resolveChannelModelOverride", () => {
 
     expect(resolved?.model).toBe("demo-provider/demo-scoped-model");
     expect(resolved?.matchKey).toBe("room:topic:thread");
+  });
+
+  it("applies provider wildcard model overrides to direct chats", () => {
+    const resolved = resolveChannelModelOverride({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            telegram: {
+              "*": "demo-provider/demo-direct-model",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      channel: "telegram",
+      groupChatType: "direct",
+    });
+
+    expect(resolved?.model).toBe("demo-provider/demo-direct-model");
+    expect(resolved?.matchKey).toBe("*");
+    expect(resolved?.matchSource).toBe("wildcard");
   });
 
   it("prefers parent conversation ids over channel-name fallbacks", () => {

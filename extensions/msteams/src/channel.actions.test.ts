@@ -1,8 +1,10 @@
+// Msteams tests cover channel.actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "./channel.js";
 
 const {
+  addParticipantMSTeamsMock,
   editMessageMSTeamsMock,
   deleteMessageMSTeamsMock,
   getChannelInfoMSTeamsMock,
@@ -12,11 +14,14 @@ const {
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
+  removeParticipantMSTeamsMock,
+  renameGroupMSTeamsMock,
   searchMessagesMSTeamsMock,
   sendAdaptiveCardMSTeamsMock,
   sendMessageMSTeamsMock,
   unpinMessageMSTeamsMock,
 } = vi.hoisted(() => ({
+  addParticipantMSTeamsMock: vi.fn(),
   editMessageMSTeamsMock: vi.fn(),
   deleteMessageMSTeamsMock: vi.fn(),
   getChannelInfoMSTeamsMock: vi.fn(),
@@ -26,6 +31,8 @@ const {
   listReactionsMSTeamsMock: vi.fn(),
   pinMessageMSTeamsMock: vi.fn(),
   reactMessageMSTeamsMock: vi.fn(),
+  removeParticipantMSTeamsMock: vi.fn(),
+  renameGroupMSTeamsMock: vi.fn(),
   searchMessagesMSTeamsMock: vi.fn(),
   sendAdaptiveCardMSTeamsMock: vi.fn(),
   sendMessageMSTeamsMock: vi.fn(),
@@ -34,6 +41,7 @@ const {
 
 vi.mock("./channel.runtime.js", () => ({
   msTeamsChannelRuntime: {
+    addParticipantMSTeams: addParticipantMSTeamsMock,
     editMessageMSTeams: editMessageMSTeamsMock,
     deleteMessageMSTeams: deleteMessageMSTeamsMock,
     getChannelInfoMSTeams: getChannelInfoMSTeamsMock,
@@ -43,6 +51,8 @@ vi.mock("./channel.runtime.js", () => ({
     listReactionsMSTeams: listReactionsMSTeamsMock,
     pinMessageMSTeams: pinMessageMSTeamsMock,
     reactMessageMSTeams: reactMessageMSTeamsMock,
+    removeParticipantMSTeams: removeParticipantMSTeamsMock,
+    renameGroupMSTeams: renameGroupMSTeamsMock,
     searchMessagesMSTeams: searchMessagesMSTeamsMock,
     sendAdaptiveCardMSTeams: sendAdaptiveCardMSTeamsMock,
     sendMessageMSTeams: sendMessageMSTeamsMock,
@@ -51,6 +61,7 @@ vi.mock("./channel.runtime.js", () => ({
 }));
 
 const actionMocks = [
+  addParticipantMSTeamsMock,
   editMessageMSTeamsMock,
   deleteMessageMSTeamsMock,
   getChannelInfoMSTeamsMock,
@@ -60,6 +71,8 @@ const actionMocks = [
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
+  removeParticipantMSTeamsMock,
+  renameGroupMSTeamsMock,
   searchMessagesMSTeamsMock,
   sendAdaptiveCardMSTeamsMock,
   sendMessageMSTeamsMock,
@@ -81,6 +94,8 @@ const reactMissingEmojiError =
   "React requires an emoji (reaction type). Valid types: like, heart, laugh, surprised, sad, angry.";
 const reactMissingEmojiDetail = "React requires an emoji (reaction type).";
 const searchMissingQueryError = "Search requires a target (to) and query.";
+const groupManagementAuthError =
+  "Microsoft Teams group management requires an owner or operator.admin requester.";
 
 function padded(value: string) {
   return ` ${value} `;
@@ -113,6 +128,9 @@ async function runAction(params: {
   toolContext?: Record<string, unknown>;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
 }) {
   const handleAction = requireMSTeamsHandleAction();
   return await handleAction({
@@ -123,6 +141,9 @@ async function runAction(params: {
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
+    requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
+    gatewayClientScopes: params.gatewayClientScopes,
   } as Parameters<ReturnType<typeof requireMSTeamsHandleAction>>[0]);
 }
 
@@ -181,6 +202,9 @@ async function expectSuccessfulAction(params: {
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
   mediaReadFile?: Parameters<typeof runAction>[0]["mediaReadFile"];
+  requesterSenderId?: Parameters<typeof runAction>[0]["requesterSenderId"];
+  senderIsOwner?: Parameters<typeof runAction>[0]["senderIsOwner"];
+  gatewayClientScopes?: Parameters<typeof runAction>[0]["gatewayClientScopes"];
   runtimeParams: Record<string, unknown>;
   details: Record<string, unknown>;
   contentDetails?: Record<string, unknown>;
@@ -192,6 +216,9 @@ async function expectSuccessfulAction(params: {
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
+    requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
+    gatewayClientScopes: params.gatewayClientScopes,
   });
   expectActionRuntimeCall(params.mockFn, params.runtimeParams);
   expectActionSuccess(result, params.details, params.contentDetails);
@@ -346,6 +373,147 @@ describe("msteamsPlugin message actions", () => {
         channel: "msteams",
         action: "channel-info",
         channelInfo: { id: "channel-1" },
+      },
+    });
+  });
+
+  it("requires trusted requester sender for Teams group-management actions from Teams turns", () => {
+    const requiresTrustedRequesterSender = msteamsPlugin.actions?.requiresTrustedRequesterSender;
+    if (!requiresTrustedRequesterSender) {
+      throw new Error("msteams actions.requiresTrustedRequesterSender unavailable");
+    }
+
+    for (const action of ["addParticipant", "removeParticipant", "renameGroup"] as const) {
+      expect(
+        requiresTrustedRequesterSender({
+          action,
+          toolContext: { currentChannelProvider: "msteams" },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      requiresTrustedRequesterSender({
+        action: "addParticipant",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
+    expect(
+      requiresTrustedRequesterSender({
+        action: "read",
+        toolContext: { currentChannelProvider: "msteams" },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects group-management actions from non-owner non-admin callers", async () => {
+    const cases = [
+      {
+        action: "addParticipant",
+        mockFn: addParticipantMSTeamsMock,
+        params: { target: targetChannelId, userId: "user-1" },
+      },
+      {
+        action: "removeParticipant",
+        mockFn: removeParticipantMSTeamsMock,
+        params: { target: targetChannelId, userId: "user-1" },
+      },
+      {
+        action: "renameGroup",
+        mockFn: renameGroupMSTeamsMock,
+        params: { target: targetChannelId, name: "Renamed group" },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await expectActionError(
+        {
+          action: testCase.action,
+          params: testCase.params,
+          senderIsOwner: false,
+          gatewayClientScopes: ["operator.write"],
+        },
+        groupManagementAuthError,
+      );
+      expect(testCase.mockFn).not.toHaveBeenCalled();
+    }
+  });
+
+  it("allows owner-authorized group-management actions", async () => {
+    await expectSuccessfulAction({
+      mockFn: addParticipantMSTeamsMock,
+      mockResult: { added: { userId: "user-1", chatId: targetChannelId } },
+      action: "addParticipant",
+      actionParams: {
+        target: targetChannelId,
+        userId: " user-1 ",
+        role: " owner ",
+      },
+      senderIsOwner: true,
+      runtimeParams: {
+        to: targetChannelId,
+        userId: "user-1",
+        role: "owner",
+      },
+      details: okMSTeamsActionDetails("addParticipant", {
+        added: { userId: "user-1", chatId: targetChannelId },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "addParticipant",
+        added: { userId: "user-1", chatId: targetChannelId },
+      },
+    });
+  });
+
+  it("allows operator.admin group-management actions without owner sender status", async () => {
+    await expectSuccessfulAction({
+      mockFn: removeParticipantMSTeamsMock,
+      mockResult: { removed: { userId: "user-1", chatId: targetChannelId } },
+      action: "removeParticipant",
+      actionParams: {
+        target: targetChannelId,
+        userId: " user-1 ",
+      },
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+      runtimeParams: {
+        to: targetChannelId,
+        userId: "user-1",
+      },
+      details: okMSTeamsActionDetails("removeParticipant", {
+        removed: { userId: "user-1", chatId: targetChannelId },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "removeParticipant",
+        removed: { userId: "user-1", chatId: targetChannelId },
+      },
+    });
+
+    await expectSuccessfulAction({
+      mockFn: renameGroupMSTeamsMock,
+      mockResult: { renamed: { chatId: targetChannelId, newName: "Renamed group" } },
+      action: "renameGroup",
+      actionParams: {
+        target: targetChannelId,
+        name: " Renamed group ",
+      },
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+      runtimeParams: {
+        to: targetChannelId,
+        name: "Renamed group",
+      },
+      details: okMSTeamsActionDetails("renameGroup", {
+        renamed: { chatId: targetChannelId, newName: "Renamed group" },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "renameGroup",
+        renamed: { chatId: targetChannelId, newName: "Renamed group" },
       },
     });
   });
@@ -545,6 +713,59 @@ describe("msteamsPlugin message actions", () => {
         channel: "msteams",
         messageId: "msg-card-1",
         conversationId: "conv-card-1",
+      },
+    });
+  });
+
+  it("downgrades select blocks when sending presentation cards", async () => {
+    await expectSuccessfulAction({
+      mockFn: sendAdaptiveCardMSTeamsMock,
+      mockResult: {
+        messageId: "msg-card-select-1",
+        conversationId: "conv-card-select-1",
+      },
+      action: "send",
+      actionParams: {
+        to: targetChannelId,
+        presentation: {
+          blocks: [
+            {
+              type: "select",
+              placeholder: "Pick a lane",
+              options: [
+                { label: "Canary", value: "canary" },
+                { label: "Stable", value: "stable" },
+              ],
+            },
+          ],
+        },
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [
+            {
+              type: "TextBlock",
+              text: "Pick a lane:\n- Canary\n- Stable",
+              wrap: true,
+              isSubtle: true,
+              size: "Small",
+            },
+          ],
+        },
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-select-1",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-select-1",
+        conversationId: "conv-card-select-1",
       },
     });
   });

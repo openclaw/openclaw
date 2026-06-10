@@ -1,3 +1,4 @@
+// Feishu tests cover subagent hooks plugin behavior.
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
@@ -5,9 +6,10 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "../subagent-hooks-api.js";
+import { handleFeishuSubagentSpawning } from "./subagent-hooks.js";
 import {
   createFeishuThreadBindingManager,
-  __testing as threadBindingTesting,
+  testing as threadBindingTesting,
 } from "./thread-bindings.js";
 
 const baseConfig: ClawdbotConfig = {
@@ -18,7 +20,10 @@ const baseConfig: ClawdbotConfig = {
 function registerHandlersForTest(config: Record<string, unknown> = baseConfig) {
   return registerHookHandlersForTest<OpenClawPluginApi>({
     config,
-    register: registerFeishuSubagentHooks,
+    register: (api) => {
+      registerFeishuSubagentHooks(api);
+      api.on("subagent_spawning", (event, ctx) => handleFeishuSubagentSpawning(event, ctx));
+    },
   });
 }
 
@@ -54,7 +59,15 @@ describe("feishu subagent hook handlers", () => {
       {},
     );
 
-    expect(result).toEqual({ status: "ok", threadBindingReady: true });
+    expect(result).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "user:ou_sender_1",
+      },
+    });
 
     const deliveryTargetHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
     await expect(
@@ -141,7 +154,16 @@ describe("feishu subagent hook handlers", () => {
       {},
     );
 
-    expect(result).toEqual({ status: "ok", threadBindingReady: true });
+    expect(result).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "chat:oc_group_chat",
+        threadId: "om_topic_root",
+      },
+    });
     await expect(
       deliveryHandler(
         {
@@ -204,7 +226,16 @@ describe("feishu subagent hook handlers", () => {
       },
     );
 
-    expect(reboundResult).toEqual({ status: "ok", threadBindingReady: true });
+    expect(reboundResult).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "chat:oc_group_chat",
+        threadId: "om_topic_root",
+      },
+    });
     const childBindings = manager.listBySessionKey("agent:main:subagent:sender-child");
     expect(childBindings).toHaveLength(1);
     expect(childBindings[0]?.conversationId).toBe(

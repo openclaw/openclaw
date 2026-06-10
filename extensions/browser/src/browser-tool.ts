@@ -1,3 +1,9 @@
+/**
+ * Browser agent tool registration.
+ *
+ * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
+ * maps high-level actions onto browser control client calls.
+ */
 import crypto from "node:crypto";
 import {
   executeActAction,
@@ -8,7 +14,6 @@ import {
 import {
   type AnyAgentTool,
   type NodeListNode,
-  DEFAULT_UPLOAD_DIR,
   BrowserToolSchema,
   applyBrowserProxyPaths,
   browserAct,
@@ -26,6 +31,7 @@ import {
   browserStatus,
   browserStop,
   callGatewayTool,
+  describeImageFile,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
@@ -33,18 +39,24 @@ import {
   listNodes,
   normalizeOptionalString,
   persistBrowserProxyFiles,
+  readPositiveIntegerParam,
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
-  resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
+  resolveRuntimeImageSanitization,
   resolveNodeIdFromList,
   resolveProfile,
+  saveMediaBuffer,
   selectDefaultNodeFromList,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
+import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
+import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
   browserAct,
@@ -61,16 +73,19 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  describeImageFile,
   getRuntimeConfig,
   imageResultFromFile,
   listNodes,
   callGatewayTool,
+  normalizeBrowserScreenshot,
+  saveMediaBuffer,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -87,10 +102,13 @@ export const __testing = {
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
+      describeImageFile: typeof describeImageFile;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
       listNodes: typeof listNodes;
       callGatewayTool: typeof callGatewayTool;
+      normalizeBrowserScreenshot: typeof normalizeBrowserScreenshot;
+      saveMediaBuffer: typeof saveMediaBuffer;
       touchSessionBrowserTab: typeof touchSessionBrowserTab;
       trackSessionBrowserTab: typeof trackSessionBrowserTab;
       untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
@@ -112,10 +130,14 @@ export const __testing = {
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
     browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
+    browserToolDeps.normalizeBrowserScreenshot =
+      overrides?.normalizeBrowserScreenshot ?? normalizeBrowserScreenshot;
+    browserToolDeps.saveMediaBuffer = overrides?.saveMediaBuffer ?? saveMediaBuffer;
     browserToolDeps.touchSessionBrowserTab =
       overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
     browserToolDeps.trackSessionBrowserTab =
@@ -127,10 +149,9 @@ export const __testing = {
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? params.timeoutMs
-      : undefined;
+  const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
   return { targetId, timeoutMs };
 }
 
@@ -421,15 +442,27 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
 }
 
 function readToolTimeoutMs(params: Record<string, unknown>) {
-  return typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-    ? Math.max(1, Math.floor(params.timeoutMs))
-    : undefined;
+  return readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
 }
 
+/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -504,7 +537,7 @@ export function createBrowserTool(opts?: {
           });
 
       const proxyRequest = nodeTarget
-        ? async (opts: {
+        ? async (optsLocal: {
             method: string;
             path: string;
             query?: Record<string, string | number | boolean | undefined>;
@@ -514,12 +547,12 @@ export function createBrowserTool(opts?: {
           }) => {
             const proxy = await callBrowserProxy({
               nodeId: nodeTarget.nodeId,
-              method: opts.method,
-              path: opts.path,
-              query: opts.query,
-              body: opts.body,
-              timeoutMs: opts.timeoutMs,
-              profile: opts.profile,
+              method: optsLocal.method,
+              path: optsLocal.path,
+              query: optsLocal.query,
+              body: optsLocal.body,
+              timeoutMs: optsLocal.timeoutMs,
+              profile: optsLocal.profile,
             });
             const mapping = await persistProxyFiles(proxy.files);
             applyProxyPaths(proxy.result, mapping);
@@ -734,11 +767,7 @@ export function createBrowserTool(opts?: {
           const element = readStringParam(params, "element");
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? Math.max(1, Math.floor(params.timeoutMs))
-              : undefined;
-          const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+          const effectiveTimeoutMs = requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
@@ -766,10 +795,80 @@ export function createBrowserTool(opts?: {
                 profile,
               });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
+          const screenshotPath = result.path;
+          const screenshotCfg = browserToolDeps.getRuntimeConfig();
+          const imageSanitization = resolveRuntimeImageSanitization();
+          try {
+            const described = await describeBrowserScreenshot(
+              {
+                cfg: screenshotCfg,
+                filePath: screenshotPath,
+                agentDir: opts?.agentDir,
+                workspaceDir: opts?.workspaceDir,
+                activeModel: opts?.activeModel,
+                mediaScope: opts?.mediaScope,
+                imageSanitization,
+              },
+              {
+                describeImageFile: browserToolDeps.describeImageFile,
+                normalizeBrowserScreenshot: browserToolDeps.normalizeBrowserScreenshot,
+                saveMediaBuffer: browserToolDeps.saveMediaBuffer,
+              },
+            );
+            if (described) {
+              const analyzedBy =
+                described.provider && described.model
+                  ? `${described.provider}/${described.model}`
+                  : "media image understanding";
+              const headerLines = [`[analyzed by ${analyzedBy}]`];
+              // Vision model descriptions contain web page content which is
+              // untrusted external input — wrap it the same way snapshot and
+              // tabs results are wrapped to mitigate prompt injection.
+              const wrappedDescription = wrapExternalContent(
+                neutralizeMediaDirectives(described.text.trim()),
+                {
+                  source: "browser",
+                  includeWarning: true,
+                },
+              );
+              const text = `${headerLines.join("\n")}\n${wrappedDescription}`;
+              return {
+                content: [{ type: "text", text }],
+                details: {
+                  ...(result as Record<string, unknown>),
+                  // Do NOT include details.media here — the vision path returns
+                  // a text description as the deliverable output. Exposing the raw
+                  // screenshot as media would cause channel delivery to auto-send
+                  // potentially sensitive page content. The local screenshot file
+                  // is still referenced in result.path for diagnostic purposes.
+                  vision: {
+                    provider: described.provider,
+                    model: described.model,
+                    decision: described.decision,
+                  },
+                },
+              };
+            }
+          } catch (err) {
+            // Fall back to returning the raw image block so the agent loop can
+            // still recover. Provider/runtime error messages are untrusted
+            // input too, so defang line-start final-reply media directives.
+            const rawReason = err instanceof Error ? err.message : String(err);
+            const reason = neutralizeMediaDirectives(rawReason);
+            const extraText = `[browser screenshot vision failed: ${reason}]`;
+            return await browserToolDeps.imageResultFromFile({
+              label: "browser:screenshot",
+              path: screenshotPath,
+              extraText,
+              details: result,
+              imageSanitization,
+            });
+          }
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
-            path: result.path,
+            path: screenshotPath,
             details: result,
+            imageSanitization,
           });
         }
         case "navigate": {
@@ -823,15 +922,11 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = await resolveExistingPathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
-          if (!uploadPathsResult.ok) {
-            throw new Error(uploadPathsResult.error);
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+          if (!resolvedResult.ok) {
+            throw new Error(resolvedResult.error);
           }
-          const normalizedPaths = uploadPathsResult.paths;
+          const normalizedPaths = resolvedResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
@@ -867,6 +962,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = readStringValue(params.promptText);
+          const dialogId = readStringValue(params.dialogId);
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -876,6 +972,7 @@ export function createBrowserTool(opts?: {
               body: {
                 accept,
                 promptText,
+                dialogId,
                 targetId,
                 timeoutMs,
               },
@@ -885,6 +982,7 @@ export function createBrowserTool(opts?: {
           const result = await browserToolDeps.browserArmDialog(baseUrl, {
             accept,
             promptText,
+            dialogId,
             targetId,
             timeoutMs,
             profile,
@@ -911,3 +1009,4 @@ export function createBrowserTool(opts?: {
     },
   };
 }
+export { testing as __testing };

@@ -1,16 +1,47 @@
+// Covers startup update check and auto-update behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import type { UpdateCheckResult } from "./update-check.js";
+
+const {
+  detectRespawnSupervisorMock,
+  scheduleGatewaySigusr1RestartMock,
+  startManagedServiceUpdateHandoffMock,
+} = vi.hoisted(() => ({
+  detectRespawnSupervisorMock: vi.fn(),
+  scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
+  startManagedServiceUpdateHandoffMock: vi.fn(async () => ({
+    status: "started" as const,
+    pid: 12345,
+    command: "openclaw update --yes --channel beta --timeout 2700",
+    logPath: "/tmp/openclaw-handoff.log",
+  })),
+}));
 
 vi.mock("./openclaw-root.js", async () => {
   const actual = await vi.importActual<typeof import("./openclaw-root.js")>("./openclaw-root.js");
   return {
     ...actual,
     resolveOpenClawPackageRoot: vi.fn(),
+  };
+});
+
+vi.mock("./restart.js", () => ({
+  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+}));
+
+vi.mock("./supervisor-markers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./supervisor-markers.js")>("./supervisor-markers.js");
+  return {
+    ...actual,
+    detectRespawnSupervisor: detectRespawnSupervisorMock,
   };
 });
 
@@ -44,10 +75,13 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+vi.mock("./update-managed-service-handoff.js", () => ({
+  startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
+}));
+
 describe("update-startup", () => {
-  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-check-suite-" });
   let tempDir: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let testState: OpenClawTestState;
 
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
@@ -67,26 +101,26 @@ describe("update-startup", () => {
     return call;
   }
 
-  beforeAll(async () => {
-    await suiteRootTracker.setup();
-  });
-
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
-    tempDir = await suiteRootTracker.make("case");
-    envSnapshot = captureEnv([
-      "OPENCLAW_NO_AUTO_UPDATE",
-      "OPENCLAW_STATE_DIR",
-      "NODE_ENV",
-      "VITEST",
-    ]);
-    process.env.OPENCLAW_STATE_DIR = tempDir;
-
-    process.env.NODE_ENV = "test";
-
-    // Ensure update checks don't short-circuit in test mode.
-    delete process.env.VITEST;
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-update-check-suite-",
+      env: {
+        OPENCLAW_NO_AUTO_UPDATE: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_GATEWAY_SERVICE_PID: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+        OPENCLAW_SYSTEMD_UNIT: undefined,
+        OPENCLAW_WINDOWS_TASK_NAME: undefined,
+        INVOCATION_ID: undefined,
+        NODE_ENV: "test",
+        VITEST: undefined,
+      },
+    });
+    tempDir = testState.stateDir;
 
     // Perf: load mocked modules once (after timers/env are set up).
     if (!loaded) {
@@ -105,17 +139,23 @@ describe("update-startup", () => {
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
     vi.mocked(runCommandWithTimeout).mockClear();
+    detectRespawnSupervisorMock.mockReset();
+    detectRespawnSupervisorMock.mockReturnValue(null);
+    scheduleGatewaySigusr1RestartMock.mockClear();
+    startManagedServiceUpdateHandoffMock.mockClear();
+    startManagedServiceUpdateHandoffMock.mockResolvedValue({
+      status: "started",
+      pid: 12345,
+      command: "openclaw update --yes --channel beta --timeout 2700",
+      logPath: "/tmp/openclaw-handoff.log",
+    });
     resetUpdateAvailableStateForTest();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    envSnapshot.restore();
+    await testState.cleanup();
     resetUpdateAvailableStateForTest();
-  });
-
-  afterAll(async () => {
-    await suiteRootTracker.cleanup();
   });
 
   function mockPackageUpdateStatus(tag = "latest", version = "2.0.0") {
@@ -240,6 +280,58 @@ describe("update-startup", () => {
     expect(parsed.lastNotifiedVersion).toBe("2.0.0");
     expect(parsed.lastAvailableVersion).toBe("2.0.0");
     expect(parsed.lastNotifiedTag).toBe("latest");
+  });
+
+  it("falls back when the update-check clock is outside Date range", async () => {
+    mockPackageUpdateStatus("latest", "2.0.0");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+  });
+
+  it("does not throttle invalid update-check clocks against persisted state", async () => {
+    const statePath = path.join(tempDir, "update-check.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          lastCheckedAt: "2026-01-17T09:30:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    mockPackageUpdateStatus("latest", "2.0.0");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
   });
 
   it("hydrates cached update from persisted state during throttle window", async () => {
@@ -443,6 +535,8 @@ describe("update-startup", () => {
     }
 
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     const [argv, options] = requireFirstRunCommandCall();
     expect(argv).toEqual([
       process.execPath,
@@ -453,11 +547,64 @@ describe("update-startup", () => {
       "beta",
       "--json",
     ]);
-    expect(options).toEqual({
-      timeoutMs: 45 * 60 * 1000,
-      env: {
-        OPENCLAW_AUTO_UPDATE: "1",
-      },
+    expect(typeof options).toBe("object");
+    if (typeof options !== "object") {
+      throw new Error("expected command options object");
+    }
+    expect(options.timeoutMs).toBe(45 * 60 * 1000);
+    expect(options.env).toEqual({ OPENCLAW_AUTO_UPDATE: "1" });
+  });
+
+  it("hands supervised auto-updates to a detached service handoff before restarting", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/opt/openclaw",
+        timeoutMs: 45 * 60 * 1000,
+        channel: "beta",
+        restartDelayMs: 0,
+        supervisor: "launchd",
+        handoffId: expect.any(String),
+        meta: {
+          handoffId: expect.any(String),
+          note: "background auto-update",
+        },
+      }),
+    );
+    const handoffCalls = startManagedServiceUpdateHandoffMock.mock.calls as unknown as Array<
+      [
+        {
+          handoffId?: string;
+          meta?: { handoffId?: string };
+        },
+      ]
+    >;
+    const [handoffParams] = handoffCalls[0] ?? [];
+    expect(handoffParams?.meta?.handoffId).toBe(handoffParams?.handoffId);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
+      delayMs: 0,
+      reason: "update.auto",
+      skipCooldown: true,
+      skipDeferral: true,
+    });
+    expect(log.info).toHaveBeenCalledWith("auto-update handoff started", {
+      channel: "beta",
+      version: "2.0.0-beta.1",
+      tag: "beta",
+      command: "openclaw update --yes --channel beta --timeout 2700",
+      logPath: "/tmp/openclaw-handoff.log",
     });
   });
 

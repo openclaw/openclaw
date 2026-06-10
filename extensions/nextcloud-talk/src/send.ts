@@ -1,4 +1,5 @@
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-message";
+// Nextcloud Talk plugin module implements send behavior.
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,

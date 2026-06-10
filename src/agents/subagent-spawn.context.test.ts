@@ -1,4 +1,7 @@
+// Subagent spawn context tests cover isolated, forked, lightweight, and
+// thread-bound bootstrap context preparation for child sessions.
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadSubagentSpawnModuleForTest,
@@ -41,6 +44,8 @@ describe("sessions_spawn context modes", () => {
   });
 
   function usePersistentStoreMock(store: SessionStore) {
+    // The spawn path mutates the session store in-place; this mock keeps that
+    // contract visible without touching disk.
     updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
       if (typeof mutator !== "function") {
         throw new Error("missing session store mutator");
@@ -153,7 +158,52 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.contextMode).toBe("isolated");
   });
 
+  it("keeps lightContext isolated spawns out of context-engine preparation", async () => {
+    const store: SessionStore = {
+      main: { sessionId: "parent-session-id", updatedAt: 1 },
+    };
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "clean worker", context: "isolated", lightContext: true },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    expect(ensureContextEnginesInitializedMock).not.toHaveBeenCalled();
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
+    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
+    const agentRequest = requireGatewayRequest("agent");
+    expect(agentRequest.params?.bootstrapContextMode).toBe("lightweight");
+  });
+
+  it("caps oversized context engine subagent TTLs at the timer-safe ceiling", async () => {
+    const store: SessionStore = {
+      main: { sessionId: "parent-session-id", updatedAt: 1 },
+    };
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "clean worker",
+        runTimeoutSeconds: Number.MAX_SAFE_INTEGER,
+      },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result.status).toBe("accepted");
+    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
+    expect(prepareContext.ttlMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
   it("falls back to isolated context when requested fork is too large", async () => {
+    // Forking very large transcripts would create expensive child context, so
+    // the accepted run records the downgrade in its note.
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",

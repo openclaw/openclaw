@@ -1,3 +1,7 @@
+/**
+ * Active Memory plugin entry and runtime implementation. It recalls recent
+ * memory context through configured agents and injects bounded context snippets.
+ */
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -12,17 +16,25 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
+import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
-  resolveSessionStoreEntry,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/session-store-runtime";
+  asOptionalRecord as asRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -40,6 +52,7 @@ const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
+const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -79,7 +92,6 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "web_search",
   "write",
 ]);
-const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
@@ -278,49 +290,16 @@ type CachedActiveRecallResult = {
 
 type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
 
-type ActiveMemoryToggleStore = {
-  sessions?: Record<string, { disabled?: boolean; updatedAt?: number }>;
+type ActiveMemoryToggleEntry = {
+  sessionKey: string;
+  disabled: true;
+  updatedAt: number;
 };
-
-type AsyncLock = <T>(task: () => Promise<T>) => Promise<T>;
-
-const toggleStoreLocks = new Map<string, AsyncLock>();
 let lastActiveRecallCacheSweepAt = 0;
 let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
 let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
 let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
-function createAsyncLock(): AsyncLock {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(task: () => Promise<T>): Promise<T> {
-    const previous = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await task();
-    } finally {
-      release?.();
-    }
-  };
-}
-
-function withToggleStoreLock<T>(statePath: string, task: () => Promise<T>): Promise<T> {
-  let withLock = toggleStoreLocks.get(statePath);
-  if (!withLock) {
-    withLock = createAsyncLock();
-    toggleStoreLocks.set(statePath, withLock);
-  }
-  return withLock(task);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
@@ -392,9 +371,9 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseInt(value, 10)
+        ? parseStrictPositiveInteger(value)
         : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -541,20 +520,15 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
     return undefined;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     let bestMatch:
       | {
           sessionKey: string;
           updatedAt: number;
         }
       | undefined;
-    for (const [sessionKey, entry] of Object.entries(store)) {
+    for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
+      agentId: params.agentId,
+    })) {
       if (!entry || typeof entry !== "object") {
         continue;
       }
@@ -577,10 +551,6 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   } catch {
     return undefined;
   }
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
@@ -639,25 +609,25 @@ function resolveRecallRunChannelContext(params: {
     (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
-  const resolveReturnValue = (params: {
+  const resolveReturnValue = (paramsLocal: {
     resolvedChannel?: string;
     resolvedChannelStrength?: "strong" | "weak";
   }) => {
     const trustedResolvedChannel =
-      params.resolvedChannelStrength === "strong" ? params.resolvedChannel : undefined;
+      paramsLocal.resolvedChannelStrength === "strong" ? paramsLocal.resolvedChannel : undefined;
     return {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
-        params.resolvedChannel,
+        paramsLocal.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
-        params.resolvedChannel,
+        paramsLocal.resolvedChannel,
     };
   };
   const resolvedSessionKey =
@@ -672,17 +642,10 @@ function resolveRecallRunChannelContext(params: {
   }
 
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-    const sessionEntry = resolveSessionStoreEntry({
-      store,
+    const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
+      agentId: params.agentId,
       sessionKey: resolvedSessionKey,
-    }).existing;
+    });
     const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
@@ -708,54 +671,14 @@ function resolveRecallRunChannelContext(params: {
   }
 }
 
-function resolveToggleStatePath(api: OpenClawPluginApi): string {
-  return path.join(
-    api.runtime.state.resolveStateDir(),
-    "plugins",
-    "active-memory",
-    TOGGLE_STATE_FILE,
-  );
+function activeMemoryToggleKey(sessionKey: string): string {
+  return crypto.createHash("sha256").update(sessionKey, "utf8").digest("hex");
 }
 
-async function readToggleStore(statePath: string): Promise<ActiveMemoryToggleStore> {
-  try {
-    const raw = await fs.readFile(statePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const sessions = (parsed as { sessions?: unknown }).sessions;
-    if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
-      return {};
-    }
-    const nextSessions: NonNullable<ActiveMemoryToggleStore["sessions"]> = {};
-    for (const [sessionKey, value] of Object.entries(sessions)) {
-      if (!sessionKey.trim() || !value || typeof value !== "object" || Array.isArray(value)) {
-        continue;
-      }
-      const disabled = (value as { disabled?: unknown }).disabled === true;
-      const updatedAt =
-        typeof (value as { updatedAt?: unknown }).updatedAt === "number"
-          ? (value as { updatedAt: number }).updatedAt
-          : undefined;
-      if (disabled) {
-        nextSessions[sessionKey] = { disabled, updatedAt };
-      }
-    }
-    return Object.keys(nextSessions).length > 0 ? { sessions: nextSessions } : {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    return {};
-  }
-}
-
-async function writeToggleStore(statePath: string, store: ActiveMemoryToggleStore): Promise<void> {
-  await replaceFileAtomic({
-    filePath: statePath,
-    content: `${JSON.stringify(store, null, 2)}\n`,
-    tempPrefix: ".active-memory",
+function openActiveMemoryToggleStore(api: OpenClawPluginApi) {
+  return api.runtime.state.openKeyedStore<ActiveMemoryToggleEntry>({
+    namespace: "session-toggles",
+    maxEntries: 10_000,
   });
 }
 
@@ -768,8 +691,13 @@ async function isSessionActiveMemoryDisabled(params: {
     return false;
   }
   try {
-    const store = await readToggleStore(resolveToggleStatePath(params.api));
-    return store.sessions?.[sessionKey]?.disabled === true;
+    const store = openActiveMemoryToggleStore(params.api);
+    const key = activeMemoryToggleKey(sessionKey);
+    const stored = await store.lookup(key);
+    if (stored?.disabled === true) {
+      return true;
+    }
+    return false;
   } catch (error) {
     params.api.logger.debug?.(
       `active-memory: failed to read session toggle (${error instanceof Error ? error.message : String(error)})`,
@@ -783,17 +711,16 @@ async function setSessionActiveMemoryDisabled(params: {
   sessionKey: string;
   disabled: boolean;
 }): Promise<void> {
-  const statePath = resolveToggleStatePath(params.api);
-  await withToggleStoreLock(statePath, async () => {
-    const store = await readToggleStore(statePath);
-    const sessions = { ...store.sessions };
-    if (params.disabled) {
-      sessions[params.sessionKey] = { disabled: true, updatedAt: Date.now() };
-    } else {
-      delete sessions[params.sessionKey];
-    }
-    await writeToggleStore(statePath, Object.keys(sessions).length > 0 ? { sessions } : {});
-  });
+  const store = openActiveMemoryToggleStore(params.api);
+  if (params.disabled) {
+    await store.register(activeMemoryToggleKey(params.sessionKey), {
+      sessionKey: params.sessionKey,
+      disabled: true,
+      updatedAt: Date.now(),
+    });
+  } else {
+    await store.delete(activeMemoryToggleKey(params.sessionKey));
+  }
 }
 
 function resolveCommandSessionKey(params: {
@@ -892,9 +819,7 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
-    agents: Array.isArray(raw.agents)
-      ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
-      : [],
+    agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:
       typeof raw.modelFallback === "string" && raw.modelFallback.trim()
@@ -980,6 +905,39 @@ function applyActiveMemoryRuntimeConfigSnapshot(
   };
 }
 
+function resolveActiveMemoryCleanupConfig(api: OpenClawPluginApi): OpenClawConfig | undefined {
+  try {
+    return (
+      (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+      (api.config as OpenClawConfig | undefined)
+    );
+  } catch {
+    return api.config as OpenClawConfig | undefined;
+  }
+}
+
+function scheduleMemorySearchCleanupAfterTimeout(
+  api: OpenClawPluginApi,
+  logPrefix: string,
+  agentId: string,
+): void {
+  const cfg = resolveActiveMemoryCleanupConfig(api);
+  setTimeout(() => {
+    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+      .then(() => {
+        api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+      })
+      .catch((error: unknown) => {
+        const message = toSingleLineLogValue(
+          error instanceof Error ? error.message : String(error),
+        );
+        api.logger.warn?.(
+          `${logPrefix} failed to release memory search managers after timeout: ${message}`,
+        );
+      });
+  }, 0);
+}
+
 function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
   if (
     thinking === "off" ||
@@ -1057,7 +1015,6 @@ function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
         "If relevant memory is mostly a stable user preference or recurring habit, lean toward returning it.",
         "If the strongest match is only a one-off historical fact and not a recurring preference or habit, prefer NONE unless the latest user message clearly asks for that fact.",
       ];
-    case "balanced":
     default:
       return [
         "Treat the latest user message as the primary query.",
@@ -1345,7 +1302,12 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= Date.now()) {
+  const now = asDateTimestampMs(Date.now());
+  if (
+    now === undefined ||
+    asDateTimestampMs(cached.expiresAt) === undefined ||
+    cached.expiresAt <= now
+  ) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -1353,19 +1315,27 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
 }
 
 function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  const now = Date.now();
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
   if (
     activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
-    now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS
+    (now !== undefined && now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS)
   ) {
     sweepExpiredCacheEntries(now);
-    lastActiveRecallCacheSweepAt = now;
+    if (now !== undefined) {
+      lastActiveRecallCacheSweepAt = now;
+    }
+  }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (expiresAt === undefined) {
+    activeRecallCache.delete(cacheKey);
+    return;
   }
   if (activeRecallCache.has(cacheKey)) {
     activeRecallCache.delete(cacheKey);
   }
   activeRecallCache.set(cacheKey, {
-    expiresAt: now + ttlMs,
+    expiresAt,
     result,
   });
   while (activeRecallCache.size > DEFAULT_MAX_CACHE_ENTRIES) {
@@ -1377,9 +1347,13 @@ function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: nu
   }
 }
 
-function sweepExpiredCacheEntries(now = Date.now()): void {
+function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
+  if (now === undefined) {
+    activeRecallCache.clear();
+    return;
+  }
   for (const [cacheKey, cached] of activeRecallCache.entries()) {
-    if (cached.expiresAt <= now) {
+    if (asDateTimestampMs(cached.expiresAt) === undefined || cached.expiresAt <= now) {
       activeRecallCache.delete(cacheKey);
     }
   }
@@ -1500,11 +1474,11 @@ function buildPluginDebugLine(params: {
     warning && action && !cleaned
       ? `${warning} ${action}`
       : [warning, action && !cleaned ? action : ""]
-          .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+          .filter((value): value is string => Boolean(value))
           .join(" | ");
-  const messages = [warningAction, cleaned]
-    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
-    .join(" | ");
+  const messages = uniqueStrings(
+    [warningAction, cleaned].filter((value): value is string => Boolean(value)),
+  ).join(" | ");
   const trailing = messages;
   if (prefix && trailing) {
     return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${trailing}`;
@@ -1560,13 +1534,11 @@ async function persistPluginStatusLines(params: {
     return;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      agentId ? { agentId } : undefined,
-    );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-      const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const existingEntry = params.api.runtime.agent.session.getSessionEntry({
+        agentId,
+        sessionKey,
+      });
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
         : false;
@@ -1574,39 +1546,38 @@ async function persistPluginStatusLines(params: {
         return;
       }
     }
-    await updateSessionStore(storePath, (store) => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey });
-      const existing = resolved.existing;
-      if (!existing) {
-        return;
-      }
-      const previousEntries = Array.isArray(existing.pluginDebugEntries)
-        ? existing.pluginDebugEntries
-        : [];
-      const nextEntries = previousEntries.filter(
-        (entry): entry is PluginDebugEntry =>
-          Boolean(entry) &&
-          typeof entry === "object" &&
-          typeof entry.pluginId === "string" &&
-          entry.pluginId !== "active-memory",
-      );
-      const nextLines: string[] = [];
-      if (params.statusLine) {
-        nextLines.push(params.statusLine);
-      }
-      if (debugLine) {
-        nextLines.push(debugLine);
-      }
-      if (nextLines.length > 0) {
-        nextEntries.push({
-          pluginId: "active-memory",
-          lines: nextLines,
-        });
-      }
-      store[resolved.normalizedKey] = {
-        ...existing,
-        pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
-      };
+    await params.api.runtime.agent.session.patchSessionEntry({
+      agentId,
+      sessionKey,
+      preserveActivity: true,
+      update: (existing) => {
+        const previousEntries = Array.isArray(existing.pluginDebugEntries)
+          ? existing.pluginDebugEntries
+          : [];
+        const nextEntries = previousEntries.filter(
+          (entry): entry is PluginDebugEntry =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            typeof entry.pluginId === "string" &&
+            entry.pluginId !== "active-memory",
+        );
+        const nextLines: string[] = [];
+        if (params.statusLine) {
+          nextLines.push(params.statusLine);
+        }
+        if (debugLine) {
+          nextLines.push(debugLine);
+        }
+        if (nextLines.length > 0) {
+          nextEntries.push({
+            pluginId: "active-memory",
+            lines: nextLines,
+          });
+        }
+        return {
+          pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
+        };
+      },
     });
   } catch (error) {
     params.api.logger.debug?.(
@@ -1825,7 +1796,9 @@ function watchTerminalMemorySearchResult(params: {
     if (stopped) {
       return;
     }
-    timeoutId = setTimeout(tick, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
+    timeoutId = setTimeout(() => {
+      void tick();
+    }, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
     timeoutId.unref?.();
   };
   const tick = async () => {
@@ -2012,7 +1985,7 @@ async function waitForSubagentPartialTimeoutData(
       (await Promise.race([
         subagentPromise.then(
           () => undefined,
-          (error) => readPartialTimeoutData(error),
+          (error: unknown) => readPartialTimeoutData(error),
         ),
         timeoutPromise,
       ])) ?? {}
@@ -2516,7 +2489,7 @@ async function runRecallSubagent(params: {
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
-    const result = await params.api.runtime.agent.runEmbeddedPiAgent({
+    const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
       agentId: params.agentId,
@@ -2529,6 +2502,7 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
+      lane: ACTIVE_MEMORY_RECALL_LANE,
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
@@ -2755,6 +2729,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
 
@@ -2864,6 +2839,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
     const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
@@ -2889,6 +2865,7 @@ async function maybeResolveActiveRecall(params: {
   }
 }
 
+/** Plugin entry registering Active Memory hooks, tools, config schema, and doctor cleanup. */
 export default definePluginEntry({
   id: "active-memory",
   name: "Active Memory",
@@ -3176,4 +3153,4 @@ const testing = {
   },
 };
 
-export { testing as __testing };
+export { testing, testing as __testing };

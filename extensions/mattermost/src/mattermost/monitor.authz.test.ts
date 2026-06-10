@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor.authz plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
@@ -179,6 +180,47 @@ describe("mattermost monitor authz", () => {
       channelName: "general",
       channelDisplay: "General",
       roomLabel: "#general",
+    });
+  });
+
+  it("denies command invocations when channel type is unavailable", async () => {
+    const decision = await authorizeMattermostCommandInvocation({
+      account: {
+        ...accountFixture,
+        config: {
+          dmPolicy: "allowlist",
+          groupPolicy: "open",
+          allowFrom: ["trusted-user"],
+        },
+      },
+      cfg: {},
+      senderId: "new-user",
+      senderName: "New User",
+      channelId: "dm-1",
+      channelInfo: {
+        id: "dm-1",
+        name: "",
+        display_name: "",
+      },
+      storeAllowFrom: [],
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
+
+    expect(decision).toEqual({
+      ok: false,
+      denyReason: "unknown-channel",
+      commandAuthorized: false,
+      channelInfo: {
+        id: "dm-1",
+        name: "",
+        display_name: "",
+      },
+      kind: "channel",
+      chatType: "channel",
+      channelName: "",
+      channelDisplay: "",
+      roomLabel: "#dm-1",
     });
   });
 

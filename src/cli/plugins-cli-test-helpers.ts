@@ -1,3 +1,4 @@
+// Shared Vitest mocks and runtime capture helpers for plugin CLI command tests.
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -25,6 +26,7 @@ type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 
 function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
+  // Tests mutate records freely; clone to keep helper state from leaking across assertions.
   return structuredClone(records);
 }
 
@@ -91,36 +93,36 @@ export const installHooksFromPath: AsyncUnknownMock = vi.fn();
 export const recordHookInstall: UnknownMock = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } = vi.hoisted(() => {
-  const runtimeLogs: string[] = [];
-  const runtimeErrors: string[] = [];
+  const runtimeLogsLocal: string[] = [];
+  const runtimeErrorsLocal: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
   const normalizeStdout = (value: string) => (value.endsWith("\n") ? value.slice(0, -1) : value);
   const stringifyJson = (value: unknown, space = 2) =>
     JSON.stringify(value, null, space > 0 ? space : undefined);
-  const defaultRuntime = {
+  const defaultRuntimeLocal = {
     log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
+      runtimeLogsLocal.push(stringifyArgs(args));
     }),
     error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
+      runtimeErrorsLocal.push(stringifyArgs(args));
     }),
     writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(normalizeStdout(value));
+      defaultRuntimeLocal.log(normalizeStdout(value));
     }),
     writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(stringifyJson(value, space));
+      defaultRuntimeLocal.log(stringifyJson(value, space));
     }),
     exit: vi.fn((code: number) => {
       throw new Error(`__exit__:${code}`);
     }),
   } as CliMockOutputRuntime;
   return {
-    defaultRuntime,
-    runtimeLogs,
-    runtimeErrors,
+    defaultRuntime: defaultRuntimeLocal,
+    runtimeLogs: runtimeLogsLocal,
+    runtimeErrors: runtimeErrorsLocal,
     resetRuntimeCapture: () => {
-      runtimeLogs.length = 0;
-      runtimeErrors.length = 0;
+      runtimeLogsLocal.length = 0;
+      runtimeErrorsLocal.length = 0;
     },
   };
 });
@@ -347,6 +349,25 @@ vi.mock("../plugins/status.js", () => ({
   formatPluginCompatibilityNotice: (entry: { message: string }) => entry.message,
 }));
 
+vi.mock("../plugins/status-snapshot.js", () => ({
+  buildPluginRegistrySnapshotReport: ((
+    ...args: Parameters<
+      (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
+    >
+  ) =>
+    invokeMock<
+      Parameters<
+        (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
+      >,
+      ReturnType<
+        (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"]
+      >
+    >(
+      buildPluginRegistrySnapshotReport,
+      ...args,
+    )) as (typeof import("../plugins/status-snapshot.js"))["buildPluginRegistrySnapshotReport"],
+}));
+
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: ((...args: unknown[]) =>
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
@@ -488,6 +509,7 @@ vi.mock("../plugins/install.js", () => ({
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
     SECURITY_SCAN_BLOCKED: "security_scan_blocked",
     SECURITY_SCAN_FAILED: "security_scan_failed",
+    UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
   },
   installPluginFromNpmSpec: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>
@@ -602,6 +624,7 @@ vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
+    ARTIFACT_UNAVAILABLE: "artifact_unavailable",
   },
   installPluginFromClawHub: ((
     ...args: Parameters<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>

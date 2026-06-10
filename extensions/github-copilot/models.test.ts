@@ -1,21 +1,12 @@
+// Github Copilot tests cover models plugin behavior.
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
-  );
-  return {
-    ...actual,
-    getOAuthApiKey: vi.fn(),
-    getOAuthProviders: vi.fn(() => []),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
+vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-model-shared")>()),
   normalizeModelCompat: (model: Record<string, unknown>) => model,
   resolveProviderEndpoint: (baseUrl: string) => ({
     baseUrl,
@@ -70,12 +61,20 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.6");
     });
 
+    it("includes claude-opus-4.8", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.8");
+    });
+
     it("includes claude-sonnet-4.6", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
     });
 
-    it("includes claude-sonnet-4.5", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.5");
+    it("excludes retired and old Claude fallback rows", () => {
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-haiku-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("grok-code-fast-1");
     });
 
     it("returns a mutable copy", () => {
@@ -104,6 +103,22 @@ describe("github-copilot model defaults", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+      });
+    });
+
+    it("uses static metadata overrides for Claude Opus 1M fallback rows", () => {
+      const def = buildCopilotModelDefinition("claude-opus-4.7-1m-internal");
+      expect(def).toEqual({
+        id: "claude-opus-4.7-1m-internal",
+        name: "Claude Opus 4.7 (1M context)",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 64_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: null },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
       });
     });
 
@@ -144,17 +159,17 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(resolveCopilotForwardCompatModel(ctx)).toBeUndefined();
   });
 
-  it("clones gpt-5.2-codex template for gpt-5.4", () => {
+  it("clones gpt-5.3-codex template for gpt-5.4", () => {
     const template = {
-      id: "gpt-5.2-codex",
-      name: "gpt-5.2-codex",
+      id: "gpt-5.3-codex",
+      name: "gpt-5.3-codex",
       provider: "github-copilot",
       api: "openai-responses",
       reasoning: true,
       contextWindow: 200_000,
     };
     const ctx = createMockCtx("gpt-5.4", {
-      "github-copilot/gpt-5.2-codex": template,
+      "github-copilot/gpt-5.3-codex": template,
     });
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("gpt-5.4");
@@ -162,25 +177,15 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
-  it("clones gpt-5.3-codex template for gpt-5.3-codex when not in registry", () => {
-    const template = {
-      id: "gpt-5.2-codex",
-      name: "gpt-5.2-codex",
-      provider: "github-copilot",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 200_000,
-    };
-    const ctx = createMockCtx("gpt-5.3-codex", {
-      "github-copilot/gpt-5.2-codex": template,
-    });
+  it("uses static metadata for gpt-5.3-codex when not in registry", () => {
+    const ctx = createMockCtx("gpt-5.3-codex");
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("gpt-5.3-codex");
     expect(result.name).toBe("gpt-5.3-codex");
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
-  it("prefers gpt-5.3-codex as template source over gpt-5.2-codex for gpt-5.4", () => {
+  it("uses gpt-5.3-codex as the template source for gpt-5.4", () => {
     const template53 = {
       id: "gpt-5.3-codex",
       name: "gpt-5.3-codex",
@@ -189,17 +194,8 @@ describe("resolveCopilotForwardCompatModel", () => {
       reasoning: true,
       contextWindow: 300_000,
     };
-    const template52 = {
-      id: "gpt-5.2-codex",
-      name: "gpt-5.2-codex",
-      provider: "github-copilot",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 200_000,
-    };
     const ctx = createMockCtx("gpt-5.4", {
       "github-copilot/gpt-5.3-codex": template53,
-      "github-copilot/gpt-5.2-codex": template52,
     });
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("gpt-5.4");
@@ -224,6 +220,17 @@ describe("resolveCopilotForwardCompatModel", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
       maxTokens: 128_000,
+    });
+  });
+
+  it("preserves static Anthropic thinking maps for Claude Opus 1M fallback rows", () => {
+    const opus46 = requireResolvedModel(createMockCtx("claude-opus-4.6-1m"));
+    expect(opus46.thinkingLevelMap).toEqual({ xhigh: null, max: null });
+
+    const result = requireResolvedModel(createMockCtx("claude-opus-4.7-1m-internal"));
+    expect(result.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: null });
+    expect(result.compat).toEqual({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
     });
   });
 
@@ -412,6 +419,10 @@ describe("github-copilot token", () => {
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
+    const [, calledInit] = fetchImpl.mock.calls[0] ?? [];
+    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
+      "identity",
+    );
     expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
   });
 });
@@ -494,7 +505,29 @@ describe("fetchCopilotModelCatalog", () => {
             max_context_window_tokens: 1000000,
             max_output_tokens: 64000,
           },
-          supports: { vision: true, tool_calls: true },
+          supports: {
+            vision: true,
+            tool_calls: true,
+            reasoning_effort: ["low", "medium", "high", "xhigh"],
+          },
+        },
+      },
+      {
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+        object: "model",
+        vendor: "Anthropic",
+        capabilities: {
+          type: "chat",
+          limits: {
+            max_context_window_tokens: 200000,
+            max_output_tokens: 64000,
+          },
+          supports: {
+            vision: true,
+            tool_calls: true,
+            reasoning_effort: ["low", "medium", "high", "max"],
+          },
         },
       },
       {
@@ -537,12 +570,16 @@ describe("fetchCopilotModelCatalog", () => {
     expect(((calledInit as RequestInit).headers as Record<string, string>).Authorization).toBe(
       "Bearer tid=test",
     );
+    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
+      "identity",
+    );
 
     expect(out.map((m) => m.id)).toEqual([
       "gpt-5.5",
       "gpt-5.3-codex",
       "gemini-3.1-pro-preview",
       "claude-opus-4.7-1m-internal",
+      "claude-opus-4-5",
     ]);
 
     const gpt55 = out.find((m) => m.id === "gpt-5.5");
@@ -555,6 +592,7 @@ describe("fetchCopilotModelCatalog", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
       maxTokens: 128000,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
     });
 
     const codex = out.find((m) => m.id === "gpt-5.3-codex");
@@ -574,6 +612,16 @@ describe("fetchCopilotModelCatalog", () => {
     const opus1m = out.find((m) => m.id === "claude-opus-4.7-1m-internal");
     expect(opus1m?.api).toBe("anthropic-messages");
     expect(opus1m?.contextWindow).toBe(1_000_000);
+    expect(opus1m?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: null });
+    expect(opus1m?.compat).toEqual({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
+
+    const opus45 = out.find((m) => m.id === "claude-opus-4-5");
+    expect(opus45?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
+    expect(opus45?.compat).toEqual({
+      supportedReasoningEfforts: ["low", "medium", "high", "max"],
+    });
   });
 
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
@@ -630,6 +678,59 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out[0].name).toBe("GPT-5.5");
   });
 
+  it("falls back from malformed live token limits", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          {
+            id: "gpt-bad-window",
+            name: "GPT Bad Window",
+            object: "model",
+            capabilities: {
+              type: "chat",
+              limits: {
+                max_context_window_tokens: -1,
+                max_output_tokens: 128000.5,
+              },
+            },
+          },
+          {
+            id: "gpt-bad-output",
+            name: "GPT Bad Output",
+            object: "model",
+            capabilities: {
+              type: "chat",
+              limits: {
+                max_context_window_tokens: Number.POSITIVE_INFINITY,
+                max_output_tokens: 0,
+              },
+            },
+          },
+        ],
+      }),
+    });
+
+    const out = await fetchCopilotModelCatalog({
+      copilotApiToken: "tid=test",
+      baseUrl: "https://api.githubcopilot.com",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({
+      id: "gpt-bad-window",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+    expect(out[1]).toMatchObject({
+      id: "gpt-bad-output",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+  });
+
   it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: false,
@@ -644,6 +745,24 @@ describe("fetchCopilotModelCatalog", () => {
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).rejects.toThrow(/HTTP 401/);
+  });
+
+  it("throws provider-owned errors for malformed successful /models payloads", async () => {
+    for (const payload of [[], { data: {} }, { data: [null] }]) {
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      });
+
+      await expect(
+        fetchCopilotModelCatalog({
+          copilotApiToken: "tid=test",
+          baseUrl: "https://api.githubcopilot.com",
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        }),
+      ).rejects.toThrow("Copilot /models: malformed JSON response");
+    }
   });
 
   it("rejects empty token / baseUrl synchronously before fetching", async () => {

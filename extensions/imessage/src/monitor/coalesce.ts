@@ -1,3 +1,4 @@
+// Imessage plugin module implements coalesce behavior.
 import type { IMessagePayload } from "./types.js";
 
 // Keep the coalescing contract narrow (caps, ID tracking, reply-context
@@ -15,6 +16,60 @@ import type { IMessagePayload } from "./types.js";
 export const MAX_COALESCED_TEXT_CHARS = 4000;
 export const MAX_COALESCED_ATTACHMENTS = 20;
 export const MAX_COALESCED_ENTRIES = 10;
+export const IMESSAGE_URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
+
+export function hasIMessageUrlBalloonBundleID(payload: IMessagePayload): boolean {
+  return payload.balloon_bundle_id === IMESSAGE_URL_BALLOON_BUNDLE_ID;
+}
+
+// imsg only emits `balloon_bundle_id` for rows that actually carry a balloon
+// (the nil case is omitted on the wire), so a present, non-empty value is the
+// signal that this build exposes balloon metadata at all.
+export function hasIMessageBalloonMetadata(payload: IMessagePayload): boolean {
+  return typeof payload.balloon_bundle_id === "string" && payload.balloon_bundle_id.length > 0;
+}
+
+/**
+ * Decide whether a debounced same-sender bucket should merge into one turn.
+ *
+ * `buildEmitsBalloonMetadata` is a session-level capability latch: once any
+ * inbound row from this imsg build has carried balloon metadata, absence of a
+ * URL marker is meaningful (the row genuinely is not a URL split-send), so we
+ * can keep ordinary buffered DMs separate. It must be session-scoped, not
+ * per-bucket: imsg omits `balloon_bundle_id` on the wire for non-balloon rows,
+ * so a bucket of plain text rows looks identical on old and new builds.
+ */
+export function shouldCombineIMessagePayloadBucket(
+  payloads: readonly IMessagePayload[],
+  buildEmitsBalloonMetadata: boolean,
+): boolean {
+  // Precise path: a real Apple URL-preview split-send carries the URL-balloon
+  // marker on the preview row — merge it into one turn.
+  if (payloads.some(hasIMessageUrlBalloonBundleID)) {
+    return true;
+  }
+  // Metadata-capable build (observed earlier this session or in this bucket):
+  // the missing URL marker is trustworthy, so keep ordinary buffered DMs as
+  // separate turns. This is the precision the structural gate exists for.
+  if (buildEmitsBalloonMetadata || payloads.some(hasIMessageBalloonMetadata)) {
+    return false;
+  }
+  // Back-compat (remove once imsg coalesces split-sends upstream — see
+  // openclaw/imsg#141, tracked by #91243): a build that has never emitted any
+  // balloon metadata cannot structurally tell a `Dump <url>` split-send from
+  // separate sends. Preserve the pre-metadata merge so split-send users do not
+  // regress to two turns on a released imsg that lacks the field.
+  //
+  // This never merges more than the shipped behavior already did: with
+  // `coalesceSameSenderDms` enabled, `main` debounces every same-sender DM and
+  // merges each multi-entry bucket unconditionally. So an unlatched session
+  // (old build, or a metadata-capable build before its first balloon row) is
+  // identical to today, not a new regression. Flushing these buckets instead
+  // would re-break old-imsg split-sends — the very case this guards. Fully
+  // closing the pre-latch window needs an imsg-advertised capability flag, which
+  // is part of the upstream #141 work.
+  return true;
+}
 
 export type CoalescedIMessagePayload = IMessagePayload & {
   /**
@@ -23,6 +78,10 @@ export type CoalescedIMessagePayload = IMessagePayload & {
    * dedupe paths can still recognize them.
    */
   coalescedMessageGuids?: string[];
+  coalescedCatchupCursor?: {
+    lastSeenMs: number;
+    lastSeenRowid: number;
+  };
 };
 
 /**
@@ -91,6 +150,19 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   const latestCreatedAt =
     createdAts.length > 0 ? createdAts.reduce((a, b) => (a > b ? a : b)) : first.created_at;
 
+  let maxRowid = -Infinity;
+  let maxDateMs = -Infinity;
+  for (const payload of payloads) {
+    if (typeof payload.id === "number" && Number.isFinite(payload.id)) {
+      maxRowid = Math.max(maxRowid, payload.id);
+    }
+    const dateMs =
+      typeof payload.created_at === "string" ? Date.parse(payload.created_at) : Number.NaN;
+    if (Number.isFinite(dateMs)) {
+      maxDateMs = Math.max(maxDateMs, dateMs);
+    }
+  }
+
   // Walk the unbounded `payloads` so even GUIDs whose text/attachments were
   // dropped by the cap are still remembered for downstream dedupe.
   const seenGuids = new Set<string>();
@@ -118,5 +190,9 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
     reply_to_text: entryWithReply?.reply_to_text ?? first.reply_to_text ?? null,
     reply_to_sender: entryWithReply?.reply_to_sender ?? first.reply_to_sender ?? null,
     coalescedMessageGuids: coalescedMessageGuids.length > 0 ? coalescedMessageGuids : undefined,
+    coalescedCatchupCursor:
+      Number.isFinite(maxRowid) && Number.isFinite(maxDateMs)
+        ? { lastSeenMs: maxDateMs, lastSeenRowid: maxRowid }
+        : undefined,
   };
 }

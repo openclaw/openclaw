@@ -1,12 +1,20 @@
+// Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
+// assistant media routes, pairing helpers, and session-generation metadata.
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  ensureDeviceToken,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
 import {
@@ -14,6 +22,7 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -279,29 +288,49 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
-  async function withPairedOperatorDeviceToken<T>(params: { fn: (token: string) => Promise<T> }) {
+  async function withPairedOperatorDeviceToken<T>(params: {
+    issuerGeneration?: string;
+    browserMetadata?: boolean;
+    fn: (token: string) => Promise<T>;
+  }) {
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
-    vi.stubEnv("OPENCLAW_HOME", tempHome);
     try {
-      const deviceId = "control-ui-device";
-      const requested = await requestDevicePairing({
-        deviceId,
-        publicKey: "test-public-key",
-        role: "operator",
-        scopes: ["operator.read"],
-        clientId: "openclaw-control-ui",
-        clientMode: "webchat",
+      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+        const deviceId = "control-ui-device";
+        const requested = await requestDevicePairing({
+          deviceId,
+          publicKey: "test-public-key",
+          role: "operator",
+          scopes: ["operator.read"],
+          ...(params.browserMetadata
+            ? {
+                clientId: "openclaw-control-ui",
+                clientMode: "webchat",
+              }
+            : {}),
+        });
+        const approved = await approveDevicePairing(requested.request.requestId, {
+          callerScopes: ["operator.read"],
+        });
+        expect(approved?.status).toBe("approved");
+        let operatorToken =
+          approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+        if (params.issuerGeneration) {
+          const issued = await ensureDeviceToken({
+            deviceId,
+            role: "operator",
+            scopes: ["operator.read"],
+            issuer: {
+              kind: "shared-gateway-auth",
+              generation: params.issuerGeneration,
+            },
+          });
+          operatorToken = issued?.token;
+        }
+        expect(typeof operatorToken).toBe("string");
+        return await params.fn(operatorToken ?? "");
       });
-      const approved = await approveDevicePairing(requested.request.requestId, {
-        callerScopes: ["operator.read"],
-      });
-      expect(approved?.status).toBe("approved");
-      const operatorToken =
-        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
-      expect(typeof operatorToken).toBe("string");
-      return await params.fn(operatorToken ?? "");
     } finally {
-      vi.unstubAllEnvs();
       await fs.rm(tempHome, { recursive: true, force: true });
     }
   }
@@ -438,6 +467,36 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("reports assistant media metadata when the process clock is outside the Date range", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    try {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-bad-clock-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const { res, handled, end } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const payload = responseJson(end) as {
+            available?: boolean;
+            mediaTicket?: string;
+            mediaTicketExpiresAt?: string;
+          };
+          expect(payload.available).toBe(true);
+          expect(payload.mediaTicket).toBeUndefined();
+          expect(payload.mediaTicketExpiresAt).toBeUndefined();
+        },
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("serves assistant local media with a scoped media ticket after metadata auth", async () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-ticket-",
@@ -563,6 +622,39 @@ describe("handleControlUiHttpRequest", () => {
               url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
               method: "GET",
               auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
+  it("accepts shared-gateway issuer tagged device tokens on assistant media requests", async () => {
+    const auth = {
+      mode: "token",
+      token: "shared-token",
+      allowTailscale: false,
+    } satisfies ResolvedGatewayAuth;
+    const issuerGeneration = resolveSharedGatewaySessionGeneration(auth);
+    expect(typeof issuerGeneration).toBe("string");
+    await withPairedOperatorDeviceToken({
+      issuerGeneration,
+      browserMetadata: true,
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-issued-device-token-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+              method: "GET",
+              auth,
               headers: {
                 authorization: `Bearer ${operatorToken}`,
               },
@@ -1012,6 +1104,30 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves static assets without synchronous file reads", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+        const readFileSync = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+          throw new Error("readFileSync should not run on Control UI request path");
+        });
+        try {
+          const { res, end, handled } = await runControlUiRequest({
+            url: "/assets/actual.txt",
+            method: "GET",
+            rootPath: tmp,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(responseBody(end)).toBe("inside-ok\n");
+        } finally {
+          readFileSync.mockRestore();
+        }
+      },
+    });
+  });
+
   it("serves HEAD for in-root assets without writing a body", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1135,7 +1251,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled, `expected ${url} to be handled`).toBe(true);
           expect(res.statusCode, `expected ${url} to be served`).toBe(200);
-          expect(res.setHeader).toHaveBeenCalledWith("Content-Type", expectedType);
+          expect(res["setHeader"]).toHaveBeenCalledWith("Content-Type", expectedType);
           expect(end, `expected ${url} to write a body`).toHaveBeenCalled();
         }
       },

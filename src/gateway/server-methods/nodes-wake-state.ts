@@ -1,3 +1,5 @@
+// Node wake state tracks APNs wake attempts and reconnect nudges for paired
+// nodes, plus a narrow read-only testing seam.
 export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
 export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
 export const NODE_WAKE_RECONNECT_POLL_MS = 150;
@@ -28,7 +30,7 @@ export function clearNodeWakeState(nodeId: string): void {
 // early-return paths. Mirrors the pattern used in agent-wait-dedupe.ts:223
 // and agents.ts:78 — keep production surface untouched and do not expose the
 // underlying Map reference.
-export const __testing = {
+export const testing = {
   getNodeWakeByIdSize(): number {
     return nodeWakeById.size;
   },
@@ -40,3 +42,4 @@ export const __testing = {
     nodeWakeNudgeById.clear();
   },
 };
+export { testing as __testing };

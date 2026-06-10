@@ -1,3 +1,4 @@
+// Discord tests cover message handler.preflight plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -31,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 import {
-  __testing as sessionBindingTesting,
+  testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -47,7 +48,7 @@ import {
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
 let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
-let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
+let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 
 beforeAll(async () => {
@@ -56,7 +57,7 @@ beforeAll(async () => {
     resolvePreflightMentionRequirement,
     shouldIgnoreBoundThreadWebhookMessage,
   } = await import("./message-handler.preflight.js"));
-  ({ __testing: threadBindingTesting, createThreadBindingManager } =
+  ({ testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
 });
 
@@ -961,6 +962,65 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.canonicalMessageId).toBe("orig-123");
   });
 
+  it("uses the resolved PluralKit member id when creating DM pairing requests", async () => {
+    fetchPluralKitMessageInfoMock.mockResolvedValue({
+      id: "proxy-dm-1",
+      original: "orig-dm-1",
+      member: { id: "pk-member-1", name: "Echo" },
+      system: { id: "system-1", name: "System" },
+    });
+    resolveDiscordDmCommandAccessMock.mockResolvedValue({
+      senderAccess: {
+        allowed: false,
+        decision: "pairing",
+        reasonCode: "dm_policy_pairing_required",
+      },
+      commandAccess: {
+        authorized: false,
+      },
+    });
+
+    const result = await runDmPreflight({
+      channelId: "dm-channel-pk-1",
+      message: createDiscordMessage({
+        id: "proxy-dm-1",
+        channelId: "dm-channel-pk-1",
+        content: "hello",
+        webhookId: "pluralkit-webhook-1",
+        author: {
+          id: "webhook-author",
+          bot: true,
+          username: "PluralKit",
+        },
+      }),
+      discordConfig: {
+        allowBots: true,
+        dmPolicy: "pairing",
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(resolveDiscordDmCommandAccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: {
+          id: "pk-member-1",
+          name: "Echo",
+          tag: "Echo",
+        },
+      }),
+    );
+    expect(handleDiscordDmCommandDecisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: {
+          id: "pk:pk-member-1",
+          tag: "Echo",
+          name: "Echo",
+        },
+      }),
+    );
+  });
+
   it("skips PluralKit lookup for bound-thread webhook echoes", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
@@ -1207,6 +1267,50 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.commandAuthorized).toBe(true);
     expect(preflight.shouldRequireMention).toBe(true);
     expect(preflight.shouldBypassMention).toBe(true);
+  });
+
+  it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
+    const channelId = "channel-room-event-abort";
+    const guildId = "guild-room-event-abort";
+    const message = createDiscordMessage({
+      id: "m-room-event-abort",
+      channelId,
+      content: "please stop",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        messages: {
+          groupChat: {
+            unmentionedInbound: "room_event",
+          },
+        },
+      } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("please stop");
+    expect(preflight.inboundEventKind).toBe("user_request");
   });
 
   it("still drops Discord native command echo messages", async () => {
@@ -2207,5 +2311,41 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
         webhookId: "wh-1",
       }),
     ).toBe(true);
+  });
+
+  it("does not suppress unbound thread webhook echoes when echo expiry overflows", async () => {
+    const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    const binding = await manager.bindTarget({
+      threadId: "thread-overflow",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child-1",
+      agentId: "main",
+      webhookId: "wh-overflow",
+      webhookToken: "tok-1",
+    });
+    expect(binding).not.toBeNull();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    try {
+      manager.unbindThread({
+        threadId: "thread-overflow",
+        sendFarewell: false,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(
+      shouldIgnoreBoundThreadWebhookMessage({
+        accountId: "default",
+        threadId: "thread-overflow",
+        webhookId: "wh-overflow",
+      }),
+    ).toBe(false);
   });
 });

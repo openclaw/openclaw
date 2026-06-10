@@ -1,3 +1,5 @@
+// Control-plane rate limiting bounds write-side RPC attempts per device/IP and
+// caps bucket growth against unique-key memory pressure.
 import type { GatewayClient } from "./server-methods/types.js";
 
 const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;
@@ -6,6 +8,7 @@ const CONTROL_PLANE_BUCKET_MAX_STALE_MS = 5 * 60_000;
 /** Hard cap to prevent memory DoS from rapid unique-key injection (CWE-400). */
 const CONTROL_PLANE_BUCKET_MAX_ENTRIES = 10_000;
 
+/** Sliding-window counter keyed by device/IP identity for write-side control RPCs. */
 type Bucket = {
   count: number;
   windowStartMs: number;
@@ -21,6 +24,7 @@ function normalizePart(value: unknown, fallback: string): string {
   return normalized.length > 0 ? normalized : fallback;
 }
 
+/** Builds a stable throttle key while avoiding shared fallback buckets for anonymous clients. */
 export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
   const deviceId = normalizePart(client?.connect?.device?.id, "unknown-device");
   const clientIp = normalizePart(client?.clientIp, "unknown-ip");
@@ -34,6 +38,7 @@ export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): s
   return `${deviceId}|${clientIp}`;
 }
 
+/** Consumes one write budget unit and reports retry state for gateway error responses. */
 export function consumeControlPlaneWriteBudget(params: {
   client: GatewayClient | null;
   nowMs?: number;
@@ -109,7 +114,7 @@ export function pruneStaleControlPlaneBuckets(nowMs = Date.now()): number {
   return pruned;
 }
 
-export const __testing = {
+export const testing = {
   getControlPlaneRateLimitBucketCount() {
     return controlPlaneBuckets.size;
   },
@@ -117,3 +122,4 @@ export const __testing = {
     controlPlaneBuckets.clear();
   },
 };
+export { testing as __testing };

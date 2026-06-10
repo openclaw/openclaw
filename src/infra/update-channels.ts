@@ -1,6 +1,10 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+// Resolves OpenClaw update channels from config, tags, and versions.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { parseComparableSemver } from "./semver-compare.js";
 
+/** Release stream used to choose registry tags and update policy defaults. */
 export type UpdateChannel = "stable" | "beta" | "dev";
+/** Evidence source that decided the effective update channel. */
 export type UpdateChannelSource =
   | "config"
   | "git-tag"
@@ -8,10 +12,14 @@ export type UpdateChannelSource =
   | "installed-version"
   | "default";
 
+/** Default channel for npm/package installs when no config or version signal overrides it. */
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
+/** Default channel for source installs where branch metadata is unavailable. */
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
+/** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 
+/** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
@@ -23,6 +31,7 @@ export function normalizeUpdateChannel(value?: string | null): UpdateChannel | n
   return null;
 }
 
+/** Maps an OpenClaw update channel to the npm dist-tag used for package lookups. */
 export function channelToNpmTag(channel: UpdateChannel): string {
   if (channel === "beta") {
     return "beta";
@@ -33,14 +42,28 @@ export function channelToNpmTag(channel: UpdateChannel): string {
   return "latest";
 }
 
+/** Returns whether a version/tag explicitly targets the beta stream. */
 export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
-export function isStableTag(tag: string): boolean {
-  return !isBetaTag(tag);
+/** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
+export function isPrereleaseTag(tag: string): boolean {
+  const parsed = parseComparableSemver(tag, { normalizeLegacyDotBeta: true });
+  if (parsed) {
+    return Boolean(parsed.prerelease?.some((part) => !/^[0-9]+$/.test(part)));
+  }
+  return /(?:^|[.-])(alpha|beta|rc|pre|preview|canary|dev|next|nightly|experimental)(?:[.-]|$)/i.test(
+    tag,
+  );
 }
 
+/** Returns whether a tag should be treated as a stable release candidate for updates. */
+export function isStableTag(tag: string): boolean {
+  return !isPrereleaseTag(tag);
+}
+
+/** Resolves registry update channel for package checks, preserving beta installs by default. */
 export function resolveRegistryUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
@@ -56,6 +79,7 @@ export function resolveRegistryUpdateChannel(params: {
   return params.configChannel ?? DEFAULT_PACKAGE_CHANNEL;
 }
 
+/** Resolves the effective channel and the signal that selected it. */
 export function resolveEffectiveUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
@@ -78,7 +102,10 @@ export function resolveEffectiveUpdateChannel(params: {
   if (params.installKind === "git") {
     const tag = params.git?.tag;
     if (tag) {
-      return { channel: isBetaTag(tag) ? "beta" : "stable", source: "git-tag" };
+      return {
+        channel: isBetaTag(tag) ? "beta" : isStableTag(tag) ? "stable" : "dev",
+        source: "git-tag",
+      };
     }
     const branch = params.git?.branch;
     if (branch && branch !== "HEAD") {
@@ -94,6 +121,7 @@ export function resolveEffectiveUpdateChannel(params: {
   return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
 }
 
+/** Formats an operator-facing channel label that includes the deciding source. */
 export function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
@@ -117,6 +145,7 @@ export function formatUpdateChannelLabel(params: {
   return `${params.channel} (default)`;
 }
 
+/** Resolves channel metadata plus display label for status and update UIs. */
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;

@@ -1,10 +1,11 @@
+// Resolves model suppression metadata declared by plugin manifests.
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  buildModelCatalogMergeKey,
   planManifestModelCatalogSuppressions,
   type ManifestModelCatalogSuppressionEntry,
 } from "../model-catalog/index.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
@@ -93,9 +94,12 @@ function manifestSuppressionMatchesConditions(params: {
     provider: params.provider,
     config: params.config,
   });
-  if (when.providerConfigApiIn?.length && configuredProvider?.api) {
+  if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
-    if (!allowedApis.has(configuredProvider.api)) {
+    const effectiveApi = configuredProvider
+      ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
+      : params.provider;
+    if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
     }
   }

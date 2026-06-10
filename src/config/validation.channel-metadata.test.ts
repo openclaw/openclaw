@@ -1,3 +1,4 @@
+// Verifies channel metadata validation and plugin capability lookups.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -153,6 +154,9 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
+  resolvePluginMetadataSnapshot: () => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(),
+  }),
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
@@ -203,6 +207,31 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
+
+  it("accepts Discord agent component TTL in generated bundled channel metadata", () => {
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        discord: {
+          agentComponents: {
+            ttlMs: 120_000,
+          },
+          accounts: {
+            work: {
+              agentComponents: {
+                ttlMs: 60_000,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.channels?.discord?.agentComponents?.ttlMs).toBe(120_000);
+      expect(result.config.channels?.discord?.accounts?.work?.agentComponents?.ttlMs).toBe(60_000);
+    }
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
@@ -246,6 +275,28 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("keeps raw channel validation diagnostics plugin-agnostic", () => {
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        telegram: {
+          groups: ["-1001234567890"],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "channels.telegram.groups",
+          message: expect.stringContaining("invalid config:"),
+        }),
+      );
+      expect(result.issues[0]?.message).not.toContain("Telegram groups");
+      expect(result.issues[0]?.message).not.toContain("openclaw doctor --fix");
+    }
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
@@ -270,6 +321,20 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("accepts the shipped deprecated bundledDiscovery marker", () => {
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "compat",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
+    }
+  });
+
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 
@@ -317,7 +382,7 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
   });
 
   it("loads a plugin metadata snapshot once during plugin validation", () => {
-    const loadPluginMetadataSnapshot = vi.fn((_config: unknown) => ({
+    const loadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) => ({
       manifestRegistry: createPluginConfigSchemaRegistry(),
     }));
 

@@ -1,8 +1,11 @@
+// Health gateway methods return cached or refreshed status summaries while
+// detecting stale channel runtime state against live gateway snapshots.
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
+import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
@@ -38,6 +41,7 @@ function cachedLifecycleDiffersFromRuntime(params: {
   return false;
 }
 
+/** Checks whether cached channel health is stale against the live runtime snapshot. */
 function cachedHealthDiffersFromRuntime(
   cached: HealthSummary,
   runtime: ChannelRuntimeSnapshot,
@@ -83,19 +87,38 @@ function cachedHealthDiffersFromRuntime(
   return false;
 }
 
+/** Merges cheap live runtime facts into a cached health summary before responding. */
 function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
 }): HealthSummary {
+  const { contextEngines: _cachedContextEngines, ...cached } = params.cached;
+  const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
+  for (const entry of listContextEngineQuarantines()) {
+    const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
+      engineId: entry.engineId,
+      operation: entry.operation,
+      reason: entry.reason,
+      failedAt: entry.failedAt.getTime(),
+    };
+    if (entry.owner) {
+      summary.owner = entry.owner;
+    }
+    quarantinedContextEngines.push(summary);
+  }
   return {
-    ...params.cached,
+    ...cached,
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    ...(quarantinedContextEngines.length > 0
+      ? { contextEngines: { quarantined: quarantinedContextEngines } }
+      : {}),
     modelPricing: getGatewayModelPricingHealth({
       enabled: params.cached.modelPricing?.state !== "disabled",
     }),
   };
 }
 
+/** Gateway handlers for health snapshots and status summaries. */
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
@@ -130,7 +153,9 @@ export const healthHandlers: GatewayRequestHandlers = {
         undefined,
         { cached: true },
       );
-      void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err) =>
+      // Serve the fresh-enough cache immediately but still refresh in the
+      // background so the next caller sees updated expensive probe data.
+      void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
       );
       return;

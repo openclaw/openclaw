@@ -1,12 +1,14 @@
+/** Builds final reply payloads after sanitization, media normalization, and dedupe. */
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
+  appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -35,6 +37,7 @@ function loadReplyPayloadsDedupeRuntime() {
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+  suppressMediaFailureWarning?: boolean;
 }): Promise<ReplyPayload> {
   if (!params.normalizeMediaPaths || !resolveSendableOutboundReplyParts(params.payload).hasMedia) {
     return params.payload;
@@ -45,8 +48,12 @@ async function normalizeReplyPayloadMedia(params: {
     return copyReplyPayloadMetadata(params.payload, normalized);
   } catch (err) {
     logVerbose(`reply payload media normalization failed: ${String(err)}`);
+    // Preserve the text reply and drop unusable media so channels can still send the answer.
     return copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
+      text: params.suppressMediaFailureWarning
+        ? params.payload.text
+        : appendReplyMediaFailureWarning(params.payload.text),
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -150,6 +157,7 @@ function copyPayloadWithSanitizedText(
   return next;
 }
 
+/** Builds final outbound payloads from agent output and message-tool delivery evidence. */
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
@@ -159,6 +167,8 @@ export async function buildReplyPayloads(params: {
   blockReplyPipeline: BlockReplyPipeline | null;
   /** Payload keys sent directly (not via pipeline) during tool flush. */
   directlySentBlockKeys?: Set<string>;
+  /** Payloads successfully sent directly during tool flush. */
+  directlySentBlockPayloads?: ReplyPayload[];
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
@@ -222,8 +232,9 @@ export async function buildReplyPayloads(params: {
       const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
         payload: parsed.payload,
         normalizeMediaPaths: params.normalizeMediaPaths,
+        suppressMediaFailureWarning: parsed.isSilent,
       });
-      if (parsed.isSilent && !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia) {
+      if (parsed.isSilent) {
         mediaNormalizedPayload.text = undefined;
       }
       return mediaNormalizedPayload;
@@ -323,8 +334,33 @@ export async function buildReplyPayloads(params: {
     : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
-  const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
-    if (payload.isError) {
+  const hasDirectlySentText = (payload: ReplyPayload): boolean => {
+    if (isDirectlySentBlockPayload(payload)) {
+      return true;
+    }
+    const text = resolveSendableOutboundReplyParts(payload).trimmedText;
+    if (!text || !params.directlySentBlockPayloads?.length) {
+      return false;
+    }
+    const fragmentsByAssistantMessage = new Map<number | undefined, string[]>();
+    for (const sentPayload of params.directlySentBlockPayloads) {
+      const sentText =
+        sentPayload.text ?? resolveSendableOutboundReplyParts(sentPayload).trimmedText;
+      if (!sentText) {
+        continue;
+      }
+      const assistantMessageIndex = getReplyPayloadMetadata(sentPayload)?.assistantMessageIndex;
+      const fragments = fragmentsByAssistantMessage.get(assistantMessageIndex) ?? [];
+      fragments.push(sentText);
+      fragmentsByAssistantMessage.set(assistantMessageIndex, fragments);
+    }
+    const normalizedText = text.trim();
+    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    const applicableFragments = fragmentsByAssistantMessage.get(assistantMessageIndex);
+    return applicableFragments ? applicableFragments.join("").trim() === normalizedText : false;
+  };
+  const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
+    if (payload.isError || payload.isFallbackNotice) {
       return payload;
     }
     const reply = resolveSendableOutboundReplyParts(payload);
@@ -340,7 +376,10 @@ export async function buildReplyPayloads(params: {
       mediaUrls: undefined,
       audioAsVoice: undefined,
     });
-    if (!params.blockReplyPipeline?.hasSentPayload(textOnlyPayload)) {
+    const textWasSent = params.blockReplyPipeline?.hasSentPayload(textOnlyPayload)
+      ? true
+      : hasDirectlySentText(textOnlyPayload);
+    if (!textWasSent) {
       return payload;
     }
     return copyReplyPayloadMetadata(payload, {
@@ -349,11 +388,18 @@ export async function buildReplyPayloads(params: {
       audioAsVoice: payload.audioAsVoice || undefined,
     });
   };
+  const preserveDirectlyUnsentPayload = (payload: ReplyPayload): ReplyPayload | null => {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    if (!reply.hasMedia || !reply.trimmedText) {
+      return payload;
+    }
+    return preserveUnsentMediaAfterBlockSend(payload);
+  };
   const contentSuppressedPayloads = shouldDropFinalPayloads
     ? (() => {
         const preserved: ReplyPayload[] = [];
         for (const payload of dedupedPayloads) {
-          const next = preserveUnsentMediaAfterBlockStream(payload);
+          const next = preserveUnsentMediaAfterBlockSend(payload);
           if (next) {
             preserved.push(next);
           }
@@ -368,7 +414,10 @@ export async function buildReplyPayloads(params: {
               !params.blockReplyPipeline?.hasSentPayload(payload) &&
               !isDirectlySentBlockPayload(payload)
             ) {
-              unsent.push(payload);
+              const next = preserveDirectlyUnsentPayload(payload);
+              if (next) {
+                unsent.push(next);
+              }
             }
           }
           return unsent;
@@ -377,19 +426,28 @@ export async function buildReplyPayloads(params: {
         ? (() => {
             const unsent: ReplyPayload[] = [];
             for (const payload of dedupedPayloads) {
-              if (!params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
-                unsent.push(payload);
+              if (params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
+                continue;
+              }
+              const next = preserveDirectlyUnsentPayload(payload);
+              if (next) {
+                unsent.push(next);
               }
             }
             return unsent;
           })()
         : dedupedPayloads;
-  const blockSentMediaUrls = params.blockStreamingEnabled
-    ? await normalizeSentMediaUrlsForDedupe({
-        sentMediaUrls: params.blockReplyPipeline?.getSentMediaUrls() ?? [],
-        normalizeMediaPaths: params.normalizeMediaPaths,
-      })
-    : [];
+  const blockSentMediaUrls = await normalizeSentMediaUrlsForDedupe({
+    sentMediaUrls: [
+      ...(params.blockStreamingEnabled
+        ? (params.blockReplyPipeline?.getSentMediaUrls() ?? [])
+        : []),
+      ...(params.directlySentBlockPayloads ?? []).flatMap(
+        (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
+      ),
+    ],
+    normalizeMediaPaths: params.normalizeMediaPaths,
+  });
   const filteredPayloads =
     blockSentMediaUrls.length > 0
       ? (

@@ -1,10 +1,11 @@
+/** Reply threading policy helpers for channel replies and status notices. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { isSingleUseReplyToMode } from "./reply-reference.js";
@@ -25,6 +26,7 @@ function normalizeReplyToModeChatType(
     : undefined;
 }
 
+/** Resolve configured reply-to mode from channel and chat-type config. */
 export function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
@@ -53,6 +55,7 @@ export function resolveConfiguredReplyToMode(
   return channelConfig?.replyToMode ?? "all";
 }
 
+/** Resolve reply-to mode using channel threading adapter override when present. */
 export function resolveReplyToModeWithThreading(
   cfg: OpenClawConfig,
   threading: ChannelThreadingAdapter | undefined,
@@ -70,6 +73,7 @@ export function resolveReplyToModeWithThreading(
   return resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType);
 }
 
+/** Resolve effective reply-to mode for a channel/account/chat tuple. */
 export function resolveReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
@@ -89,23 +93,25 @@ export function resolveReplyToMode(
   });
 }
 
+/** Create a payload filter that strips reply targets according to reply-to mode. */
 export function createReplyToModeFilter(
   mode: ReplyToMode,
   opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
 ) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
+    const isStatusNotice = isReplyPayloadStatusNotice(payload);
     if (!payload.replyToId) {
       return payload;
     }
     if (mode === "off") {
       const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
-      // Compaction notices must never be threaded when replyToMode=off — even
+      // Status notices must never be threaded when replyToMode=off — even
       // if they carry explicit reply tags (replyToCurrent).  Honouring the
       // explicit tag here would make status notices appear in-thread while
       // normal assistant replies stay off-thread, contradicting the off-mode
       // expectation.  Strip replyToId unconditionally for compaction payloads.
-      if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !payload.isCompactionNotice) {
+      if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !isStatusNotice) {
         return payload;
       }
       return copyReplyPayloadMetadata(payload, { ...payload, replyToId: undefined });
@@ -114,25 +120,26 @@ export function createReplyToModeFilter(
       return payload;
     }
     if (isSingleUseReplyToMode(mode) && hasThreaded) {
-      // Compaction notices are transient status messages that should always
+      // Status notices are transient messages that should always
       // appear in-thread, even after the first assistant block has already
       // consumed the "first" slot.  Let them keep their replyToId.
-      if (payload.isCompactionNotice) {
+      if (isStatusNotice) {
         return payload;
       }
       return copyReplyPayloadMetadata(payload, { ...payload, replyToId: undefined });
     }
-    // Compaction notices are transient status messages — they should be
+    // Status notices are transient messages — they should be
     // threaded (so they appear in-context), but they must not consume the
     // "first" slot of the replyToMode=first|batched filter.  Skip advancing
     // hasThreaded so the real assistant reply still gets replyToId.
-    if (isSingleUseReplyToMode(mode) && !payload.isCompactionNotice) {
+    if (isSingleUseReplyToMode(mode) && !isStatusNotice) {
       hasThreaded = true;
     }
     return payload;
   };
 }
 
+/** Resolve whether implicit current-message replies are allowed under threading policy. */
 export function resolveImplicitCurrentMessageReplyAllowance(
   mode: ReplyToMode | undefined,
   policy?: ReplyThreadingPolicy,
@@ -147,6 +154,7 @@ export function resolveImplicitCurrentMessageReplyAllowance(
   return mode !== "batched";
 }
 
+/** Build threading policy for batched reply-to mode. */
 export function resolveBatchedReplyThreadingPolicy(
   mode: ReplyToMode,
   isBatched: boolean,
@@ -159,6 +167,7 @@ export function resolveBatchedReplyThreadingPolicy(
   };
 }
 
+/** Create a reply-to filter using channel-specific explicit-tag defaults. */
 export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,

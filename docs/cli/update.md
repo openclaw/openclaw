@@ -19,6 +19,7 @@ updates happen via the package-manager flow in [Updating](/install/updating).
 ```bash
 openclaw update
 openclaw update status
+openclaw update repair
 openclaw update wizard
 openclaw update --channel beta
 openclaw update --channel dev
@@ -35,7 +36,7 @@ openclaw --update
 
 - `--no-restart`: skip restarting the Gateway service after a successful update. Package-manager updates that do restart the Gateway verify the restarted service reports the expected updated version before the command succeeds.
 - `--channel <stable|beta|dev>`: set the update channel (git + npm; persisted in config).
-- `--tag <dist-tag|version|spec>`: override the package target for this update only. For package installs, `main` maps to `github:openclaw/openclaw#main`.
+- `--tag <dist-tag|version|spec>`: override the package target for this update only. For package installs, `main` maps to `github:openclaw/openclaw#main`; GitHub/git source specs are packed into a temporary tarball before the staged global npm install.
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
 - `--json`: print machine-readable `UpdateRunResult` JSON, including
   `postUpdate.plugins.warnings` when corrupt or unloadable managed plugins need
@@ -76,6 +77,36 @@ Options:
 - `--json`: print machine-readable status JSON.
 - `--timeout <seconds>`: timeout for checks (default is 3s).
 
+## `update repair`
+
+Rerun update finalization after the core package already changed but later
+repair work did not finish cleanly. This is the supported recovery path when
+`openclaw update` installed the new core package but post-core plugin sync,
+managed npm plugin metadata, registry refresh, or doctor repair still needs to
+converge.
+
+```bash
+openclaw update repair
+openclaw update repair --channel beta
+openclaw update repair --json
+```
+
+Options:
+
+- `--channel <stable|beta|dev>`: persist the update channel before repair and
+  run plugin convergence against that channel.
+- `--json`: print machine-readable finalization JSON.
+- `--timeout <seconds>`: timeout for repair steps (default `1800`).
+- `--yes`: skip confirmation prompts.
+- `--no-restart`: accepted for update command parity; repair never restarts the
+  Gateway.
+
+`openclaw update repair` runs `openclaw doctor --fix`, reloads the repaired
+config and install records, syncs tracked plugins for the active update channel,
+updates managed npm plugin installs, repairs missing configured plugin payloads,
+refreshes the plugin registry, and writes the converged install-record metadata.
+It does not install a new core package and does not restart the Gateway.
+
 ## `update wizard`
 
 Interactive flow to pick an update channel and confirm whether to restart the Gateway
@@ -91,7 +122,8 @@ Options:
 When you switch channels explicitly (`--channel ...`), OpenClaw also keeps the
 install method aligned:
 
-- `dev` → ensures a git checkout (default: `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
+- `dev` → ensures a git checkout (default: `~/openclaw`, or `$OPENCLAW_HOME/openclaw` when
+  `OPENCLAW_HOME` is set; override with `OPENCLAW_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
 - `stable` → installs from npm using `latest`.
 - `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
@@ -217,9 +249,9 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 </Warning>
 
 <Note>
-Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (e.g. an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw doctor --fix` or `openclaw update`.
+Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (e.g. an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`.
 
-After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
+After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not
 run package managers or mutate dependency trees. Package-manager `update.run`

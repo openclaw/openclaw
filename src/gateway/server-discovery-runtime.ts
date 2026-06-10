@@ -1,5 +1,9 @@
+// Gateway discovery runtime.
+// Starts local mDNS plugin discovery and optional wide-area DNS-SD publishing.
 import { isTruthyEnvValue } from "../infra/env.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 import {
@@ -15,17 +19,19 @@ function resolveDiscoveryAdvertiseTimeoutMs(env: NodeJS.ProcessEnv): number {
   if (!raw) {
     return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
   }
   return parsed;
 }
 
+/** Start configured Gateway discovery publishers and return their shutdown hook. */
 export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
+  gatewayDirectReachable?: boolean;
   canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   wideAreaDiscoveryDomain?: string | null;
@@ -50,9 +56,9 @@ export async function startGatewayDiscovery(params: {
   const tailnetDns = needsTailnetDns
     ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
     : undefined;
-  const sshPortEnv = mdnsMinimal ? undefined : process.env.OPENCLAW_SSH_PORT?.trim();
-  const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : Number.NaN;
-  const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
+  const sshPort = mdnsMinimal
+    ? undefined
+    : (parseTcpPort(process.env.OPENCLAW_SSH_PORT) ?? undefined);
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
   if (localDiscoveryEnabled) {
@@ -69,6 +75,7 @@ export async function startGatewayDiscovery(params: {
           gatewayPort: params.port,
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+          gatewayDirectReachable: params.gatewayDirectReachable === true,
           canvasPort: params.canvasPort,
           sshPort,
           tailnetDns,
@@ -97,7 +104,7 @@ export async function startGatewayDiscovery(params: {
               }
               return started;
             },
-            (err) => {
+            (err: unknown) => {
               params.logDiscovery.warn(
                 `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
               );
@@ -167,6 +174,7 @@ export async function startGatewayDiscovery(params: {
           tailnetIPv6: tailnetIPv6 ?? undefined,
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+          gatewayDirectReachable: params.gatewayDirectReachable === true,
           tailnetDns,
           sshPort,
           cliPath,

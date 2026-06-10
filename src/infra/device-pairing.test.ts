@@ -1,3 +1,4 @@
+// Covers device pairing, token, and role lifecycle behavior.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
@@ -48,6 +49,25 @@ async function setupPairedNodeDevice(baseDir: string) {
     baseDir,
   );
   await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+}
+
+async function setupPairedBrowserOperatorDevice(baseDir: string) {
+  const request = await requestDevicePairing(
+    {
+      deviceId: "browser-device-1",
+      publicKey: "public-key-browser-1",
+      clientId: "openclaw-control-ui",
+      clientMode: "webchat",
+      role: "operator",
+      scopes: ["operator.read"],
+    },
+    baseDir,
+  );
+  await approveDevicePairing(
+    request.request.requestId,
+    { callerScopes: ["operator.read"] },
+    baseDir,
+  );
 }
 
 async function setupOperatorToken(scopes: string[]) {
@@ -714,7 +734,7 @@ describe("device pairing tokens", () => {
     });
   });
 
-  test("metadata refresh cannot mutate approved role and scope fields", async () => {
+  test("metadata refresh can update display metadata but not approved role and scope fields", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedNodeDevice(baseDir);
 
@@ -722,6 +742,7 @@ describe("device pairing tokens", () => {
       "node-1",
       {
         displayName: "renamed-node",
+        platform: "iOS 26.5.0",
         role: "operator",
         roles: ["operator"],
         scopes: ["operator.admin"],
@@ -734,6 +755,7 @@ describe("device pairing tokens", () => {
 
     const paired = await getPairedDevice("node-1", baseDir);
     expect(paired?.displayName).toBe("renamed-node");
+    expect(paired?.platform).toBe("iOS 26.5.0");
     expect(paired?.publicKey).toBe("public-key-node-1");
     expect(paired?.role).toBe("node");
     expect(paired?.roles).toEqual(["node"]);
@@ -766,6 +788,95 @@ describe("device pairing tokens", () => {
       lastSeenAtMs: 4321,
       lastSeenReason: "bg_app_refresh",
     });
+  });
+
+  test("approval access metadata initializes paired device last-seen fields", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+        displayName: "pending-name",
+        remoteIp: "127.0.0.1",
+      },
+      baseDir,
+    );
+    const firstSeenAtMs = Date.now();
+
+    const approved = await approveDevicePairing(
+      request.request.requestId,
+      {
+        callerScopes: [],
+        accessMetadata: {
+          displayName: "connected-name",
+          remoteIp: "10.0.0.1",
+          lastSeenAtMs: firstSeenAtMs,
+          lastSeenReason: "connect",
+        },
+      },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expectRecordFields(paired, "paired device", {
+      displayName: "connected-name",
+      remoteIp: "10.0.0.1",
+      lastSeenAtMs: firstSeenAtMs,
+      lastSeenReason: "connect",
+    });
+  });
+
+  test("repair approvals preserve paired device last-seen fields without access metadata", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    await updatePairedDeviceMetadata(
+      "node-1",
+      {
+        lastSeenAtMs: 1234,
+        lastSeenReason: "bg_app_refresh",
+      },
+      baseDir,
+    );
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expectRecordFields(paired, "paired device", {
+      lastSeenAtMs: 1234,
+      lastSeenReason: "bg_app_refresh",
+    });
+  });
+
+  test("device token verification refreshes paired device last-seen metadata", async () => {
+    const { baseDir, token } = await setupOperatorToken(["operator.read"]);
+    const beforeVerifyAtMs = Date.now();
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token,
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.lastSeenReason).toBe("device-token-auth");
+    expect(typeof paired?.lastSeenAtMs).toBe("number");
+    expect(paired?.lastSeenAtMs ?? 0).toBeGreaterThanOrEqual(beforeVerifyAtMs);
   });
 
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
@@ -1007,6 +1118,174 @@ describe("device pairing tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  test("tags browser tokens minted from shared gateway auth and rejects stale generations", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedBrowserOperatorDevice(baseDir);
+    const legacy = await getPairedDevice("browser-device-1", baseDir);
+    const legacyToken = requireToken(legacy?.tokens?.operator?.token);
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: legacyToken,
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "old-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "legacy-browser-token" });
+
+    const oldIssued = await ensureDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "old-generation" },
+      baseDir,
+    });
+    expect(oldIssued?.token).not.toBe(legacyToken);
+    expect(oldIssued?.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "old-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: requireToken(oldIssued?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "old-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "old-generation" },
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: requireToken(oldIssued?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "issuer-generation-stale" });
+
+    const newIssued = await ensureDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+      baseDir,
+    });
+    expect(newIssued?.token).not.toBe(oldIssued?.token);
+    expect(newIssued?.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "new-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: requireToken(newIssued?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
+
+    const rotated = await rotateDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    const rotatedEntry = requireRotatedEntry(rotated);
+    expect(rotatedEntry.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "new-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: rotatedEntry.token,
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
+  });
+
+  test("keeps ambiguous legacy device tokens valid across shared gateway auth rotation", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const paired = await getPairedDevice("device-1", baseDir);
+    const token = requireToken(paired?.tokens?.operator?.token);
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token,
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const issuedFromBrowserSharedAuth = await ensureDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+      baseDir,
+    });
+    expect(issuedFromBrowserSharedAuth?.token).not.toBe(token);
+    expect(issuedFromBrowserSharedAuth?.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "new-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(issuedFromBrowserSharedAuth?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
+
+    const issuedWithoutSharedAuth = await ensureDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    expect(issuedWithoutSharedAuth?.token).not.toBe(issuedFromBrowserSharedAuth?.token);
+    expect(issuedWithoutSharedAuth?.issuer).toBeUndefined();
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(issuedWithoutSharedAuth?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   test("normalizes legacy node token scopes back to [] on re-approval", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedNodeDevice(baseDir);
@@ -1060,15 +1339,53 @@ describe("device pairing tokens", () => {
     expect(paired?.tokens?.operator).toBeUndefined();
   });
 
-  test("default bootstrap pairing does not issue operator tokens", async () => {
+  test("bootstrap approval access metadata initializes paired device last-seen fields", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-seen",
+        publicKey: "bootstrap-public-key-seen",
+        role: "node",
+        roles: ["node"],
+        scopes: [],
+        silent: true,
+        remoteIp: "127.0.0.1",
+      },
+      baseDir,
+    );
+    const firstSeenAtMs = Date.now();
+
+    const approved = await approveBootstrapDevicePairing(
+      request.request.requestId,
+      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      {
+        accessMetadata: {
+          remoteIp: "10.0.0.2",
+          lastSeenAtMs: firstSeenAtMs,
+          lastSeenReason: "connect",
+        },
+      },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("bootstrap-device-seen", baseDir);
+    expectRecordFields(paired, "paired device", {
+      remoteIp: "10.0.0.2",
+      lastSeenAtMs: firstSeenAtMs,
+      lastSeenReason: "connect",
+    });
+  });
+
+  test("baseline bootstrap pairing issues bounded operator token when requested by QR handoff", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
       {
         deviceId: "bootstrap-device-operator-default",
         publicKey: "bootstrap-public-key-operator-default",
         role: "node",
-        roles: ["node"],
-        scopes: [],
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
         silent: true,
       },
       baseDir,
@@ -1082,16 +1399,41 @@ describe("device pairing tokens", () => {
     expectRecordFields(approved, "approved result", { status: "approved" });
 
     const paired = await getPairedDevice("bootstrap-device-operator-default", baseDir);
-    const nodeToken = requireToken(paired?.tokens?.node?.token);
+    const operatorToken = requireToken(paired?.tokens?.operator?.token);
+    expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
+    expect(paired?.tokens?.operator?.scopes).toStrictEqual([
+      "operator.approvals",
+      "operator.read",
+      "operator.talk.secrets",
+      "operator.write",
+    ]);
     await expect(
       verifyDeviceToken({
         deviceId: "bootstrap-device-operator-default",
-        token: nodeToken,
+        token: operatorToken,
         role: "operator",
-        scopes: ["operator.approvals", "operator.read", "operator.write"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "token-missing" });
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "bootstrap-device-operator-default",
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "bootstrap-device-operator-default",
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.pairing"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
   });
 
   test("bootstrap node approval preserves existing operator token scopes", async () => {
@@ -1171,13 +1513,7 @@ describe("device pairing tokens", () => {
         publicKey: "bootstrap-public-key-bounded-baseline",
         role: "node",
         roles: ["node", "operator"],
-        scopes: [
-          "node.exec",
-          "operator.approvals",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
+        scopes: ["node.exec", "operator.approvals", "operator.read", "operator.write"],
         silent: true,
       },
       baseDir,
@@ -1205,13 +1541,11 @@ describe("device pairing tokens", () => {
     expect(paired?.approvedScopes).toEqual([
       "operator.approvals",
       "operator.read",
-      "operator.talk.secrets",
       "operator.write",
     ]);
     expect(paired?.tokens?.operator?.scopes).toEqual([
       "operator.approvals",
       "operator.read",
-      "operator.talk.secrets",
       "operator.write",
     ]);
     expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
@@ -1229,7 +1563,7 @@ describe("device pairing tokens", () => {
     const baseDir = await makeDevicePairingDir();
     const bootstrapProfile = {
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      scopes: ["operator.approvals", "operator.read", "operator.write"],
     };
     const first = await requestDevicePairing(
       {

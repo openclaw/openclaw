@@ -1,10 +1,11 @@
+// Line tests cover bot message context plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
+import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createTestRegistry,
   setActivePluginRegistry,
@@ -231,6 +232,32 @@ describe("buildLineMessageContext", () => {
     });
 
     expect(context?.ctxPayload.CommandAuthorized).toBe(false);
+  });
+
+  it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" });
+    const directCfg: OpenClawConfig = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    };
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg: directCfg,
+      account: {
+        ...account,
+        config: { allowFrom: ["user-1"] },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.route.sessionKey).toBe("agent:main:line:direct:user-1");
+    const updateLastRoute = context?.turn.record.updateLastRoute;
+    expect(updateLastRoute?.sessionKey).toBe(context?.route.sessionKey);
+    expect(updateLastRoute?.sessionKey).not.toBe("agent:main:main");
+    expect(updateLastRoute?.channel).toBe("line");
+    expect(updateLastRoute?.to).toBe("user-1");
+    expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
   it("sets CommandAuthorized on postback context", async () => {

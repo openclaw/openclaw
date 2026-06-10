@@ -1,19 +1,13 @@
 import AppKit
 import Observation
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct DebugSettings: View {
     @Bindable var state: AppState
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let labelColumnWidth: CGFloat = 140
-    @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
-    @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     @AppStorage(canvasEnabledKey) private var canvasEnabled: Bool = true
-    @State private var modelsCount: Int?
-    @State private var modelsLoading = false
-    @State private var modelsError: String?
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
@@ -49,6 +43,7 @@ struct DebugSettings: View {
             VStack(alignment: .leading, spacing: 14) {
                 self.header
 
+                self.overviewSection
                 self.launchdSection
                 self.appInfoSection
                 self.gatewaySection
@@ -61,14 +56,11 @@ struct DebugSettings: View {
 
                 Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
+            .settingsDetailContent()
             .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
         .task {
             guard !self.isPreview else { return }
-            await self.reloadModels()
             self.loadSessionStorePath()
         }
         .alert(item: self.$pendingKill) { listener in
@@ -116,6 +108,31 @@ struct DebugSettings: View {
             Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var overviewSection: some View {
+        HStack(spacing: 12) {
+            DebugMetricCard(
+                title: "App Health",
+                value: self.healthStore.state.debugTitle,
+                icon: "heart.text.square",
+                tint: self.healthStore.state.tint,
+                subtitle: self.healthStore.summaryLine)
+
+            DebugMetricCard(
+                title: "Gateway",
+                value: self.gatewayManager.status.label,
+                icon: "antenna.radiowaves.left.and.right",
+                tint: self.gatewayManager.status.debugTint,
+                subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
+
+            DebugMetricCard(
+                title: "App PID",
+                value: "\(ProcessInfo.processInfo.processIdentifier)",
+                icon: "number.square",
+                tint: .blue,
+                subtitle: Bundle.main.bundleURL.lastPathComponent)
         }
     }
 
@@ -216,8 +233,12 @@ struct DebugSettings: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
-                    .frame(height: 180)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                    .frame(height: 130)
+                    .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(.white.opacity(0.06))
+                    }
 
                     HStack(spacing: 8) {
                         if self.canRestartGateway {
@@ -419,45 +440,6 @@ struct DebugSettings: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
-                        }
-                    }
-                    GridRow {
-                        self.gridLabel("Model catalog")
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(self.modelCatalogPath)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                            HStack(spacing: 8) {
-                                Button {
-                                    self.chooseCatalogFile()
-                                } label: {
-                                    Label("Choose models.generated.ts…", systemImage: "folder")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    Task { await self.reloadModels() }
-                                } label: {
-                                    Label(
-                                        self.modelsLoading ? "Reloading…" : "Reload models",
-                                        systemImage: "arrow.clockwise")
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(self.modelsLoading)
-                            }
-                            if let modelsError {
-                                Text(modelsError)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            } else if let modelsCount {
-                                Text("Loaded \(modelsCount) models")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text("Local fallback for model picker when gateway models.list is unavailable.")
-                                .font(.footnote)
-                                .foregroundStyle(.tertiary)
                         }
                     }
                 }
@@ -697,37 +679,6 @@ struct DebugSettings: View {
         }
     }
 
-    private func chooseCatalogFile() {
-        let panel = NSOpenPanel()
-        panel.title = "Select models.generated.ts"
-        let tsType = UTType(filenameExtension: "ts")
-            ?? UTType(tag: "ts", tagClass: .filenameExtension, conformingTo: .sourceCode)
-            ?? .item
-        panel.allowedContentTypes = [tsType]
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = URL(fileURLWithPath: self.modelCatalogPath).deletingLastPathComponent()
-        if panel.runModal() == .OK, let url = panel.url {
-            self.modelCatalogPath = url.path
-            self.modelCatalogReloadBump += 1
-            Task { await self.reloadModels() }
-        }
-    }
-
-    private func reloadModels() async {
-        guard !self.modelsLoading else { return }
-        self.modelsLoading = true
-        self.modelsError = nil
-        self.modelCatalogReloadBump += 1
-        defer { self.modelsLoading = false }
-        do {
-            let loaded = try await ModelCatalogLoader.load(from: self.modelCatalogPath)
-            self.modelsCount = loaded.count
-        } catch {
-            self.modelsCount = nil
-            self.modelsError = error.localizedDescription
-        }
-    }
-
     private func sendVoiceDebug() async {
         await MainActor.run {
             self.debugSendInFlight = true
@@ -929,13 +880,81 @@ extension DebugSettings {
 
 struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             configuration.label
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             configuration.content
         }
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.055))
+        }
+    }
+}
+
+private struct DebugMetricCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let tint: Color
+    let subtitle: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: self.icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(self.tint)
+                .frame(width: 34, height: 34)
+                .background(self.tint.opacity(0.18), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(self.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(self.value)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(self.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.055))
+        }
+    }
+}
+
+extension HealthState {
+    fileprivate var debugTitle: String {
+        switch self {
+        case .unknown: "Unknown"
+        case .ok: "Healthy"
+        case .linkingNeeded: "Needs Link"
+        case .degraded: "Degraded"
+        }
+    }
+}
+
+extension GatewayProcessManager.Status {
+    fileprivate var debugTint: Color {
+        switch self {
+        case .running, .attachedExisting: .green
+        case .starting: .orange
+        case .failed: .red
+        case .stopped: .secondary
+        }
     }
 }
 
@@ -951,9 +970,6 @@ struct DebugSettings_Previews: PreviewProvider {
 extension DebugSettings {
     static func exerciseForTesting() async {
         let view = DebugSettings(state: .preview)
-        view.modelsCount = 3
-        view.modelsLoading = false
-        view.modelsError = "Failed to load models"
         view.gatewayRootInput = "/tmp/openclaw"
         view.sessionStorePath = "/tmp/sessions.json"
         view.sessionStoreSaveError = "Save failed"
@@ -984,6 +1000,7 @@ extension DebugSettings {
 
         _ = view.body
         _ = view.header
+        _ = view.overviewSection
         _ = view.appInfoSection
         _ = view.gatewaySection
         _ = view.logsSection
@@ -995,7 +1012,6 @@ extension DebugSettings {
         _ = view.gridLabel("Test")
 
         view.loadSessionStorePath()
-        await view.reloadModels()
     }
 }
 #endif

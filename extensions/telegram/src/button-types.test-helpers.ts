@@ -1,3 +1,4 @@
+// Telegram helper module supports button types helpers behavior.
 import { describe, expect, it } from "vitest";
 import { buildTelegramInteractiveButtons, resolveTelegramInlineButtons } from "./button-types.js";
 
@@ -80,6 +81,29 @@ export function describeTelegramInteractiveButtonBehavior(): void {
           { text: "Docs", url: "https://example.com/docs", style: undefined },
         ],
       ]);
+    });
+
+    it("prefers legacy interactive buttons over generic presentation buttons", () => {
+      expect(
+        resolveTelegramInlineButtons({
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Generic", value: "generic" }],
+              },
+            ],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Legacy", value: "legacy" }],
+              },
+            ],
+          },
+        }),
+      ).toEqual([[{ text: "Legacy", callback_data: "legacy", style: undefined }]]);
     });
   });
 }

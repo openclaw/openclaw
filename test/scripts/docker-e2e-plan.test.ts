@@ -1,3 +1,4 @@
+// Docker E2E Plan tests cover docker e2e plan script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -113,9 +114,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.credentials).toEqual(["anthropic", "openai"]);
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-openai");
     expect(plan.lanes.map((lane) => lane.name)).toContain("openai-chat-tools");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("live-codex-npm-plugin");
     expect(plan.lanes.map((lane) => lane.name)).toContain("codex-on-demand");
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
     expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
@@ -157,6 +160,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.releaseProfile).toBe("beta");
     expect(laneNames).toContain("install-e2e-openai");
     expect(laneNames).toContain("openai-chat-tools");
+    expect(laneNames).toContain("live-codex-npm-plugin");
     expect(laneNames).toContain("install-e2e-anthropic");
     expect(laneNames).toContain("update-channel-switch");
     expect(laneNames).not.toContain("plugins");
@@ -176,7 +180,29 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["live-plugin-tool"]);
   });
 
+  it("keeps provider-backed install E2E lanes out of non-live package chunks", () => {
+    const plan = planFor({
+      includeOpenWebUI: true,
+      liveMode: "skip",
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update",
+    });
+
+    const laneNames = plan.lanes.map((lane) => lane.name);
+    expect(laneNames).not.toContain("install-e2e-openai");
+    expect(laneNames).not.toContain("openai-chat-tools");
+    expect(laneNames).not.toContain("live-codex-npm-plugin");
+    expect(laneNames).not.toContain("install-e2e-anthropic");
+    expect(laneNames).toContain("codex-on-demand");
+    expect(laneNames).toContain("update-channel-switch");
+  });
+
   it("splits release-path package and plugin chunks across shorter CI jobs", () => {
+    const core = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "core",
+    });
     const packageInstallOpenAi = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
@@ -243,9 +269,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       releaseChunk: "plugins-runtime-install-h",
     });
 
+    expect(core.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-openai",
       "openai-chat-tools",
+      "live-codex-npm-plugin",
       "codex-on-demand",
     ]);
     expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
@@ -363,6 +391,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+        imageKind: "functional",
+        live: false,
+        name: "kitchen-sink-rpc",
+        resources: ["docker", "service", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 900_000,
+        weight: 3,
+      },
+      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
         imageKind: "functional",
         live: false,
@@ -385,7 +423,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
-          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -483,6 +521,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual([
       "install-e2e-openai",
       "openai-chat-tools",
+      "live-codex-npm-plugin",
       "codex-on-demand",
       "install-e2e-anthropic",
       "npm-onboard-channel-agent",
@@ -500,6 +539,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "plugins",
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
+      "kitchen-sink-rpc",
       "openai-web-search-minimal",
       "live-plugin-tool",
       "openwebui",
@@ -508,6 +548,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "plugins",
       ...bundledPluginSweepLanes,
       "cron-mcp-cleanup",
+      "kitchen-sink-rpc",
       "openai-web-search-minimal",
       "live-plugin-tool",
       "plugin-update",
@@ -584,6 +625,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29",
       "published-upgrade-survivor-2026.4.29-feishu-channel",
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-channel-post-core-restore",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
@@ -603,6 +645,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29",
       "published-upgrade-survivor-2026.4.29-feishu-channel",
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-channel-post-core-restore",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
@@ -611,6 +654,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
+      "published-upgrade-survivor-2026.3.13-channel-post-core-restore",
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
       "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.3.13-tilde-log-path",
@@ -634,6 +678,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
   it("plans a live-only selected lane without package e2e images", () => {
     const plan = planFor({ selectedLaneNames: ["live-models"] });
 
+    expect(plan.credentials).toEqual(["anthropic", "gemini"]);
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["live-models"]);
     expect(plan.needs).toEqual({
       bareImage: false,
@@ -644,13 +689,49 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
+  it("derives live Docker credentials from lane resources", () => {
+    const cases = [
+      { credentials: ["anthropic", "gemini"], name: "live-models" },
+      { credentials: ["anthropic", "gemini"], name: "live-gateway" },
+      { credentials: ["anthropic"], name: "live-cli-backend-claude" },
+      { credentials: ["gemini"], name: "live-cli-backend-gemini" },
+      { credentials: ["openai"], name: "live-codex-harness" },
+      { credentials: ["openai"], name: "live-codex-media-path" },
+      { credentials: ["openai"], name: "live-mcp-code-mode-gateway" },
+      { credentials: ["openai"], name: "live-subagent-announce" },
+      { credentials: ["openai"], name: "live-codex-bind" },
+      { credentials: ["anthropic"], name: "live-acp-bind-claude" },
+      { credentials: ["codex", "openai"], name: "live-acp-bind-codex" },
+      { credentials: ["factory"], name: "live-acp-bind-droid" },
+      { credentials: ["gemini"], name: "live-acp-bind-gemini" },
+      { credentials: ["opencode"], name: "live-acp-bind-opencode" },
+    ] as const;
+
+    for (const { credentials, name } of cases) {
+      expect(planFor({ selectedLaneNames: [name] }).credentials, name).toEqual(credentials);
+    }
+  });
+
+  it("plans Codex harness Docker-all lanes for API-key Testbox auth", () => {
+    for (const name of ["live-codex-harness", "live-codex-bind"]) {
+      const plan = planFor({ selectedLaneNames: [name] });
+      const lane = requireFirstLane(plan);
+
+      expect(plan.credentials, name).toEqual(["openai"]);
+      expect(lane.command, name).toContain("OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key");
+      expect(lane.resources, name).toContain("live:openai");
+      expect(lane.resources, name).not.toContain("live:codex");
+    }
+  });
+
   it("plans the Codex npm plugin live lane as package-backed OpenAI proof", () => {
     const plan = planFor({ selectedLaneNames: ["live-codex-npm-plugin"] });
 
     expect(plan.credentials).toEqual(["openai"]);
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
+        command:
+          'OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"\'',
         imageKind: "bare",
         live: true,
         name: "live-codex-npm-plugin",
@@ -685,6 +766,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.needs.package).toBe(true);
   });
 
+  it("plans the plugin binding command escape lane as source Docker proof", () => {
+    const plan = planFor({ selectedLaneNames: ["plugin-binding-command-escape"] });
+
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe(
+      "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:plugin-binding-command-escape",
+    );
+    expect(lane.imageKind).toBeUndefined();
+    expect(lane.live).toBe(false);
+    expect(lane.name).toBe("plugin-binding-command-escape");
+    expect(lane.resources).toEqual(["docker", "npm"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.e2eImage).toBe(false);
+    expect(plan.needs.package).toBe(false);
+  });
+
   it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
     const plan = planFor({ selectedLaneNames: ["live-plugin-tool"] });
 
@@ -704,6 +802,40 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.needs.package).toBe(true);
   });
 
+  it("dedupes scheduler resources from lane wrappers and explicit lane metadata", () => {
+    const plan = planFor({
+      selectedLaneNames: ["release-user-journey", "release-plugin-marketplace"],
+    });
+
+    expect(plan.lanes.map((lane) => ({ name: lane.name, resources: lane.resources }))).toEqual([
+      {
+        name: "release-user-journey",
+        resources: ["docker", "npm", "service"],
+      },
+      {
+        name: "release-plugin-marketplace",
+        resources: ["docker", "npm"],
+      },
+    ]);
+  });
+
+  it("plans the Droid ACP bind live lane as Factory-auth proof", () => {
+    const plan = planFor({ selectedLaneNames: ["live-acp-bind-droid"] });
+
+    expect(plan.credentials).toEqual(["factory"]);
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe(
+      'OPENCLAW_LIVE_ACP_BIND_AGENT=droid OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1 OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/test-live-acp-bind-docker.sh"\'',
+    );
+    expect(lane.imageKind).toBeUndefined();
+    expect(lane.live).toBe(true);
+    expect(lane.name).toBe("live-acp-bind-droid");
+    expect(lane.resources).toEqual(["docker", "live", "live:droid", "npm"]);
+    expect(lane.timeoutMs).toBe(1_200_000);
+    expect(plan.needs.liveImage).toBe(true);
+  });
+
   it("plans Open WebUI as a live-auth functional image lane", () => {
     const plan = planFor({
       includeOpenWebUI: true,
@@ -714,7 +846,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
         command:
-          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -749,8 +881,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "openai-image-auth",
         "openai-web-search-minimal",
         "mcp-channels",
+        "mcp-code-mode-gateway",
         "cron-mcp-cleanup",
-        "pi-bundle-mcp-tools",
+        "agent-bundle-mcp-tools",
         "crestodian-first-run",
         "crestodian-planner",
         "crestodian-rescue",
@@ -758,6 +891,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "plugin-update",
         "plugins",
         "kitchen-sink-plugin",
+        "kitchen-sink-rpc",
         "bundled-plugin-install-uninstall-0",
         "commitments-safety",
         "update-channel-switch",
@@ -775,8 +909,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "openai-image-auth", stateScenario: "empty" },
       { name: "openai-web-search-minimal", stateScenario: "empty" },
       { name: "mcp-channels", stateScenario: "empty" },
+      { name: "mcp-code-mode-gateway", stateScenario: "empty" },
       { name: "cron-mcp-cleanup", stateScenario: "empty" },
-      { name: "pi-bundle-mcp-tools", stateScenario: "empty" },
+      { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
       { name: "crestodian-first-run", stateScenario: "empty" },
       { name: "crestodian-planner", stateScenario: "empty" },
       { name: "crestodian-rescue", stateScenario: "empty" },
@@ -784,6 +919,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "plugin-update", stateScenario: "empty" },
       { name: "plugins", stateScenario: "empty" },
       { name: "kitchen-sink-plugin", stateScenario: "empty" },
+      { name: "kitchen-sink-rpc", stateScenario: "empty" },
       { name: "bundled-plugin-install-uninstall-0", stateScenario: "empty" },
       { name: "commitments-safety", stateScenario: "empty" },
       { name: "update-channel-switch", stateScenario: "update-stable" },
@@ -802,9 +938,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
         command:
           "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e",
         imageKind: "bare",
-        live: false,
+        live: true,
         name: "install-e2e-openai",
-        resources: ["docker", "npm", "service"],
+        resources: ["docker", "live", "live:openai", "npm", "service"],
         timeoutMs: 900_000,
         weight: 3,
       },
@@ -812,9 +948,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
         command:
           "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
         imageKind: "bare",
-        live: false,
+        live: true,
         name: "install-e2e-anthropic",
-        resources: ["docker", "npm", "service"],
+        resources: ["docker", "live", "live:claude", "npm", "service"],
         weight: 3,
       },
     ]);

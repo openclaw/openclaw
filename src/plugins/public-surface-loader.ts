@@ -1,3 +1,4 @@
+// Loads documented plugin public surfaces while preserving lazy boundaries.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -63,7 +64,7 @@ function resolvePublicSurfaceLocationUncached(params: {
   const bundledPluginsDir = resolveBundledPluginsDir();
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: OPENCLAW_PACKAGE_ROOT,
-    ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+    ...(bundledPluginsDir ? { bundledPluginsDir, bundledPluginsDirMode: "explicit" as const } : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
   });
@@ -134,7 +135,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
     rootPath: location.boundaryRoot,
     boundaryLabel:
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
-    rejectHardlinks: true,
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     throw new Error(

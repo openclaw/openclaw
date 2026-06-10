@@ -1,3 +1,4 @@
+// Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
@@ -11,17 +12,21 @@ import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/th
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
+  getSessionEntry,
+  listSessionEntries,
   loadSessionStore,
+  patchSessionEntry,
   saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
+  upsertSessionEntry,
 } from "../../config/sessions/store.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
-const loadEmbeddedPiRuntime = createLazyRuntimeModule(
-  () => import("./runtime-embedded-pi.runtime.js"),
+const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
+  () => import("./runtime-embedded-agent.runtime.js"),
 );
 
 function resolveRuntimeThinkingCatalog(
@@ -34,6 +39,7 @@ function resolveRuntimeThinkingCatalog(
   return configuredCatalog.length > 0 ? configuredCatalog : undefined;
 }
 
+/** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
     defaults: {
@@ -64,13 +70,19 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
 
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
-    createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedAgent),
+    createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runEmbeddedAgent),
   );
-  defineCachedValue(agentRuntime, "runEmbeddedPiAgent", () =>
-    createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedPiAgent),
+  defineCachedValue(
+    agentRuntime,
+    "runEmbeddedPiAgent",
+    () => (agentRuntime as PluginRuntime["agent"]).runEmbeddedAgent,
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath,
+    getSessionEntry,
+    listSessionEntries,
+    patchSessionEntry,
+    upsertSessionEntry,
     loadSessionStore,
     saveSessionStore,
     updateSessionStore,

@@ -1,17 +1,37 @@
+/**
+ * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
+ * OpenClaw stream options into Anthropic Messages payload policy.
+ */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  streamAnthropic as streamAnthropicDefault,
-  type AnthropicOptions,
+  clampThinkingLevel,
+  stream as streamDefault,
   type Model,
-} from "@earendil-works/pi-ai";
+  type ModelThinkingLevel,
+  type ProviderStreamOptions,
+} from "openclaw/plugin-sdk/llm";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
 
-type AnthropicVertexEffort = NonNullable<AnthropicOptions["effort"]>;
+type AnthropicVertexTransportOptions = ProviderStreamOptions & {
+  client?: unknown;
+  thinkingEnabled?: boolean;
+  thinkingBudgetTokens?: number;
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+};
+
+type AnthropicVertexEffort = NonNullable<AnthropicVertexTransportOptions["effort"]>;
 type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
 type AnthropicVertexClientOptions = {
   baseURL?: string;
@@ -19,45 +39,55 @@ type AnthropicVertexClientOptions = {
   region: string;
 };
 
+/** Injectable dependencies for Anthropic Vertex stream tests. */
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
-  streamAnthropic: typeof streamAnthropicDefault;
+  streamAnthropic: typeof streamDefault;
 };
 
 const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
-  streamAnthropic: streamAnthropicDefault,
+  streamAnthropic: streamDefault,
 };
 
-function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+function isClaudeOpus47OrNewerModel(modelId: string): boolean {
+  return supportsClaudeNativeXhighEffort({ id: modelId });
 }
 
-function isClaudeOpus46Model(modelId: string): boolean {
-  return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
+function isClaudeFable5Model(modelId: string): boolean {
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    isClaudeOpus47Model(modelId) ||
-    isClaudeOpus46Model(modelId) ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+  return supportsClaudeAdaptiveThinking({ id: modelId });
 }
 
 function mapAnthropicAdaptiveEffort(
-  reasoning: string,
+  reasoning: ModelThinkingLevel,
+  model: Model<"anthropic-messages">,
   modelId: string,
 ): AnthropicVertexAdaptiveEffort {
+  const clampModel =
+    typeof model.params?.canonicalModelId === "string" ? { ...model, reasoning: true } : model;
+  const resolvedReasoning = clampThinkingLevel(clampModel, reasoning);
+  const mapped = model.thinkingLevelMap?.[resolvedReasoning];
+  if (typeof mapped === "string") {
+    return mapped as AnthropicVertexAdaptiveEffort;
+  }
   const effortMap: Record<string, AnthropicVertexAdaptiveEffort> = {
+    off: "low",
     minimal: "low",
     low: "low",
     medium: "medium",
     high: "high",
-    xhigh: isClaudeOpus47Model(modelId) ? "xhigh" : isClaudeOpus46Model(modelId) ? "max" : "high",
+    xhigh: isClaudeFable5Model(modelId)
+      ? "xhigh"
+      : isClaudeOpus47OrNewerModel(modelId)
+        ? "xhigh"
+        : "high",
+    max: supportsClaudeNativeMaxEffort({ id: modelId }) ? "max" : "high",
   };
-  return effortMap[reasoning] ?? "high";
+  return effortMap[resolvedReasoning] ?? "high";
 }
 
 function resolveAnthropicVertexMaxTokens(params: {
@@ -85,9 +115,9 @@ function resolveAnthropicVertexMaxTokens(params: {
 
 function createAnthropicVertexOnPayload(params: {
   model: { api: string; baseUrl?: string; provider: string };
-  cacheRetention: AnthropicOptions["cacheRetention"] | undefined;
-  onPayload: AnthropicOptions["onPayload"] | undefined;
-}): NonNullable<AnthropicOptions["onPayload"]> {
+  cacheRetention: ProviderStreamOptions["cacheRetention"] | undefined;
+  onPayload: ProviderStreamOptions["onPayload"] | undefined;
+}): NonNullable<ProviderStreamOptions["onPayload"]> {
   const policy = resolveAnthropicPayloadPolicy({
     provider: params.model.provider,
     api: params.model.api,
@@ -114,10 +144,10 @@ function createAnthropicVertexOnPayload(params: {
 }
 
 /**
- * Create a StreamFn that routes through pi-ai's `streamAnthropic` with an
+ * Create a StreamFn that routes through OpenClaw's generic model stream with an
  * injected `AnthropicVertex` client.  All streaming, message conversion, and
- * event handling is handled by pi-ai — we only supply the GCP-authenticated
- * client and map SimpleStreamOptions → AnthropicOptions.
+ * event handling is handled by the shared model runtime - we only supply the GCP-authenticated
+ * client and provider transport options.
  */
 export function createAnthropicVertexStreamFn(
   projectId: string | undefined,
@@ -141,9 +171,18 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const opts: AnthropicOptions = {
-      client: client as AnthropicOptions["client"],
-      temperature: options?.temperature,
+    const contractModelId = resolveClaudeModelIdentity(model);
+    const fable5 = isClaudeFable5Model(contractModelId);
+    const reasoning = options?.reasoning as ModelThinkingLevel | undefined;
+    const adaptiveThinking =
+      fable5 || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
+    const temperature =
+      adaptiveThinking || isClaudeOpus47OrNewerModel(contractModelId)
+        ? undefined
+        : options?.temperature;
+    const opts: AnthropicVertexTransportOptions = {
+      client,
+      ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,
       cacheRetention: options?.cacheRetention,
@@ -158,21 +197,25 @@ export function createAnthropicVertexStreamFn(
       metadata: options?.metadata,
     };
 
-    if (options?.reasoning) {
-      if (supportsAdaptiveThinking(model.id)) {
+    if (reasoning) {
+      if (supportsAdaptiveThinking(contractModelId)) {
         opts.thinkingEnabled = true;
         opts.effort = mapAnthropicAdaptiveEffort(
-          options.reasoning,
-          model.id,
+          reasoning,
+          transportModel,
+          contractModelId,
         ) as AnthropicVertexEffort;
       } else {
         opts.thinkingEnabled = true;
-        const budgets = options.thinkingBudgets;
+        const budgets = options?.thinkingBudgets;
         opts.thinkingBudgetTokens =
-          (budgets && options.reasoning in budgets
-            ? budgets[options.reasoning as keyof typeof budgets]
+          (budgets && reasoning in budgets
+            ? budgets[reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
       }
+    } else if (fable5) {
+      opts.thinkingEnabled = true;
+      opts.effort = "high";
     } else {
       opts.thinkingEnabled = false;
     }
@@ -204,6 +247,7 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
   }
 }
 
+/** Create an Anthropic Vertex stream function from model metadata and env. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

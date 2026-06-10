@@ -1,5 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../../packages/gateway-protocol/src/version.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import type { DeviceIdentity } from "./device-identity.ts";
@@ -94,14 +98,20 @@ vi.mock("./device-identity.ts", () => ({
   signDevicePayload: signDevicePayloadMock,
 }));
 
-const { CONTROL_UI_OPERATOR_SCOPES, GatewayBrowserClient, shouldRetryWithDeviceToken } =
-  await import("./gateway.ts");
+const {
+  CONTROL_UI_OPERATOR_SCOPES,
+  GatewayBrowserClient,
+  GatewayRequestError,
+  shouldRetryWithDeviceToken,
+} = await import("./gateway.ts");
 
 type ConnectFrame = {
   id?: string;
   method?: string;
   params?: {
     auth?: { token?: string; password?: string; deviceToken?: string };
+    maxProtocol?: number;
+    minProtocol?: number;
     scopes?: string[];
   };
 };
@@ -113,6 +123,22 @@ type RequestTimingPayload = {
   durationMs?: number;
   startedAtMs?: number;
   endedAtMs?: number;
+  errorCode?: string;
+};
+
+type ConnectTimingPayload = {
+  generation?: number;
+  phase?: string;
+  durationMs?: number;
+  phaseDurationMs?: number;
+  hasChallenge?: boolean;
+  usedFallback?: boolean;
+  secureContext?: boolean;
+  hasDeviceIdentity?: boolean;
+  hasDevice?: boolean;
+  hasAuthToken?: boolean;
+  hasDeviceToken?: boolean;
+  hasPassword?: boolean;
   errorCode?: string;
 };
 
@@ -194,6 +220,12 @@ function expectLatestRequestTiming(
   ) {
     expect(timing.durationMs).toBe(Math.max(0, timing.endedAtMs - timing.startedAtMs));
   }
+}
+
+function connectTimingPayloads(onConnectTiming: ReturnType<typeof vi.fn>): ConnectTimingPayload[] {
+  return onConnectTiming.mock.calls.map(
+    ([payload]) => requireRecord(payload, "connect timing") as ConnectTimingPayload,
+  );
 }
 
 function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
@@ -343,7 +375,18 @@ describe("GatewayBrowserClient", () => {
     const { connectFrame } = await startConnect(client);
 
     expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
+    expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("adds the current Control UI protocol to bare protocol mismatch errors", () => {
+    const error = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "protocol mismatch",
+    });
+
+    expect(error.message).toBe(`protocol mismatch: Control UI v${PROTOCOL_VERSION}`);
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
@@ -533,6 +576,110 @@ describe("GatewayBrowserClient", () => {
       ok: false,
       errorCode: "CONFIG_ERROR",
     });
+  });
+
+  it("reports connect phase timing without credentials or nonce values", async () => {
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onConnectTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client, "nonce-secret");
+    const sentPayloads = connectTimingPayloads(onConnectTiming);
+    expect(sentPayloads.map((payload) => payload.phase)).toEqual([
+      "socket-open",
+      "challenge",
+      "device-identity-ready",
+      "connect-plan-ready",
+      "request-sent",
+    ]);
+    for (const payload of sentPayloads) {
+      expect(payload.generation).toBe(1);
+      expect(payload.durationMs).toBeTypeOf("number");
+      expect(payload.phaseDurationMs).toBeTypeOf("number");
+      expect(payload).not.toHaveProperty("token");
+      expect(payload).not.toHaveProperty("passwordValue");
+      expect(payload).not.toHaveProperty("nonce");
+      expect(JSON.stringify(payload)).not.toContain("shared-auth-token");
+      expect(JSON.stringify(payload)).not.toContain("nonce-secret");
+    }
+
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("hello");
+    });
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      generation: 1,
+      phase: "hello",
+      hasChallenge: true,
+      usedFallback: false,
+      secureContext: true,
+      hasDeviceIdentity: true,
+      hasDevice: true,
+      hasAuthToken: true,
+      hasDeviceToken: false,
+      hasPassword: false,
+    });
+  });
+
+  it("marks fallback connect timing when no challenge arrives", async () => {
+    useNodeFakeTimers();
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onConnectTiming,
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(connectTimingPayloads(onConnectTiming).map((payload) => payload.phase)).toContain(
+      "fallback",
+    );
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      phase: "request-sent",
+      hasChallenge: false,
+      usedFallback: true,
+    });
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
+  it("reports failed connect timing when the socket closes before hello", async () => {
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onConnectTiming,
+    });
+
+    const { ws } = await startConnect(client);
+    ws.emitClose(1006, "socket lost");
+
+    await vi.waitFor(() => {
+      expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+        phase: "failed",
+        errorCode: "SOCKET_CLOSED",
+      });
+    });
+
+    client.stop();
   });
 
   it("prefers explicit shared auth over cached device tokens", async () => {

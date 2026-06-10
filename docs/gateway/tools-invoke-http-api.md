@@ -34,6 +34,10 @@ Notes:
 - When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
   configured trusted proxy source; same-host loopback proxies require explicit
   `gateway.auth.trustedProxy.allowLoopback = true`.
+- Internal same-host callers that bypass the proxy can use
+  `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` as a local direct
+  fallback. Any `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` header evidence
+  keeps the request on the trusted-proxy path instead.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
@@ -124,12 +128,18 @@ You can customize this deny list via `gateway.tools`:
     tools: {
       // Additional tools to block over HTTP /tools/invoke
       deny: ["browser"],
-      // Remove tools from the default deny list
+      // Remove tools from the default deny list for owner/admin callers
       allow: ["gateway"],
     },
   },
 }
 ```
+
+`gateway.tools.allow` is an exposure override, not a scope upgrade. In
+identity-bearing HTTP modes, `cron`, `gateway`, and `nodes` remain unavailable
+to callers that do not have owner/admin identity (`operator.admin`) even when
+they are listed in `gateway.tools.allow`. Shared-secret bearer auth still follows
+the full trusted-operator rule above.
 
 To help group policies resolve context, you can optionally set:
 

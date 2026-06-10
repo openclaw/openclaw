@@ -1,3 +1,4 @@
+// Covers plugin peer linking for development installs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -103,4 +104,55 @@ describe("plugin peer links", () => {
       expect(warnings.join("\n")).toContain("is not a real directory");
     },
   );
+
+  it("replaces an existing real openclaw package directory", async () => {
+    const root = makeTempDir();
+    const packageDir = path.join(root, "peer-plugin");
+    const existingOpenClawDir = path.join(packageDir, "node_modules", "openclaw");
+    fs.mkdirSync(existingOpenClawDir, { recursive: true });
+    fs.writeFileSync(path.join(existingOpenClawDir, "package.json"), '{"name":"openclaw"}', "utf8");
+
+    const messages: string[] = [];
+    const result = await linkOpenClawPeerDependencies({
+      installedDir: packageDir,
+      peerDependencies: {
+        openclaw: ">=2026.0.0",
+      },
+      logger: {
+        info: (message) => messages.push(message),
+      },
+    });
+
+    expect(result).toEqual({ repaired: 1, skipped: 0 });
+    expect(fs.lstatSync(existingOpenClawDir).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(existingOpenClawDir)).toBe(fs.realpathSync(process.cwd()));
+    expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
+  });
+
+  it("does not delete an unrelated existing package directory", async () => {
+    const root = makeTempDir();
+    const packageDir = path.join(root, "peer-plugin");
+    const existingOpenClawDir = path.join(packageDir, "node_modules", "openclaw");
+    fs.mkdirSync(existingOpenClawDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(existingOpenClawDir, "package.json"),
+      '{"name":"not-openclaw"}',
+      "utf8",
+    );
+
+    const warnings: string[] = [];
+    const result = await linkOpenClawPeerDependencies({
+      installedDir: packageDir,
+      peerDependencies: {
+        openclaw: ">=2026.0.0",
+      },
+      logger: {
+        warn: (message) => warnings.push(message),
+      },
+    });
+
+    expect(result).toEqual({ repaired: 0, skipped: 1 });
+    expect(fs.existsSync(path.join(existingOpenClawDir, "package.json"))).toBe(true);
+    expect(warnings.join("\n")).toContain("already exists and is not a symlink");
+  });
 });

@@ -1,3 +1,4 @@
+// Slack plugin module implements media behavior.
 import fs from "node:fs/promises";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -81,7 +82,7 @@ function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
     mock?: unknown;
     _isMockFunction?: unknown;
   };
-  return candidate.mock !== undefined || candidate._isMockFunction === true;
+  return candidate.mock !== undefined || candidate["_isMockFunction"] === true;
 }
 
 function createSlackMediaFetch(): FetchLike {
@@ -209,7 +210,7 @@ async function saveSlackMedia(params: {
           },
         }
       : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
     }

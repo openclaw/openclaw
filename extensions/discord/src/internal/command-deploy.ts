@@ -1,3 +1,4 @@
+// Discord plugin module implements command deploy behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
@@ -238,10 +239,10 @@ const optionComparisonOmittedFields = new Set([
 ]);
 const nullableLocalizationFields = new Set(["description_localizations", "name_localizations"]);
 
-function stableComparableObject(value: unknown, path: string[] = []): unknown {
+function stableComparableObject(value: unknown, pathValue: string[] = []): unknown {
   if (Array.isArray(value)) {
-    const normalized = value.map((entry) => stableComparableObject(entry, path));
-    const key = path.at(-1);
+    const normalized = value.map((entry) => stableComparableObject(entry, pathValue));
+    const key = pathValue.at(-1);
     if (
       key &&
       unorderedCommandArrayFields.has(key) &&
@@ -266,7 +267,7 @@ function stableComparableObject(value: unknown, path: string[] = []): unknown {
         if (entry === null && nullableLocalizationFields.has(key)) {
           return false;
         }
-        if (path.includes("options") && optionComparisonOmittedFields.has(key)) {
+        if (pathValue.includes("options") && optionComparisonOmittedFields.has(key)) {
           return false;
         }
         if ((key === "required" || key === "autocomplete") && entry === false) {
@@ -277,21 +278,21 @@ function stableComparableObject(value: unknown, path: string[] = []): unknown {
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([key, entry]) => [
         key,
-        shouldNormalizeDescriptionValue(path, key, entry)
+        shouldNormalizeDescriptionValue(pathValue, key, entry)
           ? normalizeDescriptionForComparison(entry)
-          : stableComparableObject(entry, [...path, key]),
+          : stableComparableObject(entry, [...pathValue, key]),
       ]),
   );
 }
 
 function shouldNormalizeDescriptionValue(
-  path: string[],
+  pathLocal: string[],
   key: string,
   entry: unknown,
 ): entry is string {
   return (
     typeof entry === "string" &&
-    (key === "description" || path.at(-1) === "description_localizations")
+    (key === "description" || pathLocal.at(-1) === "description_localizations")
   );
 }
 
@@ -333,7 +334,7 @@ function commandsEqual(a: unknown, b: unknown) {
   return JSON.stringify(comparableCommand(a)) === JSON.stringify(comparableCommand(b));
 }
 
-export const __testing = {
+export const testing = {
   commandsEqual,
   comparableCommand,
   normalizeDescriptionForComparison,
@@ -349,3 +350,4 @@ function stableCommandSetHash(commands: SerializedCommand[]): string {
     );
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
+export { testing as __testing };

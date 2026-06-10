@@ -1,7 +1,9 @@
+// Discord plugin module implements message handler.context behavior.
 import {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
+  toHistoryMediaEntries,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
@@ -55,6 +57,7 @@ export async function buildDiscordMessageProcessContext(params: {
     discordConfig,
     accountId,
     runtime,
+    botUserId,
     mediaMaxBytes,
     discordRestFetch,
     abortSignal,
@@ -151,6 +154,7 @@ export async function buildDiscordMessageProcessContext(params: {
     sessionKey: route.sessionKey,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
+  const isRoomEvent = ctx.inboundEventKind === "room_event";
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -162,7 +166,8 @@ export async function buildDiscordMessageProcessContext(params: {
     envelope: envelopeOptions,
   });
   const shouldIncludeChannelHistory =
-    !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+    !isDirectMessage &&
+    (isRoomEvent || !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   if (shouldIncludeChannelHistory) {
     combinedBody = channelHistory.buildPendingContext({
       historyKey: messageChannelId,
@@ -181,34 +186,21 @@ export async function buildDiscordMessageProcessContext(params: {
     });
   }
   const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
-  const replyVisibility = replyContext
-    ? evaluateSupplementalContextVisibility({
-        mode: contextVisibilityMode,
-        kind: "quote",
-        senderAllowed: isSupplementalContextSenderAllowed({
-          id: replyContext.senderId,
-          name: replyContext.senderName,
-          tag: replyContext.senderTag,
-          memberRoleIds: replyContext.memberRoleIds,
-        }),
+  const replySenderAllowed = replyContext
+    ? isSupplementalContextSenderAllowed({
+        id: replyContext.senderId,
+        name: replyContext.senderName,
+        tag: replyContext.senderTag,
+        memberRoleIds: replyContext.memberRoleIds,
       })
-    : null;
-  const filteredReplyContext = replyContext && replyVisibility?.include ? replyContext : null;
-  if (replyContext && !filteredReplyContext && isGuildMessage) {
+    : true;
+  const replyVisible = evaluateSupplementalContextVisibility({
+    mode: contextVisibilityMode,
+    kind: "quote",
+    senderAllowed: replySenderAllowed,
+  }).include;
+  if (replyContext && !replyVisible && isGuildMessage) {
     logVerbose(`discord: drop reply context (mode=${contextVisibilityMode})`);
-  }
-  const mediaListForContext = [...mediaList];
-  if (filteredReplyContext) {
-    const referencedReplyMediaList = await resolveReferencedReplyMediaList(message, mediaMaxBytes, {
-      fetchImpl: discordRestFetch,
-      ssrfPolicy: cfg.browser?.ssrfPolicy,
-      readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
-      totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-      abortSignal,
-    });
-    if (!isContextAborted(abortSignal)) {
-      mediaListForContext.push(...referencedReplyMediaList);
-    }
   }
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;
@@ -265,7 +257,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const preflightAudioIndex =
     preflightAudioTranscript === undefined
       ? -1
-      : mediaListForContext.findIndex((media) => media.contentType?.startsWith("audio/"));
+      : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: threadChannel ? messageChannelId : undefined,
@@ -277,7 +269,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     messageChannelId,
     isGuildMessage,
-    channelConfig,
+    channelConfig: isRoomEvent ? null : channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
     channelName: channelInfo?.name,
@@ -306,7 +298,7 @@ export async function buildDiscordMessageProcessContext(params: {
     : undefined;
   const effectiveTo = autoThreadContext?.To ?? dmConversationTarget ?? replyTarget;
   if (!effectiveTo) {
-    runtime.error?.(danger("discord: missing reply target"));
+    runtime.error(danger("discord: missing reply target"));
     return null;
   }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
@@ -327,10 +319,10 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = buildChannelTurnContext({
+  const ctxPayload = await buildChannelInboundEventContext({
     channel: "discord",
-    provider: "discord",
-    surface: "discord",
+    resolveSupplementalMedia: true,
+    contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
     messageIdFull: canonicalMessageId && canonicalMessageId !== message.id ? message.id : undefined,
@@ -349,11 +341,8 @@ export async function buildDiscordMessageProcessContext(params: {
       id: messageChannelId,
       label: fromLabel,
       spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
-      routePeer: {
-        kind: isDirectMessage ? "direct" : "channel",
-        id: isDirectMessage ? author.id : messageChannelId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -366,14 +355,14 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     reply: {
       to: effectiveTo,
-      originatingTo,
+      ...(originatingTo !== effectiveTo ? { originatingTo } : {}),
     },
     message: {
+      inboundEventKind: ctx.inboundEventKind,
       body: combinedBody,
       rawBody: preflightAudioTranscript ?? baseText,
       bodyForAgent: preflightAudioTranscript ?? baseText ?? text,
       commandBody: preflightAudioTranscript ?? baseText,
-      envelopeFrom: fromLabel,
       inboundHistory,
     },
     access: {
@@ -386,9 +375,6 @@ export async function buildDiscordMessageProcessContext(params: {
       },
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands: ctx.allowTextCommands,
-        useAccessGroups: false,
-        authorizers: [],
       },
     },
     commandTurn: {
@@ -397,20 +383,40 @@ export async function buildDiscordMessageProcessContext(params: {
       authorized: commandAuthorized,
       body: preflightAudioTranscript ?? baseText,
     },
-    media: toInboundMediaFacts(mediaListForContext, {
+    media: toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),
     supplemental: {
-      quote: filteredReplyContext
-        ? {
-            id: filteredReplyContext.id,
-            body: filteredReplyContext.body,
-            sender: filteredReplyContext.sender,
-          }
-        : undefined,
+      quote:
+        replyContext && replyVisible
+          ? {
+              id: replyContext.id,
+              body: replyContext.body,
+              sender: replyContext.sender,
+              senderAllowed: replySenderAllowed,
+              isSelf: Boolean(botUserId && replyContext.senderId === botUserId),
+              media: async () => {
+                const referencedReplyMediaList = await resolveReferencedReplyMediaList(
+                  message,
+                  mediaMaxBytes,
+                  {
+                    fetchImpl: discordRestFetch,
+                    ssrfPolicy: cfg.browser?.ssrfPolicy,
+                    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+                    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+                    abortSignal,
+                  },
+                );
+                return isContextAborted(abortSignal)
+                  ? []
+                  : toInboundMediaFacts(referencedReplyMediaList);
+              },
+            }
+          : undefined,
       thread: {
         starterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
         label: threadLabel,
+        senderAllowed: true,
       },
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
@@ -423,6 +429,20 @@ export async function buildDiscordMessageProcessContext(params: {
     },
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+  if (isRoomEvent && shouldIncludeChannelHistory) {
+    await channelHistory.recordWithMedia({
+      historyKey: messageChannelId,
+      limit: historyLimit,
+      entry: {
+        sender: senderName,
+        body: text,
+        timestamp: resolveTimestampMs(message.timestamp),
+        messageId: message.id,
+      },
+      media: toHistoryMediaEntries(mediaList, { messageId: message.id }),
+      messageId: message.id,
+    });
+  }
 
   if (shouldLogVerbose()) {
     const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");

@@ -1,3 +1,4 @@
+// Zalo plugin module implements lifecycle test support behavior.
 import { request as httpRequest } from "node:http";
 import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi } from "vitest";
@@ -123,7 +124,7 @@ export function createImageUpdate(params?: {
 
 export function createImageLifecycleCore() {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const buildChannelTurnContextMock = vi.fn(
+  const buildChannelInboundEventContextMock = vi.fn(
     (params: {
       channel: string;
       accountId?: string;
@@ -238,8 +239,8 @@ export function createImageLifecycleCore() {
           async () => undefined,
         ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+      inbound: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
             return {
@@ -294,9 +295,9 @@ export function createImageLifecycleCore() {
             routeSessionKey: resolved.routeSessionKey,
             dispatchResult,
           };
-        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runAssembled: vi.fn(
-          async (params: Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0]) => {
+        }) as unknown as PluginRuntime["channel"]["inbound"]["run"],
+        dispatchReply: vi.fn(
+          async (params: Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0]) => {
             await params.recordInboundSession({
               storePath: params.storePath,
               sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
@@ -327,9 +328,9 @@ export function createImageLifecycleCore() {
               dispatchResult,
             };
           },
-        ) as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
+        ) as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
         buildContext:
-          buildChannelTurnContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(
@@ -398,7 +399,9 @@ export function expectImageLifecycleDelivery(params: {
 export async function settleAsyncWork(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 

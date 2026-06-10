@@ -1,10 +1,12 @@
+// Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 
-const REASONING_MESSAGE_PREFIX = "Reasoning:\n";
+const REASONING_MESSAGE_RE = /^Thinking\.{0,3}\s*_/u;
+const LEGACY_REASONING_MESSAGE_PREFIX = "Reasoning:\n";
 const REASONING_TAG_PREFIXES = [
   "<think",
   "<thinking",
@@ -72,9 +74,12 @@ export function splitTelegramReasoningText(
   if (isPartialReasoningTagPrefix(trimmed)) {
     return {};
   }
+  if (REASONING_MESSAGE_RE.test(trimmed)) {
+    return { reasoningText: trimmed };
+  }
   if (
-    trimmed.startsWith(REASONING_MESSAGE_PREFIX) &&
-    trimmed.length > REASONING_MESSAGE_PREFIX.length
+    trimmed.startsWith(LEGACY_REASONING_MESSAGE_PREFIX) &&
+    trimmed.length > LEGACY_REASONING_MESSAGE_PREFIX.length
   ) {
     return { reasoningText: trimmed };
   }

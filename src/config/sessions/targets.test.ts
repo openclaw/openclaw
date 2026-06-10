@@ -1,3 +1,4 @@
+// Session target tests cover persisted channel targets for sessions.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -106,6 +107,51 @@ describe("resolveSessionStoreTargets", () => {
         {
           agentId: "work",
           storePath: resolveStorePath(cfg.session?.store, { agentId: "work", env }),
+        },
+      ]);
+    });
+  });
+
+  it("includes configured ACP harness stores for all-agent session views", async () => {
+    await withTempHome(async () => {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+        },
+        agents: {
+          list: [
+            { id: "ops", default: true },
+            { id: "review", runtime: { type: "acp", acp: { agent: "opencode" } } },
+          ],
+        },
+        acp: {
+          defaultAgent: "claude",
+          allowedAgents: ["gemini", "*"],
+        },
+      };
+
+      const env = { ...process.env };
+      const targets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env });
+      expect(targets).toEqual([
+        {
+          agentId: "ops",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "ops", env }),
+        },
+        {
+          agentId: "review",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "review", env }),
+        },
+        {
+          agentId: "claude",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "claude", env }),
+        },
+        {
+          agentId: "gemini",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "gemini", env }),
+        },
+        {
+          agentId: "opencode",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "opencode", env }),
         },
       ]);
     });

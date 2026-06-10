@@ -1,3 +1,4 @@
+/** Tests directive handling for target-session command turns. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
@@ -145,6 +146,8 @@ async function resolveHelloWithModelDefaults(params: {
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
   commandAuthorized?: boolean;
+  provider?: string;
+  model?: string;
   ctx?: Parameters<typeof buildTestCtx>[0];
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
@@ -190,8 +193,8 @@ async function resolveHelloWithModelDefaults(params: {
     defaultProvider: "openai",
     defaultModel: "gpt-4o-mini",
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: "openai",
-    model: "gpt-4o-mini",
+    provider: params.provider ?? "openai",
+    model: params.model ?? "gpt-4o-mini",
     hasResolvedHeartbeatModelOverride: false,
     typing: makeTypingController(),
     opts: undefined,

@@ -1,11 +1,50 @@
+// Provider catalog deprecation contract tests cover deprecated provider catalog metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  toRepoPath,
+  toRepoRelativePath,
+} from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const extensionsRoot = path.join(repoRoot, "extensions");
 
+function isProductionSourcePath(filePath: string): boolean {
+  const normalized = toRepoPath(filePath);
+  if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized)) {
+    return false;
+  }
+  if (/(^|\/)(?:node_modules|dist|\.[^/]+)(?:\/|$)/.test(normalized)) {
+    return false;
+  }
+  return !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized);
+}
+
+function listGitProductionSourceFiles(root: string): string[] | null {
+  const relativeRoot = toRepoRelativePath(repoRoot, root);
+  if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
+    return null;
+  }
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
+  if (!files) {
+    return null;
+  }
+  return files
+    .filter(isProductionSourcePath)
+    .map((line) => path.join(repoRoot, ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
+    .toSorted();
+}
+
 function walkProductionSourceFiles(dir: string): string[] {
+  const gitFiles = listGitProductionSourceFiles(dir);
+  if (gitFiles) {
+    return gitFiles;
+  }
+
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
@@ -16,11 +55,7 @@ function walkProductionSourceFiles(dir: string): string[] {
       files.push(...walkProductionSourceFiles(entryPath));
       continue;
     }
-    const normalized = entryPath.split(path.sep).join("/");
-    if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized)) {
-      continue;
-    }
-    if (/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized)) {
+    if (!isProductionSourcePath(entryPath)) {
       continue;
     }
     files.push(entryPath);
@@ -108,6 +143,18 @@ function lineNumberFor(source: string, offset: number): number {
 }
 
 describe("bundled provider catalog deprecation guard", () => {
+  it("lists production extension sources from git without walking extension roots", () => {
+    expectNoReaddirSyncDuring(() => {
+      const files = walkProductionSourceFiles(extensionsRoot);
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((file) => path.relative(repoRoot, file).startsWith("extensions"))).toBe(
+        true,
+      );
+      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+    });
+  });
+
   it("keeps bundled provider plugins off the deprecated discovery hook", () => {
     const offenders: string[] = [];
     for (const filePath of walkProductionSourceFiles(extensionsRoot)) {

@@ -1,3 +1,4 @@
+// Doctor legacy config migration tests cover shipped migration recipes and validation outcomes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupCliBackend: () => undefined,
+  resolvePluginSetupRegistry: () => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  }),
   runPluginSetupConfigMigrations: ({ config }: { config: OpenClawConfig }) => ({
     config,
     changes: [],
@@ -14,6 +23,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: () => ({
+    diagnostics: [],
     plugins: [
       {
         id: "brave",
@@ -157,7 +167,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
   });
 
-  it("sets the group visible reply default for configured channels", () => {
+  it("does not materialize a group visible reply default for configured channels", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
         discord: {},
@@ -171,11 +181,59 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.messages?.groupChat).toEqual({
       mentionPatterns: ["@openclaw"],
-      visibleReplies: "message_tool",
     });
-    expect(res.changes).toContain(
-      'Set messages.groupChat.visibleReplies to "message_tool" so group/channel replies use the message tool by default.',
+    expect(res.changes.some((change) => change.includes("messages.groupChat.visibleReplies"))).toBe(
+      false,
     );
+  });
+
+  it("removes bindings for missing configured agents", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "Team Ops" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "team-ops",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-2" } },
+        },
+      ],
+    });
+
+    expect(res.config.bindings).toEqual([
+      {
+        type: "route",
+        agentId: "team-ops",
+        match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+      },
+    ]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
+  it("does not prune bindings from malformed agent entries", () => {
+    const config = {
+      agents: {
+        list: [null],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config.bindings).toEqual(config.bindings);
+    expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
   it("does not set group visible replies without channels or when already explicit", () => {
@@ -458,12 +516,12 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [
               {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
-                api: "openai-codex-responses",
+                api: "openai-chatgpt-responses",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
@@ -491,12 +549,12 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [
               {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
-                api: "openai-codex-responses",
+                api: "openai-chatgpt-responses",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
@@ -515,12 +573,12 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [
               {
                 id: "gpt-5.5",
                 name: "gpt-5.5",
-                api: "openai-codex-responses",
+                api: "openai-chatgpt-responses",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
@@ -638,6 +696,60 @@ describe("normalizeCompatibilityConfigValues", () => {
         agentRuntime: { id: "claude-cli" },
       },
     });
+  });
+
+  it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": {
+        alias: "Opus",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(res.changes).toContain(
+      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+    );
+  });
+
+  it("does not overwrite explicit model runtime while preserving legacy whole-agent CLI intent", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [
+          {
+            id: "paige",
+            agentRuntime: { id: "claude-cli" },
+            model: "anthropic/claude-opus-4-7",
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.list?.[0]?.agentRuntime).toEqual({ id: "claude-cli" });
+    expect(res.config.agents?.list?.[0]?.models).toEqual({
+      "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+    });
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates legacy Codex CLI primary refs to the Codex app-server route", () => {
@@ -1139,6 +1251,37 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
+  it("does not report talk provider normalization for realtime voice aliases", () => {
+    const input = {
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-123",
+          },
+        },
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              model: "gpt-realtime",
+            },
+          },
+          model: "gpt-realtime",
+          voice: "cedar",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+        },
+      },
+    };
+
+    const res = normalizeCompatibilityConfigValues(input as OpenClawConfig);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toStrictEqual([]);
+  });
+
   it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {
     const res = normalizeCompatibilityConfigValues({
       tools: {
@@ -1381,6 +1524,59 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
+    const providerParams: Record<string, unknown> = { temperature: 0.2 };
+    Object.defineProperty(providerParams, "__proto__", {
+      enumerable: true,
+      value: { think: "high" },
+    });
+    const modelParams: Record<string, unknown> = { top_p: 0.9 };
+    Object.defineProperty(modelParams, "__proto__", {
+      enumerable: true,
+      value: { keep_alive: "forever" },
+    });
+
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            params: providerParams,
+            models: [
+              ollamaModel({
+                contextWindow: 32768,
+                params: modelParams,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    const nextProviderParams = res.config.models?.providers?.ollama?.params as Record<
+      string,
+      unknown
+    >;
+    const nextModelParams = res.config.models?.providers?.ollama?.models?.[0]?.params as Record<
+      string,
+      unknown
+    >;
+    expect(Object.getPrototypeOf(nextProviderParams)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(nextModelParams)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(nextProviderParams, "__proto__")?.value).toEqual({
+      think: "high",
+    });
+    expect(Object.getOwnPropertyDescriptor(nextModelParams, "__proto__")?.value).toEqual({
+      keep_alive: "forever",
+    });
+    expect(nextProviderParams.think).toBeUndefined();
+    expect(nextModelParams.keep_alive).toBeUndefined();
+    expect(nextProviderParams.num_ctx).toBe(65536);
+    expect(nextModelParams.num_ctx).toBe(32768);
+  });
+
   it("keeps existing provider-level native Ollama params.num_ctx ahead of inherited provider budgets", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {
@@ -1484,14 +1680,73 @@ describe("normalizeCompatibilityConfigValues", () => {
       res.config.models?.providers?.mistral?.models?.map((model) => ({
         id: model.id,
         maxTokens: model.maxTokens,
+        cacheRead: model.cost.cacheRead,
       })),
     ).toEqual([
-      { id: "mistral-large-latest", maxTokens: 16384 },
-      { id: "magistral-small", maxTokens: 40000 },
+      { id: "mistral-large-latest", maxTokens: 16384, cacheRead: 0.05 },
+      { id: "magistral-small", maxTokens: 40000, cacheRead: 0.05 },
     ]);
     expect(res.changes).toEqual([
       "Normalized models.providers.mistral.models[0].maxTokens (262144 → 16384) to avoid Mistral context-window rejects.",
+      "Normalized models.providers.mistral.models[0].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
       "Normalized models.providers.mistral.models[1].maxTokens (128000 → 40000) to avoid Mistral context-window rejects.",
+      "Normalized models.providers.mistral.models[1].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
+    ]);
+  });
+
+  it("normalizes old zero Mistral cacheRead costs while preserving custom costs", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "codestral-latest",
+                name: "Codestral",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 256000,
+                maxTokens: 32000,
+              },
+              {
+                id: "mistral-medium-3-5",
+                name: "Mistral Medium 3.5 Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1.5, output: 7.5, cacheRead: 0.07, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 32000,
+              },
+              {
+                id: "custom-mistral-model",
+                name: "Custom Mistral",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      res.config.models?.providers?.mistral?.models?.map((model) => ({
+        id: model.id,
+        cacheRead: model.cost.cacheRead,
+      })),
+    ).toEqual([
+      { id: "codestral-latest", cacheRead: 0.03 },
+      { id: "mistral-medium-3-5", cacheRead: 0.07 },
+      { id: "custom-mistral-model", cacheRead: 0 },
+    ]);
+    expect(res.changes).toEqual([
+      "Normalized models.providers.mistral.models[0].cost.cacheRead (0 → 0.03) for Mistral prompt-cache billing.",
     ]);
   });
 });

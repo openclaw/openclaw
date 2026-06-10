@@ -1,3 +1,4 @@
+// Migrate Hermes tests cover model.plan plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it } from "vitest";
@@ -101,7 +102,6 @@ describe("Hermes migration model planning", () => {
         model: {
           primary: "anthropic/claude-sonnet-4.6",
           fallbacks: ["openai/gpt-5.4"],
-          timeoutMs: 120_000,
         },
       }),
     );

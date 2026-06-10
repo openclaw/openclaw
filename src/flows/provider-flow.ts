@@ -1,3 +1,4 @@
+// Provider setup flow configures provider credentials, models, and defaults.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
@@ -5,7 +6,8 @@ import * as providerInstallCatalog from "../plugins/provider-install-catalog.js"
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
-type ProviderFlowScope = "text-inference" | "image-generation";
+// Provider setup contributions from manifests and install catalogs.
+type ProviderFlowScope = "text-inference" | "image-generation" | "music-generation";
 
 const DEFAULT_PROVIDER_FLOW_SCOPE: ProviderFlowScope = "text-inference";
 
@@ -28,6 +30,7 @@ function includesProviderFlowScope(
   scopes: readonly ProviderFlowScope[] | undefined,
   scope: ProviderFlowScope,
 ): boolean {
+  // Missing scope means the historic text-inference onboarding surface only.
   return scopes ? scopes.includes(scope) : scope === DEFAULT_PROVIDER_FLOW_SCOPE;
 }
 

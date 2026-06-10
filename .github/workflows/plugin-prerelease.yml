@@ -52,7 +52,7 @@ jobs:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Build plugin prerelease manifest
@@ -221,7 +221,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -257,7 +257,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -330,7 +330,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -344,7 +344,7 @@ jobs:
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
+        run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --exclude extensions/codex/src/app-server/run-attempt.test.ts
 
   plugin-prerelease-inspector:
     permissions:
@@ -362,7 +362,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment

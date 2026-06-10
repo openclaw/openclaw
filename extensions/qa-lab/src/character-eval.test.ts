@@ -1,3 +1,4 @@
+// Qa Lab tests cover character eval plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -89,17 +90,51 @@ function createConcurrencyGate(expectedActive: number) {
   };
 }
 
-function makeSuiteResult(params: { outputDir: string; model: string; transcript: string }) {
+async function makeSuiteResult(params: {
+  outputDir: string;
+  model: string;
+  transcript: string;
+  resultStatus?: "pass" | "fail";
+  summaryStatus?: "pass" | "fail";
+  summaryFailedCount?: number;
+}) {
+  const resultStatus = params.resultStatus ?? "pass";
+  const summaryStatus = params.summaryStatus ?? resultStatus;
+  const summaryFailedCount = params.summaryFailedCount ?? (summaryStatus === "fail" ? 1 : 0);
+  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  await fs.mkdir(params.outputDir, { recursive: true });
+  await fs.writeFile(
+    summaryPath,
+    `${JSON.stringify(
+      {
+        counts: {
+          total: 1,
+          passed: summaryFailedCount > 0 ? 0 : 1,
+          failed: summaryFailedCount,
+        },
+        scenarios: [
+          {
+            name: "Character vibes",
+            status: summaryStatus,
+            steps: [],
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   return {
     outputDir: params.outputDir,
     reportPath: path.join(params.outputDir, "qa-suite-report.md"),
-    summaryPath: path.join(params.outputDir, "qa-suite-summary.json"),
+    summaryPath,
     report: "# report",
     watchUrl: "http://127.0.0.1:43124",
     scenarios: [
       {
         name: "Character vibes",
-        status: "pass",
+        status: resultStatus,
         steps: [
           {
             name: `transcript for ${params.model}`,
@@ -274,7 +309,7 @@ describe("runQaCharacterEval", () => {
       { model: "openai/gpt-5.5", rank: 1, score: 8, summary: "ok" },
       { model: "openai/gpt-5.2", rank: 2, score: 7.5, summary: "ok" },
       { model: "openai/gpt-5", rank: 3, score: 7.2, summary: "ok" },
-      { model: "anthropic/claude-opus-4-6", rank: 4, score: 7, summary: "ok" },
+      { model: "anthropic/claude-opus-4-8", rank: 4, score: 7, summary: "ok" },
       { model: "anthropic/claude-sonnet-4-6", rank: 5, score: 6.8, summary: "ok" },
       { model: "zai/glm-5.1", rank: 6, score: 6.3, summary: "ok" },
       { model: "moonshot/kimi-k2.5", rank: 7, score: 6.2, summary: "ok" },
@@ -294,7 +329,7 @@ describe("runQaCharacterEval", () => {
       "openai/gpt-5.5",
       "openai/gpt-5.2",
       "openai/gpt-5",
-      "anthropic/claude-opus-4-6",
+      "anthropic/claude-opus-4-8",
       "anthropic/claude-sonnet-4-6",
       "zai/glm-5.1",
       "moonshot/kimi-k2.5",
@@ -323,7 +358,7 @@ describe("runQaCharacterEval", () => {
     expect(runJudge).toHaveBeenCalledTimes(2);
     expect(runJudge.mock.calls.map(([params]) => params.judgeModel)).toEqual([
       "openai/gpt-5.5",
-      "anthropic/claude-opus-4-6",
+      "anthropic/claude-opus-4-8",
     ]);
     expect(runJudge.mock.calls.map(([params]) => params.judgeThinkingDefault)).toEqual([
       "xhigh",
@@ -427,6 +462,33 @@ describe("runQaCharacterEval", () => {
       model: "qwen/qwen3.6-plus",
       error: "model unsupported error leaked into transcript",
     });
+  });
+
+  it("marks candidates failed when the suite summary has failed scenarios", async () => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript: "USER Alice: hi\n\nASSISTANT openclaw: outwardly fine",
+        summaryStatus: "fail",
+        summaryFailedCount: 1,
+      }),
+    );
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.5", rank: 1, score: 0.5, summary: "failed" },
+    ]);
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.5"],
+      judgeModels: ["openai/gpt-5.5"],
+      runSuite,
+      runJudge,
+    });
+
+    expect(result.runs[0]?.status).toBe("fail");
+    expect(result.runs[0]?.error).toBeUndefined();
   });
 
   it("marks raw tool failure transcripts as failed output", async () => {
@@ -577,11 +639,11 @@ describe("runQaCharacterEval", () => {
       candidateModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-8"],
       judgeThinkingDefault: "medium",
       judgeModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
+        "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
       },
       runSuite,
       runJudge,

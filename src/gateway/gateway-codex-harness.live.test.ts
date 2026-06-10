@@ -1,3 +1,4 @@
+// Codex harness live gateway tests exercise real CLI backend sessions, cron probes, media probes, and command surfaces.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
@@ -5,10 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  renderBitmapTextPngBase64,
+  renderSolidColorPngBase64,
+} from "../../test/helpers/live-image-probe.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { CallGatewayOptions } from "./call.js";
 import type { GatewayClient } from "./client.js";
 import {
@@ -18,8 +25,9 @@ import {
 import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
-  isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
+  isRetryableCodexHarnessLiveError,
+  isStrictExpectedCodexModelsCommandText,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
   assertCronJobMatches,
@@ -30,14 +38,15 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
-import { renderSolidColorPngBase64 } from "./live-image-probe.js";
-import type { EventFrame } from "./protocol/index.js";
 
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS);
 const CODEX_HARNESS_DEBUG = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_DEBUG);
 const CODEX_HARNESS_IMAGE_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE,
+);
+const CODEX_HARNESS_CHAT_IMAGE_PROBE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE,
 );
 const CODEX_HARNESS_MCP_PROBE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE);
 const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
@@ -46,8 +55,12 @@ const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE,
 );
+const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
+);
 const CODEX_HARNESS_SUBAGENT_ONLY =
   CODEX_HARNESS_SUBAGENT_PROBE &&
+  !CODEX_HARNESS_CHAT_IMAGE_PROBE &&
   !CODEX_HARNESS_IMAGE_PROBE &&
   !CODEX_HARNESS_MCP_PROBE &&
   !CODEX_HARNESS_GUARDIAN_PROBE &&
@@ -92,17 +105,6 @@ function logCodexLiveStep(step: string, details?: Record<string, unknown>): void
 
 function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
-}
-
-function isRetryableCodexHarnessLiveError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.includes("gateway request timeout for sessions.list");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => void> {
@@ -198,6 +200,7 @@ function parseModelKey(modelKey: string): { provider: string; modelId: string } 
 
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
+  codeModeOnly?: boolean;
   configPath: string;
   modelKey: string;
   port: number;
@@ -219,21 +222,21 @@ async function writeLiveGatewayConfig(params: {
           config: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
+              ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
             },
           },
         },
       },
     },
-    // The Codex plugin owns the `codex/*` catalog/auth marker. Keeping the
-    // fixture on that provider proves the app-server harness path instead of
-    // exercising legacy OpenAI-Codex provider overrides.
+    // The Codex plugin owns the `codex/*` catalog/auth marker. Keeping runtime
+    // policy on the model entry proves the app-server harness path.
     agents: {
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
+        models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         sandbox: { mode: "off" },
       },
       list: [
@@ -241,7 +244,6 @@ async function writeLiveGatewayConfig(params: {
           id: "dev",
           default: true,
           workspace: params.workspace,
-          agentRuntime: { id: "codex" },
           model: { primary: params.modelKey },
           models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         },
@@ -254,6 +256,7 @@ async function writeLiveGatewayConfig(params: {
 async function requestAgentTextWithEvents(params: {
   client: GatewayClient;
   eventPrefix?: string;
+  includeAllSessions?: boolean;
   message: string;
   sessionKey: string;
 }): Promise<{ text: string; events: CapturedAgentEvent[] }> {
@@ -264,7 +267,7 @@ async function requestAgentTextWithEvents(params: {
   const unsubscribe = onAgentEvent((event) => {
     if (
       !event.stream.startsWith(eventPrefix) ||
-      (event.sessionKey && event.sessionKey !== params.sessionKey)
+      (!params.includeAllSessions && event.sessionKey && event.sessionKey !== params.sessionKey)
     ) {
       return;
     }
@@ -312,12 +315,46 @@ async function requestAgentText(params: {
   return text;
 }
 
+async function verifyCodexCodeModeOnlyDynamicToolProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const runId = randomUUID();
+  const expectedToken = `CODEX-CODEMODE-TOOL-${runId.slice(0, 6).toUpperCase()}`;
+  const { text, events } = await requestAgentTextWithEvents({
+    client: params.client,
+    eventPrefix: "tool",
+    sessionKey: params.sessionKey,
+    message: [
+      "Code-mode-only bridge probe.",
+      "Before replying, call the OpenClaw sessions_list tool exactly once.",
+      "Use limit=1 and includeLastMessage=false.",
+      `After the tool result returns, reply exactly ${expectedToken} and nothing else.`,
+    ].join("\n"),
+  });
+  expect(text).toContain(expectedToken);
+  expect(
+    events.some((event) => event.data?.phase === "start" && event.data?.name === "sessions_list"),
+    `expected sessions_list start event; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+  expect(
+    events.some(
+      (event) =>
+        event.data?.phase === "result" &&
+        event.data?.name === "sessions_list" &&
+        event.data?.isError !== true,
+    ),
+    `expected successful sessions_list result event; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+}
+
 async function requestCodexCommandText(params: {
   client: GatewayClient;
   command: string;
   events: EventFrame[];
   expectedText: string | string[];
   isExpectedText?: (text: string) => boolean;
+  predicateOnly?: boolean;
   sessionKey: string;
 }): Promise<string> {
   const runId = `idem-${randomUUID()}-codex-command`;
@@ -345,8 +382,9 @@ async function requestCodexCommandText(params: {
     : [params.expectedText];
   const matchedByText = expectedTexts.some((expectedText) => text.includes(expectedText));
   const matchedByPredicate = params.isExpectedText?.(text) ?? false;
+  const matched = params.predicateOnly ? matchedByPredicate : matchedByText || matchedByPredicate;
   expect(
-    matchedByText || matchedByPredicate,
+    matched,
     `Expected "${params.command}" response to contain one of: ${expectedTexts.join(", ")}\nReceived:\n${text}`,
   ).toBe(true);
   return text;
@@ -368,6 +406,22 @@ async function waitForChatFinalText(params: {
     await delay(50);
   }
   throw new Error(`timed out waiting for chat final for ${params.runId}`);
+}
+
+async function waitForChatAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
+  const result: { status?: string } = await client.request(
+    "agent.wait",
+    {
+      runId,
+      timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+    },
+    {
+      timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS + 5_000,
+    },
+  );
+  if (result?.status !== "ok") {
+    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+  }
 }
 
 function extractChatFinalText(event: EventFrame, runId: string): string | undefined {
@@ -398,6 +452,69 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .join("\n")
     .trim();
+}
+
+function extractAssistantTexts(messages: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
+  const combined = texts.join("\n\n").trim();
+  if (!combined) {
+    return "<none>";
+  }
+  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+}
+
+async function waitForAssistantText(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  contains: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const timeoutMs = params.timeoutMs ?? 60_000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 24,
+    });
+    const assistantTexts = extractAssistantTexts(history.messages ?? []);
+    const normalizedContains = params.contains.toUpperCase();
+    const matched = assistantTexts.find((text) =>
+      text
+        .toUpperCase()
+        .replace(/[^A-F0-9]/g, "")
+        .includes(normalizedContains),
+    );
+    if (matched) {
+      return matched;
+    }
+    await delay(500);
+  }
+
+  const finalHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 24,
+  });
+  throw new Error(
+    `timed out waiting for assistant text containing ${params.contains}: ${formatAssistantTextPreview(
+      extractAssistantTexts(finalHistory.messages ?? []),
+    )}`,
+  );
 }
 
 async function verifyCodexImageProbe(params: {
@@ -451,6 +568,51 @@ async function verifyCodexImageProbe(params: {
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
   expect(extractPayloadText(payload.result)).toContain(expectedToken);
   expect(events.map((event) => event.stream)).toContain("codex_app_server.lifecycle");
+}
+
+async function verifyCodexChatImageProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const token = randomBitmapTextToken();
+  const runId = `idem-${randomUUID()}-codex-chat-image`;
+  const started: { runId?: string; status?: string } = await params.client.request(
+    "chat.send",
+    {
+      sessionKey: params.sessionKey,
+      idempotencyKey: runId,
+      message: "Read the code printed in the attached image. Reply with only that code.",
+      attachments: [
+        {
+          mimeType: "image/png",
+          fileName: "codex-chat-image-probe.png",
+          content: renderBitmapTextPngBase64(token),
+        },
+      ],
+      originatingChannel: "codex-harness-live",
+      originatingTo: "codex-harness-live",
+      originatingAccountId: "codex-harness-live",
+    },
+    { timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
+  );
+  if (started?.status !== "started" || typeof started.runId !== "string") {
+    throw new Error(`codex chat image probe did not start correctly: ${JSON.stringify(started)}`);
+  }
+  await waitForChatAgentRunOk(params.client, started.runId);
+  const text = await waitForAssistantText({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    contains: token,
+  });
+  const normalized = text.toUpperCase().replace(/[^A-F0-9]/g, "");
+  expect(normalized, `Expected Codex to read bitmap token ${token}; received:\n${text}`).toContain(
+    token,
+  );
+}
+
+function randomBitmapTextToken(length = 6): string {
+  const alphabet = "24567ACEF";
+  return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
 function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {
@@ -618,70 +780,31 @@ async function verifyCodexCronMcpProbe(params: {
   }
 }
 
-async function readSpawnedChildRow(params: {
+function hasCodexAppServerLifecycleEvent(params: {
   childSessionKey: string;
-  client: GatewayClient;
-  parentSessionKey: string;
-}): Promise<Record<string, unknown> | undefined> {
-  const result = await params.client.request(
-    "sessions.list",
-    {
-      spawnedBy: params.parentSessionKey,
-      limit: 20,
-    },
-    { timeoutMs: 10_000 },
+  events: CapturedAgentEvent[];
+}): boolean {
+  return params.events.some(
+    (event) =>
+      event.sessionKey === params.childSessionKey && event.stream === "codex_app_server.lifecycle",
   );
-  const sessions = asRecord(result)?.sessions;
-  if (!Array.isArray(sessions)) {
-    return undefined;
-  }
-  return sessions
-    .map((entry) => asRecord(entry))
-    .find((entry): entry is Record<string, unknown> => entry?.key === params.childSessionKey);
-}
-
-function isActiveCodexSubagentRow(row: Record<string, unknown> | undefined): boolean {
-  if (!row) {
-    return false;
-  }
-  return row.hasActiveSubagentRun === true || row.subagentRunState === "active";
 }
 
 async function waitForCodexSubagentStarted(params: {
   childSessionKey: string;
-  client: GatewayClient;
   events: CapturedAgentEvent[];
-  parentSessionKey: string;
-}): Promise<Record<string, unknown> | undefined> {
-  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 120_000);
-  let lastRow: Record<string, unknown> | undefined;
-  let lastError: unknown;
+}): Promise<void> {
+  const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    try {
-      lastRow = await readSpawnedChildRow({
-        childSessionKey: params.childSessionKey,
-        client: params.client,
-        parentSessionKey: params.parentSessionKey,
-      });
-      const hasLifecycleEvent = params.events.some(
-        (event) =>
-          event.sessionKey === params.childSessionKey &&
-          event.stream === "codex_app_server.lifecycle",
-      );
-      if (lastRow && (hasLifecycleEvent || isActiveCodexSubagentRow(lastRow))) {
-        return lastRow;
-      }
-    } catch (error) {
-      lastError = error;
+    if (hasCodexAppServerLifecycleEvent(params)) {
+      return;
     }
     await delay(2_000);
   }
   throw new Error(
     [
       `subagent ${params.childSessionKey} did not start through the Codex app-server harness`,
-      `lastRow=${JSON.stringify(lastRow)}`,
       `events=${JSON.stringify(params.events)}`,
-      `lastError=${lastError instanceof Error ? lastError.message : String(lastError)}`,
     ].join("\n"),
   );
 }
@@ -705,7 +828,7 @@ async function verifyCodexSubagentProbe(params: {
     });
   });
   try {
-    const { __testing: subagentSpawnTesting, spawnSubagentDirect } =
+    const { testing: subagentSpawnTesting, spawnSubagentDirect } =
       await import("../agents/subagent-spawn.js");
     const noOpContextEngine: ContextEngine = {
       info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
@@ -756,6 +879,7 @@ async function verifyCodexSubagentProbe(params: {
         mode: "run",
         cleanup: "keep",
         context: "isolated",
+        lightContext: true,
         expectsCompletionMessage: false,
         runTimeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
       },
@@ -774,17 +898,71 @@ async function verifyCodexSubagentProbe(params: {
         `subagent spawn did not return a child session key: ${JSON.stringify(spawnResult)}`,
       );
     }
-    const childRow = await waitForCodexSubagentStarted({
+    await waitForCodexSubagentStarted({
       childSessionKey,
-      client: params.client,
       events,
-      parentSessionKey: params.sessionKey,
     });
-    expect(childRow?.key).toBe(childSessionKey);
   } finally {
-    const { __testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
+    const { testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
     subagentSpawnTesting.setDepsForTest();
     unsubscribe();
+  }
+}
+
+async function verifyCodexNativeSubagentBridgeProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const runId = randomUUID();
+  const childToken = `CODEX-NATIVE-CHILD-${runId.slice(0, 6).toUpperCase()}`;
+  const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
+  const { listTaskRecords } = await import("../tasks/runtime-internal.js");
+  const { text, events } = await requestAgentTextWithEvents({
+    client: params.client,
+    eventPrefix: "codex_app_server.",
+    includeAllSessions: true,
+    sessionKey: params.sessionKey,
+    message: [
+      "Bridge probe.",
+      "You must use the Codex native spawn_agent tool exactly once before replying.",
+      `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
+      "Wait for the subagent result. Do not answer from your own knowledge.",
+      `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
+    ].join("\n"),
+  });
+  logCodexLiveStep("native-subagent-bridge-probe:initial-reply", { text });
+  expect(
+    events.some((event) => event.stream === "codex_app_server.lifecycle"),
+    `expected Codex lifecycle events; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+  let codexNativeTasks = listCodexNativeTasks();
+  let deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
+  const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
+  while (!deliveredTask && Date.now() < deadline) {
+    await delay(1_000);
+    codexNativeTasks = listCodexNativeTasks();
+    deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
+  }
+  expect(
+    deliveredTask,
+    `expected delivered Codex-native subagent task with child result; initialText=${JSON.stringify(
+      text,
+    )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
+  ).toBeDefined();
+
+  function listCodexNativeTasks() {
+    return listTaskRecords().filter(
+      (entry) => entry.runtime === "subagent" && entry.taskKind === "codex-native",
+    );
+  }
+
+  function findDeliveredCodexNativeTask(tasks: ReturnType<typeof listCodexNativeTasks>) {
+    return tasks.find(
+      (entry) =>
+        entry.status === "succeeded" &&
+        entry.deliveryStatus === "delivered" &&
+        entry.terminalSummary?.includes(childToken),
+    );
   }
 }
 
@@ -834,141 +1012,187 @@ describeLive("gateway live (Codex harness)", () => {
         token,
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
+        codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
         displayName: "vitest-codex-harness-live",
       });
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
       const gatewayEvents: EventFrame[] = [];
       logCodexLiveStep("config-written", { configPath, modelKey, port });
 
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      const client = await connectTestGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        deviceIdentity,
-        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-        requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
-        clientDisplayName: "vitest-codex-harness-live",
-        onEvent: (event) => {
-          gatewayEvents.push(event);
-        },
-      });
-      logCodexLiveStep("client-connected");
-
       try {
-        try {
-          const sessionKey = "agent:dev:live-codex-harness";
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
+        client = await connectTestGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          deviceIdentity,
+          timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+          requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+          clientDisplayName: "vitest-codex-harness-live",
+          onEvent: (event) => {
+            gatewayEvents.push(event);
+          },
+        });
+        logCodexLiveStep("client-connected");
+        const activeClient = client;
 
-          if (CODEX_HARNESS_SUBAGENT_PROBE) {
-            logCodexLiveStep("subagent-probe:start", { sessionKey });
-            await verifyCodexSubagentProbe({ client, sessionKey });
-            logCodexLiveStep("subagent-probe:done");
-            if (CODEX_HARNESS_SUBAGENT_ONLY) {
+        const maxAttempts = CODEX_HARNESS_SUBAGENT_PROBE ? 1 : 2;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            const sessionKey = "agent:dev:live-codex-harness";
+
+            if (CODEX_HARNESS_SUBAGENT_PROBE) {
+              logCodexLiveStep("subagent-probe:start", { sessionKey });
+              await verifyCodexSubagentProbe({ client: activeClient, sessionKey });
+              logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
+              await verifyCodexNativeSubagentBridgeProbe({ client: activeClient, sessionKey });
+              logCodexLiveStep("subagent-probe:done");
+              if (CODEX_HARNESS_SUBAGENT_ONLY) {
+                return;
+              }
+            }
+
+            const unsubscribeDebugEvents = await subscribeCodexLiveDebugEvents(sessionKey);
+            const firstNonce = randomBytes(3).toString("hex").toUpperCase();
+            try {
+              const firstToken = `CODEX-HARNESS-${firstNonce}`;
+              const firstText = await requestAgentText({
+                client: activeClient,
+                sessionKey,
+                expectedToken: firstToken,
+                message: `Reply with exactly ${firstToken} and nothing else.`,
+              });
+              expect(firstText).toContain(firstToken);
+              logCodexLiveStep("first-turn", { firstText });
+
+              const secondNonce = randomBytes(3).toString("hex").toUpperCase();
+              const secondToken = `CODEX-HARNESS-RESUME-${secondNonce}`;
+              const secondText = await requestAgentText({
+                client: activeClient,
+                sessionKey,
+                expectedToken: secondToken,
+                message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
+              });
+              expect(secondText).toContain(secondToken);
+              logCodexLiveStep("second-turn", { secondText });
+
+              if (CODEX_HARNESS_CODE_MODE_ONLY) {
+                logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });
+                await verifyCodexCodeModeOnlyDynamicToolProbe({
+                  client: activeClient,
+                  sessionKey,
+                });
+                logCodexLiveStep("code-mode-only-tool-probe:done");
+              }
+            } finally {
+              unsubscribeDebugEvents();
+            }
+
+            const statusText = await requestCodexCommandText({
+              client: activeClient,
+              events: gatewayEvents,
+              sessionKey,
+              command: "/codex status",
+              expectedText: [...EXPECTED_CODEX_STATUS_COMMAND_TEXT],
+              isExpectedText: isExpectedCodexStatusCommandText,
+            });
+            logCodexLiveStep("codex-status-command", { statusText });
+
+            const modelsText = await requestCodexCommandText({
+              client: activeClient,
+              events: gatewayEvents,
+              sessionKey,
+              command: "/codex models",
+              expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
+              isExpectedText: isStrictExpectedCodexModelsCommandText,
+              predicateOnly: true,
+            });
+            logCodexLiveStep("codex-models-command", { modelsText });
+
+            if (CODEX_HARNESS_CHAT_IMAGE_PROBE) {
+              logCodexLiveStep("chat-image-probe:start", { sessionKey });
+              await verifyCodexChatImageProbe({ client: activeClient, sessionKey });
+              logCodexLiveStep("chat-image-probe:done");
+            }
+
+            if (CODEX_HARNESS_IMAGE_PROBE) {
+              logCodexLiveStep("image-probe:start", { sessionKey });
+              await verifyCodexImageProbe({ client: activeClient, sessionKey });
+              logCodexLiveStep("image-probe:done");
+            }
+
+            if (CODEX_HARNESS_MCP_PROBE) {
+              logCodexLiveStep("cron-mcp-probe:start", { sessionKey });
+              await verifyCodexCronMcpProbe({
+                client: activeClient,
+                sessionKey,
+                port,
+                token,
+                env: process.env,
+              });
+              logCodexLiveStep("cron-mcp-probe:done");
+            }
+
+            if (CODEX_HARNESS_GUARDIAN_PROBE) {
+              const guardianSessionKey = "agent:dev:live-codex-harness-guardian";
+              logCodexLiveStep("guardian-probe:start", { sessionKey: guardianSessionKey });
+              await verifyCodexGuardianProbe({
+                client: activeClient,
+                sessionKey: guardianSessionKey,
+              });
+              logCodexLiveStep("guardian-probe:done");
+            }
+            break;
+          } catch (error) {
+            if (isCodexAccountTokenError(error)) {
+              console.error(
+                "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
+              );
               return;
             }
-          }
-
-          const unsubscribeDebugEvents = await subscribeCodexLiveDebugEvents(sessionKey);
-          const firstNonce = randomBytes(3).toString("hex").toUpperCase();
-          try {
-            const firstToken = `CODEX-HARNESS-${firstNonce}`;
-            const firstText = await requestAgentText({
-              client,
-              sessionKey,
-              expectedToken: firstToken,
-              message: `Reply with exactly ${firstToken} and nothing else.`,
-            });
-            expect(firstText).toContain(firstToken);
-            logCodexLiveStep("first-turn", { firstText });
-
-            const secondNonce = randomBytes(3).toString("hex").toUpperCase();
-            const secondToken = `CODEX-HARNESS-RESUME-${secondNonce}`;
-            const secondText = await requestAgentText({
-              client,
-              sessionKey,
-              expectedToken: secondToken,
-              message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
-            });
-            expect(secondText).toContain(secondToken);
-            logCodexLiveStep("second-turn", { secondText });
-          } finally {
-            unsubscribeDebugEvents();
-          }
-
-          const statusText = await requestCodexCommandText({
-            client,
-            events: gatewayEvents,
-            sessionKey,
-            command: "/codex status",
-            expectedText: [...EXPECTED_CODEX_STATUS_COMMAND_TEXT],
-            isExpectedText: isExpectedCodexStatusCommandText,
-          });
-          logCodexLiveStep("codex-status-command", { statusText });
-
-          const modelsText = await requestCodexCommandText({
-            client,
-            events: gatewayEvents,
-            sessionKey,
-            command: "/codex models",
-            expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
-            isExpectedText: isExpectedCodexModelsCommandText,
-          });
-          logCodexLiveStep("codex-models-command", { modelsText });
-
-          if (CODEX_HARNESS_IMAGE_PROBE) {
-            logCodexLiveStep("image-probe:start", { sessionKey });
-            await verifyCodexImageProbe({ client, sessionKey });
-            logCodexLiveStep("image-probe:done");
-          }
-
-          if (CODEX_HARNESS_MCP_PROBE) {
-            logCodexLiveStep("cron-mcp-probe:start", { sessionKey });
-            await verifyCodexCronMcpProbe({
-              client,
-              sessionKey,
-              port,
-              token,
-              env: process.env,
-            });
-            logCodexLiveStep("cron-mcp-probe:done");
-          }
-
-          if (CODEX_HARNESS_GUARDIAN_PROBE) {
-            const guardianSessionKey = "agent:dev:live-codex-harness-guardian";
-            logCodexLiveStep("guardian-probe:start", { sessionKey: guardianSessionKey });
-            await verifyCodexGuardianProbe({ client, sessionKey: guardianSessionKey });
-            logCodexLiveStep("guardian-probe:done");
-          }
-        } catch (error) {
-          if (isCodexAccountTokenError(error)) {
-            console.error(
-              "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
-            );
-          } else if (isRetryableCodexHarnessLiveError(error)) {
-            console.error(
-              `SKIP: Codex harness live backend hit a retryable gateway timeout; skipping live Codex harness assertions. ${error instanceof Error ? error.message : String(error)}`,
-            );
-          } else {
-            throw error;
+            if (
+              attempt < maxAttempts &&
+              !CODEX_HARNESS_SUBAGENT_PROBE &&
+              isRetryableCodexHarnessLiveError(error)
+            ) {
+              logCodexLiveStep("retryable-timeout:retry", {
+                attempt,
+                maxAttempts,
+                message: error instanceof Error ? error.message : String(error),
+              });
+              gatewayEvents.length = 0;
+              await delay(2_000);
+              continue;
+            } else {
+              throw error;
+            }
           }
         }
       } finally {
-        clearRuntimeConfigSnapshot();
-        await client.stopAndWait();
-        await server.close();
-        const [{ resetTaskRegistryForTests }, { resetTaskFlowRegistryForTests }] =
-          await Promise.all([
-            import("../tasks/runtime-internal.js"),
-            import("../tasks/task-flow-runtime-internal.js"),
-          ]);
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-        restoreEnv(previousEnv);
-        await removeLiveTempDir(tempDir);
+        try {
+          clearRuntimeConfigSnapshot();
+          try {
+            await client?.stopAndWait();
+          } finally {
+            await server?.close();
+          }
+          const [{ resetTaskRegistryForTests }, { resetTaskFlowRegistryForTests }] =
+            await Promise.all([
+              import("../tasks/runtime-internal.js"),
+              import("../tasks/task-flow-runtime-internal.js"),
+            ]);
+          resetTaskRegistryForTests({ persist: false });
+          resetTaskFlowRegistryForTests({ persist: false });
+        } finally {
+          restoreEnv(previousEnv);
+          await removeLiveTempDir(tempDir);
+        }
       }
     },
     CODEX_HARNESS_TIMEOUT_MS,

@@ -1,3 +1,4 @@
+// Xai tests cover code execution plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
@@ -201,6 +202,37 @@ describe("xai code_execution tool", () => {
 
     await expect(
       tool?.execute?.("code-execution:malformed-json", {
+        task: "Calculate the mean of [40, 42, 44]",
+      }),
+    ).rejects.toThrow("xAI code execution failed: malformed JSON response");
+  });
+
+  it("rejects code_execution success JSON without answer text", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ output: [{ type: "code_interpreter_call" }] }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createCodeExecutionTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("code-execution:missing-text", {
         task: "Calculate the mean of [40, 42, 44]",
       }),
     ).rejects.toThrow("xAI code execution failed: malformed JSON response");

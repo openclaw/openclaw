@@ -1,11 +1,33 @@
+// Orchestrates security audit collection and report formatting.
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import type { CliBackendConfig } from "../config/types.agent-defaults.js";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
+import {
+  canMaterializeGatewayAuthSecretRefsWithoutExec,
+  materializeGatewayAuthSecretRefs,
+} from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
-import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
+import {
+  type ExecApprovalsFile,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+  resolveExecApprovalsFromFile,
+} from "../infra/exec-approvals.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
@@ -13,8 +35,6 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -27,6 +47,7 @@ import type {
   SecurityAuditFinding,
   SecurityAuditReport,
   SecurityAuditSummary,
+  SecurityAuditSuppressedFinding,
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
@@ -34,6 +55,15 @@ import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
+type SecurityAuditExplicitGatewayAuth = {
+  token?: string;
+  password?: string;
+};
+type SecurityAuditGatewayAuthOverride = Pick<GatewayAuthConfig, "mode" | "token" | "password">;
+type ClaudePermissionModeHit = {
+  argSet: "args" | "resumeArgs";
+  mode: string;
+};
 
 export type {
   SecurityAuditFinding,
@@ -69,7 +99,9 @@ export type SecurityAuditOptions = {
   /** Optional cache for code-safety summaries across repeated deep audits. */
   codeSafetySummaryCache?: Map<string, Promise<unknown>>;
   /** Optional explicit auth for deep gateway probe. */
-  deepProbeAuth?: { token?: string; password?: string };
+  deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
+  /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
+  auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
   /** Override workspace used for workspace plugin discovery. */
   workspaceDir?: string;
   /** Dependency injection for tests. */
@@ -94,7 +126,8 @@ export type AuditExecutionContext = {
   loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
-  deepProbeAuth?: { token?: string; password?: string };
+  deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
+  auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
   workspaceDir?: string;
 };
 
@@ -190,11 +223,101 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
   return { critical, warn, info };
 }
 
+function normalizeSuppressionText(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+async function materializeAuditGatewayAuthRefs(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const materializeParams = {
+    cfg: params.cfg,
+    env: params.env,
+    mode: params.cfg.gateway?.auth?.mode,
+    hasTokenCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
+  };
+  if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
+    return params.cfg;
+  }
+  try {
+    return await materializeGatewayAuthSecretRefs(materializeParams);
+  } catch {
+    return params.cfg;
+  }
+}
+
+function shouldMaterializeHooksGatewayAuthRefs(cfg: OpenClawConfig): boolean {
+  return cfg.hooks?.enabled === true && Boolean(normalizeOptionalString(cfg.hooks.token));
+}
+
+function findingMatchesSuppression(
+  finding: SecurityAuditFinding,
+  suppression: SecurityAuditSuppression,
+): boolean {
+  const checkId = suppression.checkId.trim();
+  if (!checkId || finding.checkId !== checkId) {
+    return false;
+  }
+  const titleNeedle = normalizeSuppressionText(suppression.titleIncludes);
+  if (titleNeedle && !finding.title.toLowerCase().includes(titleNeedle)) {
+    return false;
+  }
+  const detailNeedle = normalizeSuppressionText(suppression.detailIncludes);
+  if (detailNeedle && !finding.detail.toLowerCase().includes(detailNeedle)) {
+    return false;
+  }
+  return true;
+}
+
+function buildSecurityAuditSuppressionsActiveFinding(params: {
+  configuredCount: number;
+  suppressedCount: number;
+}): SecurityAuditFinding {
+  return {
+    checkId: "security.audit.suppressions.active",
+    severity: "info",
+    title: "Security audit suppressions configured",
+    detail:
+      `security.audit.suppressions has ${params.configuredCount} configured suppression(s); ` +
+      `${params.suppressedCount} finding(s) moved to suppressedFindings.`,
+    remediation:
+      "Review suppressedFindings and remove suppressions when the accepted risk no longer applies.",
+  };
+}
+
+export function applySecurityAuditSuppressions(
+  findings: SecurityAuditFinding[],
+  suppressions: SecurityAuditSuppression[] | undefined,
+): { findings: SecurityAuditFinding[]; suppressedFindings: SecurityAuditSuppressedFinding[] } {
+  if (!Array.isArray(suppressions) || suppressions.length === 0) {
+    return { findings, suppressedFindings: [] };
+  }
+  const active: SecurityAuditFinding[] = [];
+  const suppressedFindings: SecurityAuditSuppressedFinding[] = [];
+  for (const finding of findings) {
+    const suppression = suppressions.find((candidate) =>
+      findingMatchesSuppression(finding, candidate),
+    );
+    if (!suppression) {
+      active.push(finding);
+      continue;
+    }
+    const reason = suppression.reason?.trim();
+    suppressedFindings.push({
+      ...finding,
+      suppression: reason ? { reason } : {},
+    });
+  }
+  return { findings: active, suppressedFindings };
+}
+
 function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.map((v) => String(v).trim()).filter(Boolean);
+  return normalizeStringEntries(list);
 }
 
 export async function collectFilesystemFindings(params: {
@@ -332,9 +455,11 @@ export function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  options: { gatewayAuthOverride?: SecurityAuditGatewayAuthOverride } = {},
 ): SecurityAuditFinding[] {
   return collectGatewayConfigFindingsBase(cfg, sourceConfig, env, {
     collectDangerousConfigFlags: collectEnabledInsecureOrDangerousFlags,
+    gatewayAuthOverride: options.gatewayAuthOverride,
   });
 }
 
@@ -481,6 +606,121 @@ export function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFindi
   return findings;
 }
 
+const CLAUDE_PERMISSION_MODE_FLAG = "--permission-mode";
+const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
+
+function extractClaudePermissionMode(args: readonly string[] | undefined): string | undefined {
+  if (!Array.isArray(args)) {
+    return undefined;
+  }
+  for (let i = args.length - 1; i >= 0; i -= 1) {
+    const arg = args[i] ?? "";
+    if (arg === CLAUDE_PERMISSION_MODE_FLAG) {
+      const value = args[i + 1];
+      if (typeof value === "string" && value.trim().length > 0 && !value.startsWith("-")) {
+        return value.trim();
+      }
+      continue;
+    }
+    if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_FLAG}=`)) {
+      const value = arg.slice(`${CLAUDE_PERMISSION_MODE_FLAG}=`.length).trim();
+      if (value.length > 0 && !value.startsWith("-")) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function collectRestrictiveClaudePermissionModeHits(
+  backend: CliBackendConfig | undefined,
+): ClaudePermissionModeHit[] {
+  if (!isManagedClaudeLiveBackendConfig(backend)) {
+    return [];
+  }
+  const hits: ClaudePermissionModeHit[] = [];
+  const argsMode = extractClaudePermissionMode(backend.args);
+  if (argsMode && argsMode !== CLAUDE_BYPASS_PERMISSION_MODE) {
+    hits.push({ argSet: "args", mode: argsMode });
+  }
+  const resumeArgsMode = extractClaudePermissionMode(backend.resumeArgs);
+  if (resumeArgsMode && resumeArgsMode !== CLAUDE_BYPASS_PERMISSION_MODE) {
+    hits.push({ argSet: "resumeArgs", mode: resumeArgsMode });
+  }
+  return hits;
+}
+
+function isManagedClaudeLiveBackendConfig(
+  backend: CliBackendConfig | undefined,
+): backend is CliBackendConfig {
+  if (!backend) {
+    return false;
+  }
+  const output = backend.output ?? "jsonl";
+  const input = backend.input ?? "stdin";
+  const liveSession =
+    backend.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined);
+  return liveSession === "claude-stdio" && output === "jsonl" && input === "stdin";
+}
+
+function findClaudeCliBackendConfig(
+  backends: Record<string, CliBackendConfig> | undefined,
+): CliBackendConfig | undefined {
+  if (!backends) {
+    return undefined;
+  }
+  const directKey = Object.keys(backends).find(
+    (key) => normalizeOptionalLowercaseString(key) === "claude-cli",
+  );
+  if (directKey) {
+    return backends[directKey];
+  }
+  for (const [key, backend] of Object.entries(backends)) {
+    const normalizedKey = normalizeProviderId(key);
+    const command = normalizeOptionalLowercaseString(backend.command);
+    if (
+      normalizedKey === "claude-cli" ||
+      normalizedKey === "anthropic-cli" ||
+      command === "claude"
+    ) {
+      return backend;
+    }
+  }
+  return undefined;
+}
+
+function collectYoloExecScopeIds(cfg: OpenClawConfig, approvals: ExecApprovalsFile): string[] {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  return [
+    { id: DEFAULT_AGENT_ID },
+    ...agents
+      .filter(
+        (entry): entry is NonNullable<(typeof agents)[number]> =>
+          Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
+      )
+      .map((entry) => ({ id: entry.id })),
+  ]
+    .filter((entry) => {
+      const execDefaults = resolveExecDefaults({
+        cfg,
+        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
+      });
+      const resolvedApprovals = resolveExecApprovalsFromFile({
+        file: approvals,
+        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
+        overrides: {
+          security: execDefaults.security,
+          ask: execDefaults.ask,
+        },
+      });
+      return (
+        minSecurity(execDefaults.security, resolvedApprovals.agent.security) === "full" &&
+        maxAsk(execDefaults.ask, resolvedApprovals.agent.ask) === "off"
+      );
+    })
+    .map((entry) => entry.id);
+}
+
 export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
@@ -488,6 +728,11 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
   const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
   const defaultHostIsExplicitSandbox = globalExecHost === "sandbox";
   const approvals = loadExecApprovals();
+  const claudePermissionModeHits = collectRestrictiveClaudePermissionModeHits(
+    findClaudeCliBackendConfig(cfg.agents?.defaults?.cliBackends),
+  );
+  const yoloExecScopeIds =
+    claudePermissionModeHits.length > 0 ? collectYoloExecScopeIds(cfg, approvals) : [];
 
   if (defaultHostIsExplicitSandbox && defaultSandboxMode === "off") {
     findings.push({
@@ -565,6 +810,17 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
           : ""),
       remediation:
         'Prefer tools.exec.security="allowlist" with ask prompts, and reserve "full" for tightly scoped break-glass agents only.',
+    });
+  }
+
+  if (claudePermissionModeHits.length > 0 && yoloExecScopeIds.length > 0) {
+    findings.push({
+      checkId: "agents.claude_cli.permission_mode_overridden_by_yolo",
+      severity: "warn",
+      title: "Claude permission mode is ignored under YOLO exec",
+      detail: `claude-cli sets ${claudePermissionModeHits.map((hit) => `${hit.argSet}=${hit.mode}`).join(", ")}, but OpenClaw exec is YOLO for: ${yoloExecScopeIds.join(", ")}. Managed Claude live sessions use --permission-mode bypassPermissions.`,
+      remediation:
+        "Restrict OpenClaw tools.exec.security/tools.exec.ask, or remove the Claude --permission-mode override.",
     });
   }
 
@@ -894,7 +1150,7 @@ async function maybeProbeGateway(params: {
   });
   const res = await params
     .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
-    .catch((err) => ({
+    .catch((err: unknown) => ({
       ok: false,
       url,
       connectLatencyMs: null,
@@ -965,6 +1221,7 @@ async function createAuditExecutionContext(
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
     deepProbeAuth: opts.deepProbeAuth,
+    auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };
 }
 
@@ -977,13 +1234,31 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
-  findings.push(...collectGatewayConfigFindings(cfg, context.sourceConfig, env));
+  findings.push(
+    ...collectGatewayConfigFindings(cfg, context.sourceConfig, env, {
+      gatewayAuthOverride: context.auditGatewayAuthOverride,
+    }),
+  );
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
-  findings.push(...auditNonDeep.collectHooksHardeningFindings(cfg, env));
-  findings.push(...auditNonDeep.collectGatewayHttpNoAuthFindings(cfg, env));
+  const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
+    ? await materializeAuditGatewayAuthRefs({
+        cfg,
+        env,
+      })
+    : cfg;
+  findings.push(
+    ...auditNonDeep.collectHooksHardeningFindings(hooksGatewayAuthCfg, env, {
+      gatewayAuthOverride: context.auditGatewayAuthOverride,
+    }),
+  );
+  findings.push(
+    ...auditNonDeep.collectGatewayHttpNoAuthFindings(cfg, env, {
+      gatewayAuthOverride: context.auditGatewayAuthOverride,
+    }),
+  );
   findings.push(...auditNonDeep.collectGatewayHttpSessionKeyOverrideFindings(cfg));
   findings.push(...auditNonDeep.collectSandboxDockerNoopFindings(cfg));
   findings.push(...auditNonDeep.collectSandboxDangerousConfigFindings(cfg));
@@ -1029,6 +1304,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
+        timeoutMs: context.deepTimeoutMs,
       })),
     );
     findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, stateDir })));
@@ -1097,6 +1373,27 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const deep = deepProbeResult?.deep;
   findings.push(...collectDeepProbeFindings({ deep, authWarning: deepProbeResult?.authWarning }));
 
-  const summary = countBySeverity(findings);
-  return { ts: Date.now(), summary, findings, deep };
+  const configuredSuppressions = cfg.security?.audit?.suppressions;
+  const filtered = applySecurityAuditSuppressions(findings, configuredSuppressions);
+  const configuredSuppressionCount = configuredSuppressions?.length ?? 0;
+  const activeFindings =
+    configuredSuppressionCount > 0
+      ? [
+          ...filtered.findings,
+          buildSecurityAuditSuppressionsActiveFinding({
+            configuredCount: configuredSuppressionCount,
+            suppressedCount: filtered.suppressedFindings.length,
+          }),
+        ]
+      : filtered.findings;
+  const summary = countBySeverity(activeFindings);
+  return {
+    ts: Date.now(),
+    summary,
+    findings: activeFindings,
+    ...(filtered.suppressedFindings.length > 0
+      ? { suppressedFindings: filtered.suppressedFindings }
+      : {}),
+    deep,
+  };
 }

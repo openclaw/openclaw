@@ -1,3 +1,4 @@
+// Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,10 +8,10 @@ import {
   buildBootstrapPromptWarning,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
-import { buildCurrentTurnPrompt } from "../../../src/agents/pi-embedded-runner/run/runtime-context-prompt.js";
-import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
+import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { buildEmbeddedSystemPrompt } from "../../../src/agents/embedded-agent-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
-import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
+import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
 import {
   buildDirectChatContext,
   buildGroupChatContext,
@@ -26,6 +27,9 @@ import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
 
+// Prompt composition scenarios for system/body prompt stability tests.
+
+/** One turn in a prompt composition scenario. */
 export type PromptScenarioTurn = {
   id: string;
   label: string;
@@ -34,6 +38,7 @@ export type PromptScenarioTurn = {
   notes: string[];
 };
 
+/** Multi-turn prompt composition scenario fixture. */
 export type PromptScenario = {
   scenario: string;
   focus: string;
@@ -119,8 +124,8 @@ function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string 
     isBareSessionReset: false,
     startupAction: "new",
   });
-  return buildCurrentTurnPrompt({
-    context: envelope.currentTurnContext,
+  return buildCurrentInboundPrompt({
+    context: envelope.currentInboundContext,
     prompt: envelope.queuedBody,
   });
 }
@@ -146,9 +151,6 @@ function buildAutoReplySystemPrompt(params: {
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx: params.sessionCtx,
-          silentToken: SILENT_REPLY_TOKEN,
-          silentReplyPolicy: "disallow",
-          silentReplyRewrite: true,
         })
       : "",
     params.includeGroupChatContext
@@ -736,6 +738,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   };
 }
 
+/** Create a temp workspace with prompt composition context files. */
 export async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
   const workspaceDir = await makeTempWorkspace("openclaw-prompt-cache-");
   await writeWorkspaceFile({
@@ -764,6 +767,7 @@ export async function createWorkspaceWithPromptCompositionFiles(): Promise<strin
   return workspaceDir;
 }
 
+/** Create all prompt composition scenarios plus cleanup handles. */
 export async function createPromptCompositionScenarios(): Promise<{
   workspaceDir: string;
   warningWorkspaceDir: string;

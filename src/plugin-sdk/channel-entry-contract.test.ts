@@ -1,13 +1,20 @@
+// Channel entry contract tests cover SDK channel entrypoint exports and package boundaries.
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
-import { defineBundledChannelEntry, loadBundledEntryExportSync } from "./channel-entry-contract.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import {
+  defineBundledChannelEntry,
+  defineBundledChannelSetupEntry,
+  loadBundledEntryExportSync,
+} from "./channel-entry-contract.js";
 
 const tempDirs: string[] = [];
 const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
@@ -34,6 +41,11 @@ function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory
       [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
     }
   )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
+}
+
+function writeJson(targetPath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi {
@@ -209,6 +221,35 @@ describe("defineBundledChannelEntry", () => {
   });
 });
 
+describe("defineBundledChannelSetupEntry", () => {
+  it("exposes setup-runtime registrations without loading the full channel entry", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-entry-"));
+    tempDirs.push(tempRoot);
+    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
+    const setupRuntimeRegister = vi.fn<(api: OpenClawPluginApi) => void>();
+    const pluginId = "bundled-setup-runtime";
+    const { importerPath } = writeBundledChannelFixture({
+      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
+      pluginId,
+      runtimeMarker,
+    });
+    const entry = defineBundledChannelSetupEntry({
+      importMetaUrl: pathToFileURL(importerPath).href,
+      plugin: { specifier: "./plugin.cjs", exportName: "channelPlugin" },
+      runtime: { specifier: "./runtime.cjs", exportName: "setRuntime" },
+      registerSetupRuntime: setupRuntimeRegister,
+    });
+
+    const api = createApi("setup-runtime");
+    expect(entry.loadSetupPlugin().id).toBe(pluginId);
+    entry.setChannelRuntime?.(api.runtime);
+    entry.registerSetupRuntime?.(api);
+
+    expect(fs.existsSync(runtimeMarker)).toBe(true);
+    expect(setupRuntimeRegister).toHaveBeenCalledWith(api);
+  });
+});
+
 async function expectBuiltArtifactNodeRequireFastPath(
   scope: string,
   artifactRoot = "dist",
@@ -256,7 +297,74 @@ async function expectBuiltArtifactNodeRequireFastPath(
   }
 }
 
+function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+  tempDirs.push(tempRoot);
+  const probePath = path.join(tempRoot, "probe.mjs");
+  const channelEntryContractModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src", "plugin-sdk", "channel-entry-contract.ts"),
+  ).href;
+
+  writeJson(path.join(tempRoot, "package.json"), {
+    name: "openclaw",
+    type: "module",
+    bin: { openclaw: "./openclaw.mjs" },
+    exports: {
+      "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",
+      "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
+    },
+  });
+  fs.writeFileSync(path.join(tempRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
+  fs.mkdirSync(path.join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
+  fs.writeFileSync(
+    path.join(tempRoot, "dist", "plugin-sdk", "root-alias.cjs"),
+    "module.exports = {};\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(tempRoot, "dist", "plugin-sdk", "channel-outbound.js"),
+    'export const defineChannelMessageAdapter = () => "adapter";\n',
+    "utf8",
+  );
+
+  const pluginRoot = path.join(tempRoot, "dist", "extensions", "slack");
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  const importerPath = path.join(pluginRoot, "index.js");
+  fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(pluginRoot, "sidecar.js"),
+    'import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const sentinel = defineChannelMessageAdapter();\n',
+    "utf8",
+  );
+
+  fs.writeFileSync(
+    probePath,
+    [
+      `import { loadBundledEntryExportSync } from ${JSON.stringify(channelEntryContractModuleUrl)};`,
+      `const value = loadBundledEntryExportSync(${JSON.stringify(pathToFileURL(importerPath).href)}, {`,
+      '  specifier: "./sidecar.js",',
+      '  exportName: "sentinel",',
+      "});",
+      "console.log(value);",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  return spawnSync(process.execPath, ["--import", "tsx", probePath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env, OPENCLAW_PLUGIN_LOAD_PROFILE: "1" },
+  });
+}
+
 describe("loadBundledEntryExportSync", () => {
+  let compiledEsmSidecarFastPathResult: SpawnSyncReturns<string>;
+
+  beforeAll(() => {
+    compiledEsmSidecarFastPathResult = runCompiledEsmSidecarFastPathProbe();
+  });
+
   it("includes importer and resolved path context when a bundled sidecar is missing", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
@@ -289,9 +397,8 @@ describe("loadBundledEntryExportSync", () => {
   it("keeps Windows dist sidecar loads off source-transform loading", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ load: 0 })));
     stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       const channelEntryContract = await importFreshModule<
         typeof import("./channel-entry-contract.js")
       >(import.meta.url, "./channel-entry-contract.js?scope=windows-dist-jiti");
@@ -313,9 +420,7 @@ describe("loadBundledEntryExportSync", () => {
         }),
       ).toBe(42);
       expect(createJiti).not.toHaveBeenCalled();
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("normalizes Windows absolute sidecar paths before module loads them", async () => {
@@ -332,31 +437,31 @@ describe("loadBundledEntryExportSync", () => {
         fd: fs.openSync(openedFdPath, "r"),
       }),
     }));
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
-      const channelEntryContract = await importFreshModule<
-        typeof import("./channel-entry-contract.js")
-      >(import.meta.url, "./channel-entry-contract.js?scope=windows-safe-jiti-path");
+    await withMockedWindowsPlatform(async () => {
+      try {
+        const channelEntryContract = await importFreshModule<
+          typeof import("./channel-entry-contract.js")
+        >(import.meta.url, "./channel-entry-contract.js?scope=windows-safe-jiti-path");
 
-      expect(
-        channelEntryContract.loadBundledEntryExportSync<number>(
-          "file:///C:/Users/alice/openclaw/dist/extensions/feishu/index.js",
-          {
-            specifier: "./helper.ts",
-            exportName: "load",
-          },
-          { createLoaderForTest: createJiti as never },
-        ),
-      ).toBe(42);
-      expect(jitiLoad).toHaveBeenCalledWith(
-        "file:///C:/Users/alice/openclaw/dist/extensions/feishu/helper.ts",
-      );
-    } finally {
-      platformSpy.mockRestore();
-      vi.doUnmock("../infra/boundary-file-read.js");
-      vi.doUnmock("jiti");
-    }
+        expect(
+          channelEntryContract.loadBundledEntryExportSync<number>(
+            "file:///C:/Users/alice/openclaw/dist/extensions/feishu/index.js",
+            {
+              specifier: "./helper.ts",
+              exportName: "load",
+            },
+            { createLoaderForTest: createJiti as never },
+          ),
+        ).toBe(42);
+        expect(jitiLoad).toHaveBeenCalledWith(
+          "file:///C:/Users/alice/openclaw/dist/extensions/feishu/helper.ts",
+        );
+      } finally {
+        vi.doUnmock("../infra/boundary-file-read.js");
+        vi.doUnmock("jiti");
+      }
+    });
   });
 
   it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
@@ -406,6 +511,54 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
+  it("reuses resolved bundled sidecar paths before cached module exports", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+
+    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+
+    const importerPath = path.join(pluginRoot, "index.js");
+    const helperPath = path.join(pluginRoot, "helper.cjs");
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    fs.writeFileSync(helperPath, "module.exports = { sentinel: 42 };\n", "utf8");
+
+    const openRootFileSync = vi.fn(() => ({
+      ok: true,
+      path: helperPath,
+      fd: fs.openSync(helperPath, "r"),
+    }));
+    vi.doMock("../infra/boundary-file-read.js", () => ({
+      openRootFileSync,
+    }));
+
+    try {
+      const channelEntryContract = await importFreshModule<
+        typeof import("./channel-entry-contract.js")
+      >(import.meta.url, "./channel-entry-contract.js?scope=resolved-sidecar-cache");
+
+      const ref = {
+        specifier: "./helper.cjs",
+        exportName: "sentinel",
+      };
+      expect(
+        channelEntryContract.loadBundledEntryExportSync<number>(
+          pathToFileURL(importerPath).href,
+          ref,
+        ),
+      ).toBe(42);
+      expect(
+        channelEntryContract.loadBundledEntryExportSync<number>(
+          pathToFileURL(importerPath).href,
+          ref,
+        ),
+      ).toBe(42);
+      expect(openRootFileSync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("../infra/boundary-file-read.js");
+    }
+  });
+
   it("emits non-negative source-loader sub-step timings on the built-artifact load path", async () => {
     // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
     // and fall back through jiti. The profile line must never report negative
@@ -415,6 +568,15 @@ describe("loadBundledEntryExportSync", () => {
 
   it("keeps dist-runtime built sidecar loads on the nodeRequire fast-path", async () => {
     await expectBuiltArtifactNodeRequireFastPath("dist-runtime-profile-fast-path", "dist-runtime");
+  });
+
+  it("keeps compiled ESM sidecars with SDK imports on the nodeRequire fast-path", async () => {
+    const result = compiledEsmSidecarFastPathResult;
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("adapter");
+    expect(result.stderr).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
+    expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {

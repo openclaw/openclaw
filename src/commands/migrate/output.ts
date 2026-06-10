@@ -1,9 +1,10 @@
+/** Formatting and validation helpers for migration previews and apply results. */
 import { log } from "@clack/prompts";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
 import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { theme } from "../../terminal/theme.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 function formatCount(value: number, label: string): string {
@@ -16,13 +17,11 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
     lines.push(`Target: ${plan.target}`);
   }
   const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
-  const visibleConflicts = visible.filter((item) => item.status === "conflict").length;
-  const visibleSensitive = visible.filter((item) => item.sensitive === true).length;
   lines.push(
     [
       formatCount(visible.length, "item"),
-      formatCount(visibleConflicts, "conflict"),
-      formatCount(visibleSensitive, "sensitive item"),
+      formatCount(plan.summary.conflicts, "conflict"),
+      formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
   );
   return lines;
@@ -34,6 +33,7 @@ type ItemGroup = {
 };
 
 const ITEM_GROUPS: ItemGroup[] = [
+  { kind: "auth", heading: "Auth credentials:" },
   { kind: "skill", heading: "Skills:" },
   { kind: "plugin", heading: "Plugins:" },
   { kind: "memory", heading: "Memory:" },
@@ -95,6 +95,7 @@ function formatPlanWarnings(plan: MigrationPlan): string[] {
   return lines;
 }
 
+/** Formats a redaction-safe migration preview for terminal output. */
 export function formatMigrationPreview(plan: MigrationPlan): string[] {
   return [
     ...formatPlanHeader(plan, "Migration preview:"),
@@ -103,6 +104,7 @@ export function formatMigrationPreview(plan: MigrationPlan): string[] {
   ];
 }
 
+/** Formats migration apply results for terminal output. */
 export function formatMigrationResult(plan: MigrationPlan): string[] {
   const lines = [...formatPlanHeader(plan, "Migration plan:"), ...formatPlanItems(plan, "result")];
   if (plan.nextSteps && plan.nextSteps.length > 0) {
@@ -136,6 +138,7 @@ const REASON_CODE_MESSAGES: Record<string, string> = {
 // Phrase-form conflict reasons, used as-is in selection-prompt hints
 // (`<source label> <phrase>`) and wrapped into sentence form for preview
 // /result rows. Keep one map so the two surfaces never drift.
+/** Shared short conflict phrases used by migration output and selection hints. */
 export const MIGRATION_CONFLICT_REASON_PHRASES: Record<string, string> = {
   "target exists": "already installed in workspace",
   "plugin exists": "already installed in workspace",
@@ -229,6 +232,7 @@ function formatMigrationItem(item: MigrationItem, mode: FormatMode): string {
   return `${prefix}${name}${sensitive}${messageSuffix}`;
 }
 
+/** Throws when a plan still contains conflicts that require explicit overwrite. */
 export function assertConflictFreePlan(plan: MigrationPlan, providerId: string): void {
   if (plan.summary.conflicts > 0) {
     throw new Error(
@@ -237,6 +241,7 @@ export function assertConflictFreePlan(plan: MigrationPlan, providerId: string):
   }
 }
 
+/** Writes apply results as redacted JSON or terminal text with backup/report paths. */
 export function writeApplyResult(
   runtime: RuntimeEnv,
   opts: MigrateApplyOptions,
@@ -257,6 +262,7 @@ export function writeApplyResult(
   }
 }
 
+/** Throws when apply completed with conflicts or errors. */
 export function assertApplySucceeded(result: MigrationApplyResult): void {
   if (result.summary.errors === 0 && result.summary.conflicts === 0) {
     return;

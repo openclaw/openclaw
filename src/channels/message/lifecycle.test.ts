@@ -1,3 +1,4 @@
+// Message lifecycle tests cover channel message state transitions and notifications.
 import { describe, expect, it, vi } from "vitest";
 import {
   createLiveMessageState,
@@ -107,6 +108,37 @@ describe("message lifecycle primitives", () => {
     expect(previewId).toBe("preview-1");
     expect(receiptArg.primaryPlatformMessageId).toBe("preview-1");
     expect(stateArg).toBe(liveState);
+  });
+
+  it("delivers supplemental payloads after finalizing live previews", async () => {
+    const editFinal = vi.fn(async () => undefined);
+    const deliverNormally = vi.fn(async () => undefined);
+    const deliverSupplemental = vi.fn(async () => true);
+
+    const result = await deliverFinalizableLivePreview<
+      { text?: string; mediaUrl: string },
+      string,
+      { text?: string }
+    >({
+      kind: "final",
+      payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-1",
+        seal: vi.fn(async () => undefined),
+        clear: vi.fn(async () => undefined),
+      },
+      buildFinalEdit: (payload) => ({ text: payload.text }),
+      buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+      editFinal,
+      deliverNormally,
+      deliverSupplemental,
+    });
+
+    expect(result.kind).toBe("preview-finalized");
+    expect(editFinal).toHaveBeenCalledWith("preview-1", { text: "done" });
+    expect(deliverNormally).not.toHaveBeenCalled();
+    expect(deliverSupplemental).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
   });
 
   it("treats live preview fallback delivery as terminal state", async () => {

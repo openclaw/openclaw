@@ -1,13 +1,14 @@
+// Codex tests cover outcome fallback runtime contract plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { classifyEmbeddedPiRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CodexAppServerEventProjector,
@@ -72,7 +73,7 @@ function forCurrentTurn(
 
 function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
   const finalAssistantText = result.assistantTexts.join("\n\n").trim();
-  return classifyEmbeddedPiRunResultForModelFallback({
+  return classifyEmbeddedAgentRunResultForModelFallback({
     provider: "codex",
     model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
     result: createContractRunResult({
@@ -89,7 +90,7 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
 }
 
 function readMirrorIdentity(message: unknown): string | undefined {
-  const meta = (message as MirrorTaggedMessage | undefined)?.__openclaw;
+  const meta = (message as MirrorTaggedMessage | undefined)?.["__openclaw"];
   return meta?.mirrorIdentity;
 }
 
@@ -179,7 +180,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         text: `Codex reasoning:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText}`,
       },
     ]);
-    expect(reasoningMessage.api).toBe("openai-codex-responses");
+    expect(reasoningMessage.api).toBe("openai-chatgpt-responses");
     expect(reasoningMessage.provider).toBe("codex");
     expect(reasoningMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
     expect(reasoningMessage.usage).toStrictEqual({
@@ -245,7 +246,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         text: `Codex plan:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText}`,
       },
     ]);
-    expect(planMessage.api).toBe("openai-codex-responses");
+    expect(planMessage.api).toBe("openai-chatgpt-responses");
     expect(planMessage.provider).toBe("codex");
     expect(planMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
     expect(planMessage.usage).toStrictEqual({

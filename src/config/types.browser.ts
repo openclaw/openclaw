@@ -1,7 +1,8 @@
+// Defines browser profile configuration types.
 export type BrowserProfileConfig = {
   /** CDP port for this profile. Allocated once at creation, persisted permanently. */
   cdpPort?: number;
-  /** CDP URL for this profile (use for remote Chrome). */
+  /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
   cdpUrl?: string;
   /** Explicit user data directory for existing-session Chrome MCP attachment. */
   userDataDir?: string;

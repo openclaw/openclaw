@@ -1,3 +1,4 @@
+// Register subCLI tests cover nested CLI command registration boundaries.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
@@ -68,7 +69,7 @@ const { addGatewayRunCommand, gatewayRunAction, registerGatewayCli } = vi.hoiste
 
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../gateway-cli.js", () => ({ registerGatewayCli }));
-vi.mock("../gateway-cli/run.js", () => ({ addGatewayRunCommand }));
+vi.mock("../gateway-cli/run-command.js", () => ({ addGatewayRunCommand }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
@@ -172,6 +173,12 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["nodes", "list"], { from: "user" });
 
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
+    expect(registerNodesCli).toHaveBeenCalledWith(expect.any(Command), [
+      "node",
+      "openclaw",
+      "nodes",
+      "list",
+    ]);
     expect(nodesAction).toHaveBeenCalledTimes(1);
   });
 

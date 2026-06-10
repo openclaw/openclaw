@@ -1,7 +1,9 @@
+// Verifies plugin setup registry discovery and lookup behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -205,6 +207,47 @@ afterEach(() => {
 });
 
 describe("setup-registry module loader", () => {
+  let windowsSourceTransformCase: {
+    expectedFilename: string;
+    filename: unknown;
+    options: Record<string, unknown>;
+  };
+
+  beforeAll(async () => {
+    resetRegistryJitiMocks();
+    vi.resetModules();
+    const module = await import("./setup-registry.js");
+    module.setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    module.clearPluginSetupRegistryCache();
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+    const restoreVersions = forceNodeRuntimeVersionsForTest();
+
+    try {
+      withMockedWindowsPlatform(() => {
+        module.resolvePluginSetupRegistry({
+          workspaceDir: pluginRoot,
+          env: {},
+        });
+      });
+    } finally {
+      restoreVersions();
+    }
+
+    windowsSourceTransformCase = {
+      expectedFilename: pathToFileURL(path.join(pluginRoot, "setup-api.js"), {
+        windows: true,
+      }).href,
+      filename: mockArg(mocks.createJiti, 0, 0),
+      options: requireRecord(mockArg(mocks.createJiti, 0, 1)),
+    };
+    module.setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+  });
+
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
@@ -221,30 +264,8 @@ describe("setup-registry module loader", () => {
   });
 
   it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
-      diagnostics: [],
-    });
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const restoreVersions = forceNodeRuntimeVersionsForTest();
-
-    try {
-      resolvePluginSetupRegistry({
-        workspaceDir: pluginRoot,
-        env: {},
-      });
-    } finally {
-      restoreVersions();
-      platformSpy.mockRestore();
-    }
-
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mockArg(mocks.createJiti, 0, 0)).toBe(
-      pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
-    );
-    expect(requireRecord(mockArg(mocks.createJiti, 0, 1)).tryNative).toBe(true);
+    expect(windowsSourceTransformCase.filename).toBe(windowsSourceTransformCase.expectedFilename);
+    expect(windowsSourceTransformCase.options.tryNative).toBe(true);
   });
 
   it("passes explicit plugin id scope into setup manifest reads", () => {
@@ -262,6 +283,32 @@ describe("setup-registry module loader", () => {
 
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(mocks.loadPluginManifestRegistry).pluginIds).toEqual(["test-plugin"]);
+  });
+
+  it("uses built setup artifacts for bundled source records when available", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "extensions", "slack");
+    const sourceSetup = path.join(pluginRoot, "setup-entry.ts");
+    const builtSetup = path.join(packageRoot, "dist", "extensions", "slack", "setup-entry.js");
+    fs.mkdirSync(path.dirname(sourceSetup), { recursive: true });
+    fs.mkdirSync(path.dirname(builtSetup), { recursive: true });
+    fs.writeFileSync(sourceSetup, "export default {};\n", "utf-8");
+    fs.writeFileSync(builtSetup, "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "slack",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          setupSource: sourceSetup,
+        },
+      ],
+      diagnostics: [],
+    });
+
+    resolvePluginSetupRegistry({ env: {} });
+
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(builtSetup);
   });
 
   it("skips setup-api loading when config has no relevant migration triggers", () => {
@@ -425,6 +472,50 @@ describe("setup-registry module loader", () => {
     expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(pluginRoot, "setup-api.js"));
+  });
+
+  it("uses provider auth aliases to route setup provider owner lookup", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          providerAuthAliases: { openai: "openai" },
+          setup: {
+            providers: [{ id: "openai" }],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: {
+              id: string;
+              aliases: string[];
+              label: string;
+              auth: [];
+            }) => void;
+          }) {
+            api.registerProvider({
+              id: "openai",
+              aliases: ["openai"],
+              label: "OpenAI",
+              auth: [],
+            });
+          },
+        },
+      });
+    });
+
+    const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+    expect(provider.id).toBe("openai");
+    expect(provider.label).toBe("OpenAI");
   });
 
   it("treats explicit descriptor-only setup as a runtime cutoff", () => {
@@ -797,17 +888,20 @@ describe("setup-registry module loader", () => {
       ],
       diagnostics: [],
     });
+    const registerSetup = vi.fn(
+      (api: {
+        registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+        registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+      }) => {
+        api.registerProvider({ id: "openai", label: "OpenAI", auth: [] });
+        api.registerProvider({ id: "anthropic", label: "Anthropic", auth: [] });
+        api.registerCliBackend({ id: "codex-cli", config: { command: "codex" } });
+        api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
+      },
+    );
     const loadSetupModule = vi.fn(() => ({
       default: {
-        register(api: {
-          registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
-          registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
-        }) {
-          api.registerProvider({ id: "openai", label: "OpenAI", auth: [] });
-          api.registerProvider({ id: "anthropic", label: "Anthropic", auth: [] });
-          api.registerCliBackend({ id: "codex-cli", config: { command: "codex" } });
-          api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
-        },
+        register: registerSetup,
       },
     }));
     mocks.createJiti.mockImplementation(() => loadSetupModule);
@@ -834,6 +928,7 @@ describe("setup-registry module loader", () => {
       env: {},
       pluginIds: ["anthropic"],
     });
-    expect(loadSetupModule).toHaveBeenCalledTimes(7);
+    expect(loadSetupModule).toHaveBeenCalledTimes(1);
+    expect(registerSetup).toHaveBeenCalledTimes(7);
   });
 });

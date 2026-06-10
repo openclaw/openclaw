@@ -1,3 +1,4 @@
+// Google tests cover embedding provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
@@ -137,10 +138,10 @@ describe("Gemini embedding provider", () => {
       return url.endsWith(":batchEmbedContents")
         ? {
             embeddings: Array.from({ length: 2 }, () => ({
-              values: [0, Number.POSITIVE_INFINITY, 5],
+              values: [0, 0, 5],
             })),
           }
-        : { embedding: { values: [3, 4, Number.NaN] } };
+        : { embedding: { values: [3, 4, 0] } };
     });
 
     const { provider } = await createGeminiEmbeddingProvider({
@@ -212,5 +213,53 @@ describe("Gemini embedding provider", () => {
         },
       ],
     });
+  });
+
+  it("rejects non-object successful embedding responses", async () => {
+    installFetchMock(() => []);
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test query")).rejects.toThrow(
+      "gemini embeddings failed: malformed JSON response",
+    );
+  });
+
+  it("rejects wrong single embedding vector shapes", async () => {
+    installFetchMock(() => ({ embedding: { values: [1, "bad"] } }));
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test query")).rejects.toThrow(
+      "gemini embeddings failed: malformed JSON response",
+    );
+  });
+
+  it("rejects batch embedding count mismatches", async () => {
+    installFetchMock(() => ({ embeddings: [{ values: [1, 2] }] }));
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embedBatch(["one", "two"])).rejects.toThrow(
+      "gemini embeddings failed: malformed JSON response",
+    );
   });
 });

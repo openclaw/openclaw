@@ -1,3 +1,4 @@
+// Covers OpenClaw package root resolution.
 import actualFs from "node:fs";
 import actualFsPromises from "node:fs/promises";
 import path from "node:path";
@@ -108,13 +109,13 @@ vi.mock("./openclaw-root.fs.runtime.js", () => ({
 describe("resolveOpenClawPackageRoot", () => {
   let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
   let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
-  let clearOpenClawPackageRootCaches: typeof import("./openclaw-root.js").__testing.clearOpenClawPackageRootCaches;
+  let clearOpenClawPackageRootCaches: typeof import("./openclaw-root.js").testing.clearOpenClawPackageRootCaches;
 
   beforeAll(async () => {
     ({
       resolveOpenClawPackageRoot,
       resolveOpenClawPackageRootSync,
-      __testing: { clearOpenClawPackageRootCaches },
+      testing: { clearOpenClawPackageRootCaches },
     } = await import("./openclaw-root.js"));
   });
 

@@ -1,6 +1,11 @@
+// Runs OpenClaw package update checks, package steps, and restart handoff.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -82,6 +87,14 @@ export type UpdateRunResult = {
           message: string;
           currentVersion?: string;
           nextVersion?: string;
+          channelFallback?: {
+            requestedSpec: string;
+            usedSpec: string;
+            requestedLabel: string;
+            usedLabel: string;
+            reason: "unavailable" | "failed";
+            message: string;
+          };
         }>;
       };
       integrityDrifts: Array<{
@@ -126,6 +139,7 @@ type UpdateRunnerOptions = {
   tag?: string;
   channel?: UpdateChannel;
   devTargetRef?: string;
+  deferConfiguredPluginInstallRepair?: boolean;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -159,7 +173,7 @@ export type UpdateInstallSurface =
 
 function mapManagerResolutionFailure(
   reason: UpdatePackageManagerFailureReason,
-): UpdateRunResult["reason"] {
+): NonNullable<UpdateRunResult["reason"]> {
   return reason;
 }
 
@@ -168,6 +182,8 @@ const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
+  "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const PREFLIGHT_TEMP_PREFIX =
@@ -223,11 +239,16 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
       dirs.push(packageRoot);
     }
   }
-  const proc = normalizeDir(process.cwd());
+  let proc: string | null;
+  try {
+    proc = normalizeDir(process.cwd());
+  } catch {
+    proc = null;
+  }
   if (proc) {
     dirs.push(proc);
   }
-  return Array.from(new Set(dirs));
+  return uniqueStrings(dirs);
 }
 
 function resolvePreflightTempRootPrefix() {
@@ -294,10 +315,7 @@ async function listGitTags(
   if (!res || res.code !== 0) {
     return [];
   }
-  return res.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(res.stdout.split("\n"));
 }
 
 async function resolveChannelTag(
@@ -434,6 +452,11 @@ function looksLikeFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/i.test(value.trim());
 }
 
+function resolveTagFetchRef(candidate: string): string | null {
+  const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
+  return ref.startsWith("refs/tags/") ? ref : null;
+}
+
 function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
   const candidates: string[] = [];
@@ -565,7 +588,26 @@ function isSupersededInstallFailure(
 }
 
 function findBlockingGitFailure(steps: readonly UpdateStepResult[]): UpdateStepResult | undefined {
-  return steps.find((step) => step.exitCode !== 0 && !isSupersededInstallFailure(step, steps));
+  return steps.find(
+    (step, index) =>
+      step.exitCode !== 0 &&
+      !isSupersededInstallFailure(step, steps) &&
+      !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
+  );
+}
+
+function isSupersededTargetRefFailure(
+  step: UpdateStepResult,
+  followingSteps: readonly UpdateStepResult[],
+): boolean {
+  const isTargetRefProbe = step.name.startsWith("git rev-parse ");
+  const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
+  if (!isTargetRefProbe && !isTargetTagFetch) {
+    return false;
+  }
+  return followingSteps.some(
+    (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
+  );
 }
 
 function mergeCommandEnvironments(
@@ -757,7 +799,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const beforeVersion = await readPackageVersion(gitRoot);
     const channel: UpdateChannel = opts.channel ?? "dev";
     const devTargetRef = channel === "dev" ? normalizeDevTargetRef(opts.devTargetRef) : null;
-    const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
+    const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
     const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
@@ -776,6 +818,60 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         return buildGitErrorResult(reason);
       }
       return null;
+    };
+    const appendRecoveryStep = async (name: string, argv: string[]) => {
+      const started = Date.now();
+      const result = await runCommand(argv, { cwd: gitRoot, timeoutMs });
+      const recoveryStep: UpdateStepResult = {
+        name,
+        command: argv.join(" "),
+        cwd: gitRoot,
+        durationMs: Date.now() - started,
+        exitCode: result.code,
+        stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
+        stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
+      };
+      steps.push(recoveryStep);
+      return recoveryStep.exitCode === 0;
+    };
+    const rollbackGitCheckout = async () => {
+      if (!beforeSha) {
+        return;
+      }
+      await appendRecoveryStep("git rollback clean", ["git", "-C", gitRoot, "reset", "--hard"]);
+      if (branch && branch !== "HEAD") {
+        const checkedOutBranch = await appendRecoveryStep("git rollback checkout", [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          "--force",
+          branch,
+        ]);
+        if (checkedOutBranch) {
+          await appendRecoveryStep("git rollback reset", [
+            "git",
+            "-C",
+            gitRoot,
+            "reset",
+            "--hard",
+            beforeSha,
+          ]);
+        }
+        return;
+      }
+      await appendRecoveryStep("git rollback checkout", [
+        "git",
+        "-C",
+        gitRoot,
+        "checkout",
+        "--detach",
+        beforeSha,
+      ]);
+    };
+    const buildGitErrorResultWithRollback = async (reason: string): Promise<UpdateRunResult> => {
+      await rollbackGitCheckout();
+      return buildGitErrorResult(reason);
     };
 
     const statusCheck = await runStep(
@@ -814,17 +910,43 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
       const fetchFailure = await runRequiredGitStep(
         "git fetch",
-        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
         "fetch-failed",
       );
       if (fetchFailure) {
         return fetchFailure;
       }
-      let preflightBaseSha: string | null = null;
-      let candidates: string[] = [];
+      let preflightBaseSha: string | null;
+      let candidatesLocal: string[];
       if (devTargetRef) {
         let targetSha: string | null = null;
         for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
+          const tagFetchRef = resolveTagFetchRef(targetRefCandidate);
+          if (tagFetchRef) {
+            const remoteListStep = await runStep(
+              step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
+            );
+            steps.push(remoteListStep);
+            const remotes = normalizeStringEntries((remoteListStep.stdoutTail ?? "").split("\n"));
+            let fetchedTag = false;
+            for (const remote of remotes) {
+              const targetTagFetchStep = await runStep(
+                step(
+                  `git fetch ${remote} ${tagFetchRef}`,
+                  ["git", "-C", gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
+                  gitRoot,
+                ),
+              );
+              steps.push(targetTagFetchStep);
+              if (targetTagFetchStep.exitCode === 0) {
+                fetchedTag = true;
+                break;
+              }
+            }
+            if (remotes.length > 0 && !fetchedTag) {
+              continue;
+            }
+          }
           const targetShaStep = await runStep(
             step(
               `git rev-parse ${targetRefCandidate}`,
@@ -851,7 +973,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
         preflightBaseSha = targetSha;
-        candidates = [targetSha];
+        candidatesLocal = [targetSha];
       } else {
         const upstreamStep = await runStep(
           step(
@@ -922,11 +1044,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
 
-        candidates = (revListStep.stdoutTail ?? "")
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        if (candidates.length === 0) {
+        candidatesLocal = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
+        if (candidatesLocal.length === 0) {
           return {
             status: "error",
             mode: "git",
@@ -994,7 +1113,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
       let selectedSha: string | null = null;
       try {
-        for (const sha of candidates) {
+        for (const sha of candidatesLocal) {
           const shortSha = sha.slice(0, 8);
           const checkoutStep = await runStep(
             step(
@@ -1203,15 +1322,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       "require-preferred",
     );
     if (manager.kind === "missing-required") {
-      return {
-        status: "error",
-        mode: "git",
-        root: gitRoot,
-        reason: mapManagerResolutionFailure(manager.reason),
-        before: { sha: beforeSha, version: beforeVersion },
-        steps,
-        durationMs: Date.now() - startedAt,
-      };
+      return await buildGitErrorResultWithRollback(mapManagerResolutionFailure(manager.reason));
     }
     try {
       const installEnv = resolveInstallEnv(manager.manager, manager.env);
@@ -1238,15 +1349,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
       if (finalDepsStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "deps-install-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("deps-install-failed");
       }
 
       const buildStep = await runStep(
@@ -1259,15 +1362,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       );
       steps.push(buildStep);
       if (buildStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "build-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("build-failed");
       }
 
       const uiBuildStep = await runStep(
@@ -1275,15 +1370,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       );
       steps.push(uiBuildStep);
       if (uiBuildStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "ui-build-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("ui-build-failed");
       }
 
       const doctorEntry = path.join(gitRoot, "openclaw.mjs");
@@ -1300,15 +1387,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           exitCode: 1,
           stderrTail: `missing ${doctorEntry}`,
         });
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "doctor-entry-missing",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("doctor-entry-missing");
       }
 
       // Use --fix so that doctor auto-strips unknown config keys introduced by
@@ -1318,20 +1397,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const doctorStep = await runStep(
         step("openclaw doctor", doctorArgv, gitRoot, {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          ...(opts.deferConfiguredPluginInstallRepair
+            ? { [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1" }
+            : {}),
           [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
         }),
       );
       steps.push(doctorStep);
       if (doctorStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "doctor-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("doctor-failed");
       }
 
       const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
@@ -1355,15 +1429,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         steps.push(repairStep);
 
         if (repairResult.code !== 0) {
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "ui-build-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+          return await buildGitErrorResultWithRollback("ui-build-failed");
         }
 
         const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
@@ -1378,15 +1444,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             exitCode: 1,
             stderrTail: `missing ${uiIndexPath}`,
           });
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "ui-assets-missing",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+          return await buildGitErrorResultWithRollback("ui-assets-missing");
         }
       }
 
@@ -1471,6 +1529,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           return null;
         }
         const doctorNodePath = await resolveStableNodePath(process.execPath);
+        const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
         return await runStep({
           runCommand,
           name: "openclaw doctor",
@@ -1480,6 +1539,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            ...(candidateHostVersion === null
+              ? {}
+              : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
           },
           progress,
           stepIndex: 0,

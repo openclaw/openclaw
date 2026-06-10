@@ -1,3 +1,7 @@
+/**
+ * Records optional Codex runtime trajectory sidecars with bounded, redacted
+ * context and completion events.
+ */
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,8 +14,10 @@ import {
   appendRegularFile,
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
+import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 
-type CodexTrajectoryRecorder = {
+/** Runtime trajectory recorder used by Codex run attempts and event projectors. */
+export type CodexTrajectoryRecorder = {
   filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
@@ -40,12 +46,14 @@ type CodexTrajectoryOpenFlagConstants = Pick<
 > &
   Partial<Pick<typeof nodeFs.constants, "O_NOFOLLOW">>;
 
+/** Resolves secure append flags for trajectory runtime files. */
 export function resolveCodexTrajectoryAppendFlags(
   constants: CodexTrajectoryOpenFlagConstants = nodeFs.constants,
 ): number {
   return resolveRegularFileAppendFlags(constants);
 }
 
+/** Resolves secure create/truncate flags for trajectory pointer files. */
 export function resolveCodexTrajectoryPointerFlags(
   constants: CodexTrajectoryOpenFlagConstants = nodeFs.constants,
 ): number {
@@ -139,6 +147,7 @@ function writeTrajectoryPointerBestEffort(params: {
   }
 }
 
+/** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
 ): CodexTrajectoryRecorder | null {
@@ -163,6 +172,7 @@ export function createCodexTrajectoryRecorder(
   });
   let queue = Promise.resolve();
   let seq = 0;
+  const attribution = resolveCodexLocalRuntimeAttribution(params.attempt);
 
   return {
     filePath,
@@ -180,9 +190,9 @@ export function createCodexTrajectoryRecorder(
         sessionKey: params.attempt.sessionKey,
         runId: params.attempt.runId,
         workspaceDir: params.cwd,
-        provider: params.attempt.provider,
+        provider: attribution.provider,
         modelId: params.attempt.modelId,
-        modelApi: params.attempt.model.api,
+        modelApi: attribution.api,
         data: data ? sanitizeValue(data) : undefined,
       };
       const line = boundedTrajectoryLine(event);
@@ -200,6 +210,7 @@ export function createCodexTrajectoryRecorder(
   };
 }
 
+/** Records compiled prompt/tool context at the start of a Codex runtime attempt. */
 export function recordCodexTrajectoryContext(
   recorder: CodexTrajectoryRecorder | null,
   params: CodexTrajectoryInit,
@@ -215,6 +226,7 @@ export function recordCodexTrajectoryContext(
   });
 }
 
+/** Records final Codex model completion metadata and assistant snapshots. */
 export function recordCodexTrajectoryCompletion(
   recorder: CodexTrajectoryRecorder | null,
   params: {
@@ -309,6 +321,8 @@ function toTrajectoryToolDefinitions(
 }
 
 function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
+  // Trajectory files may be inspected outside the live process, so redact
+  // credentials and private payloads before queueing the line for disk writes.
   if (value == null || typeof value === "boolean" || typeof value === "number") {
     return value;
   }
@@ -333,8 +347,8 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
   }
   if (typeof value === "object") {
     const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value).slice(0, 100)) {
-      next[key] = sanitizeValue(child, depth + 1, key);
+    for (const [keyLocal, child] of Object.entries(value).slice(0, 100)) {
+      next[keyLocal] = sanitizeValue(child, depth + 1, keyLocal);
     }
     return next;
   }
@@ -348,6 +362,7 @@ function redactSensitiveString(value: string): string {
     .replace(COOKIE_PAIR_RE, "$1=<redacted>");
 }
 
+/** Converts arbitrary prompt errors into trajectory-safe text. */
 export function normalizeCodexTrajectoryError(value: unknown): string | null {
   if (!value) {
     return null;

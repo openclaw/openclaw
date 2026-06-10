@@ -1,3 +1,4 @@
+// Anthropic tests cover provider policy api plugin behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
 import {
@@ -69,7 +70,7 @@ describe("anthropic provider policy public artifact", () => {
 
     expect(
       normalizeConfig({
-        provider: "openai-codex",
+        provider: "openai",
         providerConfig,
       }),
     ).toBe(providerConfig);
@@ -98,10 +99,35 @@ describe("anthropic provider policy public artifact", () => {
     expect(nextConfig.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   });
 
-  it("exposes Claude Opus 4.7 thinking levels without loading the full provider plugin", () => {
+  it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
+    const nextConfig = applyConfigDefaults({
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:default": {
+              provider: "anthropic",
+              mode: "api_key",
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-20250514" },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(
+      nextConfig.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.params?.cacheRetention,
+    ).toBe("short");
+  });
+
+  it("exposes Claude Opus 4.8 thinking levels without loading the full provider plugin", () => {
     const profile = resolveThinkingProfile({
       provider: "anthropic",
-      modelId: "claude-opus-4-7",
+      modelId: "claude-opus-4-8",
     });
     const ids = levelIds(profile?.levels);
     expect(ids).toContain("xhigh");
@@ -110,18 +136,52 @@ describe("anthropic provider policy public artifact", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
-  it("keeps adaptive-only Claude profiles aligned with the runtime provider", () => {
+  it("exposes the always-adaptive Claude Fable 5 thinking profile", () => {
     const profile = resolveThinkingProfile({
       provider: "anthropic",
-      modelId: "claude-opus-4-6",
+      modelId: "claude-fable-5",
     });
 
-    if (!profile) {
-      throw new Error("Expected Anthropic policy profile");
+    expect(profile).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(
+      resolveThinkingProfile({
+        provider: "claude-cli",
+        modelId: "claude-fable-5",
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+  });
+
+  it("exposes native max without xhigh for direct Claude 4.6 routes", () => {
+    for (const provider of ["anthropic", "claude-cli"]) {
+      const profile = resolveThinkingProfile({
+        provider,
+        modelId: "claude-opus-4-6",
+      });
+
+      if (!profile) {
+        throw new Error(`Expected ${provider} policy profile`);
+      }
+      expect(levelIds(profile.levels)).toContain("adaptive");
+      expect(levelIds(profile.levels)).toContain("max");
+      expect(profile.defaultLevel).toBe("adaptive");
+      expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual(["max"]);
     }
-    expect(levelIds(profile.levels)).toContain("adaptive");
-    expect(profile.defaultLevel).toBe("adaptive");
-    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {

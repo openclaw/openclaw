@@ -1,3 +1,4 @@
+// Tests text-to-speech command configuration, preference persistence, and summaries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -138,6 +139,13 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(reply.text).toContain(
       `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 73ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 420ms`,
     );
+  });
+
+  it("does not coerce partial TTS limit values", async () => {
+    const result = await handleTtsCommands(buildTtsParams("/tts limit 2000chars"), true);
+
+    expect(expectReply(result).text).toBe("❌ Limit must be between 100 and 4096 characters.");
+    expect(ttsMocks.setTtsMaxLength).not.toHaveBeenCalled();
   });
 
   it("shows attempted provider chain for failed attempts", async () => {

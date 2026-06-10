@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Parses shell commands into exec approval analysis segments.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import {
   resolveCommandResolutionFromArgv,
@@ -15,13 +16,17 @@ export {
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
   resolveApprovalAuditCandidatePath,
+  resolveApprovalAuditTrustPath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
+  resolveExecutionTargetTrustPath,
   resolvePolicyAllowlistCandidatePath,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
+  resolvePolicyTargetTrustPath,
+  resolveExecutableTrustPath,
   type CommandResolution,
   type ExecutableResolution,
   type ExecArgvToken,
@@ -221,40 +226,38 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
             if (line === current.delimiter) {
               pendingHeredocs.shift();
             }
-          } else {
+          } else if (line === current.delimiter && unquotedHeredocLogicalChunks.length === 0) {
             // An unquoted heredoc body whose previous physical line ended with
             // `\<newline>` is spliced into the next line at runtime. In that
             // case bash does not treat the next physical line as the delimiter,
             // even if it matches literally — the splice wins and the body
             // continues. Only recognize the delimiter when no continuation is
             // pending.
-            if (line === current.delimiter && unquotedHeredocLogicalChunks.length === 0) {
-              pendingHeredocs.shift();
-            } else {
-              const continued = stripUnquotedHeredocLineContinuation(line);
-              unquotedHeredocLogicalChunks.push(continued.line);
-              if (unquotedHeredocLogicalChunks.length > MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES) {
-                return {
-                  ok: false,
-                  reason: "heredoc continuation too long",
-                  segments: [],
-                };
+            pendingHeredocs.shift();
+          } else {
+            const continued = stripUnquotedHeredocLineContinuation(line);
+            unquotedHeredocLogicalChunks.push(continued.line);
+            if (unquotedHeredocLogicalChunks.length > MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES) {
+              return {
+                ok: false,
+                reason: "heredoc continuation too long",
+                segments: [],
+              };
+            }
+            unquotedHeredocLogicalLength += continued.line.length;
+            if (unquotedHeredocLogicalLength > MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH) {
+              return {
+                ok: false,
+                reason: "heredoc logical line too large",
+                segments: [],
+              };
+            }
+            if (!continued.continues) {
+              if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalChunks.join(""))) {
+                return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
               }
-              unquotedHeredocLogicalLength += continued.line.length;
-              if (unquotedHeredocLogicalLength > MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH) {
-                return {
-                  ok: false,
-                  reason: "heredoc logical line too large",
-                  segments: [],
-                };
-              }
-              if (!continued.continues) {
-                if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalChunks.join(""))) {
-                  return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
-                }
-                unquotedHeredocLogicalChunks = [];
-                unquotedHeredocLogicalLength = 0;
-              }
+              unquotedHeredocLogicalChunks = [];
+              unquotedHeredocLogicalLength = 0;
             }
           }
         }
@@ -407,8 +410,6 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       }
     } else if (line === current.delimiter) {
       pendingHeredocs.shift();
-      unquotedHeredocLogicalChunks = [];
-      unquotedHeredocLogicalLength = 0;
       if (pendingHeredocs.length === 0) {
         inHeredocBody = false;
       }
@@ -640,6 +641,7 @@ function analyzeWindowsShellCommand(params: {
   command: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): ExecCommandAnalysis {
   const effective = stripWindowsShellWrapper(params.command.trim());
   const unsupported = findWindowsUnsupportedToken(effective);
@@ -660,7 +662,12 @@ function analyzeWindowsShellCommand(params: {
       {
         raw: params.command,
         argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+          (params.platform ?? undefined) as NodeJS.Platform | undefined,
+        ),
       },
     ],
   };
@@ -675,6 +682,7 @@ function parseSegmentsFromParts(
   parts: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  platform?: string | null,
 ): ExecCommandSegment[] | null {
   const segments: ExecCommandSegment[] = [];
   for (const raw of parts) {
@@ -685,7 +693,12 @@ function parseSegmentsFromParts(
     segments.push({
       raw,
       argv,
-      resolution: resolveCommandResolutionFromArgv(argv, cwd, env),
+      resolution: resolveCommandResolutionFromArgv(
+        argv,
+        cwd,
+        env,
+        (platform ?? undefined) as NodeJS.Platform | undefined,
+      ),
     });
   }
   return segments;
@@ -1103,9 +1116,9 @@ export function buildSafeBinsShellCommand(params: {
   segmentSatisfiedBy: (
     | "allowlist"
     | "safeBins"
+    | "safeBuiltins"
     | "inlineChain"
     | "skills"
-    | "skillPrelude"
     | null
   )[];
   cwd?: string;
@@ -1209,7 +1222,12 @@ export function analyzeShellCommand(params: {
       if (!pipelineSplit.ok) {
         return { ok: false, reason: pipelineSplit.reason, segments: [] };
       }
-      const segments = parseSegmentsFromParts(pipelineSplit.segments, params.cwd, params.env);
+      const segments = parseSegmentsFromParts(
+        pipelineSplit.segments,
+        params.cwd,
+        params.env,
+        params.platform,
+      );
       if (!segments) {
         return { ok: false, reason: "unable to parse shell segment", segments: [] };
       }
@@ -1225,7 +1243,7 @@ export function analyzeShellCommand(params: {
   if (!split.ok) {
     return { ok: false, reason: split.reason, segments: [] };
   }
-  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env);
+  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env, params.platform);
   if (!segments) {
     return { ok: false, reason: "unable to parse shell segment", segments: [] };
   }
@@ -1236,6 +1254,7 @@ export function analyzeArgvCommand(params: {
   argv: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): ExecCommandAnalysis {
   const argv = params.argv.filter((entry) => entry.trim().length > 0);
   if (argv.length === 0) {
@@ -1248,7 +1267,12 @@ export function analyzeArgvCommand(params: {
         raw: argv.join(" "),
         argv,
         sourceArgv: [...params.argv],
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+          (params.platform ?? undefined) as NodeJS.Platform | undefined,
+        ),
       },
     ],
   };

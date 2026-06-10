@@ -1,3 +1,4 @@
+// Tests music generation runtime dispatch and provider fallback behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -278,6 +279,64 @@ describe("music-generation runtime", () => {
     expect(result.ignoredOverrides).toEqual([
       { key: "durationSeconds", value: 30 },
       { key: "format", value: "wav" },
+    ]);
+  });
+
+  it("ignores model-specific unsupported lyrics and instrumental overrides", async () => {
+    let seenRequest:
+      | {
+          lyrics?: string;
+          instrumental?: boolean;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "fal",
+        capabilities: {
+          generate: {
+            supportsLyrics: true,
+            supportsLyricsByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+            supportsInstrumental: true,
+            supportsInstrumentalByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+          },
+        },
+        generateMusic: async (req) => {
+          seenRequest = {
+            lyrics: req.lyrics,
+            instrumental: req.instrumental,
+          };
+          return {
+            tracks: [{ buffer: Buffer.from("wav-bytes"), mimeType: "audio/wav" }],
+            model: "fal-ai/stable-audio-25/text-to-audio",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "fal/fal-ai/stable-audio-25/text-to-audio" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "orchestral hit",
+      lyrics: "rise up",
+      instrumental: true,
+    });
+
+    expect(seenRequest).toEqual({
+      lyrics: undefined,
+      instrumental: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "lyrics", value: "rise up" },
+      { key: "instrumental", value: true },
     ]);
   });
 

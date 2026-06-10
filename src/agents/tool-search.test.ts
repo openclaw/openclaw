@@ -1,12 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+// Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
+// tools, hooks, abort wrapping, and transcript projection.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
-import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
-} from "./pi-tools.before-tool-call.js";
+} from "./agent-tools.before-tool-call.js";
 import {
-  __testing,
+  testing,
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -60,8 +62,13 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
+  afterEach(() => {
+    testing.setToolSearchCodeModeSupportedForTest(undefined);
+    testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
+  });
+
   it("enables object config when a mode is set", () => {
-    const resolved = __testing.resolveToolSearchConfig({
+    const resolved = testing.resolveToolSearchConfig({
       tools: {
         toolSearch: {
           mode: "tools",
@@ -73,10 +80,10 @@ describe("Tool Search", () => {
   });
 
   it("falls back to structured controls when code mode is unsupported", () => {
-    __testing.setToolSearchCodeModeSupportedForTest(false);
+    testing.setToolSearchCodeModeSupportedForTest(false);
     try {
       const config = { tools: { toolSearch: true } } as never;
-      const resolved = __testing.resolveToolSearchConfig(config);
+      const resolved = testing.resolveToolSearchConfig(config);
       const compacted = applyToolSearchCatalog({
         tools: [
           fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
@@ -97,7 +104,7 @@ describe("Tool Search", () => {
       ]);
       expect(compacted.catalogToolCount).toBe(1);
     } finally {
-      __testing.setToolSearchCodeModeSupportedForTest(undefined);
+      testing.setToolSearchCodeModeSupportedForTest(undefined);
     }
   });
 
@@ -154,6 +161,8 @@ describe("Tool Search", () => {
   });
 
   it("scopes catalogs by run id when attempts share a session", async () => {
+    // Overlapping run attempts can share a session id; run-scoped catalogs keep
+    // one attempt from calling tools only exposed to another.
     const runATool = pluginTool("fake_run_a", "Tool visible only to run A");
     const runBTool = pluginTool("fake_run_b", "Tool visible only to run B");
     const config = {
@@ -177,12 +186,13 @@ describe("Tool Search", () => {
       runId: "run-b",
     });
 
-    const [, , , runACallTool] = createToolSearchTools({
+    const runATools = createToolSearchTools({
       sessionId: "session-overlap",
       sessionKey: "agent:main:main",
       runId: "run-a",
       config,
     });
+    const runACallTool = runATools[3];
     await runACallTool.execute("call-run-a", {
       id: "fake_run_a",
       args: { value: "A" },
@@ -199,8 +209,8 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       runId: "run-a",
     });
-    expect(__testing.sessionCatalogs.has("run:run-a")).toBe(false);
-    expect(__testing.sessionCatalogs.has("run:run-b")).toBe(true);
+    expect(testing.sessionCatalogs.has("run:run-a")).toBe(false);
+    expect(testing.sessionCatalogs.has("run:run-b")).toBe(true);
     expect(runATool.execute).toHaveBeenCalledTimes(1);
     expect(runBTool.execute).not.toHaveBeenCalled();
     clearToolSearchCatalog({ runId: "run-b" });
@@ -225,12 +235,13 @@ describe("Tool Search", () => {
       sessionId: "session-catalog-ref",
     });
 
-    const [, , , callTool] = createToolSearchTools({
+    const tools = createToolSearchTools({
       sessionId: "session-catalog-ref",
       runId: "run-local-ref",
       catalogRef: localRef,
       config,
     });
+    const callTool = tools[3];
     await callTool.execute("call-local-ref", {
       id: "fake_local_ref",
       args: { value: "local" },
@@ -316,7 +327,7 @@ describe("Tool Search", () => {
 
     expect(compacted.tools).toEqual([]);
     expect(compacted.catalogToolCount).toBe(1);
-    const clientEntry = __testing.sessionCatalogs
+    const clientEntry = testing.sessionCatalogs
       .get("session:session-client")
       ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
     expect(clientEntry?.source).toBe("client");
@@ -337,7 +348,7 @@ describe("Tool Search", () => {
       },
     });
 
-    const entry = __testing.sessionCatalogs
+    const entry = testing.sessionCatalogs
       .get("session:session-hooks")
       ?.entries.find((candidate) => candidate.name === "fake_hooked");
     if (!entry) {
@@ -381,7 +392,7 @@ describe("Tool Search", () => {
       },
     });
 
-    const entry = __testing.sessionCatalogs
+    const entry = testing.sessionCatalogs
       .get("session:session-hooks-abort")
       ?.entries.find((candidate) => candidate.name === "fake_already_hooked");
     expect(entry?.tool).toBe(abortWrapped);
@@ -449,13 +460,15 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
     });
 
-    const [runtimeCodeTool, , , runtimeCallTool] = createToolSearchTools({
+    const runtimeTools = createToolSearchTools({
       sessionId: "session-lifecycle",
       sessionKey: "agent:main:main",
       config: {},
       abortSignal: abortController.signal,
       executeTool,
     });
+    const runtimeCodeTool = runtimeTools[0];
+    const runtimeCallTool = runtimeTools[3];
     await runtimeCodeTool.execute(
       "call-lifecycle",
       {
@@ -657,7 +670,9 @@ describe("Tool Search", () => {
       });
 
     await vi.waitFor(() => expect(target.execute).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(settled).toBe(false);
     resolveTool?.();
     const result = await resultPromise;
@@ -782,12 +797,13 @@ describe("Tool Search", () => {
   });
 
   it("terminates async continuations that block the event loop after a bridge call", async () => {
+    testing.setToolSearchMinCodeTimeoutMsForTest(100);
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_timeout_target", "Target tool for timeout search");
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1000 },
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 800 },
       },
     } as never;
 
@@ -847,7 +863,7 @@ describe("Tool Search", () => {
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 100 },
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1_000 },
       },
     } as never;
     applyToolSearchCatalog({
@@ -873,5 +889,149 @@ describe("Tool Search", () => {
     }
     expect(observedSignal.aborted).toBe(true);
     expect(abortCount).toBe(1);
+  });
+
+  it("reuses an unchanged catalog within the same run", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const alpha = pluginTool("fake_reuse_alpha", "Alpha tool");
+    const beta = pluginTool("fake_reuse_beta", "Beta tool");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-catalog-reuse";
+
+    const first = applyToolSearchCatalog({
+      tools: [codeTool, alpha, beta],
+      config,
+      sessionId,
+    });
+    expect(first.catalogRegistered).toBe(true);
+    expect(first.catalogReused).toBe(false);
+
+    const catalogAfterFirst = testing.sessionCatalogs.get(`session:${sessionId}`);
+    expect(catalogAfterFirst).toBeDefined();
+
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, alpha, beta],
+      config,
+      sessionId,
+    });
+    expect(second.catalogRegistered).toBe(true);
+    expect(second.catalogReused).toBe(true);
+    expect(testing.sessionCatalogs.get(`session:${sessionId}`)).toBe(catalogAfterFirst);
+
+    const laterRef = createToolSearchCatalogRef();
+    const later = applyToolSearchCatalog({
+      tools: [codeTool, alpha, beta],
+      config,
+      sessionId,
+      sessionKey: "agent:main:tool-search-reuse",
+      catalogRef: laterRef,
+    });
+    expect(later.catalogReused).toBe(true);
+    expect(laterRef.current).toBe(catalogAfterFirst);
+    expect(testing.sessionCatalogs.get("key:agent:main:tool-search-reuse")).toBe(catalogAfterFirst);
+  });
+
+  it("restores an unchanged catalog after run cleanup", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const alpha = pluginTool("fake_xrun_alpha", "Alpha tool");
+    const beta = pluginTool("fake_xrun_beta", "Beta tool");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-cross-run-reuse";
+    const firstRef = createToolSearchCatalogRef();
+
+    const first = applyToolSearchCatalog({
+      tools: [codeTool, alpha, beta],
+      config,
+      sessionId,
+      runId: "run-1",
+      catalogRef: firstRef,
+    });
+    expect(first.catalogReused).toBe(false);
+    const firstAlphaEntry = firstRef.current?.entries.find((entry) => entry.name === alpha.name);
+    expect(firstAlphaEntry).toBeDefined();
+
+    clearToolSearchCatalog({
+      sessionId,
+      runId: "run-1",
+      catalogRef: firstRef,
+    });
+    expect(firstRef.current).toBeUndefined();
+    expect(testing.sessionCatalogs.has("run:run-1")).toBe(false);
+
+    const secondRef = createToolSearchCatalogRef();
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, alpha, beta],
+      config,
+      sessionId,
+      runId: "run-2",
+      catalogRef: secondRef,
+    });
+    expect(second.catalogRegistered).toBe(true);
+    expect(second.catalogReused).toBe(true);
+    expect(testing.sessionCatalogs.has("run:run-2")).toBe(true);
+    expect(secondRef.current?.entries.find((entry) => entry.name === alpha.name)).toBe(
+      firstAlphaEntry,
+    );
+  });
+
+  it("does not reuse when a same-named tool uses a different executable", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const original = pluginTool("fake_exec_swap", "Stable description");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-tool-exec-change";
+    const firstRef = createToolSearchCatalogRef();
+
+    applyToolSearchCatalog({
+      tools: [codeTool, original],
+      config,
+      sessionId,
+      runId: "run-exec-1",
+      catalogRef: firstRef,
+    });
+    clearToolSearchCatalog({
+      sessionId,
+      runId: "run-exec-1",
+      catalogRef: firstRef,
+    });
+
+    const replacement = pluginTool("fake_exec_swap", "Stable description");
+    const secondRef = createToolSearchCatalogRef();
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, replacement],
+      config,
+      sessionId,
+      runId: "run-exec-2",
+      catalogRef: secondRef,
+    });
+    expect(second.catalogReused).toBe(false);
+    expect(secondRef.current?.entries.find((entry) => entry.name === replacement.name)?.tool).toBe(
+      replacement,
+    );
+  });
+
+  it("does not reuse when a same-named tool changes parameters", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const tool = pluginTool("fake_schema_swap", "Stable description");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-tool-schema-change";
+
+    applyToolSearchCatalog({
+      tools: [codeTool, tool],
+      config,
+      sessionId,
+    });
+    tool.parameters = {
+      type: "object",
+      properties: {
+        other: { type: "number" },
+      },
+    };
+
+    const second = applyToolSearchCatalog({
+      tools: [codeTool, tool],
+      config,
+      sessionId,
+    });
+    expect(second.catalogReused).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+// Slack type declarations define plugin contracts.
 export type SlackFile = {
   id?: string;
   name?: string;
@@ -44,6 +45,7 @@ export type SlackMessageEvent = {
   blocks?: unknown[];
   files?: SlackFile[];
   attachments?: SlackAttachment[];
+  assistant_thread?: Record<string, unknown>;
   /**
    * Set by the thread_ts resolver when Slack supplied parent_user_id but the
    * parent thread timestamp could not be recovered.

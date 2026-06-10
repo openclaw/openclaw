@@ -1,3 +1,5 @@
+// Irc plugin module implements inbound behavior.
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
@@ -206,7 +208,7 @@ export async function handleIrcInbound(params: {
     providerKey: "irc",
     accountId: account.accountId,
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.channel,
-    log: (message) => runtime.log?.(message),
+    log: (messageLocal) => runtime.log?.(messageLocal),
   });
 
   const groupMatch = resolveIrcGroupMatch({
@@ -322,7 +324,6 @@ export async function handleIrcInbound(params: {
       access.ingress.decisiveGateId === "command" &&
       access.commandAccess.shouldBlockControlCommand
     ) {
-      const { logInboundDrop } = await import("openclaw/plugin-sdk/channel-inbound");
       logInboundDrop({
         log: (line) => runtime.log?.(line),
         channel: CHANNEL_ID,
@@ -345,7 +346,11 @@ export async function handleIrcInbound(params: {
     return;
   }
 
-  const peerId = message.isGroup ? message.target : message.senderNick;
+  const channelTarget =
+    message.target.startsWith("#") || message.target.startsWith("&")
+      ? message.target
+      : `#${message.target}`;
+  const peerId = message.isGroup ? channelTarget : message.senderNick;
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
@@ -372,8 +377,8 @@ export async function handleIrcInbound(params: {
     Body: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    From: message.isGroup ? `irc:channel:${message.target}` : `irc:${senderDisplay}`,
-    To: `irc:${peerId}`,
+    From: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
+    To: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: message.isGroup ? "group" : "direct",
@@ -388,11 +393,11 @@ export async function handleIrcInbound(params: {
     MessageSid: message.messageId,
     Timestamp: message.timestamp,
     OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: `irc:${peerId}`,
+    OriginatingTo: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,

@@ -1,3 +1,5 @@
+// Covers outbound send service plugin/core routing, media access scoping,
+// transcript mirroring, and poll fallback.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -32,20 +34,31 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
       requesterSenderName?: string;
       requesterSenderUsername?: string;
       requesterSenderE164?: string;
+      mediaAccess?: {
+        localRoots?: readonly string[];
+        readFile?: (filePath: string) => Promise<Buffer>;
+        workspaceDir?: string;
+      };
+      mediaReadFile?: (filePath: string) => Promise<Buffer>;
     }) => {
-      localRoots: string[];
+      localRoots: readonly string[];
       readFile: (filePath: string) => Promise<Buffer>;
     }
   >((params) => ({
-    localRoots: getAgentScopedMediaLocalRootsForSourcesMock({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      mediaSources: params.mediaSources ?? [],
-    }),
-    readFile: createAgentScopedHostMediaReadFileMock({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
+    localRoots:
+      params.mediaAccess?.localRoots ??
+      getAgentScopedMediaLocalRootsForSourcesMock({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        mediaSources: params.mediaSources ?? [],
+      }),
+    readFile:
+      params.mediaAccess?.readFile ??
+      params.mediaReadFile ??
+      createAgentScopedHostMediaReadFileMock({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }),
   })),
 );
 const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
@@ -543,6 +556,74 @@ describe("executeSendAction", () => {
     });
   });
 
+  it("passes mediaUrls and structured attachment sources when widening send roots", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          mediaUrls: ["/workspace/Pictures/chart.png", ""],
+          attachments: [{ filePath: "/workspace/Documents/report.md" }],
+        },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrls: ["/workspace/Pictures/chart.png"],
+    });
+
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: ["/workspace/Pictures/chart.png", "/workspace/Documents/report.md"],
+    });
+  });
+
+  it("preserves explicit plugin send media access roots", async () => {
+    const explicitReadFile = vi.fn(async () => Buffer.from("explicit capability"));
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          mediaUrls: ["/workspace/Pictures/chart.png"],
+        },
+        mediaAccess: {
+          localRoots: ["/explicit-root"],
+          readFile: explicitReadFile,
+        },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrls: ["/workspace/Pictures/chart.png"],
+    });
+
+    const resolveArg = expectSingleCallFirstArg(
+      mocks.resolveAgentScopedOutboundMediaAccess,
+      "media access resolution",
+    );
+    const passedMediaAccess = requireRecord(resolveArg.mediaAccess, "source-scoped media access");
+    expect(resolveArg.mediaSources).toEqual(["/workspace/Pictures/chart.png"]);
+    expect(passedMediaAccess.localRoots).toEqual(["/explicit-root"]);
+    expect(passedMediaAccess.readFile).toBe(explicitReadFile);
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).not.toHaveBeenCalled();
+    expectSingleCallFields(mocks.dispatchChannelMessageAction, {
+      mediaLocalRoots: ["/explicit-root"],
+      mediaReadFile: explicitReadFile,
+    });
+  });
+
   it("passes mirror idempotency keys through plugin-handled sends", async () => {
     await executePluginMirroredSend({
       mirror: {
@@ -642,12 +723,21 @@ describe("executeSendAction", () => {
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
         dryRun: false,
+        sessionKey: "discord-session",
+        inboundEventKind: "room_event",
       },
       to: "channel:123",
       message: "hello",
     });
 
-    expect(prepareSendPayload).toHaveBeenCalled();
+    expect(prepareSendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          sessionKey: "discord-session",
+          inboundEventKind: "room_event",
+        }),
+      }),
+    );
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       channel: "discord",

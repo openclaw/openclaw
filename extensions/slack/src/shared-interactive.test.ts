@@ -1,5 +1,7 @@
+// Slack tests cover shared interactive plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildSlackInteractiveBlocks } from "./blocks-render.js";
+import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
+import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackInteractiveBlocks", () => {
   it("renders shared interactive blocks in authored order", () => {
@@ -304,5 +306,149 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[1]?.style).toBe("danger");
     expect(buttonBlock.elements?.[2]?.style).toBe("primary");
     expect(buttonBlock.elements?.[3]).not.toHaveProperty("style");
+  });
+});
+
+describe("buildSlackPresentationBlocks", () => {
+  it("renders presentation controls without requiring legacy interactive payloads", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        { type: "text", text: "Pick" },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Approve",
+              action: { type: "callback", value: "approve" },
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Pick" },
+      },
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button:1:1",
+            text: {
+              type: "plain_text",
+              text: "Approve",
+              emoji: true,
+            },
+            value: "approve",
+            style: "primary",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not render generic command actions that Slack cannot execute", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        { type: "text", text: "Pick" },
+        {
+          type: "buttons",
+          buttons: [{ label: "Plugins", action: { type: "command", command: "/codex plugins" } }],
+        },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Pick" },
+      },
+    ]);
+  });
+
+  it("keeps exec approval commands on Slack's approval path", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Approve",
+              action: { type: "command", command: "/approve req-1 allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button:1:1",
+            text: {
+              type: "plain_text",
+              text: "Approve",
+              emoji: true,
+            },
+            value: "/approve req-1 allow-once",
+          },
+        ],
+      },
+    ]);
+  });
+});
+
+describe("resolveSlackReplyBlocks", () => {
+  it("offsets legacy interactive blocks after channel and presentation controls", () => {
+    const blocks = resolveSlackReplyBlocks({
+      channelData: {
+        slack: {
+          blocks: [
+            {
+              type: "actions",
+              block_id: "openclaw_reply_buttons_1",
+              elements: [],
+            },
+          ],
+        },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Stage", value: "stage" }],
+          },
+        ],
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Approve", value: "approve" }],
+          },
+        ],
+      },
+    });
+
+    const presentationButtonBlock = blocks?.[1] as
+      | { elements?: Array<{ action_id?: string }> }
+      | undefined;
+    const legacyButtonBlock = blocks?.[2] as
+      | { elements?: Array<{ action_id?: string }> }
+      | undefined;
+    expect(blocks?.[0]?.block_id).toBe("openclaw_reply_buttons_1");
+    expect(blocks?.[1]?.block_id).toBe("openclaw_reply_buttons_2");
+    expect(presentationButtonBlock?.elements?.[0]?.action_id).toBe("openclaw:reply_button:2:1");
+    expect(blocks?.[2]?.block_id).toBe("openclaw_reply_buttons_3");
+    expect(legacyButtonBlock?.elements?.[0]?.action_id).toBe("openclaw:reply_button:3:1");
   });
 });

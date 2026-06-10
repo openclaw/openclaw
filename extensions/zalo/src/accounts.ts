@@ -1,3 +1,4 @@
+// Zalo plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   resolveMergedAccountConfig,
@@ -11,7 +12,12 @@ import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types
 export type { ResolvedZaloAccount };
 
 const { listAccountIds: listZaloAccountIds, resolveDefaultAccountId: resolveDefaultZaloAccountId } =
-  createAccountListHelpers("zalo");
+  createAccountListHelpers("zalo", {
+    implicitDefaultAccount: {
+      channelKeys: ["botToken", "tokenFile"],
+      envVars: ["ZALO_BOT_TOKEN"],
+    },
+  });
 export { listZaloAccountIds, resolveDefaultZaloAccountId };
 
 function mergeZaloAccountConfig(cfg: OpenClawConfig, accountId: string): ZaloAccountConfig {

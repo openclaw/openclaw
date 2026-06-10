@@ -1,12 +1,21 @@
+// Covers platform browser-open command resolution.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const detectBinaryMock = vi.hoisted(() => vi.fn(async () => false));
+
+vi.mock("./detect-binary.js", () => ({
+  detectBinary: detectBinaryMock,
+}));
+
 import { resolveBrowserOpenCommand } from "./browser-open.js";
-import { _resetWindowsInstallRootsForTests } from "./windows-install-roots.js";
+import { resetWindowsInstallRootsForTests } from "./windows-install-roots.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  _resetWindowsInstallRootsForTests();
+  detectBinaryMock.mockReset().mockResolvedValue(false);
+  resetWindowsInstallRootsForTests();
 });
 
 describe("resolveBrowserOpenCommand", () => {
@@ -14,7 +23,7 @@ describe("resolveBrowserOpenCommand", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("SystemRoot", ".\\fake-root");
     vi.stubEnv("windir", ".\\fake-windir");
-    _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
 
     const resolved = await resolveBrowserOpenCommand();
 
@@ -26,7 +35,7 @@ describe("resolveBrowserOpenCommand", () => {
   it("prefers the registry-backed Windows system root over process env", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("SystemRoot", "C:\\PoisonedWindows");
-    _resetWindowsInstallRootsForTests({
+    resetWindowsInstallRootsForTests({
       queryRegistryValue: (key, valueName) => {
         if (
           key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
@@ -43,5 +52,25 @@ describe("resolveBrowserOpenCommand", () => {
     const rundll32 = path.win32.join("D:\\Windows", "System32", "rundll32.exe");
     expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
     expect(resolved.command).toBe(rundll32);
+  });
+
+  it("resolves macOS open even when SSH environment variables are present", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
+    detectBinaryMock.mockResolvedValueOnce(true);
+
+    const resolved = await resolveBrowserOpenCommand();
+
+    expect(detectBinaryMock).toHaveBeenCalledWith("open");
+    expect(resolved).toEqual({ argv: ["open"], command: "open" });
+  });
+
+  it("still refuses browser launch over Linux SSH without a display", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
+
+    const resolved = await resolveBrowserOpenCommand();
+
+    expect(resolved).toEqual({ argv: null, reason: "ssh-no-display" });
   });
 });

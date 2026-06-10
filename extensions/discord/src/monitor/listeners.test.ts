@@ -1,3 +1,4 @@
+// Discord tests cover listeners plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
@@ -37,6 +38,9 @@ function createDeferred() {
 
 async function flushAsyncWork() {
   await Promise.resolve();
+  await Promise.resolve();
+  // Third tick: the interaction listener chains an extra .then for accepted
+  // events, so rejections reach .catch one microtask later.
   await Promise.resolve();
 }
 

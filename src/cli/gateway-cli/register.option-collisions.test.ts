@@ -1,3 +1,4 @@
+// Gateway register option collision tests cover gateway command option registration.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGatewayCli } from "./register.js";
@@ -55,7 +56,7 @@ vi.mock("./call.js", () => ({
     mocks.callGatewayCli(method, opts, params),
 }));
 
-vi.mock("./run.js", () => ({
+vi.mock("./run-command.js", () => ({
   addGatewayRunCommand: (cmd: Command) =>
     cmd
       .option("--token <token>", "Gateway token")
@@ -83,15 +84,15 @@ vi.mock("../../infra/widearea-dns.js", () => ({
   resolveWideAreaDiscoveryDomain: () => undefined,
 }));
 
-vi.mock("../../terminal/health-style.js", () => ({
+vi.mock("../../../packages/terminal-core/src/health-style.js", () => ({
   styleHealthChannelLine: (line: string) => line,
 }));
 
-vi.mock("../../terminal/links.js", () => ({
+vi.mock("../../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: () => "docs.openclaw.ai/cli/gateway",
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
+vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   colorize: (_rich: boolean, _fn: (value: string) => string, value: string) => value,
   isRich: () => false,
   theme: {
@@ -131,7 +132,7 @@ function firstGatewayStatusCall() {
 }
 
 describe("gateway register option collisions", () => {
-  let sharedProgram: Command = new Command();
+  const sharedProgram: Command = new Command();
 
   if (sharedProgram.commands.length === 0) {
     sharedProgram.exitOverride();
@@ -168,6 +169,26 @@ describe("gateway register option collisions", () => {
         const [opts, runtime] = firstGatewayStatusCall();
         expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
         expect(runtime).toBe(defaultRuntime);
+      },
+    },
+    {
+      name: "passes decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "7", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 7 });
+      },
+    },
+    {
+      name: "falls back for non-decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "1e3", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 30 });
       },
     },
   ])("$name", async ({ argv, assert }) => {

@@ -1,8 +1,12 @@
+// Sessions tool tests cover list/send helpers, transcript path reporting,
+// announce-target resolution, and assistant-visible text sanitization.
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
 const callGatewayMock = vi.fn();
@@ -112,6 +116,30 @@ const installRegistry = async () => {
         },
       },
       {
+        pluginId: "feishu",
+        source: "test",
+        plugin: {
+          id: "feishu",
+          meta: {
+            id: "feishu",
+            label: "Feishu",
+            selectionLabel: "Feishu",
+            docsPath: "/channels/feishu",
+            blurb: "Feishu test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
         pluginId: "whatsapp",
         source: "test",
         plugin: {
@@ -201,16 +229,12 @@ async function withStubbedStateDir<T>(
   run: (stateDir: string) => Promise<T>,
 ): Promise<T> {
   const stateDir = path.join(os.tmpdir(), name);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  try {
-    return await run(stateDir);
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => await run(stateDir));
 }
 
 describe("sanitizeTextContent", () => {
   it("strips minimax tool call XML and downgraded markers", () => {
+    // Session recall should not replay provider/tool markup as assistant text.
     const input =
       'Hello <invoke name="tool">payload</invoke></minimax:tool_call> ' +
       "[Tool Call: foo (ID: 1)] world";
@@ -408,6 +432,43 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
+  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:feishu:direct:ou_user",
+          channel: "webchat",
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          route: {
+            channel: "webchat",
+            target: { to: "session:dashboard" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_user",
+          },
+          origin: {
+            provider: "feishu",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:feishu:direct:ou_user",
+      displayKey: "agent:main:feishu:direct:ou_user",
+    });
+    expect(target).toEqual({
+      channel: "feishu",
+      to: "user:ou_user",
+      accountId: "work",
+      threadId: "thread-77",
+    });
+  });
+
   it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
@@ -514,10 +575,32 @@ describe("sessions_list gating", () => {
 
     const details = requireDetails(result);
     expect(details.count).toBe(1);
+    expect(details.visibility).toBeUndefined();
     const session = requireSessions(details)[0];
     expect(session?.key).toBe("agent:codex:acp:child-1");
     expect(session?.parentSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes visibility metadata when session visibility is restricted", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "tree" },
+      },
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    expect(details.visibility).toMatchObject({
+      mode: "tree",
+      restricted: true,
+      warning:
+        "Session visibility is restricted (effective tools.sessions.visibility=tree). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.",
+    });
   });
 
   it("keeps literal current keys for message previews", async () => {
@@ -702,6 +785,19 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
+    const tool = createMainSessionsSendTool();
+
+    await expect(
+      tool.execute("call-invalid-timeout", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "hi",
+        timeoutSeconds,
+      }),
+    ).rejects.toThrow("timeoutSeconds must be a non-negative integer");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("returns an error when label resolution fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
     const tool = createMainSessionsSendTool();
@@ -830,5 +926,117 @@ describe("sessions_send gating", () => {
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+  });
+
+  it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const tool = createMainSessionsSendTool();
+    const staleAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "older reply from a previous run" }],
+      timestamp: 20,
+    };
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [staleAssistantMessage] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-fire-and-forget-same-session", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
+    expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
+  it("accepts fire-and-forget same-session sends when baseline history is unavailable", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const tool = createMainSessionsSendTool();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        throw new Error("history unavailable");
+      }
+      if (request.method === "agent") {
+        return { runId: "run-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-fire-and-forget-history-fail", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
+    expect(flowParams?.baseline).toBeUndefined();
+  });
+
+  it("caps oversized timeoutSeconds before waiting for the target run", async () => {
+    const tool = createMainSessionsSendTool();
+    const waitTimeouts: unknown[] = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; timeoutMs?: unknown };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-huge-timeout", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        waitTimeouts.push(request.timeoutMs);
+        return { runId: "run-huge-timeout", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-huge-timeout", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(requireDetails(result).status).toBe("ok");
+    expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });

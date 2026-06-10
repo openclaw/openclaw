@@ -1,3 +1,4 @@
+// Command startup policy tests cover which CLI commands require startup side effects.
 import { describe, expect, it } from "vitest";
 import {
   resolveCliStartupPolicy,
@@ -11,8 +12,10 @@ import {
 describe("command-startup-policy", () => {
   it("matches config guard bypass commands", () => {
     expect(shouldBypassConfigGuardForCommandPath(["backup", "create"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
 
@@ -22,7 +25,7 @@ describe("command-startup-policy", () => {
         commandPath: ["status"],
         suppressDoctorStdout: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSkipRouteConfigGuardForCommandPath({
         commandPath: ["gateway", "status"],
@@ -237,7 +240,7 @@ describe("command-startup-policy", () => {
     ).toEqual({
       suppressDoctorStdout: true,
       hideBanner: false,
-      skipConfigGuard: true,
+      skipConfigGuard: false,
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
     });

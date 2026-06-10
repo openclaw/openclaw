@@ -1,3 +1,4 @@
+/** Pending chat-history windows and prompt context builders for auto-reply turns. */
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
@@ -30,6 +31,7 @@ export function evictOldHistoryKeys<T>(
 
 export type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
+/** Wraps previous chat history and the current message in the prompt context marker format. */
 export function buildHistoryContext(params: {
   historyText: string;
   currentMessage: string;
@@ -45,6 +47,7 @@ export function buildHistoryContext(params: {
   );
 }
 
+/** Appends one history entry, enforces per-session limit, and refreshes LRU key order. */
 export function appendHistoryEntry<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -71,6 +74,10 @@ export function appendHistoryEntry<T extends HistoryEntry>(params: {
   return history;
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).record(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function recordPendingHistoryEntry<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -80,6 +87,10 @@ export function recordPendingHistoryEntry<T extends HistoryEntry>(params: {
   return appendHistoryEntry(params);
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).record(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function recordPendingHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -116,6 +127,7 @@ function isImageHistoryMediaEntry(entry: HistoryMediaEntry): boolean {
   return entry.kind === "image" || contentType?.startsWith("image/") === true;
 }
 
+/** Filters history media to local image entries safe to re-attach to prompt context. */
 export function normalizeHistoryMediaEntries(params: {
   media?: readonly HistoryMediaEntry[] | null;
   limit?: number;
@@ -153,6 +165,11 @@ export function normalizeHistoryMediaEntries(params: {
   return out;
 }
 
+/**
+ * @deprecated Plugin message-turn code should use
+ * `createChannelHistoryWindow(...).recordWithMedia(...)`. This helper remains
+ * for core internals and older plugin compatibility.
+ */
 export async function recordPendingHistoryEntryWithMedia<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -181,6 +198,7 @@ export async function recordPendingHistoryEntryWithMedia<T extends HistoryEntry>
       limit: params.limit,
     });
     const resolvedMedia = await params.media();
+    // The turn can be cancelled while media resolves; keep text but avoid late media attachment.
     if (params.shouldRecord && !params.shouldRecord()) {
       return history;
     }
@@ -217,6 +235,11 @@ export async function recordPendingHistoryEntryWithMedia<T extends HistoryEntry>
   });
 }
 
+/**
+ * @deprecated Plugin message-turn code should use
+ * `createChannelHistoryWindow(...).buildPendingContext(...)`. This helper remains
+ * for core internals and older plugin compatibility.
+ */
 export function buildPendingHistoryContextFromMap(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -238,6 +261,11 @@ export function buildPendingHistoryContextFromMap(params: {
   });
 }
 
+/**
+ * @deprecated Plugin message-turn code should use
+ * `createChannelHistoryWindow(...).buildInboundHistory(...)`. This helper remains
+ * for core internals and older plugin compatibility.
+ */
 export function buildInboundHistoryFromMap<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -249,6 +277,7 @@ export function buildInboundHistoryFromMap<T extends HistoryEntry>(params: {
   });
 }
 
+/** Builds structured inbound history entries from an existing window. */
 export function buildInboundHistoryFromEntries(params: {
   entries: readonly HistoryEntry[];
   limit: number;
@@ -275,6 +304,11 @@ export function buildInboundHistoryFromEntries(params: {
   });
 }
 
+/**
+ * @deprecated Prefer `buildHistoryContextFromEntries(...)` for existing entry
+ * arrays, or `createChannelHistoryWindow(...)` when working from a history map.
+ * This helper remains for older plugin compatibility.
+ */
 export function buildHistoryContextFromMap(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -305,6 +339,10 @@ export function buildHistoryContextFromMap(params: {
   });
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).clear(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function clearHistoryEntries(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -312,6 +350,10 @@ export function clearHistoryEntries(params: {
   params.historyMap.set(params.historyKey, []);
 }
 
+/**
+ * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).clear(...)`.
+ * This helper remains for core internals and older plugin compatibility.
+ */
 export function clearHistoryEntriesIfEnabled(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
@@ -323,6 +365,7 @@ export function clearHistoryEntriesIfEnabled(params: {
   clearHistoryEntries({ historyMap: params.historyMap, historyKey: params.historyKey });
 }
 
+/** Builds prompt text from already-recorded history entries. */
 export function buildHistoryContextFromEntries(params: {
   entries: HistoryEntry[];
   currentMessage: string;

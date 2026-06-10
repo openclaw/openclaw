@@ -1,3 +1,4 @@
+// Auth choice tests cover auth choice application, provider config, and credential prompts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,7 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { __testing as providerAuthChoiceTesting } from "../plugins/provider-auth-choice.js";
+import { testing as providerAuthChoiceTesting } from "../plugins/provider-auth-choice.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -41,18 +42,18 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
 }));
 
 vi.mock("./auth-choice.apply.api-providers.js", () => {
-  const normalizeProviderId = (value: string) => value.trim().toLowerCase();
+  const normalizeProviderIdLocal = (value: string) => value.trim().toLowerCase();
   const resolveChoiceByKind = (params: {
     authChoice: string;
     kind: ProviderAuthMethod["kind"];
     tokenProvider?: string;
   }) => {
-    const providerId = normalizeProviderId(params.tokenProvider ?? "");
+    const providerId = normalizeProviderIdLocal(params.tokenProvider ?? "");
     if (!providerId) {
       return params.authChoice;
     }
     const provider = resolvePluginProviders().find(
-      (entry) => normalizeProviderId(entry.id) === providerId,
+      (entry) => normalizeProviderIdLocal(entry.id) === providerId,
     );
     return (
       provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId ??
@@ -80,10 +81,15 @@ const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => 
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
-  resolveAgentDir: (_config: unknown, agentId: string) =>
+  resolveAgentDir: (configForTest: unknown, agentId: string) =>
     `${process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state"}/agents/${agentId}/agent`,
-  resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
+  resolveAgentWorkspaceDir: (configForTest: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
+  // Required by src/agents/model-runtime-policy.ts, which is transitively
+  // imported through provider-auth-choice -> copilot-runtime-plugin-install ->
+  // copilot-routing -> model-runtime-policy.
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
+  listAgentEntries: () => [],
 }));
 
 vi.mock("../agents/workspace.js", () => ({
@@ -172,6 +178,14 @@ vi.mock("../agents/auth-profiles.js", () => ({
     agentDir?: string;
   }) => {
     seedTestAuthProfile(params);
+  },
+  upsertAuthProfileWithLock: async (params: {
+    profileId: string;
+    credential: StoredAuthProfile;
+    agentDir?: string;
+  }) => {
+    seedTestAuthProfile(params);
+    return { version: 1, profiles: readTestAuthProfileStore(params.agentDir).profiles };
   },
 }));
 
@@ -498,6 +512,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       flagName: "--openai-api-key",
       envVar: "OPENAI_API_KEY",
       promptMessage: "Enter OpenAI API key",
+      profileId: "openai:api-key",
       defaultModel: "openai/gpt-5.5",
     }),
     await createApiKeyProvider({
@@ -560,7 +575,6 @@ describe("applyAuthChoice", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
     "HF_TOKEN",
@@ -580,7 +594,6 @@ describe("applyAuthChoice", () => {
     const agentDir = path.join(stateDir, "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
   }
   function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
     return createWizardPrompter(overrides, { defaultSelect: "" });
@@ -739,19 +752,19 @@ describe("applyAuthChoice", () => {
     const spy = vi
       .spyOn(providerAuthChoices, "resolveManifestDeprecatedProviderAuthChoice")
       .mockReturnValueOnce({
-        choiceId: "openai-codex",
+        choiceId: "openai",
       } as never);
     try {
       await expect(
         applyAuthChoice({
-          authChoice: "openai-codex-import",
+          authChoice: "openai-chatgpt-import",
           config: {},
           prompter: createPrompter({}),
           runtime: createExitThrowingRuntime(),
           setDefaultModel: true,
         }),
       ).rejects.toThrow(
-        'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead, or run openclaw onboard to choose interactively.',
+        'Auth choice "openai-chatgpt-import" is no longer supported. Use "openai" instead, or run openclaw onboard to choose interactively.',
       );
     } finally {
       spy.mockRestore();
@@ -1170,11 +1183,11 @@ describe("applyAuthChoice", () => {
     expect(providerResolveInput.mode).toBe("setup");
     expectPromptMessageContaining(confirm, "OPENAI_API_KEY");
     expect(text).not.toHaveBeenCalled();
-    expectAuthProfileConfig(result, "openai:default", {
+    expectAuthProfileConfig(result, "openai:api-key", {
       provider: "openai",
       mode: "api_key",
     });
-    expect((await readAuthProfile("openai:default"))?.key).toBe("sk-openai-explicit");
+    expect((await readAuthProfile("openai:api-key"))?.key).toBe("sk-openai-explicit");
   });
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {

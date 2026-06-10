@@ -1,3 +1,4 @@
+// Qa Lab tests cover docker up plugin behavior.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -25,9 +26,9 @@ async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => 
       if (!listening) {
         return;
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
@@ -124,7 +125,7 @@ describe("runQaDockerUp", () => {
       ]);
       const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
       expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
-      expect(compose).toContain("      - --ui-dist-dir");
+      expect(compose).toContain("--ui-dist-dir /opt/openclaw-qa-lab-ui");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

@@ -1,11 +1,12 @@
+/** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
+import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ZodIssue } from "zod";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
-import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {
@@ -13,14 +14,15 @@ type UnrecognizedKeysIssue = ZodIssue & {
   keys: PropertyKey[];
 };
 
-function normalizeIssuePath(path: PropertyKey[]): Array<string | number> {
-  return path.filter((part): part is string | number => typeof part !== "symbol");
+function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
+  return pathValue.filter((part): part is string | number => typeof part !== "symbol");
 }
 
 function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
   return issue.code === "unrecognized_keys";
 }
 
+/** Formats a parsed config issue path into a user-facing dotted path. */
 export function formatConfigPath(parts: Array<string | number>): string {
   if (parts.length === 0) {
     return "<root>";
@@ -36,9 +38,10 @@ export function formatConfigPath(parts: Array<string | number>): string {
   return out || "<root>";
 }
 
-export function resolveConfigPathTarget(root: unknown, path: Array<string | number>): unknown {
+/** Resolves a config path against a loose config tree, returning null for invalid traversal. */
+export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
   let current: unknown = root;
-  for (const part of path) {
+  for (const part of pathLocal) {
     if (typeof part === "number") {
       if (!Array.isArray(current)) {
         return null;
@@ -66,10 +69,17 @@ function isUpdateInProgress(): boolean {
   return value === "1" || value === "true";
 }
 
+const ROOT_STRIP_PROTECTED_KEYS = new Set(["defaultModel"]);
 const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
   plugins: new Set(["installs"]),
 };
 
+/**
+ * Removes unknown config keys reported by schema validation, except protected migration keys.
+ *
+ * Doctor skips this while an update is in progress so partially written upgrade state is not
+ * stripped before its migration can finish.
+ */
 export function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
@@ -97,7 +107,12 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     const record = target as Record<string, unknown>;
     const parentKey =
       issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
-    const protectedSet = parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
+    const protectedSet =
+      issuePath.length === 0
+        ? ROOT_STRIP_PROTECTED_KEYS
+        : parentKey
+          ? STRIP_PROTECTED_KEYS[parentKey]
+          : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {
         continue;
@@ -113,6 +128,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   return { config: next, removed };
 }
 
+/** Warns when legacy OpenCode provider overrides shadow the built-in catalog. */
 export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
   const providers = cfg.models?.providers;
   if (!providers) {
@@ -168,6 +184,7 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   return false;
 }
 
+/** Collects warnings for agent model shapes that unintentionally drop default fallbacks. */
 export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   if (defaultFallbacks.length === 0) {
@@ -198,6 +215,7 @@ export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): str
   return warnings;
 }
 
+/** Emits doctor notes for model fallback clobber warnings. */
 export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
   const warnings = collectImplicitFallbackClobberWarnings(cfg);
   if (warnings.length === 0) {
@@ -206,6 +224,7 @@ export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
   note(warnings.join("\n"), "Doctor warnings");
 }
 
+/** Emits a config include warning when an include path escapes the config directory. */
 export function noteIncludeConfinementWarning(snapshot: {
   path?: string | null;
   issues?: Array<{ message: string }>;

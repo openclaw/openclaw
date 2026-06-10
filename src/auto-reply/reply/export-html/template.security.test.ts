@@ -1,3 +1,4 @@
+// Tests exported HTML transcript escaping and template safety.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +52,7 @@ let parseHtmlPromise: Promise<LinkedomModule["parseHTML"]> | null = null;
 
 async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
   parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
-    ({ parseHTML }) => parseHTML,
+    (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
 }
@@ -494,6 +495,104 @@ describe("export html security hardening", () => {
     );
   });
 
+  it("escapes entry.id in element id and data-entry-id attributes", async () => {
+    const xssId = `"><script>alert(1)</script><div data-x="`;
+    const session: SessionData = {
+      header: { id: "session-xss-id", timestamp: now() },
+      entries: [
+        {
+          id: xssId,
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "hello" },
+        },
+        {
+          id: "safe-child",
+          parentId: xssId,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "world" }],
+          },
+        },
+      ],
+      leafId: "safe-child",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+
+    // Core XSS prevention: no <script> tags should be injected into the DOM
+    expect(messages.querySelectorAll("script").length).toBe(0);
+
+    // No attribute breakout: onmouseover, data-x must not appear as real attributes
+    expect(messages.querySelector("[onmouseover]")).toBeNull();
+
+    // The copy-link button must exist with the payload safely contained
+    const copyBtn = requireElement(
+      messages.querySelector(".copy-link-btn"),
+      "copy-link button missing",
+    );
+    // data-entry-id must be present as a proper attribute (not broken out)
+    expect(copyBtn.hasAttribute("data-entry-id")).toBe(true);
+    // No stray attributes from the payload
+    expect(copyBtn.hasAttribute("data-x")).toBe(false);
+
+    // The user message element must not have attribute breakout either
+    const userMsg = requireElement(
+      messages.querySelector(".user-message"),
+      "user message element missing",
+    );
+    expect(userMsg.getAttribute("data-x")).toBeNull();
+    // The element id must start with entry- (the payload is contained within)
+    const elementId = userMsg.getAttribute("id") ?? "";
+    expect(elementId.startsWith("entry-")).toBe(true);
+  });
+
+  it("copy-link round-trip: dataset.entryId matches raw entry.id after browser decoding", async () => {
+    // IDs with characters that need HTML escaping but should round-trip correctly
+    const specialId = `msg-with"quotes&amp's`;
+    const session: SessionData = {
+      header: { id: "session-roundtrip", timestamp: now() },
+      entries: [
+        {
+          id: specialId,
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "test" },
+        },
+      ],
+      leafId: specialId,
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+
+    // The copy-link button should exist
+    const copyBtn = requireElement(
+      messages.querySelector(".copy-link-btn"),
+      "copy-link button missing",
+    );
+
+    // Browser decodes HTML entities in dataset reads, so dataset.entryId
+    // must return the RAW entry.id (not the HTML-escaped version).
+    // This is essential for buildShareUrl() to produce the correct URL.
+    const datasetValue = (copyBtn as HTMLElement).dataset.entryId;
+    expect(datasetValue).toBe(specialId);
+
+    // The DOM element id must also round-trip: getElementById should find it
+    const userMsg = document.getElementById(`entry-${specialId}`);
+    expect(userMsg).not.toBeNull();
+    expect(userMsg?.classList.contains("user-message")).toBe(true);
+  });
+
   it("escapes markdown data-image attributes", async () => {
     const dataImage = "data:image/png;base64,AAAA";
     const session: SessionData = {
@@ -525,5 +624,106 @@ describe("export html security hardening", () => {
     expect(img.getAttribute("onerror")).toBeNull();
     expect(img.getAttribute("alt")).toBe('x" onerror="alert(1)');
     expect(img.getAttribute("src")).toBe(dataImage);
+  });
+
+  it("does not crash when assistant message has non-array content", async () => {
+    for (const content of [null, undefined, "plain string", 42]) {
+      const session: SessionData = {
+        header: { id: "session-malformed-assistant", timestamp: now() },
+        entries: [
+          {
+            id: "1",
+            parentId: null,
+            timestamp: now(),
+            type: "message",
+            message: { role: "user", content: "hello" },
+          },
+          {
+            id: "2",
+            parentId: "1",
+            timestamp: now(),
+            type: "message",
+            message: { role: "assistant", content },
+          },
+        ],
+        leafId: "2",
+        systemPrompt: "",
+        tools: [],
+      };
+      const { document } = await renderTemplate(session);
+      if (typeof content === "string") {
+        expect(document.querySelector(".assistant-message")?.textContent).toContain(content);
+      }
+    }
+  });
+
+  it("renders string tool-result content", async () => {
+    const session: SessionData = {
+      header: { id: "session-string-tool-result", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "run a command" },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "bash",
+                arguments: { command: "echo legacy" },
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            content: "legacy output",
+          },
+        },
+      ],
+      leafId: "3",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    expect(document.querySelector(".tool-output")?.textContent).toContain("legacy output");
+  });
+
+  it("does not crash when user message has non-array non-string content", async () => {
+    for (const content of [null, undefined, 42]) {
+      const session: SessionData = {
+        header: { id: "session-malformed-user", timestamp: now() },
+        entries: [
+          {
+            id: "1",
+            parentId: null,
+            timestamp: now(),
+            type: "message",
+            message: { role: "user", content },
+          },
+        ],
+        leafId: "1",
+        systemPrompt: "",
+        tools: [],
+      };
+      await expect(renderTemplate(session)).resolves.toBeDefined();
+    }
   });
 });

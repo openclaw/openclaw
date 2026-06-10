@@ -1,6 +1,8 @@
+// Nextcloud Talk plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
+  hasConfiguredAccountValue,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
   resolveMergedAccountConfig,
@@ -39,6 +41,15 @@ const {
   resolveDefaultAccountId: resolveDefaultNextcloudTalkAccountId,
 } = createAccountListHelpers("nextcloud-talk", {
   normalizeAccountId,
+  hasImplicitDefaultAccount: (cfg) => {
+    const channel = cfg.channels?.["nextcloud-talk"];
+    return Boolean(
+      channel?.baseUrl?.trim() &&
+      (hasConfiguredAccountValue(channel.botSecret) ||
+        channel.botSecretFile?.trim() ||
+        process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim()),
+    );
+  },
 });
 export { resolveDefaultNextcloudTalkAccountId };
 

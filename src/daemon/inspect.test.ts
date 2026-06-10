@@ -1,3 +1,4 @@
+// Daemon inspect tests cover service inspection and diagnostic output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -258,6 +259,27 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 <plist version="1.0"><dict>
 <key>Label</key><string>com.example.companion-options</string>
 <key>ProgramArguments</key><array><string>/usr/local/bin/openclaw-helper</string><string>--gateway-url</string><string>http://127.0.0.1:18789</string><string>sync</string></array>
+</dict></plist>`,
+      );
+      const result = await findExtraGatewayServices({ HOME: tmpHome });
+      expect(result).toStrictEqual([]);
+    } finally {
+      await fs.rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report non-gateway LaunchAgents that mention clawdbot in environment values", async () => {
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");
+    try {
+      await fs.mkdir(launchdDir, { recursive: true });
+      await fs.writeFile(
+        path.join(launchdDir, "com.github.facebook.watchman.plist"),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>com.github.facebook.watchman</string>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/Users/test/Projects/clawdbot2/node_modules/.bin:/opt/homebrew/bin</string></dict>
+<key>ProgramArguments</key><array><string>/opt/homebrew/bin/watchman</string><string>--foreground</string></array>
 </dict></plist>`,
       );
       const result = await findExtraGatewayServices({ HOME: tmpHome });

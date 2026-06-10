@@ -1,6 +1,12 @@
+/**
+ * Basic browser control routes.
+ *
+ * Serves status, doctor, start/stop, profile management, and simple health
+ * endpoints for the browser control server.
+ */
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
-import { getChromeMcpPid } from "../chrome-mcp.js";
+import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
@@ -52,6 +58,17 @@ function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   jsonError(res, 500, String(err));
 }
 
+async function sendBasicJsonResponse(params: {
+  res: BrowserResponse;
+  run: () => Promise<unknown>;
+}) {
+  try {
+    params.res.json(await params.run());
+  } catch (err) {
+    return handleBrowserRouteError(params.res, err);
+  }
+}
+
 async function withBasicProfileRoute(params: {
   req: BrowserRequest;
   res: BrowserResponse;
@@ -67,6 +84,29 @@ async function withBasicProfileRoute(params: {
   } catch (err) {
     return handleBrowserRouteError(params.res, err);
   }
+}
+
+function registerBasicProfilePost(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+  path: string,
+  run: (params: {
+    req: BrowserRequest;
+    res: BrowserResponse;
+    profileCtx: ProfileContext;
+  }) => Promise<void>,
+) {
+  app.post(
+    path,
+    asyncBrowserRoute(async (req, res) => {
+      await withBasicProfileRoute({
+        req,
+        res,
+        ctx,
+        run: async (profileCtx) => await run({ req, res, profileCtx }),
+      });
+    }),
+  );
 }
 
 async function withProfilesServiceMutation(params: {
@@ -164,7 +204,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
       ? getChromeMcpPid(profileCtx.profile.name)
       : (profileState?.running?.pid ?? null),
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-    cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null),
+    cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
     chosenBrowser: profileState?.running?.exe.kind ?? null,
     detectedBrowser,
     detectedExecutablePath,
@@ -193,7 +233,6 @@ async function runBrowserLiveProbe(req: BrowserRequest, ctx: BrowserRouteContext
   try {
     const tab = await profileCtx.ensureTabAvailable();
     if (capabilities.usesChromeMcp) {
-      const { takeChromeMcpSnapshot } = await import("../chrome-mcp.js");
       await takeChromeMcpSnapshot({
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
@@ -236,7 +275,7 @@ async function runBrowserLiveProbe(req: BrowserRequest, ctx: BrowserRouteContext
 }
 
 function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(query ?? {}, key);
+  return Object.hasOwn(query ?? {}, key);
 }
 
 function parseHeadlessStartOverride(params: {
@@ -271,6 +310,7 @@ function parseHeadlessStartOverride(params: {
   return { ok: true, headless };
 }
 
+/** Register basic browser lifecycle, status, doctor, and profile endpoints. */
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   // List all profiles with their status
   app.get(
@@ -290,94 +330,56 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
   app.get(
     "/",
     asyncBrowserRoute(async (req, res) => {
-      try {
-        res.json(await buildBrowserStatus(req, ctx));
-      } catch (err) {
-        const mapped = toBrowserErrorResponse(err);
-        if (mapped) {
-          return jsonError(res, mapped.status, mapped.message);
-        }
-        jsonError(res, 500, String(err));
-      }
+      await sendBasicJsonResponse({
+        res,
+        run: async () => await buildBrowserStatus(req, ctx),
+      });
     }),
   );
 
   app.get(
     "/doctor",
     asyncBrowserRoute(async (req, res) => {
-      try {
-        const status = await buildBrowserStatus(req, ctx);
-        const report = buildBrowserDoctorReport({ status });
-        if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-          report.checks.push(await runBrowserLiveProbe(req, ctx));
-          report.ok = report.checks.every((check) => check.status !== "fail");
-        }
-        res.json(report);
-      } catch (err) {
-        const mapped = toBrowserErrorResponse(err);
-        if (mapped) {
-          return jsonError(res, mapped.status, mapped.message);
-        }
-        jsonError(res, 500, String(err));
-      }
+      await sendBasicJsonResponse({
+        res,
+        run: async () => {
+          const status = await buildBrowserStatus(req, ctx);
+          const report = buildBrowserDoctorReport({ status });
+          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+            report.checks.push(await runBrowserLiveProbe(req, ctx));
+            report.ok = report.checks.every((check) => check.status !== "fail");
+          }
+          return report;
+        },
+      });
     }),
   );
 
   // Start browser (profile-aware)
-  app.post(
-    "/start",
-    asyncBrowserRoute(async (req, res) => {
-      await withBasicProfileRoute({
-        req,
-        res,
-        ctx,
-        run: async (profileCtx) => {
-          const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });
-          if (!headlessOverride.ok) {
-            return;
-          }
-          await profileCtx.ensureBrowserAvailable({ headless: headlessOverride.headless });
-          res.json({ ok: true, profile: profileCtx.profile.name });
-        },
-      });
-    }),
-  );
+  registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
+    const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });
+    if (!headlessOverride.ok) {
+      return;
+    }
+    await profileCtx.ensureBrowserAvailable({ headless: headlessOverride.headless });
+    res.json({ ok: true, profile: profileCtx.profile.name });
+  });
 
   // Stop browser (profile-aware)
-  app.post(
-    "/stop",
-    asyncBrowserRoute(async (req, res) => {
-      await withBasicProfileRoute({
-        req,
-        res,
-        ctx,
-        run: async (profileCtx) => {
-          const result = await profileCtx.stopRunningBrowser();
-          res.json({
-            ok: true,
-            stopped: result.stopped,
-            profile: profileCtx.profile.name,
-          });
-        },
-      });
-    }),
-  );
+  registerBasicProfilePost(app, ctx, "/stop", async ({ res, profileCtx }) => {
+    const result = await profileCtx.stopRunningBrowser();
+    res.json({
+      ok: true,
+      stopped: result.stopped,
+      profile: profileCtx.profile.name,
+    });
+  });
 
   // Reset profile (profile-aware)
-  app.post(
-    "/reset-profile",
-    asyncBrowserRoute(async (req, res) => {
-      await withBasicProfileRoute({
-        req,
-        res,
-        ctx,
-        run: async (profileCtx) => {
-          const result = await profileCtx.resetProfile();
-          res.json({ ok: true, profile: profileCtx.profile.name, ...result });
-        },
-      });
-    }),
-  );
+  registerBasicProfilePost(app, ctx, "/reset-profile", async ({ res, profileCtx }) => {
+    const result = await profileCtx.resetProfile();
+    res.json({ ok: true, profile: profileCtx.profile.name, ...result });
+  });
 
   // Create a new profile
   app.post(

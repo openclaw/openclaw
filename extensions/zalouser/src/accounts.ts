@@ -1,3 +1,4 @@
+// Zalouser plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -18,7 +19,12 @@ async function loadZalouserAccountsRuntime() {
 const {
   listAccountIds: listZalouserAccountIds,
   resolveDefaultAccountId: resolveDefaultZalouserAccountId,
-} = createAccountListHelpers("zalouser");
+} = createAccountListHelpers("zalouser", {
+  implicitDefaultAccount: {
+    channelKeys: ["profile"],
+    envVars: ["ZALOUSER_PROFILE", "ZCA_PROFILE"],
+  },
+});
 export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
 function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {

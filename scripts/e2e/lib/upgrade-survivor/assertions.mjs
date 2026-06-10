@@ -1,11 +1,17 @@
+// Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+
+const require = createRequire(import.meta.url);
 
 const command = process.argv[2];
 const SCENARIOS = new Set([
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
@@ -19,6 +25,10 @@ const PERSONA_FILES = new Map([
   ["USER.md", "# Existing User\n\nPrefers survivor tests.\n"],
   ["MEMORY.md", "# Existing Memory\n\nUpgrade reports came from real users.\n"],
 ]);
+
+const LEGACY_SESSION_MAIN_ID = "upgrade-main-session";
+const LEGACY_SESSION_DIRECT_ID = "upgrade-direct-session";
+const LEGACY_SESSION_GROUP_ID = "upgrade-group-session";
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -50,6 +60,21 @@ function isPathInside(parent, child) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function isPathInsideManagedNpmProjectPackageRoot(params) {
+  const relative = path.relative(path.join(params.stateDir, "npm", "projects"), params.installPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const segments = relative.split(path.sep);
+  const packageSegments = params.packageName.split("/");
+  return (
+    segments.length === 2 + packageSegments.length &&
+    Boolean(segments[0]) &&
+    segments[1] === "node_modules" &&
+    packageSegments.every((segment, index) => segments[index + 2] === segment)
+  );
+}
+
 function write(file, contents) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
@@ -63,6 +88,71 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function readSessionRowsFromAgentSqlite(stateDir, agentId = "main") {
+  const dbPath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+  assert(fs.existsSync(dbPath), `agent SQLite session database missing: ${dbPath}`);
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const rows = db
+      .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ? ORDER BY key ASC")
+      .all("session_entries");
+    return Object.fromEntries(
+      rows.map((row) => {
+        assert(typeof row.key === "string", "session SQLite row key was not a string");
+        assert(
+          typeof row.value_json === "string",
+          `session SQLite row ${String(row.key)} had no JSON payload`,
+        );
+        return [row.key, JSON.parse(row.value_json)];
+      }),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function seedLegacySessionMetadata(stateDir) {
+  const legacySessionsDir = path.join(stateDir, "sessions");
+  writeJson(path.join(legacySessionsDir, "sessions.json"), {
+    main: {
+      sessionId: LEGACY_SESSION_MAIN_ID,
+      sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
+      provider: "openai",
+      model: "gpt-5.5",
+      updatedAt: 1710000000000,
+      skillsSnapshot: {
+        prompt: "legacy prompt survives as metadata",
+        resolvedSkills: [
+          {
+            name: "legacy-heavy-skill-cache",
+            filePath: "/tmp/openclaw-old-package/skills/legacy-heavy-skill-cache/SKILL.md",
+          },
+        ],
+      },
+    },
+    "+15551234567": {
+      sessionId: LEGACY_SESSION_DIRECT_ID,
+      sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
+      provider: "openai",
+      model: "gpt-5.5",
+      updatedAt: 1710000000100,
+    },
+    "slack:channel:CUPGRADE": {
+      sessionId: LEGACY_SESSION_GROUP_ID,
+      sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
+      provider: "openai",
+      model: "gpt-5.5",
+      updatedAt: 1710000000200,
+      lastChannel: "slack",
+      lastTo: "CUPGRADE",
+    },
+  });
+  write(path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`), '{"type":"main"}\n');
+  write(path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`), '{"type":"direct"}\n');
+  write(path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`), '{"type":"group"}\n');
 }
 
 function getScenario() {
@@ -95,7 +185,7 @@ function acceptsIntent(coverage, id) {
 }
 
 function hasCoverage(coverage) {
-  return !!coverage;
+  return Boolean(coverage);
 }
 
 function seedState() {
@@ -121,6 +211,7 @@ function seedState() {
     agentId: "main",
     title: "Existing user session",
   });
+  seedLegacySessionMetadata(stateDir);
 
   const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
   for (const plugin of ["discord", "telegram", "whatsapp"]) {
@@ -295,6 +386,15 @@ function assertConfigSurvived() {
     }
   }
 
+  if (getScenario() === "channel-post-core-restore") {
+    const whatsapp = config.channels?.whatsapp;
+    assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
+    assert(
+      whatsapp.groups?.["120363000000000000@g.us"]?.requireMention === true,
+      "post-core channel restore changed WhatsApp group config",
+    );
+  }
+
   if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
     const matrix = config.channels?.matrix;
     assert(matrix?.enabled === true, "matrix enabled flag changed");
@@ -330,12 +430,15 @@ function assertStateSurvived() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
+  const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
   assert(
     fs.existsSync(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json")),
     "legacy session file missing",
   );
-  const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+  if (stage !== "baseline") {
+    assertSessionMetadataMigratedToSqlite(stateDir);
+  }
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
   if (stage === "baseline") {
     if (fs.existsSync(legacyRuntimeRoot)) {
@@ -379,19 +482,77 @@ function assertStateSurvived() {
   }
 }
 
+function assertSessionMetadataMigratedToSqlite(stateDir) {
+  const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+  const agentSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+  assert(
+    !fs.existsSync(legacyStorePath),
+    `legacy sessions.json survived migration: ${legacyStorePath}`,
+  );
+  for (const sessionId of [
+    LEGACY_SESSION_MAIN_ID,
+    LEGACY_SESSION_DIRECT_ID,
+    LEGACY_SESSION_GROUP_ID,
+  ]) {
+    assert(
+      fs.existsSync(path.join(agentSessionsDir, `${sessionId}.jsonl`)),
+      `legacy session transcript was not moved for ${sessionId}`,
+    );
+  }
+
+  const store = readSessionRowsFromAgentSqlite(stateDir);
+  const main = store["agent:main:main"];
+  const direct = store["agent:main:+15551234567"];
+  const group = store["agent:main:slack:channel:cupgrade"];
+  assert(main?.sessionId === LEGACY_SESSION_MAIN_ID, "main legacy session row missing from SQLite");
+  assert(
+    direct?.sessionId === LEGACY_SESSION_DIRECT_ID,
+    "direct legacy session row missing from SQLite",
+  );
+  assert(
+    group?.sessionId === LEGACY_SESSION_GROUP_ID,
+    "channel legacy session row missing from SQLite",
+  );
+  assert(
+    main?.sessionFile === path.join(agentSessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
+    "main legacy session row still points at the old sessions directory",
+  );
+  assert(
+    direct?.sessionFile === path.join(agentSessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
+    "direct legacy session row still points at the old sessions directory",
+  );
+  assert(
+    group?.sessionFile === path.join(agentSessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
+    "channel legacy session row still points at the old sessions directory",
+  );
+  assert(
+    main.skillsSnapshot?.prompt === "legacy prompt survives as metadata",
+    "legacy session metadata prompt was not preserved",
+  );
+  assert(
+    main.skillsSnapshot?.resolvedSkills === undefined,
+    "heavy resolvedSkills cache was persisted into SQLite session metadata",
+  );
+}
+
 function readInstalledPluginIndex() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  const file = path.join(stateDir, "plugins", "installs.json");
-  assert(fs.existsSync(file), `installed plugin index missing: ${file}`);
-  return readJson(file);
+  const index = readPluginInstallIndex({ stateDir });
+  assert(index.installRecords, "installed plugin index missing");
+  return index;
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {
   const record = records[pluginId];
   assert(record, `configured external ${pluginId} plugin install record missing`);
+  const installedFromNpm = record.source === "npm";
+  const installedFromOfficialClawHubNpmPack =
+    record.source === "clawhub" &&
+    record.clawhubChannel === "official" &&
+    record.artifactKind === "npm-pack";
   assert(
-    record.source === "npm",
-    `configured external ${pluginId} plugin must be installed from npm, got: ${record.source}`,
+    installedFromNpm || installedFromOfficialClawHubNpmPack,
+    `configured external ${pluginId} plugin must be installed from npm or official ClawHub npm-pack, got: ${record.source}`,
   );
   const installPath = resolveHomePath(record.installPath);
   assert(
@@ -411,14 +572,26 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     packageJson.name === packageName,
     `configured external ${pluginId} package name changed: ${packageJson.name}`,
   );
-  const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+  if (installedFromNpm) {
+    const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+    assert(
+      isPathInsideManagedNpmProjectPackageRoot({ stateDir, installPath, packageName }),
+      `configured external ${pluginId} npm install path outside managed npm project root: ${installPath}`,
+    );
+    assert(
+      String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
+      `configured external ${pluginId} plugin npm spec changed`,
+    );
+    return;
+  }
   assert(
-    isPathInside(npmRoot, installPath),
-    `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+    record.clawhubPackage === packageName,
+    `configured external ${pluginId} ClawHub package changed: ${record.clawhubPackage}`,
   );
+  const extensionsRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "extensions");
   assert(
-    String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
-    `configured external ${pluginId} plugin npm spec changed`,
+    isPathInside(extensionsRoot, installPath),
+    `configured external ${pluginId} ClawHub install path outside managed extensions root: ${installPath}`,
   );
 }
 

@@ -1,7 +1,9 @@
+// Redaction tests cover secret, token, and identifier scrubbing rules.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   getDefaultRedactPatterns,
   redactSecrets,
@@ -12,23 +14,17 @@ import {
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
-const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let tempDirs: string[] = [];
 
-function writeConfig(source: string): void {
+function writeConfig(source: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
   tempDirs.push(dir);
   const configPath = path.join(dir, "openclaw.json");
   fs.writeFileSync(configPath, source);
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  return configPath;
 }
 
 afterEach(() => {
-  if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-  }
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -43,6 +39,64 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
+  });
+
+  it("preserves shell env references in assignments", () => {
+    const input = [
+      'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"',
+      "OPENAI_API_KEY=$OPENAI_API_KEY",
+      "API_KEY=$API_KEY",
+      "TOKEN=${TOKEN}",
+      "PASSWORD=${PASSWORD:-}",
+      "GITHUB_TOKEN=${GITHUB_TOKEN}",
+    ].join("\n");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+  });
+
+  it("masks shell env references that do not match the assignment key", () => {
+    const output = redactSensitiveText("DISCORD_BOT_TOKEN=$SUPERSECRET123", {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("DISCORD_BOT_TOKEN=***");
+  });
+
+  it("masks literal shell env expansion defaults in assignments", () => {
+    const fallback = "discordliteral1234567890";
+    const input = `DISCORD_BOT_TOKEN="\${DISCORD_BOT_TOKEN:-${fallback}}"`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).not.toContain(fallback);
+    expect(output).toBe('DISCORD_BOT_TOKEN="${DISC…890}"');
+  });
+
+  it("does not bypass explicit user redaction patterns for shell references", () => {
+    const output = redactSensitiveText("FOO_TOKEN=$FOO_TOKEN", {
+      mode: "tools",
+      patterns: [String.raw`/FOO_TOKEN=(\$FOO_TOKEN)/g`],
+    });
+    expect(output).toBe("FOO_TOKEN=***");
+  });
+
+  it("masks JSON-escaped quoted env assignments while keeping the key", () => {
+    const xai = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const brave = "issue85049-brave-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const input = String.raw`raw_params={"command":"export XAI_API_KEY=\"${xai}\" && export BRAVE_API_KEY=\\\"${brave}\\\" && echo blocked"}`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain("XAI_API_KEY=");
+    expect(output).toContain("BRAVE_API_KEY=");
+    expect(output).not.toContain(xai);
+    expect(output).not.toContain(brave);
+    expect(output).toContain("issue8…7890");
   });
 
   it("masks CLI flags", () => {
@@ -196,6 +250,18 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveFieldValue("openai_api_key", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
       "abcdef…7890",
     );
+    expect(redactSensitiveFieldValue("DISCORD_BOT_TOKEN", "${DISCORD_BOT_TOKEN:-}")).toBe(
+      "${DISCORD_BOT_TOKEN:-}",
+    );
+    expect(redactSensitiveFieldValue("apiKey", "${OPENAI_API_KEY:-}")).toBe("${OPEN…Y:-}");
+    expect(redactSensitiveFieldValue("password", "$SUPERSECRET123")).toBe("***");
+    expect(redactSensitiveFieldValue("apiKey", "${SECRET_TOKEN}")).toBe("***");
+    expect(
+      redactSensitiveFieldValue(
+        "DISCORD_BOT_TOKEN",
+        "${DISCORD_BOT_TOKEN:-discordliteral1234567890}",
+      ),
+    ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
   });
 
@@ -206,6 +272,39 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
+  });
+
+  it("masks Basic authorization header tokens", () => {
+    const secret = "c2VjcmV0OnBhc3M=";
+    const output = redactSensitiveText(`Authorization: Basic ${secret}`, {
+      mode: "tools",
+      patterns: defaults,
+    });
+
+    expect(output).toBe("Authorization: Basic ***");
+    expect(output).not.toContain(secret);
+  });
+
+  it("masks named Gateway security headers", () => {
+    const openClawToken = "supersecretgatewaytoken1234567890";
+    const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";
+    const apiKey = "shortsecret";
+    const input = [
+      `X-OpenClaw-Token: ${openClawToken}`,
+      `x-pomerium-jwt-assertion: ${pomeriumJwt}`,
+      `X-Api-Key=${apiKey}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+
+    expect(output).toContain("X-OpenClaw-Token: supers…7890");
+    expect(output).toContain("x-pomerium-jwt-assertion: eyJhea…3456");
+    expect(output).toContain("X-Api-Key=***");
+    expect(output).not.toContain(openClawToken);
+    expect(output).not.toContain(pomeriumJwt);
+    expect(output).not.toContain(apiKey);
   });
 
   it("masks token prefixes embedded after adjacent text", () => {
@@ -423,14 +522,16 @@ describe("redactSensitiveText", () => {
   });
 
   it("honors logging redaction settings from the active config path", () => {
-    writeConfig(`{
+    const configPath = writeConfig(`{
       logging: {
         redactSensitive: "off",
       },
     }`);
 
-    expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-      "OPENAI_API_KEY=sk-1234567890abcdef",
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+      expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
+        "OPENAI_API_KEY=sk-1234567890abcdef",
+      ),
     );
   });
 
@@ -460,6 +561,42 @@ describe("redactSensitiveText", () => {
 
     expect(resolved.patterns).toHaveLength(1);
     expect(resolved.patterns[0]).toBe(pattern);
+  });
+
+  it("keeps custom redaction patterns active for text outside default markers", () => {
+    const output = redactSensitiveText("ticket internal-12345 should hide", {
+      mode: "tools",
+      patterns: [/internal-\d+/g],
+    });
+
+    expect(output).toBe("ticket *** should hide");
+  });
+
+  it("keeps configured redaction patterns active for text outside default markers", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        redactPatterns: ["/internal-\\\\d+/g"],
+      },
+    }`);
+
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+      expect(redactSensitiveText("ticket internal-12345 should hide")).toBe(
+        "ticket *** should hide",
+      ),
+    );
+  });
+
+  it("redacts built-in query parameters after the default prefilter", () => {
+    expect(redactSensitiveText("https://example.test/callback?pass=opensesamevalue")).toBe(
+      "https://example.test/callback?pass=***",
+    );
+    expect(redactSensitiveText("https://example.test/callback?security_code=123456")).toBe(
+      "https://example.test/callback?security_code=***",
+    );
+  });
+
+  it("redacts standalone bearer tokens after the default prefilter", () => {
+    expect(redactSensitiveText("Bearer abcdef1234567890ghij")).toBe("Bearer abcdef…ghij");
   });
 });
 

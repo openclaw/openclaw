@@ -47,10 +47,14 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 `--modern` starts the Crestodian conversational onboarding preview. Without
 `--modern`, `openclaw onboard` keeps the classic onboarding flow.
 
-For plaintext private-network `ws://` targets (trusted networks only), set
+On a fresh install where the active config file is missing or has no authored
+settings (empty or metadata-only), bare `openclaw` also starts the classic
+onboarding flow. Once a config file has authored settings, bare `openclaw`
+opens Crestodian instead.
+
+Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
+Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
-There is no `openclaw.json` equivalent for this client-side transport
-break-glass.
 
 ## Locale
 
@@ -89,6 +93,7 @@ openclaw onboard --non-interactive \
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
 OpenClaw marks common vision model IDs as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
+Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`.
 
 LM Studio also supports a provider-specific key flag in non-interactive mode:
 
@@ -218,7 +223,7 @@ openclaw onboard --non-interactive \
   <Accordion title="Web-search follow-ups">
     Some web-search providers trigger provider-specific follow-up prompts:
 
-    - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY` and an `x_search` model choice.
+    - **Grok** can offer optional `x_search` setup with the same xAI OAuth profile or API key and an `x_search` model choice.
     - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs `api.moonshot.cn`) and the default Kimi web-search model.
 
   </Accordion>

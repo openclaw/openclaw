@@ -1,8 +1,9 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+// Xai plugin module implements x search shared behavior.
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiResponsesToolBody,
-  resolveXaiResponseTextCitationsAndInline,
+  requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import {
@@ -10,7 +11,7 @@ import {
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
-import { type XaiWebSearchResponse } from "./web-search-shared.js";
+import type { XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 
@@ -132,11 +133,15 @@ export async function requestXaiXSearch(params: {
       errorLabel: "xAI",
     },
     async (response) => {
-      const data = await readProviderJsonResponse<XaiWebSearchResponse>(
+      const data = (await readProviderJsonObjectResponse(
         response,
         "xAI X search failed",
+      )) as XaiWebSearchResponse;
+      return requireXaiResponseTextCitationsAndInline(
+        data,
+        "xAI X search failed",
+        params.inlineCitations,
       );
-      return resolveXaiResponseTextCitationsAndInline(data, params.inlineCitations);
     },
   );
 }

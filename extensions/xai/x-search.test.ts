@@ -1,3 +1,4 @@
+// Xai tests cover x search plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXSearchTool } from "./x-search.js";
@@ -320,6 +321,40 @@ describe("xai x_search tool", () => {
     await expect(
       tool?.execute?.("x-search:malformed-json", {
         query: "malformed x_search response probe",
+      }),
+    ).rejects.toThrow("xAI X search failed: malformed JSON response");
+  });
+
+  it("rejects x_search success JSON without answer text", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ output: [] }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("x-search:missing-text", {
+        query: "malformed x_search missing text probe",
       }),
     ).rejects.toThrow("xAI X search failed: malformed JSON response");
   });

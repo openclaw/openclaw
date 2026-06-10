@@ -1,3 +1,5 @@
+// Covers conversion from OpenClaw bundle-MCP config into Codex app-server
+// thread config patches.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMcpServersConfig, loadCodexBundleMcpThreadConfig } from "./codex-mcp-config.js";
 
@@ -25,6 +27,8 @@ beforeEach(() => {
 
 describe("buildCodexMcpServersConfig", () => {
   it("normalizes OpenClaw MCP servers into Codex app-server mcp_servers shape", () => {
+    // Authorization is represented as Codex's bearer env var, while other env
+    // placeholders become env_http_headers for per-thread substitution.
     expect(
       buildCodexMcpServersConfig({
         mcpServers: {
@@ -50,6 +54,26 @@ describe("buildCodexMcpServersConfig", () => {
         env_http_headers: {
           "x-session-key": "OPENCLAW_MCP_SESSION_KEY",
         },
+      },
+    });
+  });
+
+  it("preserves Codex-specific MCP approval mode metadata", () => {
+    expect(
+      buildCodexMcpServersConfig({
+        mcpServers: {
+          search: {
+            url: "https://mcp.example.com/mcp",
+            codex: {
+              defaultToolsApprovalMode: "prompt",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      search: {
+        url: "https://mcp.example.com/mcp",
+        default_tools_approval_mode: "prompt",
       },
     });
   });
@@ -91,6 +115,8 @@ describe("loadCodexBundleMcpThreadConfig", () => {
   });
 
   it("leaves user mcp.servers to the Codex user MCP projection path", () => {
+    // User MCP config is projected elsewhere; this loader only injects bundled
+    // MCP servers so the same server does not appear twice in Codex.
     const loaded = loadCodexBundleMcpThreadConfig({
       workspaceDir: "/workspace",
       cfg: {
@@ -111,7 +137,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.evaluated).toBe(true);
   });
 
-  it("returns an evaluated empty MCP config when Pi would not create a bundle MCP runtime", () => {
+  it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", () => {
     const cfg = {
       mcp: {
         servers: {

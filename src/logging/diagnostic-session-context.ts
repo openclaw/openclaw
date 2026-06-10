@@ -1,6 +1,8 @@
+// Diagnostic session context helpers capture session metadata for support bundles.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 
 const SESSION_TAIL_BYTES = 64 * 1024;
 const MAX_QUOTED_FIELD_CHARS = 140;
@@ -137,9 +139,8 @@ function readCronJobName(cronJobId: string | undefined): string | undefined {
     return undefined;
   }
   try {
-    const raw = fs.readFileSync(path.join(resolveStateDir(), "cron", "jobs.json"), "utf8");
-    const parsed = JSON.parse(raw) as { jobs?: Array<{ id?: unknown; name?: unknown }> };
-    const job = parsed.jobs?.find((entry) => entry.id === cronJobId);
+    const store = loadCronJobsStoreSync(resolveCronJobsStorePath());
+    const job = store.jobs.find((entry) => entry.id === cronJobId);
     return typeof job?.name === "string" && job.name.trim() ? job.name.trim() : undefined;
   } catch {
     return undefined;
@@ -196,6 +197,7 @@ export function formatStoppedCronSessionDiagnosticFields(context: CronSessionCon
   return fields.join(" ");
 }
 
-export const __testing = {
+export const testing = {
   quoteLogField,
 };
+export { testing as __testing };

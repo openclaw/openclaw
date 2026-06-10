@@ -1,3 +1,4 @@
+// Covers dangerous config flag detection and reporting.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
@@ -114,6 +115,20 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
       'agents.list[id="worker"].sandbox.docker.dangerouslyAllowExternalBindSources=true',
     ]);
+  });
+
+  it("collects configured security audit suppressions as a dangerous flag", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          security: {
+            audit: {
+              suppressions: [{ checkId: "plugins.code_safety" }],
+            },
+          },
+        }),
+      ),
+    ).toContain("security.audit.suppressions configured (1)");
   });
 
   it("uses stable agent ids for per-agent dangerous sandbox flags", () => {

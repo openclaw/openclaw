@@ -1,3 +1,4 @@
+// Interactive payload tests cover validation of interactive response payloads.
 import { describe, expect, it } from "vitest";
 import {
   hasReplyChannelData,
@@ -165,6 +166,63 @@ describe("interactive payload helpers", () => {
     );
   });
 
+  it("normalizes typed presentation actions and bridges them to legacy values", () => {
+    const normalized = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(presentationToInteractiveReply(normalized!)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Plugins",
+              action: { type: "command", command: "/codex plugins menu" },
+              value: "/codex plugins menu",
+            },
+            {
+              label: "Approve",
+              action: { type: "callback", value: "/approve req allow-once" },
+              value: "/approve req allow-once",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("converts only presentation controls for native component renderers", () => {
     const presentation = {
       title: "Deploy approval",
@@ -173,7 +231,14 @@ describe("interactive payload helpers", () => {
         { type: "divider" as const },
         {
           type: "buttons" as const,
-          buttons: [{ label: "Approve", value: "approve", style: "success" as const }],
+          buttons: [
+            {
+              label: "Approve",
+              value: "approve",
+              style: "success" as const,
+              reusable: true,
+            },
+          ],
         },
         {
           type: "select" as const,
@@ -189,7 +254,7 @@ describe("interactive payload helpers", () => {
         { type: "text", text: "Canary is ready." },
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
         },
         {
           type: "select",
@@ -202,7 +267,7 @@ describe("interactive payload helpers", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
         },
         {
           type: "select",

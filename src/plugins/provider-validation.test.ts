@@ -1,3 +1,4 @@
+/** Covers provider registration validation for ids, duplicates, and required hooks. */
 import { describe, expect, it } from "vitest";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginDiagnostic, ProviderPlugin } from "./types.js";
@@ -101,6 +102,7 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: " demo-primary ",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
@@ -121,6 +123,7 @@ describe("normalizeRegisteredProvider", () => {
         wizard: {
           setup: {
             choiceId: " demo-choice ",
+            onboardingFeatured: true,
             methodId: " missing ",
           },
           modelPicker: {
@@ -142,6 +145,7 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: "demo-primary",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
@@ -155,6 +159,7 @@ describe("normalizeRegisteredProvider", () => {
         wizard: {
           setup: {
             choiceId: "demo-choice",
+            onboardingFeatured: true,
           },
           modelPicker: {
             label: "Demo models",

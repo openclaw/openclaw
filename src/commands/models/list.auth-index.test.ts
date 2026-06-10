@@ -1,3 +1,4 @@
+// Model auth index tests cover auth index loading while listing models.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +27,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
 
 const envCandidateMocks = vi.hoisted(() => ({
   resolveProviderEnvApiKeyCandidates: vi.fn(),
+  resolveProviderEnvAuthLookupMaps: vi.fn(),
 }));
 
 vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
@@ -33,9 +35,13 @@ vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
   envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockImplementation(
     actual.resolveProviderEnvApiKeyCandidates,
   );
+  envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockImplementation(
+    actual.resolveProviderEnvAuthLookupMaps,
+  );
   return {
     ...actual,
     resolveProviderEnvApiKeyCandidates: envCandidateMocks.resolveProviderEnvApiKeyCandidates,
+    resolveProviderEnvAuthLookupMaps: envCandidateMocks.resolveProviderEnvAuthLookupMaps,
   };
 });
 
@@ -97,6 +103,7 @@ async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
 describe("createModelListAuthIndex", () => {
   beforeEach(() => {
     envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockClear();
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockClear();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockClear();
   });
 
@@ -134,7 +141,11 @@ describe("createModelListAuthIndex", () => {
   });
 
   it("checks resolver-only env auth on demand", () => {
-    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockReturnValueOnce({});
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockReturnValueOnce({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+    });
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: emptyStore,
@@ -144,6 +155,30 @@ describe("createModelListAuthIndex", () => {
     });
 
     expect(index.hasProviderAuth("google-vertex")).toBe(true);
+  });
+
+  it("does not rediscover resolver-only env auth when a command metadata snapshot is supplied", () => {
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockReturnValueOnce({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+    });
+    const metadataSnapshot = {
+      index: { plugins: [] },
+      plugins: [],
+    };
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {
+        GOOGLE_CLOUD_API_KEY: "gcp-test",
+      },
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
+        typeof createModelListAuthIndex
+      >[0]["metadataSnapshot"],
+    });
+
+    expect(index.hasProviderAuth("google-vertex")).toBe(false);
   });
 
   it("uses trusted workspace plugin auth evidence when workspace scope is supplied", async () => {
@@ -208,18 +243,23 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("custom-openai")).toBe(true);
   });
 
-  it("treats OpenAI Codex auth as usable for canonical OpenAI agent routes", () => {
+  it("treats OpenAI OAuth auth as usable for canonical OpenAI agent routes", () => {
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
+          },
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
           },
         },
       },
@@ -229,7 +269,26 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("openai")).toBe(true);
   });
 
-  it("does not treat OpenAI Codex auth as usable for custom OpenAI-compatible routes", () => {
+  it("treats OpenAI token auth as usable for canonical OpenAI agent routes", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("openai")).toBe(true);
+  });
+
+  it("does not treat OpenAI OAuth auth as usable for custom OpenAI-compatible routes", () => {
     const index = createModelListAuthIndex({
       cfg: {
         models: {
@@ -245,9 +304,9 @@ describe("createModelListAuthIndex", () => {
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -289,6 +348,66 @@ describe("createModelListAuthIndex", () => {
     });
 
     expect(index.hasProviderAuth("codex")).toBe(true);
+  });
+
+  it("uses an injected metadata snapshot index for synthetic auth refs", () => {
+    const metadataSnapshot = {
+      index: {
+        plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
+      },
+      plugins: [],
+    };
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockImplementationOnce(
+      ({ index }: { index?: typeof metadataSnapshot.index } = {}) => ({
+        source: "provided",
+        snapshot: index ?? { plugins: [] },
+        diagnostics: [],
+      }),
+    );
+
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
+        typeof createModelListAuthIndex
+      >[0]["metadataSnapshot"],
+    });
+
+    expect(index.hasProviderAuth("codex")).toBe(true);
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ index: metadataSnapshot.index }),
+    );
+  });
+
+  it("ignores synthetic auth refs from injected derived metadata snapshots", () => {
+    const metadataSnapshot = {
+      index: {
+        plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
+      },
+      plugins: [],
+      registryDiagnostics: [
+        {
+          level: "info",
+          code: "persisted-registry-missing",
+          message: "missing",
+        },
+      ],
+    };
+
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
+        typeof createModelListAuthIndex
+      >[0]["metadataSnapshot"],
+    });
+
+    expect(index.hasProviderAuth("codex")).toBe(false);
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalledWith(
+      expect.objectContaining({ index: metadataSnapshot.index }),
+    );
   });
 
   it("keeps synthetic auth refs exact instead of applying auth-choice aliases", () => {

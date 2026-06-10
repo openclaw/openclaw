@@ -1,3 +1,4 @@
+// Telegram tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
@@ -70,6 +71,15 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("normalizes raw code language HTML without leaking tags", () => {
+    const commandBlock = '<code class="language-text">/queue followup debounce:0\n</code>';
+
+    expect(markdownToTelegramHtml(commandBlock)).toBe("<code>/queue followup debounce:0\n</code>");
+    expect(
+      markdownToTelegramHtml('<pre><code class="language-python">print(1)\n</code></pre>'),
+    ).toBe('<pre><code class="language-python">print(1)\n</code></pre>');
+  });
+
   it("renders blockquotes as native Telegram blockquote tags", () => {
     const res = markdownToTelegramHtml("> Quote");
     expect(res).toContain("<blockquote>");
@@ -96,9 +106,9 @@ describe("markdownToTelegramHtml", () => {
     expect(res.match(/<blockquote>/g)).toHaveLength(2);
   });
 
-  it("renders fenced code blocks", () => {
-    const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
-    expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
+  it("renders fenced code block languages for Telegram native copy buttons", () => {
+    const res = markdownToTelegramHtml('```bash\necho "hello"\n```');
+    expect(res).toBe('<pre><code class="language-bash">echo "hello"\n</code></pre>');
   });
 
   it("properly nests overlapping bold and autolink (#4071)", () => {

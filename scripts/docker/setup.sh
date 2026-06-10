@@ -14,6 +14,7 @@ DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
 RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
 SKIP_ONBOARDING=""
+DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -31,6 +32,19 @@ run_docker_build() {
   # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
   # BuildKit so hosts defaulting to the legacy builder do not fail.
   docker_build_exec "$@"
+}
+
+run_docker_pull() {
+  local image="$1"
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+      timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+    else
+      timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+    fi
+    return
+  fi
+  docker pull "$image"
 }
 
 is_truthy_value() {
@@ -204,9 +218,6 @@ validate_mount_path_value() {
   if contains_disallowed_chars "$value"; then
     fail "$label contains unsupported control characters."
   fi
-  if [[ "$value" =~ [[:space:]] ]]; then
-    fail "$label cannot contain whitespace."
-  fi
 }
 
 validate_named_volume() {
@@ -223,9 +234,16 @@ validate_mount_spec() {
   fi
   # Keep mount specs strict to avoid YAML structure injection.
   # Expected format: source:target[:options]
-  if [[ ! "$mount" =~ ^[^[:space:],:]+:[^[:space:],:]+(:[^[:space:],:]+)?$ ]]; then
-    fail "Invalid mount format '$mount'. Expected source:target[:options] without spaces."
+  if [[ ! "$mount" =~ ^[^,:]+:[^,:]+(:[^,:]+)?$ ]]; then
+    fail "Invalid mount format '$mount'. Expected source:target[:options] without commas or control characters."
   fi
+}
+
+quote_yaml_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
 }
 
 require_cmd docker
@@ -296,7 +314,8 @@ export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_DISABLE_BONJOUR="${OPENCLAW_DISABLE_BONJOUR:-}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
-export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+export OPENCLAW_IMAGE_APT_PACKAGES="${OPENCLAW_IMAGE_APT_PACKAGES-${OPENCLAW_DOCKER_APT_PACKAGES:-}}"
+export OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
 export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
@@ -373,15 +392,15 @@ YAML
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
     validate_mount_spec "$gateway_auth_profile_secret_mount"
-    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
   done
 
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
@@ -390,15 +409,15 @@ YAML
 YAML
 
   if [[ -n "$home_volume" ]]; then
-    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
@@ -500,7 +519,8 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_IMAGE_APT_PACKAGES \
+  OPENCLAW_IMAGE_PIP_PACKAGES \
   OPENCLAW_EXTENSIONS \
   OPENCLAW_INSTALL_BROWSER \
   OPENCLAW_SANDBOX \
@@ -522,7 +542,8 @@ upsert_env "$ENV_FILE" \
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   run_docker_build \
-    --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
@@ -531,7 +552,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
     "$ROOT_DIR"
 else
   echo "==> Pulling Docker image: $IMAGE_NAME"
-  if ! docker pull "$IMAGE_NAME"; then
+  if ! run_docker_pull "$IMAGE_NAME"; then
     echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
     exit 1
   fi
@@ -551,6 +572,7 @@ echo "==> Fixing data-directory permissions"
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
   'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   chown node:node /home/node/.config; \
    find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
@@ -569,11 +591,17 @@ else
   else
     echo "Bonjour/mDNS advertising: explicitly enabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
   fi
-  echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+  echo "Gateway token: stored in Docker environment/config (not printed)."
   echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
   echo "Install Gateway daemon: No (managed by Docker Compose)"
   echo ""
-  run_prestart_cli onboard --mode local --no-install-daemon
+  run_prestart_cli onboard \
+    --mode local \
+    --no-install-daemon \
+    --gateway-auth token \
+    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+    --skip-ui \
+    --suppress-gateway-token-output
 fi
 
 echo ""
@@ -634,7 +662,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
 services:
   openclaw-gateway:
     volumes:
-      - ${DOCKER_SOCKET_PATH}:/var/run/docker.sock
+      - $(quote_yaml_string "${DOCKER_SOCKET_PATH}:/var/run/docker.sock")
 YAML
     if [[ -n "${DOCKER_GID:-}" ]]; then
       cat >>"$SANDBOX_COMPOSE_FILE" <<YAML
@@ -708,8 +736,8 @@ echo "Gateway running with host port mapping."
 echo "Access from tailnet devices via the host's tailnet IP."
 echo "Config: $OPENCLAW_CONFIG_DIR"
 echo "Workspace: $OPENCLAW_WORKSPACE_DIR"
-echo "Token: $OPENCLAW_GATEWAY_TOKEN"
+echo "Token: stored in Docker environment/config (not printed)."
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
-echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token \"$OPENCLAW_GATEWAY_TOKEN\""
+echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Publishes evidence manifest artifacts and optional PR comments for Mantis proof.
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -86,6 +87,9 @@ function resolveArtifact(manifestDir, artifact) {
   };
 }
 
+/**
+ * Loads and validates an evidence manifest from disk.
+ */
 export function loadEvidenceManifest(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);
@@ -308,6 +312,37 @@ function laneLine(label, lane) {
   return pieces.join("");
 }
 
+function hasVisibleProofArtifacts(manifest) {
+  return manifest.artifacts.some((artifact) =>
+    ["desktopScreenshot", "fullVideo", "motionClip", "motionPreview", "timeline"].includes(
+      artifact.kind,
+    ),
+  );
+}
+
+function isTelegramDesktopProof(manifest) {
+  return manifest.id === "telegram-desktop-proof" || manifest.scenario === "telegram-desktop-proof";
+}
+
+function publicSummary(manifest) {
+  return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
+}
+
+function overallStatus(manifest) {
+  const pass = manifest.comparison?.pass;
+  return typeof pass === "boolean" ? String(pass) : "";
+}
+
+export function shouldPublishPrComment(manifest, { requestSource } = {}) {
+  if (!isTelegramDesktopProof(manifest) || hasVisibleProofArtifacts(manifest)) {
+    return true;
+  }
+  if (requestSource === "pull_request_target") {
+    return false;
+  }
+  return manifest.comparison?.pass === true;
+}
+
 export function renderEvidenceComment({
   artifactUrl: actionsArtifactUrl,
   manifest,
@@ -333,7 +368,7 @@ export function renderEvidenceComment({
     marker,
     `## ${manifest.title}`,
     "",
-    `Summary: ${manifest.summary ?? "Mantis captured QA evidence for this scenario."}`,
+    `Summary: ${publicSummary(manifest)}`,
     "",
     `- Scenario: \`${manifest.scenario}\``,
   ];
@@ -354,8 +389,9 @@ export function renderEvidenceComment({
   if (candidateLine) {
     lines.push(candidateLine);
   }
-  if (typeof comparison.pass === "boolean") {
-    lines.push(`- Overall: \`${comparison.pass}\``);
+  const overall = overallStatus(manifest);
+  if (overall) {
+    lines.push(`- Overall: \`${overall}\``);
   }
   lines.push("");
 
@@ -551,6 +587,10 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
     runUrl: args.run_url,
     treeUrl: published.treeUrl,
   });
+  if (!shouldPublishPrComment(manifest, { requestSource: args.request_source })) {
+    console.log("Skipped Mantis QA evidence PR comment because the run did not capture proof.");
+    return;
+  }
   upsertPrComment({
     body,
     marker: args.marker,

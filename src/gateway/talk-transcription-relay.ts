@@ -1,4 +1,10 @@
+// Gateway Talk transcription relay.
+// Bridges browser audio to realtime STT providers and emits Talk events.
 import { randomUUID } from "node:crypto";
+import {
+  parseFiniteNumber as readFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
@@ -9,12 +15,25 @@ import {
   createTalkSessionController,
 } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import {
+  closeExpiredTalkRelaySessions,
+  requireActiveTalkRelaySession,
+} from "./talk-relay-session-lifecycle.js";
 
+/**
+ * Gateway-owned relay for streaming speech-to-text providers used by Talk.
+ *
+ * The relay accepts browser audio on one WebSocket connection, forwards it to a
+ * realtime transcription provider, and mirrors provider callbacks into Talk
+ * events for the same connection.
+ */
 const TRANSCRIPTION_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_TRANSCRIPTION_SESSIONS_PER_CONN = 2;
 const MAX_TRANSCRIPTION_SESSIONS_GLOBAL = 64;
 const TRANSCRIPTION_EVENT = "talk.event";
+const RELAY_INPUT_ENCODING = "g711_ulaw";
+const RELAY_INPUT_SAMPLE_RATE_HZ = 8000;
 
 type TalkTranscriptionRelayEventPayload =
   | { transcriptionSessionId: string; type: "ready" }
@@ -54,13 +73,83 @@ type TalkTranscriptionRelaySessionResult = {
   transport: "gateway-relay";
   transcriptionSessionId: string;
   audio: {
-    inputEncoding: "pcm16";
-    inputSampleRateHz: 24000;
+    inputEncoding: "g711_ulaw";
+    inputSampleRateHz: 8000;
   };
   expiresAt: number;
 };
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
+
+/** Normalizes common provider audio-format aliases into the relay contract. */
+function normalizeRelayInputEncoding(
+  value: unknown,
+): "g711_ulaw" | "g711_alaw" | "pcm16" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "mulaw" ||
+    normalized === "ulaw" ||
+    normalized === "g711_ulaw" ||
+    normalized === "g711-mulaw" ||
+    normalized === "pcm_mulaw" ||
+    normalized === "audio/pcmu" ||
+    normalized === "ulaw_8000"
+  ) {
+    return "g711_ulaw";
+  }
+  if (
+    normalized === "alaw" ||
+    normalized === "g711_alaw" ||
+    normalized === "g711-alaw" ||
+    normalized === "pcm_alaw"
+  ) {
+    return "g711_alaw";
+  }
+  if (
+    normalized === "pcm" ||
+    normalized === "pcm16" ||
+    normalized === "linear16" ||
+    normalized === "pcm_s16le"
+  ) {
+    return "pcm16";
+  }
+  return undefined;
+}
+
+function inferSampleRateFromAudioFormat(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = value.match(/_(\d+)$/);
+  return match ? readFiniteNumber(match[1]) : undefined;
+}
+
+/** Verifies provider config matches the audio format the browser relay emits. */
+function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProviderConfig): void {
+  const encodingValue =
+    providerConfig.encoding ?? providerConfig.audioFormat ?? providerConfig.audio_format;
+  const encoding = normalizeRelayInputEncoding(encodingValue);
+  if (encoding && encoding !== RELAY_INPUT_ENCODING) {
+    throw new Error(
+      `Gateway transcription relay requires ${RELAY_INPUT_ENCODING}/${RELAY_INPUT_SAMPLE_RATE_HZ} audio`,
+    );
+  }
+
+  const sampleRate =
+    readFiniteNumber(providerConfig.sampleRate ?? providerConfig.sample_rate) ??
+    inferSampleRateFromAudioFormat(encodingValue);
+  if (sampleRate && sampleRate !== RELAY_INPUT_SAMPLE_RATE_HZ) {
+    throw new Error(
+      `Gateway transcription relay requires ${RELAY_INPUT_ENCODING}/${RELAY_INPUT_SAMPLE_RATE_HZ} audio`,
+    );
+  }
+}
 
 function broadcastToOwner(
   context: GatewayRequestContext,
@@ -106,11 +195,11 @@ function closeTranscriptionSession(
 }
 
 function pruneExpiredTranscriptionSessions(nowMs = Date.now()): void {
-  for (const session of transcriptionSessions.values()) {
-    if (nowMs > session.expiresAtMs) {
-      closeTranscriptionSession(session, "completed");
-    }
-  }
+  closeExpiredTalkRelaySessions({
+    sessions: transcriptionSessions.values(),
+    closeSession: (session) => closeTranscriptionSession(session, "completed"),
+    nowMs,
+  });
 }
 
 function countTranscriptionSessionsForConn(connId: string): number {
@@ -133,12 +222,17 @@ function enforceTranscriptionSessionLimits(connId: string): void {
   }
 }
 
+/** Creates a transcription relay session and returns its browser audio contract. */
 export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
 ): TalkTranscriptionRelaySessionResult {
   enforceTranscriptionSessionLimits(params.connId);
+  assertRelayInputAudioConfig(params.providerConfig);
   const transcriptionSessionId = randomUUID();
-  const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(TRANSCRIPTION_SESSION_TTL_MS);
+  if (expiresAtMs === undefined) {
+    throw new Error("Transcription relay session expiry is outside the supported Date range");
+  }
   const talk = createTalkSessionController(
     {
       sessionId: transcriptionSessionId,
@@ -149,14 +243,15 @@ export function createTalkTranscriptionRelaySession(
     },
     { onEvent: recordTalkObservabilityEvent },
   );
-  let relay: TranscriptionRelaySession | undefined;
   const emit = (event: TalkTranscriptionRelayEventPayload, talkEvent?: TalkEventInput): void => {
     broadcastToOwner(params.context, params.connId, {
       ...event,
       ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
     });
   };
+  const relayRef: { current?: TranscriptionRelaySession } = {};
   const ensureTurnId = (): string => {
+    const relay = relayRef.current;
     return relay ? ensureTranscriptionTurn(relay) : "turn-1";
   };
   const sttSession = params.provider.createSession({
@@ -187,6 +282,7 @@ export function createTalkTranscriptionRelaySession(
           final: true,
         },
       );
+      const relay = relayRef.current;
       if (relay) {
         const ended = relay.talk.endTurn({ turnId, payload: {} });
         if (ended.ok) {
@@ -209,12 +305,13 @@ export function createTalkTranscriptionRelaySession(
           final: true,
         },
       );
+      const relay = relayRef.current;
       if (relay) {
         closeTranscriptionSession(relay, "error");
       }
     },
   });
-  relay = {
+  const relay: TranscriptionRelaySession = {
     id: transcriptionSessionId,
     connId: params.connId,
     context: params.context,
@@ -230,6 +327,7 @@ export function createTalkTranscriptionRelaySession(
     }, TRANSCRIPTION_SESSION_TTL_MS),
     closed: false,
   };
+  relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   transcriptionSessions.set(transcriptionSessionId, relay);
   sttSession
@@ -262,8 +360,8 @@ export function createTalkTranscriptionRelaySession(
     transport: "gateway-relay",
     transcriptionSessionId,
     audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
+      inputEncoding: RELAY_INPUT_ENCODING,
+      inputSampleRateHz: RELAY_INPUT_SAMPLE_RATE_HZ,
     },
     expiresAt: Math.floor(expiresAtMs / 1000),
   };
@@ -273,16 +371,16 @@ function getTranscriptionSession(
   transcriptionSessionId: string,
   connId: string,
 ): TranscriptionRelaySession {
-  const session = transcriptionSessions.get(transcriptionSessionId);
-  if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
-    if (session) {
-      closeTranscriptionSession(session, "completed");
-    }
-    throw new Error("Unknown transcription Talk session");
-  }
-  return session;
+  return requireActiveTalkRelaySession({
+    sessions: transcriptionSessions,
+    sessionId: transcriptionSessionId,
+    connId,
+    closeSession: (session) => closeTranscriptionSession(session, "completed"),
+    unknownSessionMessage: "Unknown transcription Talk session",
+  });
 }
 
+/** Streams one base64-encoded audio frame into the owning transcription relay. */
 export function sendTalkTranscriptionRelayAudio(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -307,6 +405,7 @@ export function sendTalkTranscriptionRelayAudio(params: {
   });
 }
 
+/** Commits the current transcription turn and closes the relay. */
 export function stopTalkTranscriptionRelaySession(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -329,6 +428,7 @@ export function stopTalkTranscriptionRelaySession(params: {
   closeTranscriptionSession(session, "completed");
 }
 
+/** Cancels the active transcription turn and closes the relay. */
 export function cancelTalkTranscriptionRelayTurn(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -350,6 +450,7 @@ export function cancelTalkTranscriptionRelayTurn(params: {
   closeTranscriptionSession(session, "completed");
 }
 
+/** Clears process-local transcription relays between tests. */
 export function clearTalkTranscriptionRelaySessionsForTest(): void {
   for (const session of transcriptionSessions.values()) {
     clearTimeout(session.cleanupTimer);

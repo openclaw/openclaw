@@ -1,3 +1,4 @@
+// Control UI tests cover chat responsive behavior.
 import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -99,12 +100,9 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
             <label class="field chat-controls__session chat-controls__session-picker">
               <select data-chat-session-select="true" aria-label="Chat session"><option>Daily planning</option></select>
             </label>
-            <label class="field chat-controls__session chat-controls__model">
-              <select data-chat-model-select="true" aria-label="Chat model"><option>Default (gpt-5)</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__thinking-select">
-              <select class="chat-controls__thinking-select-full" data-chat-thinking-select="true" aria-label="Chat thinking level"><option>Default (high)</option></select>
-            </label>
+            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="" data-chat-thinking-value="" aria-label="Chat model">gpt-5 · High</summary>
+            </details>
           </div>
           <div class="chat-controls__thinking">
             <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
@@ -113,6 +111,35 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
             <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
           </div>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+function composerControlsHtml() {
+  return `
+    <div class="agent-chat__composer-controls">
+      <div class="chat-composer-model-control">
+        <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+          <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
+            <span class="chat-controls__inline-select-label">Default model · Off</span>
+            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
+            <div class="chat-controls__combined-model-list">
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="chat-settings-popover-wrapper">
+        <button class="chat-settings-chip" type="button" aria-label="Chat settings">
+          <span class="chat-settings-chip__icon">${iconSvg()}</span>
+          <span class="chat-settings-chip__text">Chat settings</span>
+          <span class="chat-settings-chip__chevron">${iconSvg()}</span>
+        </button>
       </div>
     </div>
   `;
@@ -130,12 +157,9 @@ function chatHeaderControlsHtml(hidden = false) {
             <label class="field chat-controls__session chat-controls__session-picker">
               <select data-chat-session-select="true" aria-label="Chat session"><option>main</option></select>
             </label>
-            <label class="field chat-controls__session chat-controls__model">
-              <select data-chat-model-select="true" aria-label="Chat model"><option>gpt-5.5</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__thinking-select">
-              <select class="chat-controls__thinking-select-full" data-chat-thinking-select="true" aria-label="Chat thinking level"><option>Default (high)</option></select>
-            </label>
+            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="gpt-5.5" data-chat-thinking-value="" aria-label="Chat model">gpt-5.5 · High</summary>
+            </details>
           </div>
         </div>
         <div class="page-meta">
@@ -144,7 +168,6 @@ function chatHeaderControlsHtml(hidden = false) {
             <span class="chat-controls__separator">|</span>
             <button class="btn btn--sm btn--icon active" aria-label="Toggle assistant thinking">${iconSvg()}</button>
             <button class="btn btn--sm btn--icon active" aria-label="Toggle tool calls">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon" aria-label="Toggle focus mode">${iconSvg()}</button>
             <button class="btn btn--sm btn--icon active" aria-label="Show cron sessions">${iconSvg()}</button>
           </div>
         </div>
@@ -213,11 +236,11 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
               <div class="agent-chat__toolbar-left">
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
+                <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <span class="agent-chat__token-count">8</span>
               </div>
+              ${composerControlsHtml()}
               <div class="agent-chat__toolbar-right">
-                <button class="btn btn--ghost">${iconSvg()}</button>
-                <button class="btn btn--ghost">${iconSvg()}</button>
                 <button class="chat-send-btn">${iconSvg()}</button>
               </div>
             </div>
@@ -275,6 +298,18 @@ async function getTextContentRect(page: Page, selector: string) {
   return rect;
 }
 
+function rectsOverlap(
+  first: Pick<ControlRect, "x" | "y" | "width" | "height">,
+  second: Pick<ControlRect, "x" | "y" | "width" | "height">,
+) {
+  return (
+    first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y
+  );
+}
+
 async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
   const page = await browser.newPage({ viewport: { width, height } });
   await page.setContent(
@@ -320,7 +355,6 @@ describeBrowserLayout("chat responsive browser layout", () => {
           session: rectFor('[data-chat-session-select="true"]'),
           agent: rectFor('[data-chat-agent-filter="true"]'),
           model: rectFor('[data-chat-model-select="true"]'),
-          thinking: rectFor('[data-chat-thinking-select="true"]'),
           action: rectFor(".page-meta .btn--icon"),
         };
       });
@@ -328,10 +362,9 @@ describeBrowserLayout("chat responsive browser layout", () => {
         controls.session?.y,
         controls.agent?.y,
         controls.model?.y,
-        controls.thinking?.y,
         controls.action?.y,
       ].filter((value): value is number => typeof value === "number");
-      expect(rowY.length).toBe(5);
+      expect(rowY.length).toBe(4);
       expect(Math.max(...rowY) - Math.min(...rowY)).toBeLessThanOrEqual(4);
       const agent = expectControlRect(controls.agent, "agent");
       const session = expectControlRect(controls.session, "session");
@@ -460,7 +493,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         await expectNoHorizontalOverflow(page);
         const mobileControls = await page.evaluate(() => {
           const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLSelectElement | null;
+            const node = document.querySelector(selector) as HTMLElement | null;
             if (!node) {
               return null;
             }
@@ -470,26 +503,27 @@ describeBrowserLayout("chat responsive browser layout", () => {
               y: rect.y,
               width: rect.width,
               height: rect.height,
-              text: node.options[node.selectedIndex]?.textContent?.trim() ?? "",
+              text: node.textContent?.trim() ?? "",
               display: getComputedStyle(node).display,
             };
           };
           return {
             agent: rectFor('[data-chat-agent-filter="true"]'),
             session: rectFor('[data-chat-session-select="true"]'),
-            thinkingFull: rectFor('[data-chat-thinking-select="true"]'),
+            model: rectFor('[data-chat-model-select="true"]'),
             compactCount: document.querySelectorAll('[data-chat-thinking-select-compact="true"]')
               .length,
           };
         });
         const agent = expectControlRect(mobileControls.agent, "agent");
         const session = expectControlRect(mobileControls.session, "session");
+        const model = expectControlRect(mobileControls.model, "model");
         expect(session.y).toBe(agent.y);
         expect(agent.x).toBeLessThan(session.x);
         expect(session.width / agent.width).toBeGreaterThan(1.25);
         expect(session.width / agent.width).toBeLessThan(1.55);
-        expect(mobileControls.thinkingFull?.display).not.toBe("none");
-        expect(mobileControls.thinkingFull?.text).toBe("Default (high)");
+        expect(model.display).not.toBe("none");
+        expect(model.text).toBe("gpt-5 · High");
         expect(mobileControls.compactCount).toBe(0);
 
         const sizes = await page
@@ -532,6 +566,64 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
+  it.each([
+    [320, 568],
+    [393, 852],
+    [568, 320],
+  ] as const)(
+    "keeps current composer model, settings, and send controls from overlapping at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        await expectNoHorizontalOverflow(page);
+        const controls = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              display: getComputedStyle(node).display,
+            };
+          };
+          return {
+            input: rectFor(".agent-chat__input"),
+            left: rectFor(".agent-chat__toolbar-left"),
+            model: rectFor(".chat-composer-model-control"),
+            settings: rectFor(".chat-settings-chip"),
+            settingsLabel: rectFor(".chat-settings-chip__text"),
+            send: rectFor(".chat-send-btn"),
+          };
+        });
+
+        const input = expectControlRect(controls.input, "composer");
+        const left = expectControlRect(controls.left, "composer left controls");
+        const model = expectControlRect(controls.model, "composer model control");
+        const settings = expectControlRect(controls.settings, "composer settings control");
+        const send = expectControlRect(controls.send, "composer send control");
+        const settingsLabel = expectControlRect(controls.settingsLabel, "settings label");
+
+        for (const control of [left, model, settings, send]) {
+          expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
+          expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
+        }
+        expect(rectsOverlap(model, settings)).toBe(false);
+        expect(rectsOverlap(model, send)).toBe(false);
+        expect(rectsOverlap(settings, send)).toBe(false);
+        expect(settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settingsLabel.display).toBe("none");
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
     const page = await openFixture(320, 568, { singleAgent: true });
     try {
@@ -539,10 +631,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(await page.locator('[data-chat-agent-filter="true"]').count()).toBe(0);
       const session = await getBoundingBox(page, '[data-chat-session-select="true"]');
       const model = await getBoundingBox(page, '[data-chat-model-select="true"]');
-      const thinking = await getBoundingBox(page, '[data-chat-thinking-select="true"]');
-      expect(thinking.x).toBeGreaterThan(session.x);
       expect(model.y).toBeGreaterThan(session.y);
-      expect(model.width).toBeGreaterThan(session.width);
+      expect(model.width).toBe(session.width);
     } finally {
       await page.close();
     }

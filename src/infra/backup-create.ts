@@ -1,8 +1,11 @@
+// Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -11,10 +14,12 @@ import {
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { writeJson } from "./json-files.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 
 type TarRuntime = typeof import("tar");
 
@@ -23,6 +28,18 @@ let tarRuntimePromise: Promise<TarRuntime> | undefined;
 function loadTarRuntime(): Promise<TarRuntime> {
   tarRuntimePromise ??= import("tar");
   return tarRuntimePromise;
+}
+
+type BackupLinkCacheKey = `${number}:${number}`;
+
+class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
+  override get(_key: BackupLinkCacheKey): undefined {
+    return undefined;
+  }
+
+  override set(_key: BackupLinkCacheKey, _value: string): this {
+    return this;
+  }
 }
 
 export type BackupCreateOptions = {
@@ -122,7 +139,9 @@ function isTarEofRaceError(err: unknown): boolean {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export type BackupTarRetryLogger = (message: string) => void;
@@ -172,7 +191,8 @@ async function writeTarArchiveWithRetry(params: {
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }
 
-export const __test = { writeTarArchiveWithRetry, isTarEofRaceError };
+export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError };
+export { testApi as __test };
 
 async function resolveOutputPath(params: {
   output?: string;
@@ -224,6 +244,15 @@ async function assertOutputPathReady(outputPath: string): Promise<void> {
 
 function buildTempArchivePath(outputPath: string): string {
   return `${outputPath}.${randomUUID()}.tmp`;
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // The temp manifest is passed to `tar.c` alongside the asset source paths. If
@@ -404,10 +433,15 @@ function remapArchiveEntryPath(params: {
   entryPath: string;
   manifestPath: string;
   archiveRoot: string;
+  sourcePathRemaps?: ReadonlyMap<string, string>;
 }): string {
   const normalizedEntry = path.resolve(params.entryPath);
   if (normalizedEntry === params.manifestPath) {
     return path.posix.join(params.archiveRoot, "manifest.json");
+  }
+  const remappedSourcePath = params.sourcePathRemaps?.get(normalizedEntry);
+  if (remappedSourcePath) {
+    return buildBackupArchivePath(params.archiveRoot, remappedSourcePath);
   }
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
@@ -430,10 +464,126 @@ export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: s
   };
 }
 
+type SanitizedSqliteBackupAsset = {
+  sourcePath: string;
+  archiveSourcePath: string;
+  skippedSourcePaths: Set<string>;
+};
+
+function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { ok?: unknown } | undefined;
+  return row?.ok === 1;
+}
+
+async function createSanitizedStateSqliteBackupAsset(params: {
+  stateDir: string;
+  tempDir: string;
+}): Promise<SanitizedSqliteBackupAsset | undefined> {
+  const archiveSourcePath = resolveOpenClawStateSqlitePath({
+    ...process.env,
+    OPENCLAW_STATE_DIR: params.stateDir,
+  });
+  if (!(await pathExists(archiveSourcePath))) {
+    return undefined;
+  }
+
+  const sqlite = requireNodeSqlite();
+  const source = new sqlite.DatabaseSync(archiveSourcePath, { readOnly: true });
+  const sourcePath = path.join(params.tempDir, "openclaw-state-backup.sqlite");
+  try {
+    source.exec("PRAGMA busy_timeout = 30000;");
+    source.prepare("VACUUM INTO ?").run(sourcePath);
+  } finally {
+    source.close();
+  }
+  await fs.chmod(sourcePath, 0o600);
+
+  const snapshot = new sqlite.DatabaseSync(sourcePath);
+  try {
+    if (tableExistsSql(snapshot, "delivery_queue_entries")) {
+      snapshot.prepare("DELETE FROM delivery_queue_entries").run();
+      snapshot.exec("VACUUM;");
+    }
+  } finally {
+    snapshot.close();
+  }
+
+  return {
+    sourcePath,
+    archiveSourcePath,
+    skippedSourcePaths: new Set([
+      path.resolve(archiveSourcePath),
+      path.resolve(`${archiveSourcePath}-wal`),
+      path.resolve(`${archiveSourcePath}-shm`),
+    ]),
+  };
+}
+
+async function listAgentSqlitePaths(stateDir: string): Promise<string[]> {
+  const agentsDir = path.join(stateDir, "agents");
+  const found: string[] = [];
+  async function visit(dir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+      } else if (entry.isFile() && entry.name === "openclaw-agent.sqlite") {
+        found.push(entryPath);
+      }
+    }
+  }
+  await visit(agentsDir);
+  return found;
+}
+
+async function createAgentSqliteBackupAssets(params: {
+  stateDir: string;
+  tempDir: string;
+}): Promise<SanitizedSqliteBackupAsset[]> {
+  const sqlitePaths = await listAgentSqlitePaths(params.stateDir);
+  if (sqlitePaths.length === 0) {
+    return [];
+  }
+  const sqlite = requireNodeSqlite();
+  const snapshots: SanitizedSqliteBackupAsset[] = [];
+  for (const archiveSourcePath of sqlitePaths) {
+    const source = new sqlite.DatabaseSync(archiveSourcePath, { readOnly: true });
+    const sourcePath = path.join(
+      params.tempDir,
+      `openclaw-agent-backup-${snapshots.length}.sqlite`,
+    );
+    try {
+      source.exec("PRAGMA busy_timeout = 30000;");
+      source.prepare("VACUUM INTO ?").run(sourcePath);
+    } finally {
+      source.close();
+    }
+    await fs.chmod(sourcePath, 0o600);
+    snapshots.push({
+      sourcePath,
+      archiveSourcePath,
+      skippedSourcePaths: new Set([
+        path.resolve(archiveSourcePath),
+        path.resolve(`${archiveSourcePath}-wal`),
+        path.resolve(`${archiveSourcePath}-shm`),
+      ]),
+    });
+  }
+  return snapshots;
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
-  const nowMs = opts.nowMs ?? Date.now();
+  const nowMs = resolveDateTimestampMs(opts.nowMs);
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
@@ -491,7 +641,30 @@ export async function createBackupArchive(
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  const stateAsset = result.assets.find((asset) => asset.kind === "state");
   try {
+    const sanitizedStateSqlite = stateAsset
+      ? await createSanitizedStateSqliteBackupAsset({
+          stateDir: stateAsset.sourcePath,
+          tempDir,
+        })
+      : undefined;
+    const agentSqliteSnapshots = stateAsset
+      ? await createAgentSqliteBackupAssets({
+          stateDir: stateAsset.sourcePath,
+          tempDir,
+        })
+      : [];
+    const sourcePathRemaps = new Map<string, string>();
+    if (sanitizedStateSqlite) {
+      sourcePathRemaps.set(
+        path.resolve(sanitizedStateSqlite.sourcePath),
+        sanitizedStateSqlite.archiveSourcePath,
+      );
+    }
+    for (const snapshot of agentSqliteSnapshots) {
+      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
+    }
     const manifest = buildManifest({
       createdAt,
       archiveRoot,
@@ -507,7 +680,6 @@ export async function createBackupArchive(
     await writeJson(manifestPath, manifest, { trailingNewline: true });
 
     const tar = await loadTarRuntime();
-    const stateAsset = result.assets.find((asset) => asset.kind === "state");
     const extensionsFilter = stateAsset
       ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
       : undefined;
@@ -518,6 +690,14 @@ export async function createBackupArchive(
       // is always safe to include.
       if (path.resolve(entryPath) === manifestPath) {
         return true;
+      }
+      if (
+        sanitizedStateSqlite?.skippedSourcePaths.has(path.resolve(entryPath)) ||
+        agentSqliteSnapshots.some((snapshot) =>
+          snapshot.skippedSourcePaths.has(path.resolve(entryPath)),
+        )
+      ) {
+        return false;
       }
       if (extensionsFilter && !extensionsFilter(entryPath)) {
         return false;
@@ -542,16 +722,23 @@ export async function createBackupArchive(
             gzip: true,
             portable: true,
             preservePaths: true,
+            linkCache: new BackupLinkCache(),
             filter: tarFilter,
             onWriteEntry: (entry) => {
               entry.path = remapArchiveEntryPath({
                 entryPath: entry.path,
                 manifestPath,
                 archiveRoot,
+                sourcePathRemaps,
               });
             },
           },
-          [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+          [
+            manifestPath,
+            ...(sanitizedStateSqlite ? [sanitizedStateSqlite.sourcePath] : []),
+            ...agentSqliteSnapshots.map((snapshot) => snapshot.sourcePath),
+            ...result.assets.map((asset) => asset.sourcePath),
+          ],
         );
       },
     });

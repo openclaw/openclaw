@@ -1,3 +1,4 @@
+// Telegram plugin module implements polling liveness behavior.
 import { formatDurationPrecise } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -12,6 +13,7 @@ type TelegramPollingStall = {
 
 export class TelegramPollingLivenessTracker {
   #lastGetUpdatesAt: number;
+  #lastGetUpdatesActivityAt: number;
   #lastGetUpdatesStartedAt: number | null = null;
   #lastGetUpdatesFinishedAt: number | null = null;
   #lastGetUpdatesDurationMs: number | null = null;
@@ -23,6 +25,7 @@ export class TelegramPollingLivenessTracker {
 
   constructor(private readonly options: TelegramPollingLivenessTrackerOptions = {}) {
     this.#lastGetUpdatesAt = this.#now();
+    this.#lastGetUpdatesActivityAt = this.#lastGetUpdatesAt;
   }
 
   get inFlightGetUpdates() {
@@ -31,6 +34,7 @@ export class TelegramPollingLivenessTracker {
 
   noteGetUpdatesStarted(payload: unknown, at = this.#now()) {
     this.#lastGetUpdatesAt = at;
+    this.#lastGetUpdatesActivityAt = at;
     this.#lastGetUpdatesStartedAt = at;
     this.#lastGetUpdatesOffset = resolveGetUpdatesOffset(payload);
     this.#inFlightGetUpdates += 1;
@@ -39,6 +43,7 @@ export class TelegramPollingLivenessTracker {
   }
 
   noteGetUpdatesSuccess(result: unknown, at = this.#now()) {
+    this.#lastGetUpdatesActivityAt = at;
     this.#lastGetUpdatesFinishedAt = at;
     this.#lastGetUpdatesDurationMs =
       this.#lastGetUpdatesStartedAt == null ? null : at - this.#lastGetUpdatesStartedAt;
@@ -46,7 +51,18 @@ export class TelegramPollingLivenessTracker {
     this.options.onPollSuccess?.(at);
   }
 
+  noteGetUpdatesSuccessCount(count: number, at = this.#now()) {
+    this.#lastGetUpdatesActivityAt = at;
+    this.#lastGetUpdatesFinishedAt = at;
+    this.#lastGetUpdatesDurationMs =
+      this.#lastGetUpdatesStartedAt == null ? null : at - this.#lastGetUpdatesStartedAt;
+    const normalizedCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+    this.#lastGetUpdatesOutcome = `ok:${normalizedCount}`;
+    this.options.onPollSuccess?.(at);
+  }
+
   noteGetUpdatesError(err: unknown, at = this.#now()) {
+    this.#lastGetUpdatesActivityAt = at;
     this.#lastGetUpdatesFinishedAt = at;
     this.#lastGetUpdatesDurationMs =
       this.#lastGetUpdatesStartedAt == null ? null : at - this.#lastGetUpdatesStartedAt;
@@ -58,11 +74,15 @@ export class TelegramPollingLivenessTracker {
     this.#inFlightGetUpdates = Math.max(0, this.#inFlightGetUpdates - 1);
   }
 
+  noteGetUpdatesActivity(at = this.#now()) {
+    this.#lastGetUpdatesActivityAt = at;
+  }
+
   detectStall(params: { thresholdMs: number; now?: number }): TelegramPollingStall | null {
     const now = params.now ?? this.#now();
     const activeElapsed =
       this.#inFlightGetUpdates > 0 && this.#lastGetUpdatesStartedAt != null
-        ? now - this.#lastGetUpdatesStartedAt
+        ? now - this.#lastGetUpdatesActivityAt
         : 0;
     const idleElapsed =
       this.#inFlightGetUpdates > 0

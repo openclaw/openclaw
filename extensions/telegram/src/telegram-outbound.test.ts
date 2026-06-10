@@ -1,3 +1,4 @@
+// Telegram tests cover telegram outbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { telegramOutbound } from "./outbound-adapter.js";
@@ -28,5 +29,17 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.chunker?.(text, 4000)).toEqual(
       markdownToTelegramHtmlChunks(text, 4000),
     );
+  });
+
+  it("passes markdown table mode to the outbound markdown chunker", () => {
+    clearTelegramRuntime();
+    const text = ["| Name | Value |", "|------|-------|", "| A | 1 |"].join("\n");
+
+    const chunks = telegramOutbound.chunker?.(text, 4000, {
+      formatting: { tableMode: "bullets" },
+    });
+
+    expect(chunks?.join("\n")).toContain("Value: 1");
+    expect(chunks?.join("\n")).not.toContain("| Name | Value |");
   });
 });

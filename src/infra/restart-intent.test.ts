@@ -1,3 +1,4 @@
+// Covers gateway restart intent persistence and consumption.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -64,18 +65,20 @@ describe("gateway restart intent", () => {
     expect(fs.statSync(intentPath(env)).mode & 0o777).toBe(0o600);
   });
 
-  it("round-trips restart force and wait options", () => {
+  it("round-trips restart reason, force, and wait options", () => {
     const env = createIntentEnv();
 
     expect(
       writeGatewayRestartIntentSync({
         env,
         targetPid: process.pid,
+        reason: "gateway.restart",
         intent: { force: true, waitMs: 12_345 },
       }),
     ).toBe(true);
 
     expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({
+      reason: "gateway.restart",
       force: true,
       waitMs: 12_345,
     });

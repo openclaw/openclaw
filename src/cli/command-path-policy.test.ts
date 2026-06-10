@@ -1,3 +1,4 @@
+// Command path policy tests cover allowed CLI command path shapes and lazy imports.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
@@ -56,7 +57,7 @@ describe("command-path-policy", () => {
 
   it("resolves status policy with shared startup semantics", () => {
     expectResolvedPolicy(["status"], {
-      routeConfigGuard: "when-suppressed",
+      routeConfigGuard: "never",
       loadPlugins: "never",
       pluginRegistry: { scope: "channels" },
       ensureCliPath: false,
@@ -189,6 +190,19 @@ describe("command-path-policy", () => {
       bypassConfigGuard: true,
       loadPlugins: "never",
     });
+    expectResolvedPolicy(["config"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["config", "set"], {
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["doctor"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+    });
     expectResolvedPolicy(["config", "validate"], {
       bypassConfigGuard: true,
       loadPlugins: "never",
@@ -208,6 +222,13 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    for (const commandPath of [["tasks"], ["tasks", "list"], ["tasks", "audit"]]) {
+      expectResolvedPolicy(commandPath, {
+        ensureCliPath: false,
+        loadPlugins: "never",
+        networkProxy: "bypass",
+      });
+    }
     for (const commandPath of [
       ["plugins", "install"],
       ["plugins", "inspect"],
@@ -283,19 +304,21 @@ describe("command-path-policy", () => {
       const actual = await importOriginal<typeof import("./command-catalog.js")>();
       return { ...actual, cliCommandCatalog: catalog };
     });
-    const { resolveCliCatalogCommandPath, resolveCliNetworkProxyPolicy } = await importFreshModule<
-      typeof import("./command-path-policy.js")
-    >(import.meta.url, "./command-path-policy.js?catalog-overrides");
+    const {
+      resolveCliCatalogCommandPath: resolveCliCatalogCommandPathLocal,
+      resolveCliNetworkProxyPolicy: resolveCliNetworkProxyPolicyLocal,
+    } = await importFreshModule<typeof import("./command-path-policy.js")>(
+      import.meta.url,
+      "./command-path-policy.js?catalog-overrides",
+    );
 
-    expect(resolveCliCatalogCommandPath(["node", "openclaw", "nodes", "camera", "snap"])).toEqual([
-      "nodes",
-      "camera",
-      "snap",
-    ]);
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "nodes", "camera", "snap"])).toBe(
+    expect(
+      resolveCliCatalogCommandPathLocal(["node", "openclaw", "nodes", "camera", "snap"]),
+    ).toEqual(["nodes", "camera", "snap"]);
+    expect(resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "snap"])).toBe(
       "default",
     );
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "nodes", "camera", "list"])).toBe(
+    expect(resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "list"])).toBe(
       "bypass",
     );
   });

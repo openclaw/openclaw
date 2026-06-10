@@ -1,3 +1,4 @@
+// Volcengine tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -44,6 +45,21 @@ describe("volcengine plugin", () => {
 
     expect(pluginJson.providerAuthAliases).toEqual({
       "volcengine-plan": "volcengine",
+    });
+  });
+
+  it("declares OpenAI-compatible streaming usage support in the manifest", () => {
+    const pluginJson = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
+    );
+
+    expect(pluginJson.providerRequest?.providers).toMatchObject({
+      volcengine: {
+        openAICompletions: { supportsStreamingUsage: true },
+      },
+      "volcengine-plan": {
+        openAICompletions: { supportsStreamingUsage: true },
+      },
     });
   });
 

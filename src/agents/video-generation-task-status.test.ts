@@ -1,4 +1,7 @@
+// Video generation task-status tests cover active background task detection and
+// prompt/status text that prevents duplicate media generation requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.js";
 import {
   buildActiveVideoGenerationTaskPromptContextForSession,
   buildVideoGenerationTaskStatusDetails,
@@ -9,9 +12,17 @@ import {
   VIDEO_GENERATION_TASK_KIND,
 } from "./video-generation-task-status.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listTasksForOwnerKey: vi.fn(),
-}));
+const taskRuntimeInternalMocks = vi.hoisted(() => {
+  const mocks = {
+    listTasksForOwnerKey: vi.fn(),
+    listFreshTasksForOwnerKey: vi.fn(),
+    reloadTaskRegistryFromStore: vi.fn(),
+  };
+  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    mocks.listTasksForOwnerKey(ownerKey),
+  );
+  return mocks;
+});
 
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 
@@ -28,6 +39,12 @@ describe("video generation task status", () => {
   beforeEach(() => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+      taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+    );
+    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
+    resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 
   it("recognizes active session-backed video generation tasks", () => {
@@ -66,6 +83,8 @@ describe("video generation task status", () => {
   });
 
   it("prefers a running task over queued session siblings", () => {
+    // Running work should suppress duplicate generation even when older queued
+    // siblings still exist for the same session owner.
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-queued",

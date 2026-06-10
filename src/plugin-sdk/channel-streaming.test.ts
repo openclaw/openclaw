@@ -1,3 +1,6 @@
+/**
+ * Tests channel streaming helper lifecycle and event forwarding.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelProgressDraftLine,
@@ -8,8 +11,10 @@ import {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
+  isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftRender,
@@ -17,10 +22,13 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   resolveChannelStreamingPreviewToolProgress,
+  resolveTranscriptBackedChannelFinalText,
+  selectLongerFinalText,
 } from "./channel-streaming.js";
 
 describe("channel-streaming", () => {
@@ -94,6 +102,24 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
+  it("enables commentary progress only for progress-mode drafts", () => {
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "progress", progress: { commentary: true } },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "partial", progress: { commentary: true } },
+      }),
+    ).toBe(false);
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "progress" },
+      }),
+    ).toBe(false);
+  });
+
   it("falls back to legacy flat fields when the canonical object is absent", () => {
     const entry = {
       chunkMode: "newline",
@@ -140,6 +166,47 @@ describe("channel-streaming", () => {
     );
   });
 
+  it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
+    const fullAnswer =
+      "Here is the complete final answer with enough stable prefix text before the ellipsis and enough continuation text after it.";
+    const truncatedFinal =
+      "Here is the complete final answer with enough stable prefix text before the ellipsis...";
+
+    expect(isPotentialTruncatedFinal(truncatedFinal)).toBe(true);
+    expect(
+      selectLongerFinalText({
+        finalText: truncatedFinal,
+        candidateTexts: ["short", fullAnswer],
+      }),
+    ).toBe(fullAnswer);
+    await expect(
+      resolveTranscriptBackedChannelFinalText({
+        finalText: truncatedFinal,
+        resolveCandidateText: async () => fullAnswer,
+      }),
+    ).resolves.toBe(fullAnswer);
+  });
+
+  it("keeps intentional ellipsis finals when candidates do not prove truncation", async () => {
+    const finalText =
+      "Here is the complete final answer with enough stable prefix text before an intentional pause...";
+    const candidateText =
+      "Here is the complete final answer with enough stable prefix text before an intentional pause... then punctuation";
+
+    expect(
+      selectLongerFinalText({
+        finalText,
+        candidateTexts: [candidateText],
+      }),
+    ).toBeUndefined();
+    await expect(
+      resolveTranscriptBackedChannelFinalText({
+        finalText,
+        resolveCandidateText: async () => candidateText,
+      }),
+    ).resolves.toBe(finalText);
+  });
+
   it("suppresses standalone tool progress for active preview drafts", () => {
     expect(
       resolveChannelStreamingSuppressDefaultToolProgressMessages({
@@ -167,8 +234,7 @@ describe("channel-streaming", () => {
   });
 
   it("uses auto progress labels when no explicit label is configured", () => {
-    const invalidLabels = DEFAULT_PROGRESS_DRAFT_LABELS.filter((label) => !label.endsWith("..."));
-    expect(invalidLabels).toStrictEqual([]);
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS[0]).toBe("Working");
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );
@@ -181,6 +247,17 @@ describe("channel-streaming", () => {
         random: () => 0,
       }),
     ).toBe(DEFAULT_PROGRESS_DRAFT_LABELS[0]);
+  });
+
+  it("separates progress labels from detail lines with a blank line", () => {
+    const entry = { streaming: { progress: { label: "Working" } } };
+
+    expect(
+      formatChannelProgressDraftText({
+        entry,
+        lines: ["🛠️ pgrep -fl Discord || true (agent)", "Discord is installed."],
+      }),
+    ).toBe("Working\n\n🛠️ pgrep -fl Discord || true (agent)\n• Discord is installed.");
   });
 
   it("supports explicit progress labels and custom label sets", () => {
@@ -203,8 +280,11 @@ describe("channel-streaming", () => {
   });
 
   it("formats bounded progress draft text", () => {
-    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2, render: "rich" } } };
+    const entry = {
+      streaming: { progress: { label: "Shelling", maxLines: 2, maxLineChars: 80, render: "rich" } },
+    };
     expect(resolveChannelProgressDraftMaxLines(entry)).toBe(2);
+    expect(resolveChannelProgressDraftMaxLineChars(entry)).toBe(80);
     expect(resolveChannelProgressDraftRender(entry)).toBe("rich");
     expect(
       formatChannelProgressDraftText({
@@ -219,6 +299,19 @@ describe("channel-streaming", () => {
         lines: ["🛠️ Exec", "plain update"],
       }),
     ).toBe("🛠️ Exec\n• plain update");
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false } } },
+        lines: [
+          {
+            kind: "item",
+            text: "_Checking source data before summarizing._",
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe("_Checking source data before summarizing._");
   });
 
   it("renders progress labels as rolling lines", () => {
@@ -244,7 +337,7 @@ describe("channel-streaming", () => {
         entry: { streaming: { progress: { label: false } } },
         lines: line ? [line] : [],
       }),
-    ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…");
+    ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts");
   });
 
   it("bounds progress draft line length to reduce edit reflow", () => {
@@ -254,7 +347,34 @@ describe("channel-streaming", () => {
         lines: ["x".repeat(160)],
         formatLine: (line) => `\`${line}\``,
       }),
-    ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
+    ).toBe(`Shelling\n\n• \`${"x".repeat(119)}…\``);
+  });
+
+  it("honors configured progress draft line length and cuts prose on word boundaries", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: "Shelling", maxLineChars: 64 } } },
+        lines: [
+          "I'm checking whether the generated video exists or if the generator bailed while writing output.",
+        ],
+      }),
+    ).toBe("Shelling\n\n• I'm checking whether the generated video exists or if the…");
+  });
+
+  it("falls back to plain commentary when compaction drops the closing italic marker", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false, maxLineChars: 32 } } },
+        lines: [
+          {
+            kind: "item",
+            text: `_${"x".repeat(80)}_`,
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe(`${"x".repeat(30)}…`);
   });
 
   it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
@@ -275,7 +395,9 @@ describe("channel-streaming", () => {
       lines: line ? [line] : [],
     });
 
-    expect(text).toBe("Shelling\n🛠️ run node script…th/that/keeps/going/and/going/index…");
+    expect(text).toBe(
+      "Shelling\n\n🛠️ run node script…e…y/deep/path/that/keeps/going/and/going/index.ts --flag value",
+    );
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 
@@ -432,6 +554,32 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
+  it("preserves stable ids on named tool and command-output progress lines", () => {
+    const toolLine = buildChannelProgressDraftLine({
+      event: "tool",
+      itemId: "tool:item-1",
+      toolCallId: "call-1",
+      name: "bash",
+      phase: "start",
+    });
+    const commandLine = buildChannelProgressDraftLine({
+      event: "command-output",
+      itemId: "command:item-1",
+      toolCallId: "call-1",
+      name: "bash",
+      phase: "end",
+      exitCode: 0,
+    });
+
+    expect(toolLine).toMatchObject({ id: "tool:item-1", kind: "tool", toolName: "bash" });
+    expect(commandLine).toMatchObject({
+      id: "command:item-1",
+      kind: "command-output",
+      status: "completed",
+      toolName: "bash",
+    });
+  });
+
   it("starts progress drafts after five seconds or a second work event", async () => {
     vi.useFakeTimers();
     const onStart = vi.fn(async () => {});
@@ -459,6 +607,103 @@ describe("channel-streaming", () => {
     expect(onStart).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report started when delayed progress startup rejects", async () => {
+    vi.useFakeTimers();
+    const onStart = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("draft unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await expect(gate.noteWork()).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(false);
+
+    await expect(gate.noteWork()).resolves.toBe(true);
+
+    expect(onStart).toHaveBeenCalledTimes(2);
+    expect(gate.hasStarted).toBe(true);
+  });
+
+  it("keeps concurrent progress startup single-flight until onStart resolves", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    const firstStart = gate.noteWork();
+    const secondStart = gate.startNow();
+    await Promise.resolve();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+
+    resolveStart?.();
+    await expect(firstStart).resolves.toBe(true);
+    await expect(secondStart).resolves.toBeUndefined();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+  });
+
+  it("does not report active when cancel wins the startup race", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    const startResult = gate.noteWork();
+    await Promise.resolve();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    gate.cancel();
+
+    resolveStart?.();
+
+    await expect(startResult).resolves.toBe(false);
+    expect(gate.hasStarted).toBe(false);
+  });
+
+  it("joins explicit startup before applying the first-work delay", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    const explicitStart = gate.startNow();
+    await Promise.resolve();
+    const workDuringStart = gate.noteWork();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+
+    resolveStart?.();
+
+    await expect(explicitStart).resolves.toBeUndefined();
+    await expect(workDuringStart).resolves.toBe(true);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
   });
 
   it("ignores message-like tools for progress draft work", () => {

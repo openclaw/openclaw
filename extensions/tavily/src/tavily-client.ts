@@ -1,3 +1,4 @@
+// Tavily plugin module implements tavily client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -306,7 +307,8 @@ export async function runTavilyExtract(
   return result;
 }
 
-export const __testing = {
+export const testing = {
   readTavilyJsonResponse,
   resolveEndpoint,
 };
+export { testing as __testing };

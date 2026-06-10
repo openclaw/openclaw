@@ -1,5 +1,6 @@
+/** Builds plugin hook agent context snapshots from active session and model state. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 
 const TARGET_PREFIXES = new Set(["channel", "chat", "direct", "dm", "group", "thread", "user"]);
@@ -10,7 +11,7 @@ function normalizeKey(value: string | undefined): string {
 
 function stripConversationPrefix(
   value: string | undefined,
-  provider: string | undefined,
+  ...providers: Array<string | undefined>
 ): string | undefined {
   const text = normalizeOptionalString(value);
   if (!text) {
@@ -27,12 +28,16 @@ function stripConversationPrefix(
   if (!suffix) {
     return text;
   }
-  if (TARGET_PREFIXES.has(prefix) || (provider && prefix === normalizeKey(provider))) {
+  if (
+    TARGET_PREFIXES.has(prefix) ||
+    providers.some((provider) => prefix === normalizeKey(provider))
+  ) {
     return suffix;
   }
   return text;
 }
 
+/** Resolves the channel id exposed to plugin agent hooks. */
 export function resolveAgentHookChannelId(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
@@ -41,25 +46,31 @@ export function resolveAgentHookChannelId(params: {
   messageTo?: string | null;
 }): string | undefined {
   const provider = normalizeOptionalString(params.messageProvider);
+  const messageChannel = normalizeOptionalString(params.messageChannel);
   const parsed = parseRawSessionConversationRef(params.sessionKey);
   if (parsed?.rawId) {
     return parsed.rawId;
   }
 
   const metadataChannel =
-    stripConversationPrefix(params.currentChannelId ?? undefined, provider) ??
-    stripConversationPrefix(params.messageTo ?? undefined, provider);
+    stripConversationPrefix(params.currentChannelId ?? undefined, provider, messageChannel) ??
+    stripConversationPrefix(params.messageTo ?? undefined, provider, messageChannel);
   if (metadataChannel && normalizeKey(metadataChannel) !== normalizeKey(provider)) {
     return metadataChannel;
   }
 
-  const messageChannel = stripConversationPrefix(params.messageChannel ?? undefined, provider);
-  if (messageChannel && normalizeKey(messageChannel) !== normalizeKey(provider)) {
-    return messageChannel;
+  const strippedMessageChannel = stripConversationPrefix(
+    params.messageChannel ?? undefined,
+    provider,
+    messageChannel,
+  );
+  if (strippedMessageChannel && normalizeKey(strippedMessageChannel) !== normalizeKey(provider)) {
+    return strippedMessageChannel;
   }
-  return normalizeOptionalString(params.messageChannel) ?? provider;
+  return messageChannel ?? provider;
 }
 
+/** Builds channel/provider fields for plugin agent hook context. */
 export function buildAgentHookContextChannelFields(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;

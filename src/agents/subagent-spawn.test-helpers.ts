@@ -1,7 +1,9 @@
+// Subagent spawn test helpers install mocked runtime seams so sessions_spawn
+// tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -9,12 +11,18 @@ type MockImplementationTarget = {
 };
 type SessionStore = Record<string, Record<string, unknown>>;
 type SessionStoreMutator = (store: SessionStore) => unknown;
-type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks" | "runSubagentSpawning"> &
-  Partial<Pick<SubagentLifecycleHookRunner, "runSubagentSpawned" | "runSubagentEnded">>;
+type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
+  Partial<
+    Pick<
+      SubagentLifecycleHookRunner,
+      "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+    >
+  >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: MockFn;
 };
 
+/** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
@@ -43,6 +51,7 @@ export function createSubagentSpawnTestConfig(
   };
 }
 
+/** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
     if (opts.method === "sessions.patch") {
@@ -70,6 +79,7 @@ function createDefaultSessionHelperMocks() {
   };
 }
 
+/** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
     mockImplementation: (
@@ -92,6 +102,7 @@ export function installSessionStoreCaptureMock(
   );
 }
 
+/** Assert the persisted session entry captured the expected runtime model. */
 export function expectPersistedRuntimeModel(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
@@ -114,9 +125,13 @@ export function expectPersistedRuntimeModel(params: {
   }
 }
 
+/** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
+  dispatchGatewayMethodInProcessMock?: MockFn;
+  hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
+  loadSessionStoreMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
@@ -136,6 +151,33 @@ export async function loadSubagentSpawnModuleForTest(params: {
     sessionKey?: string;
   }) => { sandboxed: boolean };
   getSessionBindingService?: () => {
+    getCapabilities?: (params: { channel?: string; accountId?: string }) => {
+      adapterAvailable: boolean;
+      bindSupported: boolean;
+      placements: Array<"current" | "child">;
+    };
+    bind?: (params: {
+      targetSessionKey: string;
+      targetKind?: string;
+      conversation: {
+        channel: string;
+        accountId?: string;
+        conversationId: string;
+        parentConversationId?: string;
+      };
+      placement: "current" | "child";
+      metadata?: Record<string, unknown>;
+    }) => Promise<{
+      targetSessionKey: string;
+      targetKind?: string;
+      status?: string;
+      conversation: {
+        channel: string;
+        accountId?: string;
+        conversationId: string;
+        parentConversationId?: string;
+      };
+    }>;
     listBySession: (targetSessionKey: string) => Array<{
       status?: string;
       conversation: {
@@ -156,13 +198,22 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resetModules?: boolean;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
+    // The helper rewires imports with vi.doMock, so each test starts from a
+    // fresh module graph unless explicitly sharing mocks.
     vi.resetModules();
   }
 
   const resetSubagentRegistryForTests = vi.fn();
 
+  vi.doMock("./provider-model-normalization.runtime.js", () => ({
+    normalizeProviderModelIdWithRuntime: () => undefined,
+  }));
+
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
+    dispatchGatewayMethodInProcess: (...args: unknown[]) =>
+      params.dispatchGatewayMethodInProcessMock?.(...args),
+    hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
     buildSubagentSystemPrompt: () => "system-prompt",
     forkSessionFromParent:
       params.forkSessionFromParentMock ??
@@ -179,6 +230,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
@@ -224,7 +276,18 @@ export async function loadSubagentSpawnModuleForTest(params: {
       method === "sessions.patch" || method === "sessions.delete",
     pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
     getSessionBindingService:
-      params.getSessionBindingService ?? (() => ({ listBySession: () => [] })),
+      params.getSessionBindingService ??
+      (() => ({
+        getCapabilities: () => ({
+          adapterAvailable: false,
+          bindSupported: false,
+          placements: [],
+        }),
+        bind: async () => {
+          throw new Error("session binding adapter unavailable");
+        },
+        listBySession: () => [],
+      })),
     resolveConversationDeliveryTarget:
       params.resolveConversationDeliveryTarget ??
       ((targetParams: { channel?: string; conversationId?: string | number }) => ({

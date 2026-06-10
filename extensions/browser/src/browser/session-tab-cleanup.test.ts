@@ -1,22 +1,23 @@
+// Browser tests cover session tab cleanup plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isPrimaryTrackedBrowserSessionKey,
   runTrackedBrowserTabCleanupOnce,
 } from "./session-tab-cleanup.js";
 import {
-  __countTrackedSessionBrowserTabsForTests,
-  __resetTrackedSessionBrowserTabsForTests,
+  countTrackedSessionBrowserTabsForTests,
+  resetTrackedSessionBrowserTabsForTests,
   trackSessionBrowserTab,
 } from "./session-tab-registry.js";
 
 describe("session tab cleanup", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    __resetTrackedSessionBrowserTabsForTests();
+    resetTrackedSessionBrowserTabsForTests();
   });
 
   afterEach(() => {
-    __resetTrackedSessionBrowserTabsForTests();
+    resetTrackedSessionBrowserTabsForTests();
     vi.useRealTimers();
   });
 
@@ -45,8 +46,8 @@ describe("session tab cleanup", () => {
     });
 
     expect(closed).toBe(1);
-    expect(__countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(0);
-    expect(__countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(1);
-    expect(__countTrackedSessionBrowserTabsForTests("agent:main:cron:nightly")).toBe(1);
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(0);
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(1);
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:cron:nightly")).toBe(1);
   });
 });

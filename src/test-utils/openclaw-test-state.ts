@@ -1,8 +1,18 @@
+// Creates isolated OpenClaw state directories for integration-style tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import * as configRuntime from "../config/config.js";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
+
+type ConfigRuntimeResettable = typeof configRuntime & {
+  resetConfigRuntimeState?: () => void;
+};
 
 type OpenClawTestStateLayout = "home" | "state-only" | "split";
 
@@ -59,9 +69,22 @@ const ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
   "OPENCLAW_SERVICE_REPAIR_POLICY",
 ] as const;
+
+function resetConfigRuntimeStateForTest(): void {
+  let reset: (() => void) | undefined;
+  try {
+    reset = (configRuntime as ConfigRuntimeResettable).resetConfigRuntimeState;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('No "resetConfigRuntimeState" export is defined')) {
+      return;
+    }
+    throw error;
+  }
+  reset?.();
+}
 
 function normalizeLabel(value: string | undefined): string {
   return (value ?? "state").replace(/[^A-Za-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "") || "state";
@@ -201,11 +224,9 @@ function buildEnvVars(params: {
     params.agentEnv === "main"
       ? {
           OPENCLAW_AGENT_DIR: params.agentDir,
-          PI_CODING_AGENT_DIR: params.agentDir,
         }
       : {
           OPENCLAW_AGENT_DIR: undefined,
-          PI_CODING_AGENT_DIR: undefined,
         };
   const envVars: Record<string, string | undefined> = {
     OPENCLAW_STATE_DIR: params.stateDir,
@@ -275,7 +296,7 @@ export async function createOpenClawTestState(
     extraEnv: options.env ?? {},
   });
   const env = createSpawnEnv(envVars);
-  const snapshot = captureEnv([...new Set([...ENV_KEYS, ...Object.keys(envVars)])]);
+  const snapshot = captureEnv(uniqueStrings([...ENV_KEYS, ...Object.keys(envVars)]));
   let envApplied = false;
   let cleaned = false;
   const agentDir = (agentId = "main") => path.join(paths.stateDir, "agents", agentId, "agent");
@@ -301,15 +322,21 @@ export async function createOpenClawTestState(
       return filePath;
     },
     writeAuthProfiles: (store, agentId = "main") => {
-      const filePath = path.join(agentDir(agentId), "auth-profiles.json");
-      return writeJsonFile(filePath, store);
+      const targetAgentDir = agentDir(agentId);
+      saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+      return Promise.resolve(resolveAuthProfileDatabasePath(targetAgentDir));
     },
     applyEnv: () => {
+      resetConfigRuntimeStateForTest();
       for (const [key, value] of Object.entries(envVars)) {
+        // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
         if (value === undefined) {
-          delete process.env[key];
+          Reflect.deleteProperty(process.env, key);
         } else {
-          process.env[key] = value;
+          Reflect.set(process.env, key, value);
         }
       }
       envApplied = true;
@@ -317,6 +344,7 @@ export async function createOpenClawTestState(
     restoreEnv: () => {
       if (envApplied) {
         snapshot.restore();
+        resetConfigRuntimeStateForTest();
         envApplied = false;
       }
     },

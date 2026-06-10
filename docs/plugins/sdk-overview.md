@@ -14,9 +14,8 @@ reference for **what to import** and **what you can register**.
 <Note>
   This page is for plugin authors using `openclaw/plugin-sdk/*` inside
   OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
-  that want to run agents through the Gateway, use the
-  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
-  instead.
+  that want to run agents through the Gateway, use
+  [Gateway integrations for external apps](/gateway/external-apps) instead.
 </Note>
 
 <Tip>
@@ -95,6 +94,7 @@ methods:
 | `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend           |
 | `api.registerChannel(...)`                       | Messaging channel                     |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
@@ -105,7 +105,29 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
 | `api.registerWebSearchProvider(...)`             | Web search                            |
 
+Embedding providers registered with `api.registerEmbeddingProvider(...)` must
+also be listed in `contracts.embeddingProviders` in the plugin manifest. This
+is the generic embedding surface for reusable vector generation. Memory search
+can consume this generic provider surface. The older
+`api.registerMemoryEmbeddingProvider(...)` and
+`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
+existing memory-specific providers migrate.
+
+Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
+the existing per-file batching contract unless their runtime explicitly sets
+`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
+to the host batch limits. Batch adapters that upload JSONL request files must
+split provider jobs before their upload-size cap as well as their request-count
+cap. The provider must return one embedding per input chunk in the same order as
+`batch.chunks`; omit the flag when the provider expects file-local batches or
+cannot preserve input ordering across a larger source-wide job.
+
 ### Tools and commands
+
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
 
 | Method                          | What it registers                             |
 | ------------------------------- | --------------------------------------------- |
@@ -115,6 +137,27 @@ methods:
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
+
+Guidance entries may be legacy strings, which apply to every prompt surface, or
+structured entries:
+
+```ts
+agentPromptGuidance: [
+  "Global command hint.",
+  { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
+];
+```
+
+Structured `surfaces` may include `openclaw_main`, `codex_app_server`,
+`cli_backend`, `acp_backend`, or `subagent`. `pi_main` remains a deprecated alias
+for `openclaw_main`. Omit `surfaces` for intentional all-surface guidance. Do
+not pass an empty `surfaces` array; it is rejected so accidental scope loss does
+not become global prompt text.
+
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
 
 ### Infrastructure
 
@@ -144,7 +187,7 @@ plugins.
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
 | `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
-| `api.registerTrustedToolPolicy(...)`                                                 | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
+| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                               |
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
 | `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
@@ -192,7 +235,10 @@ The contracts intentionally split authority:
 - External plugins can own session extensions, UI descriptors, commands, tool
   metadata, next-turn injections, and normal hooks.
 - Trusted tool policies run before ordinary `before_tool_call` hooks and are
-  bundled-only because they participate in host safety policy.
+  host-trusted. Bundled policies run first; installed-plugin policies require
+  explicit enablement plus their local ids in
+  `contracts.trustedToolPolicies`, and run next in plugin-load order. Policy ids
+  are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
@@ -217,16 +263,18 @@ Examples of non-Plan consumers:
 </Note>
 
 <Accordion title="When to use tool-result middleware">
-  Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when
+  Bundled plugins and explicitly enabled installed plugins with matching
+  manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
   they need to rewrite a tool result after execution and before the runtime
   feeds that result back into the model. This is the trusted runtime-neutral
   seam for async output reducers such as tokenjuice.
 
-Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted runtime, for example `["pi", "codex"]`. External plugins
-cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing. The old Pi-only embedded
-extension factory registration path has been removed.
+Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
+runtime, for example `["openclaw", "codex"]`. Installed plugins without that
+contract, or without explicit enablement, cannot register this middleware; keep
+normal OpenClaw plugin hooks for work that does not need pre-model tool-result
+timing. The old
+embedded-runner-only extension factory registration path has been removed.
 </Accordion>
 
 ### Gateway discovery registration
@@ -345,7 +393,7 @@ For an end-to-end authoring guide, see
 | `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
 | `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
 
-### Memory embedding adapters
+### Deprecated memory embedding adapters
 
 | Method                                         | What it registers                              |
 | ---------------------------------------------- | ---------------------------------------------- |
@@ -361,12 +409,12 @@ For an end-to-end authoring guide, see
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
-  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
-  plugin-defined id).
-- User config such as `agents.defaults.memorySearch.provider` and
-  `agents.defaults.memorySearch.fallback` resolves against those registered
-  adapter ids.
+- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
+  should use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`.
+- Existing memory-specific providers continue to work during the migration
+  window, but plugin inspection reports this as compatibility debt for
+  non-bundled plugins.
 
 ### Events and lifecycle
 

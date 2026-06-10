@@ -1,3 +1,4 @@
+// Codex tests cover trajectory plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -80,6 +81,43 @@ describe("Codex trajectory recorder", () => {
     expect(content).not.toContain("sk-other-secret-token");
     expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(true);
+  });
+
+  it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: { provider: "openai", api: "openai-responses" },
+        runtimePlan: {
+          observability: {
+            resolvedRef: "openai/gpt-5.5",
+            provider: "openai",
+            modelId: "gpt-5.5",
+            harnessId: "codex",
+          },
+        },
+      } as never,
+      env: {},
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    trajectoryRecorder.recordEvent("session.started");
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    expect(parsed.provider).toBe("openai");
+    expect(parsed.modelApi).toBe("openai-chatgpt-responses");
+    expect(parsed.modelId).toBe("gpt-5.5");
   });
 
   it("sanitizes session ids when resolving an override directory", async () => {

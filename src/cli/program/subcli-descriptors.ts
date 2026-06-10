@@ -1,7 +1,9 @@
+// Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
+/** Descriptor shape for root-level sub-CLI commands. */
 export type SubCliDescriptor = NamedCommandDescriptor;
 
 const subCliCommandCatalog = defineCommandDescriptorCatalog([
@@ -179,28 +181,46 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
 ] as const satisfies ReadonlyArray<SubCliDescriptor>);
 
-export const SUB_CLI_DESCRIPTORS = subCliCommandCatalog.descriptors;
+function filterPrivateQaItems<T>(
+  items: ReadonlyArray<T>,
+  getName: (item: T) => string,
+): ReadonlyArray<T> {
+  if (isPrivateQaCliEnabled()) {
+    return items;
+  }
+  return items.filter((item) => getName(item) !== "qa");
+}
 
+/** Visible sub-CLI descriptors after private QA gating. */
+export const SUB_CLI_DESCRIPTORS = filterPrivateQaItems(
+  subCliCommandCatalog.descriptors,
+  (descriptor) => descriptor.name,
+);
+
+/** Return visible sub-CLI descriptors in help/registration order. */
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  const descriptors = subCliCommandCatalog.getDescriptors();
-  if (isPrivateQaCliEnabled()) {
-    return descriptors;
-  }
-  return descriptors.filter((descriptor) => descriptor.name !== "qa");
+  return filterPrivateQaItems(
+    subCliCommandCatalog.getDescriptors(),
+    (descriptor) => descriptor.name,
+  );
 }
 
+/** Return visible sub-CLI names that own child subcommands. */
 export function getSubCliCommandsWithSubcommands(): string[] {
-  const commands = subCliCommandCatalog.getCommandsWithSubcommands();
-  if (isPrivateQaCliEnabled()) {
-    return commands;
-  }
-  return commands.filter((command) => command !== "qa");
+  return [
+    ...filterPrivateQaItems(
+      subCliCommandCatalog.getCommandsWithSubcommands(),
+      (command) => command,
+    ),
+  ];
 }
 
+/** Return visible sub-CLI names whose parent command should show help by default. */
 export function getSubCliParentDefaultHelpCommands(): string[] {
-  const commands = subCliCommandCatalog.getParentDefaultHelpCommands();
-  if (isPrivateQaCliEnabled()) {
-    return commands;
-  }
-  return commands.filter((command) => command !== "qa");
+  return [
+    ...filterPrivateQaItems(
+      subCliCommandCatalog.getParentDefaultHelpCommands(),
+      (command) => command,
+    ),
+  ];
 }

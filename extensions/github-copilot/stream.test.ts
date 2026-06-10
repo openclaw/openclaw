@@ -1,3 +1,4 @@
+// Github Copilot tests cover stream plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { buildCopilotDynamicHeaders } from "./stream.js";
 import {
@@ -64,6 +65,7 @@ describe("wrapCopilotAnthropicStream", () => {
       messages,
       hasImages: true,
     });
+    expect(expectedCopilotHeaders["Accept-Encoding"]).toBe("identity");
 
     void wrapped(
       {
@@ -117,14 +119,22 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
-  it("adds Copilot headers, preserves reasoning IDs, and rewrites message IDs before payload send", () => {
+  it("adds Copilot headers, sanitizes reasoning replay, and rewrites message IDs before payload send", () => {
     const reasoningId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
+    const overlongReasoningId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
     const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
-          { id: reasoningId, type: "reasoning" },
+          { id: reasoningId, type: "reasoning", encrypted_content: "valid-encrypted-payload" },
+          { type: "reasoning", encrypted_content: "idless-encrypted-payload", summary: [] },
+          {
+            id: overlongReasoningId,
+            type: "reasoning",
+            encrypted_content: "invalid-encrypted-payload",
+            summary: [],
+          },
           { id: messageId, type: "message" },
         ],
       };
@@ -173,7 +183,13 @@ describe("wrapCopilotAnthropicStream", () => {
       onPayload: options.onPayload,
     });
     expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
-    expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(payloads[0]?.input.map((item) => item.type)).toEqual([
+      "reasoning",
+      "reasoning",
+      "message",
+    ]);
+    expect(payloads[0]?.input[1]?.id).toBeUndefined();
+    expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
   it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {

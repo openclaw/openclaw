@@ -1,4 +1,6 @@
+// Control UI chat module implements build chat items behavior.
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
+import type { ChatQueueItem } from "../ui-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -8,7 +10,9 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
-import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
+import { trimAccumulatedStreamPrefix } from "./stream-text.ts";
+import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
+import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -17,9 +21,11 @@ export type BuildChatItemsProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  queue?: ChatQueueItem[];
   showToolCalls: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
+  historyRenderLimit?: number;
 };
 
 function appendCanvasBlockToAssistantMessage(
@@ -92,7 +98,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (!normalized) {
     return null;
   }
-  const cards = extractToolCards(toolMessage, "preview");
+  const cards = extractToolCardsCached(toolMessage, "preview");
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
@@ -187,13 +193,17 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
+    const senderLabel =
+      role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
+        ? (normalized.senderLabel ?? null)
+        : null;
     const timestamp = normalized.timestamp || Date.now();
+    const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -223,6 +233,10 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 }
 
 function collapseDuplicateDisplaySignature(message: unknown): string | null {
+  const marker = asRecord(message)?.["__openclaw"];
+  if (asRecord(marker)?.kind === "pending-send") {
+    return null;
+  }
   const normalized = safeNormalizeMessage(message);
   if (!normalized) {
     return null;
@@ -245,7 +259,8 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   if (!text) {
     return null;
   }
-  const senderLabel = role === "user" ? (normalized.senderLabel ?? "").trim() : "";
+  const senderLabel =
+    role === "user" || role === "assistant" ? (normalized.senderLabel ?? "").trim() : "";
   return `${role}:${senderLabel}:${text}`;
 }
 
@@ -277,12 +292,42 @@ function hasRenderableNormalizedMessage(message: unknown): boolean {
   if (!normalized) {
     return false;
   }
-  return normalized.content.length > 0 || Boolean(normalized.replyTarget);
+  const role = normalizeRoleForGrouping(normalized.role);
+  const hasVisibleSenderLabel = role === "assistant" && Boolean(normalized.senderLabel?.trim());
+  return normalized.content.length > 0 || Boolean(normalized.replyTarget) || hasVisibleSenderLabel;
 }
 
 function sanitizeStreamText(text: string): string {
   const stripped = stripMessageDisplayMetadataText(text);
   return stripped.trim().length > 0 ? stripped : "";
+}
+
+function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
+  if (typeof item.sendSubmittedAtMs !== "number" || item.sendState === "failed") {
+    return false;
+  }
+  return (
+    item.sendState === "waiting-model" ||
+    item.sendState === "sending" ||
+    item.sendState === "waiting-reconnect"
+  );
+}
+
+function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
+  const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
+  if (content.length === 0) {
+    return null;
+  }
+  return {
+    role: "user",
+    content,
+    timestamp: item.createdAt,
+    __openclaw: {
+      kind: "pending-send",
+      id: item.id,
+      state: item.sendState,
+    },
+  };
 }
 
 function rawMessageTimestamp(message: unknown): number | null {
@@ -304,6 +349,19 @@ function chatItemTimestamp(item: ChatItem): number | null {
       return null;
   }
   return null;
+}
+
+function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
+  const latestTimestamp = items.reduce<number | null>((latest, item) => {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp == null) {
+      return latest;
+    }
+    return latest == null || timestamp > latest ? timestamp : latest;
+  }, null);
+  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
+    ? latestTimestamp + 1
+    : desiredTimestamp;
 }
 
 function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
@@ -426,7 +484,18 @@ function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean
   return count;
 }
 
-function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): number {
+function resolveHistoryRenderLimit(limit: number | undefined): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return CHAT_HISTORY_RENDER_LIMIT;
+  }
+  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_LIMIT, Math.floor(limit)));
+}
+
+function resolveHistoryStartIndex(
+  messages: unknown[],
+  showToolCalls: boolean,
+  renderLimit: number,
+): number {
   let visibleCount = 0;
   let renderChars = 0;
   let startIndex = messages.length;
@@ -435,7 +504,7 @@ function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): 
     if (isHiddenToolMessage(message, showToolCalls)) {
       continue;
     }
-    if (visibleCount >= CHAT_HISTORY_RENDER_LIMIT) {
+    if (visibleCount >= renderLimit) {
       break;
     }
     const remainingBudget = Math.max(1, CHAT_HISTORY_RENDER_CHAR_BUDGET - renderChars + 1);
@@ -452,6 +521,7 @@ function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): 
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
+  const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
@@ -463,7 +533,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     text: string | null;
     timestamp: number | null;
   }>;
-  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls);
+  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
   const hiddenHistoryCount = countVisibleHistoryMessages(
     history.slice(0, historyStart),
     props.showToolCalls,
@@ -490,7 +560,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
     const raw = asRecord(msg) ?? {};
-    const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
       items.push({
         kind: "divider",
@@ -500,7 +570,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
             : `divider:compaction:${normalized.timestamp}:${i}`,
         label: "Compacted history",
         description:
-          "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
         action: {
           kind: "session-checkpoints",
           label: "Open checkpoints",
@@ -528,6 +598,29 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message: msg,
     });
   }
+  const queuedSends = Array.isArray(props.queue) ? props.queue : [];
+  for (const queued of queuedSends) {
+    if (!shouldRenderQueuedSendInThread(queued)) {
+      continue;
+    }
+    const message = queuedSendThreadMessage(queued);
+    if (!message) {
+      continue;
+    }
+    const searchQuery = props.searchQuery ?? "";
+    if (
+      props.searchOpen &&
+      searchQuery.trim() &&
+      !messageMatchesSearchQuery(message, searchQuery)
+    ) {
+      continue;
+    }
+    items.push({
+      kind: "message",
+      key: `pending-send:${queued.id}`,
+      message,
+    });
+  }
   for (const liftedCanvasSource of liftedCanvasSources) {
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
@@ -551,15 +644,21 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
+  let previousAccumulatedStreamText: string | null = null;
   for (let i = 0; i < maxLen; i++) {
     if (i < segments.length) {
       const text = sanitizeStreamText(segments[i].text);
+      const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
       if (text.length > 0) {
+        previousAccumulatedStreamText = text;
+      }
+      if (visibleText.length > 0) {
         items.push({
           kind: "stream",
           key: `stream-seg:${props.sessionKey}:${i}`,
-          text,
+          text: visibleText,
           startedAt: segments[i].ts,
+          isStreaming: false,
         });
       }
     }
@@ -575,13 +674,16 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
-    if (text.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(text).shouldSkip) {
+    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    const startedAt = timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now());
+    if (visibleText.length > 0) {
+      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
         items.push({
           kind: "stream",
           key,
-          text,
-          startedAt: props.streamStartedAt ?? Date.now(),
+          text: visibleText,
+          startedAt,
+          isStreaming: true,
         });
       }
     } else if (props.stream.trim().length === 0) {

@@ -1,3 +1,4 @@
+// Mantis Publish Pr Evidence tests cover mantis publish pr evidence script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   loadEvidenceManifest,
   publishArtifactFiles,
   renderEvidenceComment,
+  shouldPublishPrComment,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
 const tempDirs: string[] = [];
@@ -151,7 +153,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "content-type": "image/png",
       "x-amz-date": expect.any(String),
     });
-    expect(String((requests[0]?.headers as Record<string, string>).authorization)).toContain(
+    expect((requests[0].headers as Record<string, string>).authorization).toContain(
       "Credential=access/",
     );
     expect(String(requests[4]?.body)).toContain(
@@ -281,6 +283,54 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(body).toContain("- Overall: `true`");
     expect(body).not.toContain("<table");
     expect(body).not.toContain("<img ");
+    expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(true);
+    expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
+  });
+
+  it("does not publish PR comments for Telegram capture infrastructure failures", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
+    tempDirs.push(dir);
+    const manifestPath = path.join(dir, "mantis-evidence.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        artifacts: [],
+        comparison: {
+          baseline: {
+            expected: "no acceptable native Telegram Desktop visual artifact",
+            status: "skipped",
+          },
+          candidate: {
+            expected: "no acceptable native Telegram Desktop visual artifact",
+            status: "skipped",
+          },
+          pass: false,
+        },
+        id: "telegram-desktop-proof",
+        scenario: "telegram-desktop-proof",
+        schemaVersion: 1,
+        summary:
+          "Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
+        title: "Mantis Telegram Desktop Proof",
+      }),
+    );
+
+    const manifest = loadEvidenceManifest(manifestPath);
+    const body = renderEvidenceComment({
+      manifest,
+      marker: "<!-- mantis-telegram-desktop-proof -->",
+      rawBase: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1",
+      requestSource: "pull_request_target",
+      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
+      treeUrl: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/index.json",
+    });
+
+    expect(body).toContain(
+      "Summary: Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
+    );
+    expect(body).toContain("- Overall: `false`");
+    expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(false);
+    expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
   });
 
   it("rejects artifact paths that escape the manifest directory", () => {

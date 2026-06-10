@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import {
   fetchRemoteEmbeddingVectors,
   resolveRemoteEmbeddingClient,
@@ -47,7 +48,11 @@ export async function createOpenAiEmbeddingProvider(
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
   };
 
-  const embed = async (input: string[], kind: "query" | "document"): Promise<number[][]> => {
+  const embed = async (
+    input: string[],
+    kind: "query" | "document",
+    signal?: AbortSignal,
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -57,6 +62,7 @@ export async function createOpenAiEmbeddingProvider(
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
+      signal,
       body: {
         model: client.model,
         input,
@@ -76,11 +82,12 @@ export async function createOpenAiEmbeddingProvider(
       ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
         : {}),
-      embedQuery: async (text) => {
-        const [vec] = await embed([text], "query");
+      embedQuery: async (text, optionsValue) => {
+        const [vec] = await embed([text], "query", optionsValue?.signal);
         return vec ?? [];
       },
-      embedBatch: async (texts) => await embed(texts, "document"),
+      embedBatch: async (texts, optionsLocal) =>
+        await embed(texts, "document", optionsLocal?.signal),
     },
     client,
   };
@@ -90,7 +97,7 @@ async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
   const client = await resolveRemoteEmbeddingClient({
-    provider: "openai",
+    provider: options.provider ?? "openai",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,

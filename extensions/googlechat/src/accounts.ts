@@ -1,3 +1,4 @@
+// Googlechat plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -36,7 +37,12 @@ const JsonRecordSchema = z.record(z.string(), z.unknown());
 const {
   listAccountIds: listGoogleChatAccountIds,
   resolveDefaultAccountId: resolveDefaultGoogleChatAccountId,
-} = createAccountListHelpers("googlechat");
+} = createAccountListHelpers("googlechat", {
+  implicitDefaultAccount: {
+    channelKeys: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+    envVars: [ENV_SERVICE_ACCOUNT, ENV_SERVICE_ACCOUNT_FILE],
+  },
+});
 export { listGoogleChatAccountIds, resolveDefaultGoogleChatAccountId };
 
 function mergeGoogleChatAccountConfig(

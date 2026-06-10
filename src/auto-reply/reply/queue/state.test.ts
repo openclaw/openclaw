@@ -1,3 +1,4 @@
+// Tests queue state storage, dedupe, and cleanup primitives.
 import { afterEach, describe, expect, it } from "vitest";
 import { clearFollowupQueue, getFollowupQueue, refreshQueuedFollowupSession } from "./state.js";
 import type { FollowupRun } from "./types.js";
@@ -67,7 +68,7 @@ describe("refreshQueuedFollowupSession", () => {
     const queuedRun: FollowupRun = {
       prompt: "queued message",
       enqueuedAt: Date.now(),
-      run: makeRun(),
+      run: { ...makeRun(), hasAutoFallbackProvenance: true },
     };
     queue.items.push(queuedRun);
 

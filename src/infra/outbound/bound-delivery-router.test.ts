@@ -1,7 +1,9 @@
+// Covers bound delivery routing for active bindings, requester matching,
+// ambiguous bindings, and fail-closed fallback reasons.
 import { beforeEach, describe, expect, it } from "vitest";
 import { createBoundDeliveryRouter } from "./bound-delivery-router.js";
 import {
-  __testing,
+  testing,
   registerSessionBindingAdapter,
   type SessionBindingRecord,
 } from "./session-binding-service.js";
@@ -44,7 +46,7 @@ function registerRuntimeSessionBindings(
 
 describe("bound delivery router", () => {
   beforeEach(() => {
-    __testing.resetSessionBindingAdaptersForTests();
+    testing.resetSessionBindingAdaptersForTests();
   });
 
   const resolveDestination = (params: {

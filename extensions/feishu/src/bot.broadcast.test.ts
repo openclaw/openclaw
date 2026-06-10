@@ -1,3 +1,4 @@
+// Feishu tests cover bot.broadcast plugin behavior.
 import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -19,6 +20,7 @@ const { mockCreateFeishuReplyDispatcher, mockCreateFeishuClient, mockResolveAgen
       },
       replyOptions: {},
       markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
     })),
     mockCreateFeishuClient: vi.fn(),
     mockResolveAgentRoute: vi.fn(),
@@ -115,8 +117,8 @@ describe("broadcast dispatch", () => {
       media: {
         saveMediaBuffer: mockSaveMediaBuffer,
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+      inbound: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
             return {
@@ -149,26 +151,6 @@ describe("broadcast dispatch", () => {
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPrepared: vi.fn(
-          async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
-            await turn.recordInboundSession({
-              storePath: turn.storePath,
-              sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-              ctx: turn.ctxPayload,
-              groupResolution: turn.record?.groupResolution,
-              createIfMissing: turn.record?.createIfMissing,
-              updateLastRoute: turn.record?.updateLastRoute,
-              onRecordError: turn.record?.onRecordError ?? (() => undefined),
-            });
-            return {
-              admission: { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: turn.ctxPayload,
-              routeSessionKey: turn.routeSessionKey,
-              dispatchResult: await turn.runDispatch(),
-            };
-          },
-        ),
       },
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue([]),
@@ -247,6 +229,20 @@ describe("broadcast dispatch", () => {
       lastRoutePolicy: "session",
       matchedBy: "default",
     });
+    mockCreateFeishuReplyDispatcher.mockReturnValue({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    });
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
@@ -284,6 +280,43 @@ describe("broadcast dispatch", () => {
     const sessionKeys = finalizeInboundContextCalls.map((call) => call.SessionKey);
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
+    const recordCalls = (
+      runtimeStub.channel.session.recordInboundSession as unknown as {
+        mock: {
+          calls: Array<
+            [
+              {
+                updateLastRoute?: {
+                  sessionKey?: unknown;
+                  channel?: unknown;
+                  to?: unknown;
+                };
+              },
+            ]
+          >;
+        };
+      }
+    ).mock.calls;
+    expect(
+      recordCalls
+        .map(([call]) => ({
+          sessionKey: call.updateLastRoute?.["sessionKey"],
+          channel: call.updateLastRoute?.["channel"],
+          to: call.updateLastRoute?.["to"],
+        }))
+        .toSorted((left, right) => String(left.sessionKey).localeCompare(String(right.sessionKey))),
+    ).toEqual([
+      {
+        sessionKey: "agent:main:feishu:group:oc-broadcast-group",
+        channel: "feishu",
+        to: "chat:oc-broadcast-group",
+      },
+      {
+        sessionKey: "agent:susan:feishu:group:oc-broadcast-group",
+        channel: "feishu",
+        to: "chat:oc-broadcast-group",
+      },
+    ]);
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
     expect(
       finalizeInboundContextCalls
@@ -310,6 +343,130 @@ describe("broadcast dispatch", () => {
       | { agentId?: string }
       | undefined;
     expect(dispatcherParams?.agentId).toBe("main");
+  });
+
+  it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {
+    mockDispatchReplyFromConfig
+      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
+      .mockResolvedValueOnce({
+        queuedFinal: false,
+        counts: { final: 0 },
+        noVisibleReplyFallbackEligible: true,
+      });
+    const ensureNoVisibleReplyFallback = vi.fn();
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback,
+    });
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-zero-final",
+      text: "hello @bot",
+      botMentioned: true,
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
+      "broadcast-dispatch-complete-no-visible-reply",
+    );
+  });
+
+  it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
+    mockDispatchReplyFromConfig
+      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
+      .mockResolvedValueOnce({
+        queuedFinal: true,
+        counts: { final: 1 },
+      });
+    const ensureNoVisibleReplyFallback = vi.fn();
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 1 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback,
+    });
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-final-failed",
+      text: "hello @bot",
+      botMentioned: true,
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
+      "broadcast-dispatch-complete-no-visible-reply",
+    );
+  });
+
+  it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {
+    mockDispatchReplyFromConfig
+      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
+      .mockResolvedValueOnce({
+        queuedFinal: false,
+        counts: { final: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+        noVisibleReplyFallbackEligible: true,
+      });
+    const ensureNoVisibleReplyFallback = vi.fn();
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback,
+    });
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-source-suppressed",
+      text: "hello @bot",
+      botMentioned: true,
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(ensureNoVisibleReplyFallback).not.toHaveBeenCalled();
   });
 
   it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {

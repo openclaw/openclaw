@@ -1,3 +1,8 @@
+/**
+ * Subagent registry record types.
+ *
+ * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
+ */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
@@ -19,6 +24,64 @@ export type PendingFinalDeliveryPayload = {
   frozenResultText?: string | null;
   fallbackFrozenResultText?: string | null;
   wakeOnDescendantSettle?: boolean;
+};
+
+export type SubagentExecutionState = {
+  status: "running" | "interrupted" | "terminal";
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunOutcome;
+  interruptedAt?: number;
+  interruptionReason?: "gateway-restart" | "lost-execution-context";
+  transcriptFile?: string;
+};
+
+export type SubagentCompletionState = {
+  required: boolean;
+  resultText?: string | null;
+  capturedAt?: number;
+  fallbackResultText?: string | null;
+  fallbackCapturedAt?: number;
+};
+
+export type SubagentCompletionDeliveryState = {
+  status:
+    | "not_required"
+    | "pending"
+    | "in_progress"
+    | "delivered"
+    | "failed"
+    | "suspended"
+    | "discarded";
+  payload?: PendingFinalDeliveryPayload;
+  createdAt?: number;
+  enqueuedAt?: number;
+  deliveredAt?: number;
+  announcedAt?: number;
+  lastAttemptAt?: number;
+  attemptCount?: number;
+  lastError?: string | null;
+  steeringLeaseId?: string;
+  steeringLeasedAt?: number;
+  steeringInjectedAt?: number;
+  suspendedAt?: number;
+  suspendedReason?: "retry-limit" | "expiry";
+  discardedAt?: number;
+  discardReason?: "expired" | "pressure-pruned";
+  discardedPayloadSummary?: {
+    requesterSessionKey?: string;
+    childSessionKey?: string;
+    childRunId?: string;
+    endedAt?: number;
+    status?: string;
+    lastError?: string | null;
+  };
+  lastDropReason?:
+    | "queue_cap"
+    | "parent_run_ended"
+    | "sink_unavailable"
+    | "dedupe"
+    | "waiting_for_requester_turn";
 };
 
 export type SubagentRunRecord = {
@@ -48,26 +111,17 @@ export type SubagentRunRecord = {
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
   expectsCompletionMessage?: boolean;
-  announceRetryCount?: number;
-  lastAnnounceRetryAt?: number;
-  lastAnnounceDeliveryError?: string;
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;
-  frozenResultText?: string | null;
-  frozenResultCapturedAt?: number;
-  fallbackFrozenResultText?: string | null;
-  fallbackFrozenResultCapturedAt?: number;
+  execution?: SubagentExecutionState;
+  completion?: SubagentCompletionState;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
-  /** Durable marker that final user delivery still needs a retry/resume pass. */
-  pendingFinalDelivery?: boolean;
-  pendingFinalDeliveryCreatedAt?: number;
-  pendingFinalDeliveryLastAttemptAt?: number;
-  pendingFinalDeliveryAttemptCount?: number;
-  pendingFinalDeliveryLastError?: string | null;
-  pendingFinalDeliveryPayload?: PendingFinalDeliveryPayload;
-  completionAnnouncedAt?: number;
+  /** Set after cleanupBrowserSessionsForLifecycleEnd has been dispatched once. */
+  browserCleanupDispatchedAt?: number;
+  /** Durable outbox marker for parent/external completion delivery. */
+  delivery?: SubagentCompletionDeliveryState;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

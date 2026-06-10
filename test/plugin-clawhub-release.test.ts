@@ -1,5 +1,13 @@
+// Plugin ClawHub release tests validate plugin release metadata and artifacts.
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -61,7 +69,7 @@ describe("collectClawHubPublishablePluginPackages", () => {
     });
 
     expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
-      "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
+      "openclaw.compat.pluginApi is required for external code plugin packages.",
     );
   });
 
@@ -327,6 +335,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(plan.skippedPublished).toHaveLength(1);
     expect(plan.skippedPublished[0]).toEqual({
       alreadyPublished: true,
+      artifactName: "clawhub-package-openclaw-demo-plugin-2026.4.1",
       channel: "stable",
       extensionId: "demo-plugin",
       packageDir: "extensions/demo-plugin",
@@ -366,6 +375,9 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
 
     expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+    expect(plan.candidates.map((plugin) => plugin.artifactName)).toEqual([
+      "clawhub-package-openclaw-demo-plugin-2026.4.1",
+    ]);
   });
 });
 
@@ -411,6 +423,34 @@ describe("collectClawHubOpenClawOwnerErrors", () => {
 
     expect(errors).toStrictEqual([]);
   });
+
+  it("bounds ClawHub owner metadata response bodies", async () => {
+    await expect(
+      collectClawHubOpenClawOwnerErrors({
+        plugins: [{ packageName: "@openclaw/demo-plugin" }],
+        registryBaseUrl: "https://clawhub.ai",
+        fetchImpl: async () =>
+          new Response("{}", {
+            status: 200,
+            headers: { "content-length": String(1024 * 1024 + 1) },
+          }),
+      }),
+    ).rejects.toThrow(
+      "ClawHub package owner response for @openclaw/demo-plugin response body exceeded 1048576 bytes.",
+    );
+  });
+
+  it("bounds streamed ClawHub owner metadata bodies", async () => {
+    await expect(
+      collectClawHubOpenClawOwnerErrors({
+        plugins: [{ packageName: "@openclaw/demo-plugin" }],
+        registryBaseUrl: "https://clawhub.ai",
+        fetchImpl: async () => new Response("x".repeat(1024 * 1024 + 1), { status: 200 }),
+      }),
+    ).rejects.toThrow(
+      "ClawHub package owner response for @openclaw/demo-plugin response body exceeded 1048576 bytes.",
+    );
+  });
 });
 
 describe("plugin-clawhub-publish.sh", () => {
@@ -425,6 +465,9 @@ describe("plugin-clawhub-publish.sh", () => {
       `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
+if [[ "\${1:-}" == "--workdir" ]]; then
+  shift 2
+fi
 if [[ "\${1:-}" == "package" && "\${2:-}" == "pack" ]]; then
   pack_destination=""
   while [[ "$#" -gt 0 ]]; do
@@ -469,10 +512,78 @@ exit 0
     expect(output).toContain("Publish command: CLAWHUB_WORKDIR=");
     expect(output).toContain("Resolved ClawPack:");
     const invocations = readFileSync(markerPath, "utf8");
-    expect(invocations).toContain("package pack ./extensions/demo-plugin");
+    const resolvedRepoDir = realpathSync(repoDir);
+    expect(invocations).toContain(`--workdir ${resolvedRepoDir}`);
+    expect(invocations).toContain(
+      `package pack ${join(resolvedRepoDir, "extensions/demo-plugin")}`,
+    );
     expect(invocations).toContain("package publish ");
     expect(invocations).toContain(".tgz --tags latest");
     expect(invocations).toContain("--dry-run");
+  });
+
+  it("packs a reusable workflow artifact without publishing", () => {
+    const repoDir = createTempPluginRepo();
+    const binDir = join(repoDir, "bin");
+    const markerPath = join(repoDir, "clawhub-invoked");
+    const outputDir = join(repoDir, "clawhub-artifacts");
+    mkdirSync(binDir, { recursive: true });
+    const clawhubPath = join(binDir, "clawhub");
+    writeFileSync(
+      clawhubPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
+if [[ "\${1:-}" == "--workdir" ]]; then
+  shift 2
+fi
+if [[ "\${1:-}" == "package" && "\${2:-}" == "pack" ]]; then
+  pack_destination=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --pack-destination)
+        pack_destination="\${2:-}"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+  mkdir -p "$pack_destination"
+  pack_path="$pack_destination/openclaw-demo-plugin-2026.4.1.tgz"
+  printf 'fake tgz\\n' > "$pack_path"
+  printf '{"path":"%s","name":"@openclaw/demo-plugin","version":"2026.4.1"}\\n' "$pack_path"
+fi
+exit 0
+`,
+    );
+    chmodSync(clawhubPath, 0o755);
+
+    const output = execFileSync(
+      "bash",
+      [
+        join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+        "--pack",
+        "extensions/demo-plugin",
+      ],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: outputDir,
+          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(output).toContain("Packed ClawPack:");
+    expect(existsSync(join(outputDir, "openclaw-demo-plugin-2026.4.1.tgz"))).toBe(true);
+    const invocations = readFileSync(markerPath, "utf8");
+    expect(invocations).toContain("package pack ");
+    expect(invocations).not.toContain("package publish ");
   });
 });
 

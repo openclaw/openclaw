@@ -1,3 +1,4 @@
+// Whatsapp helper module supports test helpers behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -201,16 +202,29 @@ function resolveSenderLabelMock(sender?: TestInboundEnvelopeParams["sender"]) {
   return display || idPart || undefined;
 }
 
+function resolveDirectEnvelopeBodyLabelMock(from?: string) {
+  const label = sanitizeEnvelopeHeaderPart(from?.trim() || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  if (idMarkerIndex > 0) {
+    const displayLabel = label.slice(0, idMarkerIndex).trim();
+    return displayLabel.includes(":") ? "(sender)" : displayLabel;
+  }
+  return label.includes(":") ? "(sender)" : label;
+}
+
 function formatInboundEnvelopeMock(params: TestInboundEnvelopeParams) {
   const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
   const isDirect = !chatType || chatType === "direct";
   const sender = params.senderLabel?.trim() || resolveSenderLabelMock(params.sender);
+  const directSender = resolveDirectEnvelopeBodyLabelMock(params.from);
   const body =
     isDirect && params.fromMe
       ? `(self): ${params.body}`
-      : !isDirect && sender
-        ? `${sanitizeEnvelopeHeaderPart(sender)}: ${params.body}`
-        : params.body;
+      : isDirect && directSender
+        ? `${directSender}: ${params.body}`
+        : !isDirect && sender
+          ? `${sanitizeEnvelopeHeaderPart(sender)}: ${params.body}`
+          : params.body;
   const parts = [sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel")];
   const from = params.from?.trim();
   if (from) {
@@ -535,6 +549,13 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
 }));
 
 vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
+  createChannelHistoryWindow: (params: { historyMap: Map<string, unknown[]> }) => ({
+    record: (recordParams: { historyKey: string; limit: number; entry: unknown }) => {
+      const current = params.historyMap.get(recordParams.historyKey) ?? [];
+      const next = [...current, recordParams.entry].slice(-recordParams.limit);
+      params.historyMap.set(recordParams.historyKey, next);
+    },
+  }),
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
   implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: normalizePhoneLikeToE164,

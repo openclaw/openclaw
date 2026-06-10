@@ -1,10 +1,14 @@
+// Main interactive configure/update wizard implementation.
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
@@ -14,8 +18,6 @@ import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { isPlainObject, resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -52,6 +54,7 @@ import {
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
+import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
@@ -63,8 +66,7 @@ const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigMo
 );
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(typeof value === "string" ? value.trim() : value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parsePort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -370,6 +372,7 @@ async function promptWebToolsConfig(
   };
 }
 
+/** Run the configure/update wizard, optionally limited to selected sections. */
 export async function runConfigureWizard(
   opts: ConfigureWizardParams,
   runtime: RuntimeEnv = defaultRuntime,
@@ -406,74 +409,86 @@ export async function runConfigureWizard(
       }
     }
 
-    const localUrl = "ws://127.0.0.1:18789";
-    const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
-    const localProbePromise = (async () => {
-      const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([
-        resolveGatewaySecretInputForWizard({
-          cfg: baseConfig,
-          value: baseConfig.gateway?.auth?.token,
-          path: "gateway.auth.token",
-        }),
-        resolveGatewaySecretInputForWizard({
-          cfg: baseConfig,
-          value: baseConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-        }),
-      ]);
-      return probeGatewayReachable({
-        url: localUrl,
-        token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
-        password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
-        timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
-      });
-    })();
-    const remoteProbePromise = remoteUrl
-      ? (async () => {
-          const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
+    const selectedSections = opts.sections;
+    const shouldPromptGatewayRunMode =
+      !selectedSections ||
+      selectedSections.includes("gateway") ||
+      selectedSections.includes("daemon") ||
+      selectedSections.includes("health");
+    const promptGatewayRunMode = async (): Promise<OnboardMode> => {
+      const localUrl = "ws://127.0.0.1:18789";
+      const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
+      const localProbePromise = (async () => {
+        const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([
+          resolveGatewaySecretInputForWizard({
             cfg: baseConfig,
-            value: baseConfig.gateway?.remote?.token,
-            path: "gateway.remote.token",
-          });
-          return probeGatewayReachable({
-            url: remoteUrl,
-            token: baseRemoteProbeToken,
-            timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
-          });
-        })()
-      : Promise.resolve(null);
-    const [localProbe, remoteProbe] = await Promise.all([localProbePromise, remoteProbePromise]);
+            value: baseConfig.gateway?.auth?.token,
+            path: "gateway.auth.token",
+          }),
+          resolveGatewaySecretInputForWizard({
+            cfg: baseConfig,
+            value: baseConfig.gateway?.auth?.password,
+            path: "gateway.auth.password",
+          }),
+        ]);
+        return probeGatewayReachable({
+          url: localUrl,
+          token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
+          password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
+          timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
+        });
+      })();
+      const remoteProbePromise = remoteUrl
+        ? (async () => {
+            const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
+              cfg: baseConfig,
+              value: baseConfig.gateway?.remote?.token,
+              path: "gateway.remote.token",
+            });
+            return probeGatewayReachable({
+              url: remoteUrl,
+              token: baseRemoteProbeToken,
+              timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
+            });
+          })()
+        : Promise.resolve(null);
+      const [localProbe, remoteProbe] = await Promise.all([localProbePromise, remoteProbePromise]);
+      return guardCancel(
+        await select({
+          message: "Where will the Gateway run?",
+          options: [
+            {
+              value: "local",
+              label: "Local (this machine)",
+              hint: localProbe.ok
+                ? `Gateway reachable (${localUrl})`
+                : `No gateway detected (${localUrl})`,
+            },
+            {
+              value: "remote",
+              label: "Remote (info-only)",
+              hint: !remoteUrl
+                ? "No remote URL configured yet"
+                : remoteProbe?.ok
+                  ? `Gateway reachable (${remoteUrl})`
+                  : `Configured but unreachable (${remoteUrl})`,
+            },
+          ],
+        }),
+        runtime,
+      );
+    };
 
-    const mode = guardCancel(
-      await select({
-        message: "Where will the Gateway run?",
-        options: [
-          {
-            value: "local",
-            label: "Local (this machine)",
-            hint: localProbe.ok
-              ? `Gateway reachable (${localUrl})`
-              : `No gateway detected (${localUrl})`,
-          },
-          {
-            value: "remote",
-            label: "Remote (info-only)",
-            hint: !remoteUrl
-              ? "No remote URL configured yet"
-              : remoteProbe?.ok
-                ? `Gateway reachable (${remoteUrl})`
-                : `Configured but unreachable (${remoteUrl})`,
-          },
-        ],
-      }),
-      runtime,
-    );
+    const mode = shouldPromptGatewayRunMode ? await promptGatewayRunMode() : "local";
+    const metadataMode: OnboardMode =
+      shouldPromptGatewayRunMode || baseConfig.gateway?.mode !== "remote" ? mode : "remote";
+    const shouldSkipGatewaySummary = !shouldPromptGatewayRunMode;
 
-    if (mode === "remote") {
+    if (shouldPromptGatewayRunMode && mode === "remote") {
       let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
       remoteConfig = applyWizardMetadata(remoteConfig, {
         command: opts.command,
-        mode,
+        mode: metadataMode,
       });
       const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: remoteConfig,
@@ -489,7 +504,7 @@ export async function runConfigureWizard(
     let nextConfig = { ...baseConfig };
     let mergeBaseConfig = structuredClone(baseConfig);
     let didSetGatewayMode = false;
-    if (nextConfig.gateway?.mode !== "local") {
+    if (shouldPromptGatewayRunMode && nextConfig.gateway?.mode !== "local") {
       nextConfig = {
         ...nextConfig,
         gateway: {
@@ -508,7 +523,7 @@ export async function runConfigureWizard(
     const persistConfig = async () => {
       nextConfig = applyWizardMetadata(nextConfig, {
         command: opts.command,
-        mode,
+        mode: metadataMode,
       });
 
       // Retry loop: if config was mutated by a plugin, re-read and merge before retry
@@ -627,11 +642,11 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      gatewayPort = Number.parseInt(portInput, 10);
+      gatewayPort = parsePort(portInput) ?? gatewayPort;
     };
 
-    if (opts.sections) {
-      const selected = opts.sections;
+    if (selectedSections) {
+      const selected = selectedSections;
       if (!selected || selected.length === 0) {
         outro("No configuration changes selected.");
         return;
@@ -765,6 +780,20 @@ export async function runConfigureWizard(
         outro("No configuration changes selected.");
         return;
       }
+    }
+
+    if (shouldSkipGatewaySummary) {
+      const remoteUrl = normalizeOptionalString(nextConfig.gateway?.remote?.url);
+      if (remoteUrl) {
+        note(
+          ["Remote Gateway:", remoteUrl, "Docs: https://docs.openclaw.ai/gateway/remote"].join(
+            "\n",
+          ),
+          "Gateway",
+        );
+      }
+      outro("Configuration updated.");
+      return;
     }
 
     const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);

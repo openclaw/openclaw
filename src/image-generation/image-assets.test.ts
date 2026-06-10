@@ -1,3 +1,4 @@
+/** Tests image asset parsing, MIME sniffing, and OpenAI-compatible response conversion. */
 import { describe, expect, it } from "vitest";
 import {
   generatedImageAssetFromDataUrl,
@@ -90,6 +91,26 @@ describe("image asset helpers", () => {
         { defaultMimeType: "image/png" },
       ),
     ).toEqual([]);
+  });
+
+  it("rejects malformed OpenAI-compatible image responses in strict mode", () => {
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(
+        {
+          data: [{ b64_json: "not-base64!" }],
+        },
+        {
+          defaultMimeType: "image/png",
+          malformedResponseError: "Sample image response malformed",
+        },
+      ),
+    ).toThrow("Sample image response malformed");
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(
+        { data: { b64_json: Buffer.from("png").toString("base64") } },
+        { malformedResponseError: "Sample image response malformed" },
+      ),
+    ).toThrow("Sample image response malformed");
   });
 
   it("resolves source upload filenames from explicit names or MIME types", () => {

@@ -1,4 +1,6 @@
+// Qa Lab plugin module implements app behavior.
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
+import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   type Bootstrap,
@@ -16,7 +18,6 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
-
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
   if (!response.ok) {
@@ -133,15 +134,17 @@ function loadCaptureSavedViews(): CaptureSavedView[] {
     if (!raw) {
       return [];
     }
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as CaptureSavedView[]) : [];
+    return normalizeCaptureSavedViews(JSON.parse(raw) as unknown);
   } catch {
     return [];
   }
 }
 
 function persistCaptureSavedViews(savedViews: CaptureSavedView[]) {
-  localStorage.setItem(CAPTURE_SAVED_VIEWS_KEY, JSON.stringify(savedViews));
+  localStorage.setItem(
+    CAPTURE_SAVED_VIEWS_KEY,
+    JSON.stringify(normalizeCaptureSavedViews(savedViews)),
+  );
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -318,7 +321,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   function isSelectOpen(): boolean {
     const active = document.activeElement;
-    return !!active && root.contains(active) && active.tagName === "SELECT";
+    return active !== null && root.contains(active) && active.tagName === "SELECT";
   }
 
   /* ---------- Data fetching ---------- */
@@ -668,22 +671,26 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   function applyCaptureSavedView(view: CaptureSavedView) {
-    state.selectedCaptureSessionIds = [...view.sessionIds];
-    state.captureKindFilter = [...view.kindFilter];
-    state.captureProviderFilter = [...view.providerFilter];
-    state.captureHostFilter = [...view.hostFilter];
-    state.captureSearchText = view.searchText;
-    state.captureHeaderMode = view.headerMode;
-    state.captureViewMode = view.viewMode;
-    state.captureGroupMode = view.groupMode;
-    state.captureTimelineLaneMode = view.timelineLaneMode;
-    state.captureTimelineLaneSort = view.timelineLaneSort;
-    state.captureTimelineZoom = view.timelineZoom;
-    state.captureTimelineSparklineMode = view.timelineSparklineMode;
-    state.captureErrorsOnly = view.errorsOnly;
-    state.captureDetailPlacement = view.detailPlacement;
-    state.capturePayloadDetailLayout = view.payloadLayout;
-    state.capturePayloadExtent = view.payloadExtent;
+    const normalized = normalizeCaptureSavedView(view);
+    if (!normalized) {
+      return;
+    }
+    state.selectedCaptureSessionIds = [...normalized.sessionIds];
+    state.captureKindFilter = [...normalized.kindFilter];
+    state.captureProviderFilter = [...normalized.providerFilter];
+    state.captureHostFilter = [...normalized.hostFilter];
+    state.captureSearchText = normalized.searchText;
+    state.captureHeaderMode = normalized.headerMode;
+    state.captureViewMode = normalized.viewMode;
+    state.captureGroupMode = normalized.groupMode;
+    state.captureTimelineLaneMode = normalized.timelineLaneMode;
+    state.captureTimelineLaneSort = normalized.timelineLaneSort;
+    state.captureTimelineZoom = normalized.timelineZoom;
+    state.captureTimelineSparklineMode = normalized.timelineSparklineMode;
+    state.captureErrorsOnly = normalized.errorsOnly;
+    state.captureDetailPlacement = normalized.detailPlacement;
+    state.capturePayloadDetailLayout = normalized.payloadLayout;
+    state.capturePayloadExtent = normalized.payloadExtent;
     state.selectedCaptureEventKey = null;
   }
 
@@ -952,28 +959,29 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
-      ?.addEventListener("click", async () => {
-        if (state.selectedCaptureSessionIds.length === 0) {
-          return;
-        }
-        const confirmed = window.confirm(
-          `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
-            state.selectedCaptureSessionIds.length === 1 ? "" : "s"
-          }?`,
-        );
-        if (!confirmed) {
-          return;
-        }
-        await postJson("/api/capture/delete-sessions", {
-          sessionIds: state.selectedCaptureSessionIds,
-        });
-        state.selectedCaptureSessionIds = [];
-        state.selectedCaptureEventKey = null;
-        await refresh();
+      ?.addEventListener("click", () => {
+        void (async () => {
+          if (state.selectedCaptureSessionIds.length === 0) {
+            return;
+          }
+          const confirmed = window.confirm(
+            `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
+              state.selectedCaptureSessionIds.length === 1 ? "" : "s"
+            }?`,
+          );
+          if (!confirmed) {
+            return;
+          }
+          await postJson("/api/capture/delete-sessions", {
+            sessionIds: state.selectedCaptureSessionIds,
+          });
+          state.selectedCaptureSessionIds = [];
+          state.selectedCaptureEventKey = null;
+          await refresh();
+        })();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-purge-all")
-      ?.addEventListener("click", async () => {
+    root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", () => {
+      void (async () => {
         const confirmed = window.confirm("Purge all captured sessions, events, and blobs?");
         if (!confirmed) {
           return;
@@ -982,7 +990,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.selectedCaptureSessionIds = [];
         state.selectedCaptureEventKey = null;
         await refresh();
-      });
+      })();
+    });
     root.querySelector<HTMLSelectElement>("#capture-preset")?.addEventListener("change", (e) => {
       state.captureQueryPreset = (e.currentTarget as HTMLSelectElement)
         .value as UiState["captureQueryPreset"];
@@ -1321,12 +1330,12 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
     root.querySelectorAll<HTMLButtonElement>("[data-copy-text]").forEach((node) => {
-      node.addEventListener("click", async () => {
+      node.addEventListener("click", () => {
         const text = node.dataset.copyText ?? "";
         if (!text) {
           return;
         }
-        await navigator.clipboard.writeText(text).catch(() => undefined);
+        void navigator.clipboard.writeText(text).catch(() => undefined);
       });
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {

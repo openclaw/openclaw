@@ -1,3 +1,4 @@
+// Applies an onboarding auth choice through provider setup flows and legacy normalization.
 import { formatCliCommand } from "../cli/command-format.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
@@ -10,7 +11,7 @@ async function normalizeLegacyChoice(
   if (authChoice === "oauth") {
     return "setup-token";
   }
-  if (typeof authChoice !== "string" || !authChoice.endsWith("-cli")) {
+  if (typeof authChoice !== "string") {
     return authChoice;
   }
   const { normalizeLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");
@@ -60,6 +61,7 @@ async function formatDeprecatedProviderChoiceError(
   return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
 }
 
+/** Apply a selected auth choice, returning the mutated config or retry/model override signals. */
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {

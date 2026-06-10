@@ -1,3 +1,5 @@
+// Builds provider-aware auth-choice options and grouped onboarding menus.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
@@ -13,14 +15,33 @@ function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
   return a.label.localeCompare(b.label);
 }
 
+const FEATURED_AUTH_GROUP_ORDER = new Map<string, number>([
+  ["openai", 0],
+  ["anthropic", 1],
+  ["xai", 2],
+  ["google", 3],
+  ["openrouter", 4],
+]);
+
 function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
   const priorityA = a.assistantPriority ?? 0;
   const priorityB = b.assistantPriority ?? 0;
   return priorityA - priorityB || compareOptionLabels(a, b);
 }
 
-function compareGroupLabels(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
-  return a.label.localeCompare(b.label);
+function compareLabelsCaseInsensitive(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: "base" });
+}
+
+/** Sort auth-choice groups with featured providers first, then stable labels. */
+export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
+  const priorityA = FEATURED_AUTH_GROUP_ORDER.get(a.value) ?? Number.POSITIVE_INFINITY;
+  const priorityB = FEATURED_AUTH_GROUP_ORDER.get(b.value) ?? Number.POSITIVE_INFINITY;
+  return (
+    priorityA - priorityB ||
+    compareLabelsCaseInsensitive(a.label, b.label) ||
+    compareLabelsCaseInsensitive(a.value, b.value)
+  );
 }
 
 function resolveProviderChoiceOptions(params?: {
@@ -56,6 +77,7 @@ function resolveProviderChoiceOptions(params?: {
   );
 }
 
+/** Format all currently available auth-choice values for CLI help/validation. */
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;
@@ -71,9 +93,10 @@ export function formatAuthChoiceChoicesForCli(params?: {
     }).map((contribution) => contribution.option.value),
   ];
 
-  return [...new Set(values)].join("|");
+  return uniqueStrings(values).join("|");
 }
 
+/** Build flat auth-choice options from core choices plus provider setup flows. */
 export function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
@@ -108,6 +131,7 @@ export function buildAuthChoiceOptions(params: {
   return options;
 }
 
+/** Build grouped assistant-visible auth choices for the onboarding prompt. */
 export function buildAuthChoiceGroups(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
@@ -145,7 +169,7 @@ export function buildAuthChoiceGroups(params: {
     .map((group) =>
       Object.assign({}, group, { options: [...group.options].toSorted(compareAssistantOptions) }),
     )
-    .toSorted(compareGroupLabels);
+    .toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

@@ -1,3 +1,4 @@
+// Exec tests cover command execution, output capture, and cancellation behavior.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import process from "node:process";
@@ -192,6 +193,29 @@ describe("runCommandWithTimeout", () => {
     ).toBeNull();
   });
 
+  it("does not spawn when the abort signal is already aborted", async () => {
+    await loadExecModules({ mockSpawn: true });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      timeoutMs: 2_000,
+      signal: controller.signal,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      killed: false,
+      termination: "signal",
+      noOutputTimedOut: false,
+    });
+    expect(result.code).not.toBe(0);
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
     { timeout: 5_000 },
@@ -210,7 +234,7 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
     },
   );
 
@@ -231,7 +255,7 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
     },
   );
 

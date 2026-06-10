@@ -1,3 +1,4 @@
+// Plugin install config tests cover install specs and generated plugin config.
 import { bundledPluginRootAt, repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -174,6 +175,42 @@ describe("loadConfigForInstall", () => {
       throw new Error(request.error);
     }
 
+    const result = await loadConfigForInstall(request.request);
+    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
+    expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
+  });
+
+  it("allows Brave official plugin reinstall recovery from source-only runtime shadows", async () => {
+    const snapshotCfg = {
+      plugins: { installs: { brave: { source: "clawhub", installPath: "/bad/brave" } } },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { brave: {} } } },
+        config: snapshotCfg,
+        issues: [
+          {
+            path: "plugins.entries.brave",
+            message:
+              "plugin brave: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+          },
+          {
+            path: "tools.web.search.provider",
+            message:
+              'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+          },
+        ],
+      }),
+    );
+
+    const request = resolvePluginInstallRequestContext({
+      rawSpec: "@openclaw/brave-plugin",
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+
+    expect(request.request.allowInvalidConfigRecovery).toBe(true);
     const result = await loadConfigForInstall(request.request);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
