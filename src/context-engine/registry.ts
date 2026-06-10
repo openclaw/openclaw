@@ -570,6 +570,7 @@ export function clearContextEnginesForOwner(owner: string): void {
     if (entry.owner === normalizedOwner) {
       registry.delete(id);
       registryState.quarantinedEngines.delete(id);
+      clearPersistedContextEngineQuarantineForProcess(id, process.pid);
     }
   }
 }
