@@ -1936,6 +1936,45 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-column")).toBeNull();
   });
 
+  it("preserves card titles in crowded columns", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = Array.from({ length: 10 }, (_, index) => ({
+      id: `card-${index + 1}`,
+      title: `Crowded card ${index + 1}`,
+      status: "backlog",
+      priority: "normal",
+      labels: [],
+      position: (index + 1) * 1000,
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const backlogColumn = [...container.querySelectorAll<HTMLElement>(".workboard-column")].find(
+      (column) => column.querySelector("h2")?.textContent === "Backlog",
+    );
+    const cards = backlogColumn?.querySelectorAll(".workboard-card");
+    expect(cards).toHaveLength(10);
+    cards?.forEach((card, index) => {
+      expect(card.querySelector("h3")?.textContent).toBe(`Crowded card ${index + 1}`);
+    });
+  });
+
   it("does not retry a failed initial load on every render", async () => {
     const host = {};
     const container = document.createElement("div");
