@@ -235,6 +235,8 @@ interface ConnectionMeta {
 export class MsteamsMediaStream {
   private readonly config: MsteamsMediaStreamConfig;
   private readonly hmacWindowMs: number;
+  /** Verified upgrade tuples already used once (replay guard); value = expiry epoch ms. */
+  private readonly seenUpgrades = new Map<string, number>();
   private readonly maxConnections: number;
   private readonly maxConnectionsPerIp: number;
   private readonly preStartTimeoutMs: number;
@@ -370,6 +372,28 @@ export class MsteamsMediaStream {
       this.rejectUpgrade(socket, 401, "Unauthorized");
       return;
     }
+
+    // Replay guard: a verified (callId, timestamp, signature) tuple is single-use. A captured
+    // handshake replayed within the HMAC window would otherwise open a ghost session once the live
+    // call ends (the duplicate-callId check only protects while it's connected). A legitimate
+    // reconnect always carries a fresh timestamp, so this rejects only true replays. Only verified
+    // tuples are recorded (an attacker without the secret cannot grow the map); entries expire with
+    // the timestamp window.
+    const now = Date.now();
+    for (const [key, expiry] of this.seenUpgrades) {
+      if (expiry <= now) {
+        this.seenUpgrades.delete(key);
+      }
+    }
+    const replayKey = `${callId}.${ts}.${signature}`;
+    if (this.seenUpgrades.has(replayKey)) {
+      this.config.logger?.warn(
+        `MsteamsMediaStream: rejecting upgrade for ${callId} — replayed handshake`,
+      );
+      this.rejectUpgrade(socket, 401, "Unauthorized");
+      return;
+    }
+    this.seenUpgrades.set(replayKey, now + this.hmacWindowMs);
 
     const ip = normalizeIp(request.socket.remoteAddress);
     // Bound total + per-IP concurrent sockets before accepting the upgrade.
