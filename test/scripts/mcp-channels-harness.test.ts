@@ -4,10 +4,22 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  maybeApprovePendingBridgePairing,
+  type GatewayRpcClient,
+} from "../../scripts/e2e/mcp-channels-harness.ts";
+import {
   connectMcpClientWithPairingReconnect,
   createMcpClientTempState,
   type McpClientTempState,
 } from "../../scripts/e2e/mcp-client-temp-state.js";
+
+function createGateway(request: GatewayRpcClient["request"]): GatewayRpcClient {
+  return {
+    request,
+    events: [],
+    close: async () => {},
+  };
+}
 
 describe("mcp-channels harness", () => {
   it("creates unique client temp state and removes token files on cleanup", () => {
@@ -96,5 +108,24 @@ describe("mcp-channels harness", () => {
     } finally {
       tempState.cleanup();
     }
+  });
+
+  it("treats stale pairing request approvals as already handled", async () => {
+    const request = vi.fn<GatewayRpcClient["request"]>(async (method) => {
+      if (method === "device.pair.list") {
+        return {
+          pending: [{ requestId: "stale-request", role: "operator" }],
+        };
+      }
+      if (method === "device.pair.approve") {
+        throw new Error("unknown requestId");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(maybeApprovePendingBridgePairing(createGateway(request))).resolves.toBe(false);
+    expect(request).toHaveBeenCalledWith("device.pair.approve", {
+      requestId: "stale-request",
+    });
   });
 });

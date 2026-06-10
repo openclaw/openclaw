@@ -307,6 +307,13 @@ export async function maybeApprovePendingBridgePairing(
   if (!pendingRequest?.requestId) {
     return false;
   }
-  await gateway.request("device.pair.approve", { requestId: pendingRequest.requestId });
+  try {
+    await gateway.request("device.pair.approve", { requestId: pendingRequest.requestId });
+  } catch (error) {
+    if (formatErrorMessage(error).includes("unknown requestId")) {
+      return false;
+    }
+    throw error;
+  }
   return true;
 }
