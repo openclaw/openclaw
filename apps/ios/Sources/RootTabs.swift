@@ -196,7 +196,7 @@ struct RootTabs: View {
                     .frame(width: sidebarWidth, alignment: .topLeading)
                     .frame(maxHeight: .infinity, alignment: .topLeading)
                     .overlay(alignment: .trailing) {
-                        Divider()
+                        self.sidebarVerticalSeparator
                     }
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
@@ -225,7 +225,7 @@ struct RootTabs: View {
                     .frame(width: sidebarWidth, alignment: .topLeading)
                     .frame(maxHeight: .infinity, alignment: .topLeading)
                     .overlay(alignment: .trailing) {
-                        Divider()
+                        self.sidebarVerticalSeparator
                     }
                     .shadow(color: .black.opacity(0.26), radius: 18, x: 8, y: 0)
                     .transition(.move(edge: .leading).combined(with: .opacity))
@@ -281,7 +281,7 @@ struct RootTabs: View {
         .padding(.vertical, 12)
         .background(Color(uiColor: .systemBackground))
         .overlay(alignment: .bottom) {
-            Divider()
+            self.sidebarHorizontalSeparator
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("OpenClaw \(self.sidebarGatewayStatusTitle)")
@@ -308,6 +308,7 @@ struct RootTabs: View {
                         self.sidebarDestinationButton(destination)
                     }
                 }
+                .listSectionSeparator(.hidden, edges: .all)
             }
         }
         .listStyle(.sidebar)
@@ -318,7 +319,7 @@ struct RootTabs: View {
 
     private var sidebarFooter: some View {
         VStack(spacing: 0) {
-            Divider()
+            self.sidebarHorizontalSeparator
             HStack(spacing: 10) {
                 Text("VERSION")
                     .font(.caption2.weight(.semibold))
@@ -334,6 +335,18 @@ struct RootTabs: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
         }
+    }
+
+    private var sidebarHorizontalSeparator: some View {
+        Rectangle()
+            .fill(Color(uiColor: .separator))
+            .frame(height: 1 / UIScreen.main.scale)
+    }
+
+    private var sidebarVerticalSeparator: some View {
+        Rectangle()
+            .fill(Color(uiColor: .separator))
+            .frame(width: 1 / UIScreen.main.scale)
     }
 
     private var sidebarGatewayStatusColor: Color {
@@ -368,6 +381,7 @@ struct RootTabs: View {
             destination == self.selectedSidebarDestination
                 ? OpenClawBrand.accent.opacity(0.12)
                 : Color.clear)
+        .listRowSeparator(.hidden, edges: .all)
     }
 
     @ViewBuilder
