@@ -1396,7 +1396,7 @@ describe("package artifact reuse", () => {
       "run_live_discord",
     ]) {
       expect(qaWorkflow).toMatch(
-        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-16vcpu-ubuntu-2404`, "u"),
       );
     }
     expectTextToIncludeAll(liveE2eWorkflow, [
