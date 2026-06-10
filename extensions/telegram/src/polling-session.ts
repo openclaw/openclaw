@@ -110,6 +110,11 @@ function resolveTelegramRestartDelayMs(
   return { delayMs, stopTimeoutSuffix };
 }
 
+// Surfaced in logs and channel status when getUpdates returns 409; the only
+// user-fixable causes are a second poller on the same token or a stale webhook.
+const TELEGRAM_GET_UPDATES_CONFLICT_HINT =
+  " Another OpenClaw gateway, script, or Telegram poller may be using this bot token; stop the duplicate poller or switch this account to webhook mode.";
+
 const DEFAULT_POLL_STALL_THRESHOLD_MS = 120_000;
 const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
@@ -813,10 +818,12 @@ export class TelegramPollingSession {
       offset: number | null;
       outcome: string;
       error?: string;
+      errorCode: number | null;
     } = {
       startedAt: null,
       offset: null,
       outcome: "not-started",
+      errorCode: null,
     };
     const liveness = new TelegramPollingLivenessTracker();
     let consecutiveDrainFailures = 0;
@@ -853,6 +860,7 @@ export class TelegramPollingSession {
         pollState.offset = message.offset;
         pollState.outcome = "started";
         delete pollState.error;
+        pollState.errorCode = null;
         return;
       }
       if (message.type === "poll-success") {
@@ -871,6 +879,7 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;
+        pollState.errorCode = message.errorCode ?? null;
         return;
       }
       if (message.type === "update") {
@@ -1002,14 +1011,24 @@ export class TelegramPollingSession {
         if (this.opts.abortSignal?.aborted) {
           return "exit";
         }
-        if (
+        // The worker only issues getUpdates, so a 409 is always a duplicate
+        // poller (or stale webhook) conflict. Mirror the classic polling
+        // cycle: re-clear the webhook, rotate the transport (#69787), and
+        // restart with backoff instead of crashing the whole account.
+        const isConflict = pollState.errorCode === 409;
+        if (isConflict) {
+          this.#webhookCleared = false;
+          this.#transportState.markDirty();
+        } else if (
           pollState.error &&
           !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
         ) {
           this.#status.notePollingError(pollState.error);
           throw new Error(pollState.error, { cause: err });
         }
-        const message = formatErrorMessage(err);
+        const message = isConflict
+          ? `Telegram getUpdates conflict: ${pollState.error}.${TELEGRAM_GET_UPDATES_CONFLICT_HINT}`
+          : formatErrorMessage(err);
         this.opts.log(`[telegram][diag] isolated polling ingress failed: ${message}`);
         this.#status.notePollingError(message);
         clearForceCycleTimer();
@@ -1162,6 +1181,7 @@ export class TelegramPollingSession {
         this.#transportState.markDirty();
         stalledRestart = true;
         this.opts.log(`[telegram] ${stall.message}`);
+        this.#status.notePollingError(stall.message);
         requestStopForRestart();
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
@@ -1210,12 +1230,16 @@ export class TelegramPollingSession {
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
-      const conflictHint = isConflict
-        ? " Another OpenClaw gateway, script, or Telegram poller may be using this bot token; stop the duplicate poller or switch this account to webhook mode."
-        : "";
+      const conflictHint = isConflict ? TELEGRAM_GET_UPDATES_CONFLICT_HINT : "";
       this.opts.log(
         `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}${conflictHint}`,
       );
+      // Conflicts carry a user-fixable diagnosis, so surface them in channel
+      // status. Recoverable network blips stay log-only; the stall watchdog
+      // owns status for extended outages (see detectStall above).
+      if (isConflict) {
+        this.#status.notePollingError(`Telegram ${reason}: ${errMsg}.${conflictHint}`);
+      }
       clearForceCycleTimer();
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg};${conflictHint} retrying in ${delay}.`,
