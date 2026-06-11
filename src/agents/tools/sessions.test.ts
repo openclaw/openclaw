@@ -15,7 +15,7 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 type SessionsToolTestConfig = {
-  session: { scope: "per-sender"; mainKey: string };
+  session: { scope: "per-sender"; mainKey: string; agentToAgent?: { maxPingPongTurns: number } };
   tools: {
     agentToAgent: { enabled: boolean };
     sessions?: { visibility: "self" | "tree" | "agent" | "all" };
@@ -1107,6 +1107,104 @@ describe("sessions_send gating", () => {
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
     expect(flowParams?.baseline).toBeUndefined();
+  });
+
+  it("forces maxPingPongTurns to 0 for fire-and-forget sends from an isolated cron requester (#92257)", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const requesterSessionKey = "agent:main:cron:run:abc";
+    const targetSessionKey = "agent:other:discord:group:ops";
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: requesterSessionKey,
+      agentChannel: "cron",
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: targetSessionKey, kind: "group" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-cross-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-cross-fire-and-forget", {
+      sessionKey: targetSessionKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    expect(flowParams?.maxPingPongTurns).toBe(0);
+    expect(flowParams?.requesterSessionKey).toBe(requesterSessionKey);
+    expect(flowParams?.targetSessionKey).toBe(targetSessionKey);
+    expect(flowParams?.requesterSessionKey).not.toBe(flowParams?.targetSessionKey);
+  });
+
+  it("keeps the configured maxPingPongTurns for fire-and-forget sends from a normal requester (#92257 regression)", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const requesterSessionKey = "discord:group:req";
+    const targetSessionKey = "agent:other:discord:group:ops";
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: requesterSessionKey,
+      agentChannel: "discord",
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: targetSessionKey, kind: "group" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-normal-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-normal-fire-and-forget", {
+      sessionKey: targetSessionKey,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    // Normal fire-and-forget must preserve the intended A2A ping-pong roundtrip.
+    expect(flowParams?.maxPingPongTurns).toBe(5);
+    expect(flowParams?.requesterSessionKey).toBe(requesterSessionKey);
+    expect(flowParams?.targetSessionKey).toBe(targetSessionKey);
   });
 
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {

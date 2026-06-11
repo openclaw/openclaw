@@ -339,6 +339,64 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
+  it("with maxPingPongTurns 0 and requester != target, never steps the requester session but still announces in the target (#92257)", async () => {
+    const requesterSessionKey = "agent:main:cron:run:abc";
+    const targetSessionKey = "agent:other:discord:group:ops";
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey,
+      displayKey: targetSessionKey,
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey,
+      requesterChannel: "cron",
+      roundOneReply: "Worker completed successfully",
+    });
+
+    // The requester (e.g. isolated cron) session must never receive an injected turn.
+    const requesterStep = vi
+      .mocked(runAgentStep)
+      .mock.calls.find(
+        (call) => (call[0] as { sessionKey?: string }).sessionKey === requesterSessionKey,
+      );
+    expect(requesterStep).toBeUndefined();
+
+    // The announce step still runs, in the target session only.
+    expect(runAgentStep).toHaveBeenCalledTimes(1);
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.sessionKey).toBe(targetSessionKey);
+    expect(stepInput.message).toBe("Agent-to-agent announce step.");
+  });
+
+  it("does not inject or announce a fire-and-forget reply that matches the baseline (#92257)", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "pre-existing cron output",
+      fingerprint: "pre-existing-cron-output",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:other:discord:group:ops",
+      displayKey: "agent:other:discord:group:ops",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: "agent:main:cron:run:abc",
+      requesterChannel: "cron",
+      baseline: {
+        text: "pre-existing cron output",
+        fingerprint: "pre-existing-cron-output",
+      },
+      waitRunId: "run-fire-and-forget",
+    });
+
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe(
+      "run-fire-and-forget",
+    );
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP"])(
     "suppresses exact announce control reply %s before channel delivery",
     async (announceReply) => {
