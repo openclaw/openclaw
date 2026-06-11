@@ -44,7 +44,7 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
   it("refuses to auto-create an empty database when allowCreate is false", async () => {
     const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "absent-index.sqlite");
 
-    await expect(() => openMemoryDatabaseAtPath(dbPath, false, false)).toThrow(
+    expect(() => openMemoryDatabaseAtPath(dbPath, false, false)).toThrow(
       /Memory database not found.*refusing to auto-create/,
     );
 
