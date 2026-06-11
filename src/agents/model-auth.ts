@@ -336,6 +336,18 @@ export function resolveUsableCustomProviderApiKey(params: {
       source: "models.json (local marker)",
     };
   }
+  // Before giving up, check whether the runtime config snapshot has already
+  // resolved this marker (e.g. secretref-managed backed by
+  // openclaw-config-secrets.json, prepared by the secrets runtime).  Without
+  // this fallback, custom providers using file-backed SecretRefs get 503
+  // auth_unavailable after the snapshot replaces the raw marker (issue #92097).
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  if (runtimeConfig && runtimeConfig !== params.cfg) {
+    const runtimeCustomKey = getCustomProviderApiKey(runtimeConfig, params.provider);
+    if (runtimeCustomKey && !isNonSecretApiKeyMarker(runtimeCustomKey)) {
+      return { apiKey: runtimeCustomKey, source: "models.json (runtime snapshot)" };
+    }
+  }
   return null;
 }
 
