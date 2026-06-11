@@ -110,6 +110,9 @@ describe("login-qr", () => {
   });
 
   it("restarts login once on status 515 and completes", async () => {
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValueOnce({ outcome: "stable", exists: true });
     waitForWaConnectionMock
       // Baileys v7 wraps the error: { error: BoomError(515) }
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
@@ -243,6 +246,9 @@ describe("login-qr", () => {
   });
 
   it("reports a recovered linked session when socket bootstrap restores auth without a QR", async () => {
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValueOnce({ outcome: "stable", exists: true });
     createWaSocketMock.mockImplementationOnce(
       async (
         _printQr: boolean,
@@ -304,6 +310,9 @@ describe("login-qr", () => {
 
   it("does not short-circuit on an existing QR when the waiter has no current QR image", async () => {
     const accountId = "wait-without-current-qr";
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValueOnce({ outcome: "stable", exists: true });
     waitForWaConnectionMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -330,6 +339,9 @@ describe("login-qr", () => {
 
   it("returns a terminal login result before a stale QR refresh", async () => {
     const accountId = "connected-before-refresh";
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValueOnce({ outcome: "stable", exists: true });
     let resolveLogin: () => void = () => {
       throw new Error("Expected login wait to be pending");
     };

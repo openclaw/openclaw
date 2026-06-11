@@ -13,6 +13,7 @@ import {
   createWaSocket,
   formatError,
   getStatusCode,
+  readWebAuthExistsForDecision,
   logoutWeb,
   waitForWaConnection,
 } from "./session.js";
@@ -234,6 +235,22 @@ export async function waitForWhatsAppLoginResult(params: {
   while (true) {
     try {
       await wait(currentSock, { timeout: "none" });
+      const auth = await readWebAuthExistsForDecision(params.authDir);
+      if (auth.outcome === "unstable") {
+        return {
+          outcome: "failed",
+          message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
+          error: new Error("WhatsApp auth state is still stabilizing after socket opened."),
+        };
+      }
+      if (!auth.exists) {
+        return {
+          outcome: "failed",
+          message:
+            "WhatsApp connected, but linked auth was not persisted yet. Retry login in a moment.",
+          error: new Error("WhatsApp linked auth was not persisted after socket opened."),
+        };
+      }
       return {
         outcome: "connected",
         restarted: postPairingRestarted || timeoutRestarted,

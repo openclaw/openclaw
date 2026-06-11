@@ -9,7 +9,7 @@ import {
   WhatsAppConnectionController,
 } from "./connection-controller.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
-import { createWaSocket, waitForWaConnection } from "./session.js";
+import { createWaSocket, readWebAuthExistsForDecision, waitForWaConnection } from "./session.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 vi.mock("./session.js", async () => {
@@ -17,11 +17,13 @@ vi.mock("./session.js", async () => {
   return {
     ...actual,
     createWaSocket: vi.fn(),
+    readWebAuthExistsForDecision: vi.fn(),
     waitForWaConnection: vi.fn(),
   };
 });
 
 const createWaSocketMock = vi.mocked(createWaSocket);
+const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
 function createListenerStub(messageId = "ok") {
@@ -47,6 +49,10 @@ describe("WhatsAppConnectionController", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    readWebAuthExistsForDecisionMock.mockResolvedValue({
+      outcome: "stable",
+      exists: true,
+    });
     controller = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
@@ -178,6 +184,51 @@ describe("WhatsAppConnectionController", () => {
     expect(onSocketReplaced).toHaveBeenCalledWith(replacementSock);
     expect(waitForConnection).toHaveBeenNthCalledWith(1, initialSock, { timeout: "none" });
     expect(waitForConnection).toHaveBeenNthCalledWith(2, replacementSock, { timeout: "none" });
+  });
+
+  it("does not report login success before linked auth is stable on disk", async () => {
+    const sock = createSocketWithTransportEmitter();
+    const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "unstable" });
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: sock as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: { log: vi.fn() } as never,
+      waitForConnection: waitForConnection as never,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
+    });
+    expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledWith("/tmp/wa-auth");
+  });
+
+  it("does not report login success when socket opens before linked auth reaches disk", async () => {
+    const sock = createSocketWithTransportEmitter();
+    const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+      outcome: "stable",
+      exists: false,
+    });
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: sock as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: { log: vi.fn() } as never,
+      waitForConnection: waitForConnection as never,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      message:
+        "WhatsApp connected, but linked auth was not persisted yet. Retry login in a moment.",
+    });
   });
 
   it("still honors the post-pairing 515 restart after a status 408 recovery", async () => {
