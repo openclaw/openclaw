@@ -369,6 +369,11 @@
       - any-glob-to-any-file:
           - "extensions/gmi/**"
           - "docs/providers/gmi.md"
+"extensions: aigateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/aigateway/**"
+          - "docs/providers/aigateway.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
