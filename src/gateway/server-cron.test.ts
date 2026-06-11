@@ -44,23 +44,23 @@ const {
   retireSessionMcpRuntimeMock: vi.fn(async () => true),
 }));
 
-function enqueueSystemEvent(...args: unknown[]) {
-  return enqueueSystemEventMock(...args);
+function enqueueSystemEvent(text: string, opts?: unknown) {
+  return enqueueSystemEventMock(text, opts);
 }
 
-function enqueueSystemEventEntry(...args: unknown[]) {
-  const result = enqueueSystemEventMock(...args);
+function enqueueSystemEventEntry(text: string, opts?: unknown) {
+  const result = enqueueSystemEventMock(text, opts);
   if (result === false || result === null) {
     return null;
   }
   return {
-    text: String(args[0] ?? ""),
+    text,
     ts: Date.now(),
   };
 }
 
-function consumeSelectedSystemEventEntries(...args: unknown[]) {
-  return consumeSelectedSystemEventEntriesMock(...args);
+function consumeSelectedSystemEventEntries(sessionKey: string, entries: readonly unknown[]) {
+  return consumeSelectedSystemEventEntriesMock(sessionKey, entries);
 }
 
 function requestHeartbeat(...args: unknown[]) {

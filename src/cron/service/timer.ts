@@ -1166,7 +1166,7 @@ function isRunnableJob(params: {
     const lastRun = job.state.lastRunAtMs;
     const nextRun = job.state.nextRunAtMs;
     if (isScheduledTerminalOneShotRetry(job, lastRunStatus, lastRun, nextRun)) {
-      return nowMs >= nextRun;
+      return typeof nextRun === "number" && nowMs >= nextRun;
     }
     return false;
   }
