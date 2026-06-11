@@ -58,6 +58,7 @@ const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES =
   MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES + MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES;
+const MAX_BENIGN_SESSION_FENCE_CTIME_DIGEST_BYTES = 32 * 1024 * 1024;
 const MAX_SAFE_FILE_OFFSET = BigInt(Number.MAX_SAFE_INTEGER);
 
 type SessionFileFenceSnapshot = {
@@ -249,6 +250,9 @@ async function readSessionFileFenceSnapshot(
     } catch {
       return { fingerprint };
     }
+  }
+  if (fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_CTIME_DIGEST_BYTES)) {
+    return { fingerprint };
   }
   return {
     fingerprint,
