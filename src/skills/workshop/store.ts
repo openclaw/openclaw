@@ -566,7 +566,7 @@ async function resolveWorkspaceSkillWriteTarget(params: {
   );
   if (!allowedRoot) {
     throw new Error(
-      `Skill file resolves through an untrusted symlink target: ${params.filePath}. Configure skills.load.allowSymlinkTargets for intentional skill symlinks.`,
+      `Skill file resolves through an untrusted symlink target: ${params.filePath}. Configure skills.load.allowSymlinkTargets and enable skills.workshop.allowSymlinkTargetWrites for intentional Skill Workshop symlink writes.`,
     );
   }
   return {
