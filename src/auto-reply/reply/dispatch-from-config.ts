@@ -2206,7 +2206,8 @@ export async function dispatchReplyFromConfig(
       if (
         ctx.ChatType !== "direct" ||
         shouldEmitFullVerboseProgress() ||
-        payload.isError !== true
+        payload.isError !== true ||
+        getReplyPayloadMetadata(payload)?.replaceableByTerminalToolErrorWarning !== true
       ) {
         return false;
       }

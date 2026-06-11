@@ -672,6 +672,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     toolName: string | undefined,
     message: string,
     result?: unknown,
+    options?: { replaceableByTerminalToolErrorWarning?: boolean },
   ) => {
     if (!params.onToolResult) {
       return;
@@ -703,11 +704,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     try {
-      void params.onToolResult({
+      const payload = {
         text: parsed.text,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
         ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-      });
+      };
+      void params.onToolResult(
+        options?.replaceableByTerminalToolErrorWarning === true
+          ? setReplyPayloadMetadata(payload, { replaceableByTerminalToolErrorWarning: true })
+          : payload,
+      );
     } catch {
       // ignore tool result delivery failures
     }
@@ -718,7 +724,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     });
     emitToolResultMessage(toolName, agg);
   };
-  const emitToolOutput = (toolName?: string, meta?: string, output?: string, result?: unknown) => {
+  const emitToolOutput = (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    result?: unknown,
+    options?: { replaceableByTerminalToolErrorWarning?: boolean },
+  ) => {
     if (!output) {
       return;
     }
@@ -726,7 +738,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       markdown: useMarkdown,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    emitToolResultMessage(toolName, message, result);
+    emitToolResultMessage(toolName, message, result, options);
   };
 
   const stripBlockTags = (

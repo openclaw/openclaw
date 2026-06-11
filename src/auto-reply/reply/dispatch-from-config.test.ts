@@ -3579,7 +3579,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses direct text-only tool error progress when a normal final reply follows", async () => {
+  it("keeps direct read-only text-only tool error progress when a normal final reply follows", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -3598,6 +3598,45 @@ describe("dispatchReplyFromConfig", () => {
       text: "⚠️ 🛠️ print lines 1-220 from memory/2026-06-03.md (agent) failed",
       isError: true,
     } satisfies ReplyPayload;
+
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(failedOutput);
+      return { text: "Yo." } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(failedOutput);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Yo." });
+  });
+
+  it("suppresses direct text-only tool error progress only when terminal warning replacement is guaranteed", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+
+    const failedOutput = setReplyPayloadMetadata(
+      {
+        text: "⚠️ 🛠️ apply patch (agent) failed",
+        isError: true,
+      } satisfies ReplyPayload,
+      { replaceableByTerminalToolErrorWarning: true },
+    );
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.(failedOutput);

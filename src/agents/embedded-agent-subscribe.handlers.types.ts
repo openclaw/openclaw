@@ -193,7 +193,13 @@ export type EmbeddedAgentSubscribeContext = {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
+  emitToolOutput: (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    result?: unknown,
+    options?: { replaceableByTerminalToolErrorWarning?: boolean },
+  ) => void;
   stripBlockTags: (
     text: string,
     state: {
@@ -320,7 +326,13 @@ export type ToolHandlerContext = {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
+  emitToolOutput: (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    result?: unknown,
+    options?: { replaceableByTerminalToolErrorWarning?: boolean },
+  ) => void;
   trimMessagingToolSent: () => void;
 };
 

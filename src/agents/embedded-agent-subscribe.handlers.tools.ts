@@ -828,7 +828,10 @@ async function emitToolResultOutput(params: {
     }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     if (outputText) {
-      ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
+      ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result, {
+        replaceableByTerminalToolErrorWarning:
+          isToolError && ctx.state.lastToolError?.mutatingAction === true,
+      });
     }
     if (!hasStructuredMedia) {
       return;

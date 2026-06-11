@@ -178,6 +178,12 @@ export type ReplyPayloadMetadata = {
   beforeAgentRunBlocked?: boolean;
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /**
+   * This live progress payload may be suppressed because terminal payload
+   * policy will surface the same failure unless the assistant explicitly
+   * acknowledges it.
+   */
+  replaceableByTerminalToolErrorWarning?: boolean;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
