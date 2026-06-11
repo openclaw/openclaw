@@ -74,12 +74,13 @@ function sameSessionFileFingerprint(
   if (!left.exists || !right.exists) {
     return true;
   }
+  // ctimeNs intentionally excluded: unstable on Btrfs (background maintenance
+  // tasks like snapshots/scrub/quota update ctime without any file content change)
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
     left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
+    left.mtimeNs === right.mtimeNs
   );
 }
 
