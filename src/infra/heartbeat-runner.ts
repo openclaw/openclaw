@@ -1240,6 +1240,8 @@ ${completionInstruction}`;
   const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool && !commitmentPrompt;
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt(execEvents, {
+        // Exec details are always visible via transcriptBody. The prompt
+        // text is separate — deliverToUser controls relay instructions only.
         deliverToUser: params.canRelayToUser,
         useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
       })
