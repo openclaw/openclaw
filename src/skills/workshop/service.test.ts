@@ -25,7 +25,11 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
-import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
+import {
+  readSkillProposalManifest,
+  resolveProposalDraftPath,
+  updateSkillProposalRecord,
+} from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -214,6 +218,56 @@ describe("skill workshop proposals", () => {
       ).rejects.toThrow();
       await expect(
         fs.access(path.join(targetSkillsDir, "readonly-symlink-skill", "references", "details.md")),
+      ).rejects.toThrow();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "validates support file targets against trusted symlink write roots",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-trusted-");
+      const untrustedSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-untrusted-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await fs.symlink(untrustedSkillsDir, path.join(workspaceDir, "other-skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Support Escape",
+        description: "Must keep support writes in trusted roots",
+        content: "# Support Escape\n\nDo not write through the wrong skill dir.\n",
+        supportFiles: [
+          {
+            path: "references/details.md",
+            content: "This support file must not be written outside the trusted target.\n",
+          },
+        ],
+      });
+
+      await updateSkillProposalRecord({
+        record: {
+          ...proposal.record,
+          target: {
+            ...proposal.record.target,
+            skillDir: path.join(workspaceDir, "other-skills", "support-escape"),
+          },
+        },
+      });
+
+      await expect(
+        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).rejects.toThrow("untrusted symlink target");
+      await expect(
+        fs.access(path.join(untrustedSkillsDir, "support-escape", "references", "details.md")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(targetSkillsDir, "support-escape", "SKILL.md")),
       ).rejects.toThrow();
     },
   );
