@@ -51,13 +51,14 @@ async function renameWithRetry(
   source: string,
   target: string,
   options: ResolvedMemoryIndexFileOptions,
+  optional = false,
 ): Promise<void> {
   for (let attempt = 1; attempt <= options.maxRenameAttempts; attempt++) {
     try {
       await options.fileOps.rename(source, target);
       return;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (optional && (err as NodeJS.ErrnoException).code === "ENOENT") {
         return;
       }
       if (!isTransientFileError(err) || attempt === options.maxRenameAttempts) {
@@ -79,7 +80,7 @@ export async function moveMemoryIndexFiles(
   for (const suffix of suffixes) {
     const source = `${sourceBase}${suffix}`;
     const target = `${targetBase}${suffix}`;
-    await renameWithRetry(source, target, resolvedOptions);
+    await renameWithRetry(source, target, resolvedOptions, suffix !== "");
   }
 }
 
@@ -112,6 +113,47 @@ export async function removeMemoryIndexFiles(
   }
 }
 
+async function removeMemoryIndexSidecars(
+  basePath: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
+  await rmWithRetry(`${basePath}-wal`, options);
+  await rmWithRetry(`${basePath}-shm`, options);
+}
+
+async function moveMemoryIndexSidecars(
+  sourceBase: string,
+  targetBase: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
+  const suffixes = ["-wal", "-shm"];
+  for (const suffix of suffixes) {
+    await renameWithRetry(`${sourceBase}${suffix}`, `${targetBase}${suffix}`, options, true);
+  }
+}
+
+async function moveMemoryIndexSidecarsWithRollback(
+  sourceBase: string,
+  targetBase: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
+  try {
+    await moveMemoryIndexSidecars(sourceBase, targetBase, options);
+  } catch (err) {
+    try {
+      await moveMemoryIndexSidecars(targetBase, sourceBase, options);
+    } catch (rollbackErr) {
+      const aggregateErr = new AggregateError(
+        [err, rollbackErr],
+        "memory index sidecar backup failed and rollback failed",
+        { cause: rollbackErr },
+      );
+      throw aggregateErr;
+    }
+    throw err;
+  }
+}
+
 async function swapMemoryIndexFiles(
   targetPath: string,
   tempPath: string,
@@ -122,30 +164,40 @@ async function swapMemoryIndexFiles(
   // publishing the new one. On Windows, rename fails when the target
   // exists, so the three-step backup protocol is retained.
   const resolvedOptions = resolveMemoryIndexFileOptions(options);
+  const backupPath = `${targetPath}.backup-${randomUUID()}`;
+  // The old and temp DBs are checkpointed and closed before swap. Hide target
+  // sidecars before publishing the new main DB, but keep them rollbackable
+  // until the main-file publish succeeds.
+  await moveMemoryIndexSidecarsWithRollback(targetPath, backupPath, resolvedOptions);
   try {
-    await moveMemoryIndexFiles(tempPath, targetPath, options);
+    await renameWithRetry(tempPath, targetPath, resolvedOptions);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EPERM" || (err as NodeJS.ErrnoException).code === "EEXIST") {
+    if (
+      (err as NodeJS.ErrnoException).code === "EPERM" ||
+      (err as NodeJS.ErrnoException).code === "EEXIST"
+    ) {
       // Windows: target exists, use three-step backup protocol with rollback.
-      const backupPath = `${targetPath}.backup-${randomUUID()}`;
-      await moveMemoryIndexFiles(targetPath, backupPath, options);
       try {
-        await moveMemoryIndexFiles(tempPath, targetPath, options);
+        await renameWithRetry(targetPath, backupPath, resolvedOptions);
+      } catch (backupErr) {
+        await moveMemoryIndexSidecars(backupPath, targetPath, resolvedOptions);
+        throw backupErr;
+      }
+      try {
+        await renameWithRetry(tempPath, targetPath, resolvedOptions);
       } catch (moveErr) {
         await moveMemoryIndexFiles(backupPath, targetPath, options);
         throw moveErr;
       }
-      await removeMemoryIndexFiles(backupPath, options);
     } else {
+      await moveMemoryIndexSidecars(backupPath, targetPath, resolvedOptions);
       throw err;
     }
   }
-  // Clean up stale WAL/SHM sidecars from the old index that may
-  // linger if the previous index was in WAL mode. rename only
-  // moves the main file; -wal and -shm from the old live DB
-  // can remain at the target path if the old DB had them.
-  await rmWithRetry(`${targetPath}-wal`, resolvedOptions);
-  await rmWithRetry(`${targetPath}-shm`, resolvedOptions);
+  await removeMemoryIndexFiles(backupPath, options);
+  // Closed temp databases should not need sidecars after checkpoint; remove
+  // leftovers at the temp path without touching the published target pair.
+  await removeMemoryIndexSidecars(tempPath, resolvedOptions);
 }
 
 export async function runMemoryAtomicReindex<T>(params: {
