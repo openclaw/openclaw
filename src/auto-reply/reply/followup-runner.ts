@@ -38,6 +38,7 @@ import {
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
@@ -88,6 +89,14 @@ function filterStringArray(value: unknown): string[] | undefined {
 }
 
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
+  const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+  if (commandOutput) {
+    return (
+      commandOutput.status === "failed" ||
+      commandOutput.status === "error" ||
+      (typeof commandOutput.exitCode === "number" && commandOutput.exitCode !== 0)
+    );
+  }
   if (evt.stream !== "item" && evt.stream !== "command_output") {
     return false;
   }
@@ -105,7 +114,7 @@ function canForwardFailedFollowupProgressEvent(
   evt: FollowupAgentEvent,
   opts?: GetReplyOptions,
 ): boolean {
-  if (evt.stream === "command_output") {
+  if (evt.stream === "command_output" || buildCommandOutputFromToolResultEvent(evt)) {
     return typeof opts?.onCommandOutput === "function";
   }
   if (evt.stream !== "item") {
@@ -148,6 +157,10 @@ async function forwardFollowupProgressEvent(params: {
             : undefined,
         detailMode: params.detailMode,
       });
+    }
+    const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+    if (commandOutput) {
+      await opts?.onCommandOutput?.(commandOutput);
     }
   }
 
