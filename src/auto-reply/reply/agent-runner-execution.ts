@@ -66,6 +66,10 @@ import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  launchStreamingEchoFanout,
+  type StreamingEchoFanoutHandle,
+} from "../../infra/outbound/echo-streaming.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -1664,6 +1668,54 @@ export async function runAgentTurnWithFallback(params: {
       isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
     });
+  }
+  // B-full native streaming echo: launch one live renderer per streaming-enabled
+  // echo target, fed by THIS run's agent-event stream (one agent run, N native
+  // renders). Must run before the model emits — the bus has no replay buffer, so
+  // each renderer subscribes synchronously here. On normal completion the renderers
+  // self-finalize from the run's lifecycle event; on abort we discard them.
+  let streamingEchoFanout: StreamingEchoFanoutHandle | undefined;
+  const echoEntryForStreaming = params.sessionKey ? params.getActiveSessionEntry() : undefined;
+  if (echoEntryForStreaming?.echoTargets?.length) {
+    try {
+      streamingEchoFanout = await launchStreamingEchoFanout({
+        originRunId: runId,
+        cfg: runtimeConfig,
+        sessionKey: params.sessionKey,
+        sessionEntry: echoEntryForStreaming,
+        // Origin = the channel that triggered THIS turn. Prefer the current
+        // turn's explicit origin (OriginatingChannel/To — set for webchat
+        // chat.send and any caller that does not claim the session's `last*`)
+        // over the session's `last*`, which is only fresh for channel inbounds
+        // that update it. Without this, a webchat-origin turn inherits the stale
+        // `last*` of the previously-active channel; if that channel is also a
+        // pinned echo target it gets self-excluded and the mirror silently falls
+        // back to the flat post-hoc echo instead of a native streaming render.
+        // `last*` remains the fallback so channel-origin turns are unchanged.
+        originChannel:
+          params.sessionCtx.OriginatingChannel ??
+          echoEntryForStreaming.lastChannel ??
+          echoEntryForStreaming.channel ??
+          params.sessionCtx.Provider ??
+          "",
+        originTo:
+          params.sessionCtx.OriginatingTo ?? echoEntryForStreaming.lastTo ?? "",
+        originAccountId: echoEntryForStreaming.lastAccountId,
+        originThreadId: echoEntryForStreaming.lastThreadId,
+      });
+    } catch (err) {
+      logVerbose(`streaming echo fan-out launch failed (non-fatal): ${String(err)}`);
+    }
+    const echoAbortSignal = params.replyOperation?.abortSignal ?? params.opts?.abortSignal;
+    if (streamingEchoFanout && echoAbortSignal) {
+      echoAbortSignal.addEventListener(
+        "abort",
+        () => {
+          void streamingEchoFanout?.dispose();
+        },
+        { once: true },
+      );
+    }
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   let fallbackProvider = params.followupRun.run.provider;

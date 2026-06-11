@@ -890,6 +890,10 @@
       "types": "./dist/plugin-sdk/channel-message-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-message-runtime.js"
     },
+    "./plugin-sdk/channel-echo": {
+      "types": "./dist/plugin-sdk/channel-echo.d.ts",
+      "default": "./dist/plugin-sdk/channel-echo.js"
+    },
     "./plugin-sdk/channel-outbound": {
       "types": "./dist/plugin-sdk/channel-outbound.d.ts",
       "default": "./dist/plugin-sdk/channel-outbound.js"

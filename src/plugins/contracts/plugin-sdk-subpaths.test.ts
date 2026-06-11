@@ -16,6 +16,7 @@ import type {
   ChannelThreadingContext as ContractChannelThreadingContext,
   ChannelThreadingToolContext as ContractChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
+import * as channelEchoSdk from "openclaw/plugin-sdk/channel-echo";
 import * as commandAuthSdk from "openclaw/plugin-sdk/command-auth";
 import type {
   ChannelMessageActionContext as CoreChannelMessageActionContext,
@@ -1316,6 +1317,7 @@ describe("plugin-sdk subpath exports", () => {
       "withResolvedWebhookRequestPipeline",
     ]);
     expectSourceMentions("channel-feedback", ["removeAckReactionAfterReply", "shouldAckReaction"]);
+    expect(channelEchoSdk).not.toHaveProperty("registerEchoRendererFactory");
   });
 
   it("keeps shared plugin-sdk types aligned", () => {

@@ -36,6 +36,7 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { EchoRendererFactory } from "../infra/outbound/echo-streaming.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -2640,6 +2641,13 @@ export type OpenClawPluginApi = {
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
+  /**
+   * Register this channel plugin's native streaming echo renderer.
+   *
+   * The host binds the registration to the activated plugin's owned channel id;
+   * plugins do not pass a channel string and cannot claim another channel.
+   */
+  registerEchoRendererFactory: (factory: EchoRendererFactory) => void;
   /**
    * Register a gateway RPC method for this plugin.
    *

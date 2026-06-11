@@ -27,6 +27,7 @@ import {
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
   validateSessionsPatchParams,
+  validateSessionsEchoParams,
   validateSessionsPluginPatchParams,
   validateSessionsPreviewParams,
   validateSessionsResetParams,
@@ -72,6 +73,10 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  normalizeEchoTargetId,
+  targetMatchesSessionParticipant,
+} from "../../infra/outbound/echo.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import {
@@ -305,7 +310,7 @@ function emitSessionOperation(
 }
 
 function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "restore";
+  action: "patch" | "delete" | "compact" | "restore" | "echo";
   client: GatewayClient | null;
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;
@@ -2169,6 +2174,173 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         : {}),
       reason: "patch",
     });
+  },
+  "sessions.echo": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validateSessionsEchoParams, "sessions.echo", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+    const action = p.action ?? "list";
+    if (action !== "list") {
+      if (rejectWebchatSessionMutation({ action: "echo", client, isWebchatConnect, respond })) {
+        return;
+      }
+    }
+
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const requestedAgentId = requestedAgent.agentId;
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
+      agentId: requestedAgentId,
+    });
+
+    if (action === "list") {
+      const store = loadSessionStore(storePath);
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+        agentId: requestedAgentId,
+      });
+      const entry = store[primaryKey];
+      respond(true, { echoTargets: entry?.echoTargets ?? [] }, undefined);
+      return;
+    }
+
+    if (!p.channel || !p.to) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "channel and to are required for add/remove"),
+      );
+      return;
+    }
+
+    let changed = false;
+    let atLimit = false;
+    let notParticipant = false;
+    const MAX_ECHO_TARGETS = 16;
+    const updated = await updateSessionStore(storePath, (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+        agentId: requestedAgentId,
+      });
+      const entry = store[primaryKey];
+      if (!entry) {
+        return null;
+      }
+      const existing = entry.echoTargets ?? [];
+
+      if (action === "add") {
+        // A mirror recipient must be a verified participant of this session, not
+        // an arbitrary chat id. Anything that is not the session's known bound
+        // thread is rejected; opt other threads in with /pin from that thread.
+        if (!targetMatchesSessionParticipant(entry, { channel: p.channel!, to: p.to!, accountId: p.accountId, threadId: p.threadId })) {
+          notParticipant = true;
+          return entry;
+        }
+        if (existing.length >= MAX_ECHO_TARGETS) {
+          atLimit = true;
+          return entry;
+        }
+        const duplicate = existing.find(
+          (t) =>
+            t.channel === p.channel &&
+            normalizeEchoTargetId(t.channel, t.to) ===
+              normalizeEchoTargetId(p.channel!, p.to!) &&
+            (t.accountId ?? "") === (p.accountId ?? "") &&
+            String(t.threadId ?? "") === String(p.threadId ?? ""),
+        );
+        if (duplicate) {
+          return entry;
+        }
+        changed = true;
+        entry.echoTargets = [
+          ...existing,
+          {
+            channel: p.channel!,
+            to: p.to!,
+            accountId: p.accountId,
+            threadId: p.threadId,
+            label: p.label,
+            echoUser: p.echoUser,
+            echoAssistant: p.echoAssistant,
+            addedAt: Date.now(),
+          },
+        ];
+      } else if (action === "remove") {
+        const filtered = existing.filter(
+          (t) =>
+            !(
+              t.channel === p.channel &&
+              normalizeEchoTargetId(t.channel, t.to) ===
+                normalizeEchoTargetId(p.channel!, p.to!) &&
+              (t.accountId ?? "") === (p.accountId ?? "") &&
+              String(t.threadId ?? "") === String(p.threadId ?? "")
+            ),
+        );
+        if (filtered.length !== existing.length) {
+          changed = true;
+          if (filtered.length > 0) {
+            entry.echoTargets = filtered;
+          } else {
+            delete entry.echoTargets;
+          }
+        }
+      }
+      return entry;
+    });
+
+    if (!updated) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `Session not found: ${key}`),
+      );
+      return;
+    }
+    if (notParticipant) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Echo target must be a thread bound to this session. Use /pin from the target thread to opt it in.",
+        ),
+      );
+      return;
+    }
+    if (atLimit) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Echo target limit reached (max ${MAX_ECHO_TARGETS})`,
+        ),
+      );
+      return;
+    }
+    respond(true, { changed, echoTargets: updated.echoTargets ?? [] }, undefined);
+    if (changed) {
+      emitSessionsChanged(context, {
+        sessionKey: target.canonicalKey ?? key,
+        ...(target.canonicalKey === "global" && requestedAgentId
+          ? { agentId: requestedAgentId }
+          : {}),
+        reason: "echo",
+      });
+    }
   },
   "sessions.pluginPatch": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (
