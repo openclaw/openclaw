@@ -235,6 +235,8 @@ export function buildEmbeddedRunPayloads(params: {
   sessionKey: string;
   provider?: string;
   model?: string;
+  profileId?: string;
+  trigger?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
@@ -336,12 +338,16 @@ export function buildEmbeddedRunPayloads(params: {
               sessionKey: params.sessionKey,
               provider: params.provider,
               model: params.model,
+              profileId: params.profileId,
+              trigger: params.trigger,
             })
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
               model: params.model,
+              profileId: params.profileId,
+              trigger: params.trigger,
             })
       : undefined;
   const rawErrorFingerprint = rawErrorMessage

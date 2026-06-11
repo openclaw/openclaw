@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  buildTransientErrorContext,
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
@@ -24,6 +25,34 @@ describe("formatAssistantErrorText", () => {
     "Authentication failed (provider returned HTTP 401). " +
     "Your provider token may have expired — try the request again in a moment. " +
     "If the failure persists, re-authenticate this provider.";
+
+  it("builds transient error context from available provider metadata", () => {
+    expect(
+      buildTransientErrorContext(
+        '{"type":"error","error":{"type":"overloaded_error"},"request_id":"req_123"}',
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          profileId: "anthropic:manual",
+          trigger: "heartbeat",
+        },
+      ),
+    ).toBe(" [anthropic/claude-sonnet-4-6, profile=active, trigger=heartbeat]");
+  });
+
+  it("omits empty transient error context", () => {
+    expect(buildTransientErrorContext("429 Too Many Requests")).toBe("");
+  });
+
+  it("sanitizes transient error context fields", () => {
+    expect(
+      buildTransientErrorContext("429 Too Many Requests", {
+        provider: "anthropic\u001b]8;;https://evil.test\u0007",
+        model: "claude\tsonnet\n4",
+        profileId: "manual\rprofile",
+      }),
+    ).toBe(" [anthropic/claude sonnet 4, profile=active]");
+  });
 
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
@@ -67,7 +96,24 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+      "The AI service is temporarily overloaded. Please try again in a moment. [test-model]",
+    );
+  });
+
+  it("includes provider, model, active profile, and trigger on overloaded errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"}}',
+    );
+    expect(
+      formatAssistantErrorText(msg, {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        profileId: "anthropic:manual",
+        trigger: "heartbeat",
+        sessionKey: "agent:main:telegram:group:g1",
+      }),
+    ).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment. [anthropic/claude-sonnet-4-6, profile=active, trigger=heartbeat]",
     );
   });
   it("rewrites generic provider internal errors without support request ids", () => {
@@ -288,8 +334,26 @@ describe("formatAssistantErrorText", () => {
   it("returns generic rate limit message when no specific details are present", () => {
     const msg = makeAssistantError("429 Too Many Requests");
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "⚠️ API rate limit reached. Please try again later. [test-model]",
     );
+  });
+
+  it("includes transient context on provider-specific rate limit guidance", () => {
+    const msg = makeAssistantError(
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit reached. Try again in 30 seconds."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai",
+      model: "gpt-5.4",
+      profileId: "openai:primary",
+      trigger: "cron",
+      sessionKey: "agent:main:cron:job1",
+    });
+    expect(result).toBe(
+      "⚠️ Rate limit reached. Try again in 30 seconds. [openai/gpt-5.4, profile=active, trigger=cron]",
+    );
+    expect(result).not.toContain("openai:primary");
+    expect(result).not.toContain("agent:main:cron:job1");
   });
 
   it("strips leading HTTP status code prefix from non-JSON rate limit messages", () => {
@@ -297,7 +361,7 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("try again in 24 hours");
     expect(result).not.toMatch(/^⚠️ 429\b/);
-    expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
+    expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours [test-model]");
   });
 
   it("returns upstream HTML copy for HTML quota pages", () => {

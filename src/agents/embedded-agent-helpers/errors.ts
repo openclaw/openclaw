@@ -55,6 +55,7 @@ import type { FailoverReason } from "./types.js";
 
 export {
   BILLING_ERROR_USER_MESSAGE,
+  buildTransientErrorContext,
   formatBillingErrorMessage,
   formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
@@ -1157,7 +1158,14 @@ export function classifyProviderRuntimeFailureKind(
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    profileId?: string;
+    trigger?: string;
+  },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -1317,7 +1325,12 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw, {
+    provider: opts?.provider,
+    model: opts?.model ?? msg.model,
+    profileId: opts?.profileId,
+    trigger: opts?.trigger,
+  });
   if (transientCopy) {
     return transientCopy;
   }
@@ -1390,7 +1403,14 @@ export function isRawAssistantErrorPassthrough(params: {
 
 export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    profileId?: string;
+    trigger?: string;
+  },
 ): string {
   const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();

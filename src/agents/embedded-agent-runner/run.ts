@@ -1917,6 +1917,8 @@ export async function runEmbeddedAgent(
                 sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
+                profileId: lastProfileId,
+                trigger: params.trigger,
               })
             : undefined;
           const assistantErrorText =
@@ -2909,6 +2911,7 @@ export async function runEmbeddedAgent(
             lastAssistant: assistantForFailover,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
+            trigger: params.trigger,
             authFailure,
             rateLimitFailure,
             billingFailure,
@@ -3027,6 +3030,8 @@ export async function runEmbeddedAgent(
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            profileId: lastProfileId,
+            trigger: params.trigger,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             thinkingLevel: params.thinkLevel,
