@@ -244,6 +244,38 @@ describe("createAgentSession attribution headers", () => {
 });
 
 describe("createAgentSession tool defaults", () => {
+  it("attaches input provenance to queued steering user messages", async () => {
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    await session.steer("completion from child", {
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:child:run",
+        sourceChannel: "telegram",
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    const queuedMessages = (session.agent as unknown as { steeringQueue: { messages: unknown[] } })
+      .steeringQueue.messages;
+    expect(queuedMessages).toHaveLength(1);
+    expect(queuedMessages[0]).toMatchObject({
+      role: "user",
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:child:run",
+        sourceChannel: "telegram",
+        sourceTool: "subagent_announce",
+      },
+    });
+  });
+
   it("forwards max thinking budgets from settings to the agent", async () => {
     const { session } = await createAgentSession({
       model: testModel,

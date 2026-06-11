@@ -2,11 +2,38 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelQueuedSteeringMessage,
+  steerActiveSessionWithOptionalDeliveryWait,
   steerAndWaitForTranscriptCommit,
   type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("passes input provenance into the real active steer call", async () => {
+    const steer = vi.fn(async () => {});
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "completion from child", {
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:child:run",
+        sourceChannel: "telegram",
+        sourceTool: "subagent_announce",
+      },
+    });
+
+    expect(steer).toHaveBeenCalledWith("completion from child", {
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:child:run",
+        sourceChannel: "telegram",
+        sourceTool: "subagent_announce",
+      },
+    });
+  });
+
   it("waits for the queued user message_end transcript boundary", async () => {
     // A queued steer is only durable once the user message_end event lands in
     // the active transcript.

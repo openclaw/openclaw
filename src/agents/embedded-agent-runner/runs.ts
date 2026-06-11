@@ -369,7 +369,23 @@ function prepareEmbeddedAgentQueueMessage(
 ): PreparedEmbeddedAgentQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
-    const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
+    const replyRunQueueOptions =
+      options?.deliveryContext ||
+      options?.inputProvenance ||
+      options?.sourceReplyDeliveryMode ||
+      options?.deliveryTimeoutMs !== undefined
+        ? {
+            ...(options.deliveryContext ? { deliveryContext: options.deliveryContext } : {}),
+            ...(options.inputProvenance ? { inputProvenance: options.inputProvenance } : {}),
+            ...(options.sourceReplyDeliveryMode
+              ? { sourceReplyDeliveryMode: options.sourceReplyDeliveryMode }
+              : {}),
+            ...(options.deliveryTimeoutMs !== undefined
+              ? { deliveryTimeoutMs: options.deliveryTimeoutMs }
+              : {}),
+          }
+        : undefined;
+    const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, replyRunQueueOptions);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "embedded-agent-runner" });
       return {
