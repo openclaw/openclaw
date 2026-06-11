@@ -940,7 +940,8 @@ export function createFollowupRunner(params: {
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
                     }),
-                    classifyCommentaryText: opts?.commentaryProgressEnabled !== undefined,
+                    classifyCommentaryText:
+                      opts?.commentaryProgressEnabled === true && Boolean(opts.onItemEvent),
                     thinkLevel: run.thinkLevel,
                     timeoutMs: run.timeoutMs,
                     runTimeoutOverrideMs: run.runTimeoutOverrideMs,

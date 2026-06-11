@@ -665,10 +665,16 @@ export function createCliJsonlStreamingParser(params: {
     if (!pendingClaudeText) {
       return;
     }
+    if (!params.onCommentaryText) {
+      // No commentary consumer is wired: fall back to the assistant text lane
+      // instead of silently discarding model output.
+      flushPendingClaudeAssistantText();
+      return;
+    }
     const text = pendingClaudeText.trim();
     pendingClaudeText = "";
     if (text) {
-      params.onCommentaryText?.(text);
+      params.onCommentaryText(text);
     }
   };
 

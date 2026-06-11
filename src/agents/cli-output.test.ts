@@ -990,7 +990,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([{ text: "Final answer.", delta: "Final answer." }]);
   });
 
-  it("drops Claude commentary text when classification is enabled without delivery", () => {
+  it("falls back to assistant deltas when classification is enabled without delivery", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -1026,7 +1026,9 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(deltas).toEqual([]);
+    expect(deltas).toEqual([
+      { text: "Let me inspect the repo.", delta: "Let me inspect the repo." },
+    ]);
   });
 
   it("does not fire onCommentaryText when no text precedes tool_use", () => {
