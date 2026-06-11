@@ -2526,6 +2526,33 @@ describe("resolveGatewayModelSupportsImages", () => {
     ).resolves.toBe(true);
   });
 
+  test("treats google-gemini-cli Gemini models as image-capable even when catalog metadata is stale or missing", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gemini-3.5-flash",
+        provider: "google-gemini-cli",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "gemini-3.5-flash",
+            name: "Gemini 3.5 Flash",
+            provider: "google-gemini-cli",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("treats google-gemini-cli Gemini models as image-capable when the catalog has no matching entry", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gemini-3.5-flash",
+        provider: "google-gemini-cli",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(true);
+  });
+
   test("matches catalog model ids case-insensitively for explicit providers", async () => {
     await expect(
       resolveGatewayModelSupportsImages({
