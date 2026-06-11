@@ -243,7 +243,7 @@ describe("telegram bot message processor", () => {
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("sends user-visible fallback when dispatch throws", async () => {
+  it("sends user-visible fallback and rethrows when dispatch throws", async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const { processMessage, runtimeError } = createDispatchFailureHarness(
       {
@@ -253,7 +253,7 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
+    await expect(processSampleMessage(processMessage)).rejects.toThrow("dispatch exploded");
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
@@ -275,7 +275,7 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
+    await expect(processSampleMessage(processMessage)).rejects.toThrow("dispatch exploded");
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,
@@ -284,7 +284,7 @@ describe("telegram bot message processor", () => {
     );
   });
 
-  it("swallows fallback delivery failures after dispatch throws", async () => {
+  it("rethrows after sending fallback even when fallback delivery fails", async () => {
     const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
     const { processMessage, runtimeError } = createDispatchFailureHarness(
       {
@@ -293,7 +293,7 @@ describe("telegram bot message processor", () => {
       },
       sendMessage,
     );
-    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
+    await expect(processSampleMessage(processMessage)).rejects.toThrow("dispatch exploded");
 
     expect(sendMessage).toHaveBeenCalledWith(
       123,

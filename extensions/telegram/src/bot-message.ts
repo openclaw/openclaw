@@ -209,6 +209,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           buildTelegramThreadParams(context.threadSpec),
         );
       } catch {}
+      throw err;
     }
     return true;
   };
