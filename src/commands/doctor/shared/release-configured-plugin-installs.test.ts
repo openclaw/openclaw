@@ -426,6 +426,16 @@ describe("configured plugin install release step", () => {
       warnings: [],
       completed: false,
       touchedConfig: false,
+      postInstallDoctorResult: {
+        status: "advisory",
+        advisory: expect.objectContaining({
+          kind: "package-post-install-doctor",
+          reason: "deferred-configured-plugin-repair",
+          details: [
+            'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
+          ],
+        }),
+      },
     });
   });
 
@@ -462,6 +472,14 @@ describe("configured plugin install release step", () => {
       warnings: [],
       completed: false,
       touchedConfig: false,
+      postInstallDoctorResult: {
+        status: "advisory",
+        advisory: expect.objectContaining({
+          kind: "package-post-install-doctor",
+          reason: "deferred-configured-plugin-repair",
+          details: ['Installed missing configured plugin "discord".'],
+        }),
+      },
     });
   });
 

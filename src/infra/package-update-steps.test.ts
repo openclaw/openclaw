@@ -10,6 +10,10 @@ import {
   type PackageUpdateStepResult,
 } from "./package-update-steps.js";
 import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+} from "./update-doctor-result.js";
+import {
   resolveNpmGlobalPrefixLayoutFromPrefix,
   type CommandRunner,
   type ResolvedGlobalInstallTarget,
@@ -76,14 +80,53 @@ function createRootRunner(globalRoot: string): CommandRunner {
 }
 
 describe("markPackagePostInstallDoctorAdvisory", () => {
-  it("does not mark timed-out doctor exits as advisory when they report a code", () => {
-    const step = markPackagePostInstallDoctorAdvisory({
-      exitCode: 124,
-      stderrTail: "doctor timed out",
-      signal: null,
-      killed: true,
-      termination: "timeout" as const,
+  it("marks only explicit post-install doctor advisory exits", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+        stderrTail: "doctor deferred repair",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      },
+      createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
+    );
+
+    expect(step.advisory).toEqual({
+      kind: "package-post-install-doctor",
+      message: expect.stringContaining("recoverable update-time repair warning"),
     });
+    expect(step.stderrTail).toContain("doctor deferred repair");
+    expect(step.stderrTail).toContain("deferred configured plugin repair");
+  });
+
+  it("does not mark unknown nonzero doctor exits as advisory", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: 1,
+        stderrTail: "doctor refused migration",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      },
+      null,
+    );
+
+    expect(step.advisory).toBeUndefined();
+    expect(step.stderrTail).toBe("doctor refused migration");
+  });
+
+  it("does not mark timed-out doctor exits as advisory when they report a code", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: 124,
+        stderrTail: "doctor timed out",
+        signal: null,
+        killed: true,
+        termination: "timeout" as const,
+      },
+      createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
+    );
 
     expect(step.advisory).toBeUndefined();
     expect(step.stderrTail).toBe("doctor timed out");

@@ -79,6 +79,11 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "../../infra/update-doctor-result.js";
+import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
@@ -88,11 +93,7 @@ import {
   resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
-import {
-  runGatewayUpdate,
-  type UpdateRunResult,
-  type UpdateStepProgress,
-} from "../../infra/update-runner.js";
+import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -1491,15 +1492,24 @@ async function runPackageInstallUpdate(params: {
       if (entryPath) {
         await createUpdateConfigSnapshot();
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
+        const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+        const doctorArgv = [
+          params.nodeRunner ?? resolveNodeRunner(),
+          entryPath,
+          "doctor",
+          "--non-interactive",
+          "--fix",
+        ];
+        const doctorProgressInfo = {
+          name: `${CLI_NAME} doctor`,
+          command: doctorArgv.join(" "),
+          index: 0,
+          total: 0,
+        };
+        params.progress?.onStepStart?.(doctorProgressInfo);
         const doctorStep = await runUpdateStep({
           name: `${CLI_NAME} doctor`,
-          argv: [
-            params.nodeRunner ?? resolveNodeRunner(),
-            entryPath,
-            "doctor",
-            "--non-interactive",
-            "--fix",
-          ],
+          argv: doctorArgv,
           cwd: verifiedPackageRoot,
           env: {
             ...resolvePostInstallDoctorEnv({
@@ -1509,14 +1519,26 @@ async function runPackageInstallUpdate(params: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
             ...(candidateHostVersion === null
               ? {}
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
           },
           timeoutMs: params.timeoutMs,
-          progress: createPackagePostInstallDoctorProgress(params.progress),
         });
-        return markPackagePostInstallDoctorAdvisory(doctorStep);
+        const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+        const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
+        params.progress?.onStepComplete?.({
+          ...doctorProgressInfo,
+          durationMs: completedDoctorStep.durationMs,
+          exitCode: completedDoctorStep.exitCode,
+          stderrTail: completedDoctorStep.stderrTail,
+          signal: completedDoctorStep.signal,
+          killed: completedDoctorStep.killed,
+          termination: completedDoctorStep.termination,
+          advisory: completedDoctorStep.advisory,
+        });
+        return completedDoctorStep;
       }
       return null;
     },
@@ -1531,20 +1553,6 @@ async function runPackageInstallUpdate(params: {
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
     steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
-  };
-}
-
-function createPackagePostInstallDoctorProgress(
-  progress: UpdateStepProgress | undefined,
-): UpdateStepProgress | undefined {
-  if (!progress) {
-    return undefined;
-  }
-  return {
-    ...(progress.onStepStart ? { onStepStart: progress.onStepStart } : {}),
-    onStepComplete: (step) => {
-      progress.onStepComplete?.(markPackagePostInstallDoctorAdvisory(step));
-    },
   };
 }
 

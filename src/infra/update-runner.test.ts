@@ -10,6 +10,12 @@ import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { pathExists } from "../utils.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  writeUpdatePostInstallDoctorResult,
+} from "./update-doctor-result.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
@@ -2011,7 +2017,7 @@ describe("runGatewayUpdate", () => {
     expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2.0.0");
   });
 
-  it("continues global npm updates when post-update doctor fails after verification", async () => {
+  it("continues global npm updates for explicit post-install doctor advisories", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     await seedGlobalPackageRoot(pkgRoot);
@@ -2035,7 +2041,21 @@ describe("runGatewayUpdate", () => {
       const key = argv.join(" ");
       if (key === doctorCommand) {
         calls.push(key);
-        return { stdout: "", stderr: "doctor refused migration", code: 1 };
+        const resultPath = options?.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        if (!resultPath) {
+          throw new Error("missing doctor result path");
+        }
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: createDeferredConfiguredPluginRepairDoctorResult([
+            "deferred configured plugin repair",
+          ]),
+        });
+        return {
+          stdout: "",
+          stderr: "doctor deferred configured plugin repair",
+          code: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+        };
       }
       return runCommand(argv, options);
     };
@@ -2047,17 +2067,55 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(doctorCommand);
     const lastStep = result.steps.at(-1);
     expect(lastStep?.name).toBe("openclaw doctor");
-    expect(lastStep?.exitCode).toBe(1);
+    expect(lastStep?.exitCode).toBe(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
     expect(lastStep?.advisory).toEqual({
       kind: "package-post-install-doctor",
-      message: expect.stringContaining(
-        "Post-install doctor failed after the package install was verified",
-      ),
+      message: expect.stringContaining("recoverable update-time repair warning"),
     });
-    expect(lastStep?.stderrTail).toContain("doctor refused migration");
-    expect(lastStep?.stderrTail).toContain(
-      "Post-install doctor failed after the package install was verified",
-    );
+    expect(lastStep?.stderrTail).toContain("doctor deferred configured plugin repair");
+    expect(lastStep?.stderrTail).toContain("deferred configured plugin repair");
+  });
+
+  it("fails global npm updates when post-update doctor exits nonzero without an advisory result", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await writeGatewayEntrypoint(pkgRoot);
+      },
+    });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(
+      pkgRoot,
+      "dist",
+      "index.js",
+    )} doctor --non-interactive --fix`;
+    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      const key = argv.join(" ");
+      if (key === doctorCommand) {
+        calls.push(key);
+        expect(options?.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]).toBeTruthy();
+        return { stdout: "", stderr: "doctor refused migration", code: 1 };
+      }
+      return runCommand(argv, options);
+    };
+
+    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("doctor-failed");
+    expect(calls).toContain(doctorCommand);
+    const lastStep = result.steps.at(-1);
+    expect(lastStep?.name).toBe("openclaw doctor");
+    expect(lastStep?.exitCode).toBe(1);
+    expect(lastStep?.advisory).toBeUndefined();
+    expect(lastStep?.stderrTail).toBe("doctor refused migration");
   });
 
   it("fails global npm updates when the post-update doctor times out with a nonzero code", async () => {
@@ -2090,7 +2148,7 @@ describe("runGatewayUpdate", () => {
           code: 124,
           signal: null,
           killed: true,
-          termination: "timeout",
+          termination: "timeout" as const,
         };
       }
       return runCommand(argv, options);

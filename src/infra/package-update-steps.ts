@@ -6,6 +6,13 @@ import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import {
+  PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  type PackageUpdateStepAdvisory,
+  type UpdatePostInstallDoctorResult,
+} from "./update-doctor-result.js";
+export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
+import {
   collectInstalledGlobalPackageErrors,
   globalInstallArgs,
   globalInstallFallbackArgs,
@@ -37,17 +44,6 @@ export type PackageUpdateStepResult = {
   killed?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
   advisory?: PackageUpdateStepAdvisory;
-};
-
-export type PackageUpdateStepAdvisory = {
-  kind: "package-post-install-doctor";
-  message: string;
-};
-
-export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
-  kind: "package-post-install-doctor",
-  message:
-    "Post-install doctor failed after the package install was verified; continuing with post-core plugin convergence and gateway restart.",
 };
 
 type PackageUpdateStepRunner = (params: {
@@ -107,11 +103,24 @@ export function markPackagePostInstallDoctorAdvisory<
     termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
     advisory?: PackageUpdateStepAdvisory;
   },
->(step: T): T {
-  if (step.exitCode === 0 || step.exitCode === null || !isNormalProcessExit(step)) {
+>(
+  step: T,
+  result: UpdatePostInstallDoctorResult | null,
+): T & {
+  advisory?: PackageUpdateStepAdvisory;
+} {
+  if (
+    step.exitCode !== UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE ||
+    result?.status !== "advisory" ||
+    !isNormalProcessExit(step)
+  ) {
     return step;
   }
-  const advisoryTail = [step.stderrTail, PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message]
+  const advisoryTail = [
+    step.stderrTail,
+    ...result.advisory.details,
+    PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
+  ]
     .filter((line): line is string => Boolean(line?.trim()))
     .join("\n");
   return {

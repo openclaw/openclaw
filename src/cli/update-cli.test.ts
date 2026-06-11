@@ -12,6 +12,12 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
 import { isBetaTag } from "../infra/update-channels.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  writeUpdatePostInstallDoctorResult,
+} from "../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
@@ -2668,7 +2674,7 @@ describe("update-cli", () => {
     ).toBe("1");
   });
 
-  it("continues package post-core work when post-update doctor fails after verification", async () => {
+  it("continues package post-core work for explicit post-update doctor advisories", async () => {
     const tempDir = await createTrackedTempDir("openclaw-update-package-doctor-warning-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
@@ -2690,7 +2696,7 @@ describe("update-cli", () => {
         return false;
       }
     });
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return {
           stdout: `${nodeModules}\n`,
@@ -2702,10 +2708,21 @@ describe("update-cli", () => {
         };
       }
       if (Array.isArray(argv) && argv[1] === entryPath && argv[2] === "doctor") {
+        const env = options && typeof options !== "number" ? options.env : undefined;
+        const resultPath = env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        if (!resultPath) {
+          throw new Error("missing doctor result path");
+        }
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: createDeferredConfiguredPluginRepairDoctorResult([
+            "deferred configured plugin repair",
+          ]),
+        });
         return {
           stdout: "",
-          stderr: "legacy state migration warning",
-          code: 1,
+          stderr: "doctor deferred configured plugin repair",
+          code: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
           signal: null,
           killed: false,
           termination: "exit",
@@ -2734,17 +2751,13 @@ describe("update-cli", () => {
     const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
     expect(jsonOutput?.status).toBe("ok");
-    expect(doctorStep?.exitCode).toBe(1);
+    expect(doctorStep?.exitCode).toBe(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
     expect(doctorStep?.advisory).toEqual({
       kind: "package-post-install-doctor",
-      message: expect.stringContaining(
-        "Post-install doctor failed after the package install was verified",
-      ),
+      message: expect.stringContaining("recoverable update-time repair warning"),
     });
-    expect(doctorStep?.stderrTail).toContain("legacy state migration warning");
-    expect(doctorStep?.stderrTail).toContain(
-      "Post-install doctor failed after the package install was verified",
-    );
+    expect(doctorStep?.stderrTail).toContain("doctor deferred configured plugin repair");
+    expect(doctorStep?.stderrTail).toContain("deferred configured plugin repair");
   });
 
   it("fails package updates when the post-update doctor is killed after verification", async () => {
