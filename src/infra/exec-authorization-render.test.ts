@@ -197,6 +197,21 @@ describe("exec authorization renderer", () => {
     ).toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
   });
 
+  it("fails closed for enforced POSIX commands with tilde-expanded arguments", async () => {
+    const plan = await planShellAuthorization({
+      command: "cat ~/secret",
+      env: POSIX_ENV,
+    });
+
+    expect(
+      buildAuthorizedShellCommandFromPlan({
+        plan,
+        mode: "enforced",
+        segmentSatisfiedBy: ["allowlist"],
+      }),
+    ).toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+  });
+
   it("preserves env assignment prefixes for enforced POSIX commands", async () => {
     const plan = await planShellAuthorization({
       command: "LIMIT=1 head -n 5",
