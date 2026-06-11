@@ -10,6 +10,10 @@ describe("sanitizeWebFetchUrl", () => {
     expect(sanitizeWebFetchUrl("  https://example.com  ")).toBe("https://example.com");
   });
 
+  it("trims leading Unicode whitespace", () => {
+    expect(sanitizeWebFetchUrl("\u00a0\ufeffhttps://example.com")).toBe("https://example.com");
+  });
+
   it("trims trailing newlines", () => {
     expect(sanitizeWebFetchUrl("https://example.com\n")).toBe("https://example.com");
   });
