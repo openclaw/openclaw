@@ -334,8 +334,15 @@ describe("createAgentSession thinking level defaults", () => {
   it("uses the provider-specific thinking default for new sessions", async () => {
     thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
 
+    const ollamaModel = {
+      ...testModel,
+      provider: "ollama",
+      reasoning: true,
+      params: { canonicalModelId: "qwen3:8b" },
+      compat: { thinkingFormat: "ollama" },
+    } satisfies Model;
     const { session } = await createAgentSession({
-      model: { ...testModel, provider: "ollama", reasoning: true },
+      model: ollamaModel,
       resourceLoader: createEmptyResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
@@ -346,7 +353,7 @@ describe("createAgentSession thinking level defaults", () => {
     expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
       provider: "ollama",
       model: testModel.id,
-      catalog: [{ provider: "ollama", id: testModel.id, reasoning: true }],
+      catalog: [ollamaModel],
     });
   });
 

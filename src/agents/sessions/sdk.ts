@@ -276,7 +276,7 @@ export async function createAgentSession(
     ? resolveThinkingDefaultForModel({
         provider: model.provider,
         model: model.id,
-        catalog: [{ provider: model.provider, id: model.id, reasoning: model.reasoning }],
+        catalog: [model],
       })
     : undefined;
   const modelThinkingDefault: ThinkingLevel =
