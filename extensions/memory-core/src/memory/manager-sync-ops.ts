@@ -2322,7 +2322,7 @@ export abstract class MemoryManagerSyncOps {
 
     const restoreOriginalState = () => {
       if (originalDbClosed) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
       } else {
         this.db = originalDb;
       }
@@ -2434,7 +2434,7 @@ export abstract class MemoryManagerSyncOps {
         },
       });
 
-      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
       this.resetVectorState();
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;

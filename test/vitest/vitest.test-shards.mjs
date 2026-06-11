@@ -46,6 +46,7 @@ export const fullSuiteVitestShards = [
     name: "core-tooling",
     projects: [
       "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
     ],
   },
