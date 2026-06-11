@@ -84,6 +84,8 @@ function expectCronStatus(
   expect(status.enabled).toBe(true);
   expect(status.storePath).toBe(params.storePath);
   expect(status.jobs).toBe(params.jobs);
+  expect(status.databasePath).toBeTypeOf("string");
+  expect(status.databasePath).toContain(".sqlite");
   if (status.nextWakeAtMs !== null) {
     expect(status.nextWakeAtMs).toBeTypeOf("number");
   }
