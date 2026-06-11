@@ -1320,7 +1320,13 @@ export function createMsteamsRealtimeCall(params: {
           `${MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT} Produce minutes with these sections, omitting ` +
           `empty ones: Key points; Decisions; Action items (as a checklist). Keep it brief and ` +
           `factual; no invented attribution. Then deliver by calling the message tool exactly once ` +
-          `with action "send", channel "msteams", target "user:${aadId}". The message IS the minutes.`,
+          `with action "send", channel "msteams", target "${
+            // Group calls post minutes into the meeting thread itself (the channel's
+            // conversation:<id> target form); 1:1 recaps go to the caller's chat.
+            humanCount >= 2 && session.threadId?.trim()
+              ? `conversation:${session.threadId.trim()}`
+              : `user:${aadId}`
+          }". The message IS the minutes.`,
         toolPolicy: consultToolPolicy,
         fastMode: false,
       });
