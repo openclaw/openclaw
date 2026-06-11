@@ -215,6 +215,18 @@ const MSTEAMS_LOOK_TOOL: RealtimeVoiceTool = {
   },
 };
 
+/** Tool: post minutes of the call so far to Teams chat, on request ("/summarize" by voice). */
+const MSTEAMS_MINUTES_TOOL_NAME = "post_meeting_minutes";
+const MSTEAMS_MINUTES_TOOL: RealtimeVoiceTool = {
+  type: "function",
+  name: MSTEAMS_MINUTES_TOOL_NAME,
+  description:
+    "Post written minutes of this call SO FAR (key points, decisions, action items) to the Teams " +
+    'chat. Use when the caller asks to "summarize the meeting", "post the minutes", or "send a ' +
+    'recap". Tell the caller the minutes are on their way; do not dictate them aloud.',
+  parameters: { type: "object", properties: {} },
+};
+
 const MSTEAMS_SHOW_TOOL_NAME = "show_to_caller";
 const MSTEAMS_SHOW_TOOL: RealtimeVoiceTool = {
   type: "function",
@@ -550,6 +562,8 @@ export function createMsteamsRealtimeCall(params: {
     ...(asyncTasksEnabled ? [MSTEAMS_AGENT_TASK_TOOL] : []),
     ...(visionEnabled ? [MSTEAMS_LOOK_TOOL] : []),
     ...(showEnabled ? [MSTEAMS_SHOW_TOOL] : []),
+    // On-demand minutes deliver via the agent's message tool (owner policy), like background tasks.
+    ...(asyncTasksEnabled && session.caller.aadId ? [MSTEAMS_MINUTES_TOOL] : []),
   ];
 
   /**
@@ -724,6 +738,14 @@ export function createMsteamsRealtimeCall(params: {
       // (cleared via finally regardless of success/error; the result speech then re-cues the emotion).
       setThinking(true);
       const clearThinking = (): void => setThinking(false);
+      if (event.name === MSTEAMS_MINUTES_TOOL_NAME) {
+        // Ack on the call, then write+post the minutes in the background (same run as call-end recap).
+        rtSession.submitToolResult(event.callId, {
+          text: "Minutes are being written and posted to the Teams chat now.",
+        });
+        void runMeetingRecap().finally(clearThinking);
+        return;
+      }
       if (event.name === MSTEAMS_LOOK_TOOL_NAME) {
         void handleLook(event, rtSession).finally(clearThinking);
         return;
