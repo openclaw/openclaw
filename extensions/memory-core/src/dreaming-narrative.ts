@@ -483,6 +483,24 @@ function normalizeDiaryBlockBody(block: string): string {
   return clampDiaryContextEntry(bodyLines.join(" "));
 }
 
+function isOptionalDiaryContextReadError(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  if (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "ENOENT" ||
+    code === "ENOTDIR" ||
+    code === "not-found" ||
+    code === "not-file" ||
+    code === "path-alias" ||
+    code === "path-mismatch" ||
+    code === "symlink"
+  ) {
+    return true;
+  }
+  return err instanceof Error && err.message === "path must be a regular file";
+}
+
 export async function readRecentDreamDiaryEntries(params: {
   workspaceDir: string;
   limit?: number;
@@ -491,8 +509,16 @@ export async function readRecentDreamDiaryEntries(params: {
   if (limit === 0) {
     return [];
   }
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  const existing = await readDreamsFile(dreamsPath);
+  let existing: string;
+  try {
+    const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+    existing = await readDreamsFile(dreamsPath);
+  } catch (err) {
+    if (isOptionalDiaryContextReadError(err)) {
+      return [];
+    }
+    throw err;
+  }
   const startIdx = existing.indexOf(DIARY_START_MARKER);
   const endIdx = existing.indexOf(DIARY_END_MARKER);
   if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {

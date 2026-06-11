@@ -463,6 +463,16 @@ describe("appendNarrativeEntry", () => {
     await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
   });
 
+  it("treats unreadable DREAMS.md as empty recent diary context", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "unreadable", "utf-8");
+    vi.spyOn(fs, "access").mockRejectedValueOnce(
+      Object.assign(new Error("permission denied"), { code: "EACCES" }),
+    );
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
+  });
+
   it("prepends diary before existing managed blocks", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
