@@ -580,7 +580,7 @@ describe("buildClaudeOwnerKey", () => {
     expect(a1).not.toBe(b);
   });
 
-  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — orphans live sessions)", () => {
+  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — splits queue from live-session map)", () => {
     expect(
       buildClaudeOwnerKey({
         agentAccountId: "acct-1",
