@@ -54,6 +54,20 @@ export function estimateMessagesTokens(messages: AgentMessage[]): number {
   return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
+/**
+ * Per-original-message token estimates, aligned 1:1 to the input array. Sanitizes
+ * the full array once instead of wrapping and re-cloning each message in its own
+ * 1-element array. Runtime-context entries are not model-visible, so they estimate
+ * to 0 here just as sanitizeCompactionMessages([msg]) would drop them.
+ */
+function estimatePerMessageTokens(messages: AgentMessage[]): number[] {
+  // SECURITY: toolResult.details must never enter LLM-facing compaction; strip once for the whole array.
+  const detailStripped = stripToolResultDetails(messages);
+  // stripRuntimeContextCustomMessages filters by reference, so kept entries keep their identity.
+  const modelVisible = new Set(stripRuntimeContextCustomMessages(detailStripped));
+  return detailStripped.map((message) => (modelVisible.has(message) ? estimateTokens(message) : 0));
+}
+
 /** Removes runtime-only context and tool-result details before token estimates or summaries. */
 export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessage[] {
   return stripToolResultDetails(stripRuntimeContextCustomMessages(messages));
@@ -85,7 +99,10 @@ export function splitMessagesByTokenShare(
     return [messages];
   }
 
-  const totalTokens = estimateMessagesTokens(messages);
+  // Sanitize the full array once and reuse per-message token counts; avoids the
+  // per-message [msg] wrap-and-clone that previously ran on every iteration.
+  const perMessageTokens = estimatePerMessageTokens(messages);
+  const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
   const targetTokens = totalTokens / normalizedParts;
   const chunks: AgentMessage[][] = [];
   let current: AgentMessage[] = [];
@@ -93,6 +110,9 @@ export function splitMessagesByTokenShare(
 
   let pendingToolCallIds = new Set<string>();
   let pendingChunkStartIndex: number | null = null;
+  // Token count for each message currently buffered in `current`, kept in lockstep so a
+  // boundary split can re-sum without re-estimating.
+  let currentTokenCounts: number[] = [];
 
   const splitCurrentAtPendingBoundary = (): boolean => {
     if (
@@ -105,13 +125,15 @@ export function splitMessagesByTokenShare(
     // Keep an assistant tool_use and its following tool_result responses in the same chunk.
     chunks.push(current.slice(0, pendingChunkStartIndex));
     current = current.slice(pendingChunkStartIndex);
-    currentTokens = current.reduce((sum, msg) => sum + estimateCompactionMessageTokens(msg), 0);
+    currentTokenCounts = currentTokenCounts.slice(pendingChunkStartIndex);
+    currentTokens = currentTokenCounts.reduce((sum, tokens) => sum + tokens, 0);
     pendingChunkStartIndex = 0;
     return true;
   };
 
-  for (const message of messages) {
-    const messageTokens = estimateCompactionMessageTokens(message);
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const messageTokens = perMessageTokens[index];
 
     if (
       pendingToolCallIds.size === 0 &&
@@ -121,11 +143,13 @@ export function splitMessagesByTokenShare(
     ) {
       chunks.push(current);
       current = [];
+      currentTokenCounts = [];
       currentTokens = 0;
       pendingChunkStartIndex = null;
     }
 
     current.push(message);
+    currentTokenCounts.push(messageTokens);
     currentTokens += messageTokens;
 
     if (message.role === "assistant") {
@@ -183,12 +207,16 @@ export function chunkMessagesByMaxTokens(
   // (chars/4 heuristic misses multi-byte chars, special tokens, code tokens, etc.)
   const effectiveMax = Math.max(1, Math.floor(maxTokens / SAFETY_MARGIN));
 
+  // Sanitize the full array once and reuse per-message token counts; avoids the
+  // per-message [msg] wrap-and-clone that previously ran on every iteration.
+  const perMessageTokens = estimatePerMessageTokens(messages);
   const chunks: AgentMessage[][] = [];
   let currentChunk: AgentMessage[] = [];
   let currentTokens = 0;
 
-  for (const message of messages) {
-    const messageTokens = estimateCompactionMessageTokens(message);
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const messageTokens = perMessageTokens[index];
     if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
       chunks.push(currentChunk);
       currentChunk = [];
@@ -265,10 +293,16 @@ export function buildOversizedFallbackPlan(params: {
   const smallMessages: AgentMessage[] = [];
   const oversizedNotes: string[] = [];
 
-  for (const msg of params.messages) {
-    if (isOversizedForSummary(msg, params.contextWindow)) {
+  // Sanitize the full array once and reuse per-message token counts; avoids the
+  // per-message [msg] wrap-and-clone (twice per oversized message) of the prior loop.
+  const perMessageTokens = estimatePerMessageTokens(params.messages);
+  const oversizedThreshold = params.contextWindow * 0.5;
+
+  for (let index = 0; index < params.messages.length; index += 1) {
+    const msg = params.messages[index];
+    const tokens = perMessageTokens[index];
+    if (tokens * SAFETY_MARGIN > oversizedThreshold) {
       const role = (msg as { role?: string }).role ?? "message";
-      const tokens = estimateCompactionMessageTokens(msg);
       oversizedNotes.push(
         `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
       );

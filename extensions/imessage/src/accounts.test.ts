@@ -51,6 +51,26 @@ describe("resolveIMessageAccount", () => {
     expect(resolved.config.dmPolicy).toBe("open");
     expect(resolved.configured).toBe(true);
   });
+
+  it("treats sendTransport as an intentional account config", () => {
+    const resolved = resolveIMessageAccount({
+      cfg: {
+        channels: {
+          imessage: {
+            accounts: {
+              work: {
+                sendTransport: "bridge",
+              },
+            },
+          },
+        },
+      } as never,
+      accountId: "work",
+    });
+
+    expect(resolved.config.sendTransport).toBe("bridge");
+    expect(resolved.configured).toBe(true);
+  });
 });
 
 describe("iMessage duplicate-source watcher ownership", () => {

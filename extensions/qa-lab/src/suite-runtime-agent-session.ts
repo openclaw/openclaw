@@ -4,7 +4,6 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
@@ -301,7 +300,15 @@ async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
     "sessions",
     "sessions.json",
   );
-  return loadSessionStore(storePath, { skipCache: true }) as Record<string, QaRawSessionStoreEntry>;
+  try {
+    const raw = await fs.readFile(storePath, "utf8");
+    return JSON.parse(raw) as Record<string, QaRawSessionStoreEntry>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
 }
 
 async function readSessionTranscriptSummary(

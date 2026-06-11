@@ -5,10 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../../config/sessions/test-helpers.js";
-import {
   appendHistoryEntry,
   buildHistoryContext,
   buildHistoryContextFromEntries,
@@ -41,7 +37,12 @@ async function seedSessionStore(params: {
   sessionKey: string;
   entry: Record<string, unknown>;
 }) {
-  await writeSessionStoreForTestAsync(params.storePath, { [params.sessionKey]: params.entry });
+  await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+  await fs.writeFile(
+    params.storePath,
+    JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+    "utf-8",
+  );
 }
 
 async function createCompactionSessionFixture(entry: SessionEntry) {
@@ -78,7 +79,7 @@ async function rotateCompactionSessionFile(params: {
     storePath,
     newSessionId: params.newSessionId,
   });
-  const stored = readSessionStoreForTest(storePath);
+  const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
   const expectedDir = await fs.realpath(tmp);
   return { stored, sessionKey, expectedDir };
 }
@@ -498,7 +499,7 @@ describe("incrementCompactionCount", () => {
     });
     expect(count).toBe(3);
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(3);
   });
 
@@ -521,7 +522,7 @@ describe("incrementCompactionCount", () => {
       tokensAfter: 12_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(12_000);
     // input/output cleared since we only have the total estimate
@@ -549,7 +550,7 @@ describe("incrementCompactionCount", () => {
       tokensAfter: 0,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(0);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
@@ -580,7 +581,7 @@ describe("incrementCompactionCount", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(12_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -608,7 +609,7 @@ describe("incrementCompactionCount", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(0);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -636,7 +637,7 @@ describe("incrementCompactionCount", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(90_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -659,7 +660,7 @@ describe("incrementCompactionCount", () => {
       tokensAfter: Number.POSITIVE_INFINITY,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(180_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
@@ -710,7 +711,7 @@ describe("incrementCompactionCount", () => {
     });
     expect(count).toBe(4);
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(4);
   });
 
@@ -731,7 +732,7 @@ describe("incrementCompactionCount", () => {
       newSessionId: "new-session-id",
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     const expectedSessionDir = await fs.realpath(path.dirname(storePath));
     expect(stored[sessionKey].sessionId).toBe("new-session-id");
     expect(stored[sessionKey].sessionFile).toBe(
@@ -757,7 +758,7 @@ describe("incrementCompactionCount", () => {
       newSessionId: "same-id",
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].sessionId).toBe("same-id");
     expect(stored[sessionKey].sessionFile).toBe("same-id.jsonl");
     expect(stored[sessionKey].compactionCount).toBe(1);
@@ -782,7 +783,7 @@ describe("incrementCompactionCount", () => {
       newSessionFile: rotatedSessionFile,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].sessionId).toBe("same-id");
     expect(stored[sessionKey].sessionFile).toBe(rotatedSessionFile);
     expect(stored[sessionKey].compactionCount).toBe(1);
@@ -805,7 +806,7 @@ describe("incrementCompactionCount", () => {
       storePath,
     });
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(1);
     // totalTokens unchanged
     expect(stored[sessionKey].totalTokens).toBe(180_000);

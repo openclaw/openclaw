@@ -241,6 +241,7 @@ async function runConfigMutation(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  replacePaths?: readonly string[];
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
   const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
@@ -263,6 +264,7 @@ async function runConfigMutation(params: {
           ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
         },
         { timeoutMs },
       );
@@ -316,6 +318,7 @@ async function patchConfig(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  replacePaths?: readonly string[];
 }) {
   return await runConfigMutation({
     env: params.env,
@@ -325,6 +328,7 @@ async function patchConfig(params: {
     deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
+    replacePaths: params.replacePaths,
   });
 }
 

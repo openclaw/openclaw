@@ -2,7 +2,11 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -10,6 +14,7 @@ import {
   buildConfiguredModelCatalog,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -126,6 +131,22 @@ function resolveConfiguredReplaceModeCatalog(cfg: OpenClawConfig) {
 
 function shouldLoadFullGatewayCatalogForReplaceMode(cfg: OpenClawConfig) {
   return cfg.models?.mode === "replace" && hasProviderWildcardModelAllowlist(cfg);
+}
+
+function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+}): { status: "warmed" } | { status: "failed"; error: string } {
+  try {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
+    ensureRuntimePluginsLoaded({
+      config: params.cfg,
+      workspaceDir,
+    });
+    return { status: "warmed" };
+  } catch (err) {
+    return { status: "failed", error: String(err) };
+  }
 }
 
 async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig) {
@@ -414,6 +435,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       config: cfg,
       agentId: opts.agentId,
     });
+    const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
+      cfg,
+      sessionAgentId,
+    });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
@@ -478,6 +503,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel: sessionInfo.verboseLevel,
+      runtimePluginsPrewarm,
     };
   }
 

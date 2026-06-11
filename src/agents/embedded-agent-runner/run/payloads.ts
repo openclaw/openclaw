@@ -224,6 +224,7 @@ function resolveToolErrorWarningPolicy(params: {
  */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantMessageIndex?: number;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -590,6 +591,11 @@ export function buildEmbeddedRunPayloads(params: {
       if (item.nonTerminalToolErrorWarning) {
         setReplyPayloadMetadata(payload, {
           nonTerminalToolErrorWarning: true,
+        });
+      }
+      if (!item.isError && !item.isReasoning && params.assistantMessageIndex !== undefined) {
+        setReplyPayloadMetadata(payload, {
+          assistantMessageIndex: params.assistantMessageIndex,
         });
       }
       if (item.replyToId) {

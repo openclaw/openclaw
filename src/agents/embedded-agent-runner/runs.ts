@@ -7,6 +7,7 @@ import {
   abortReplyRunBySessionId,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
+  isReplyRunAbortableForCompaction,
   isReplyRunStreamingForSessionId,
   queueReplyRunMessage,
   resolveActiveReplyRunSessionId,
@@ -516,6 +517,14 @@ export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   const active = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   if (active) {
     diag.debug(`run handle active check: sessionId=${sessionId} active=true`);
+  }
+  return active;
+}
+
+export function isEmbeddedAgentRunAbortableForCompaction(sessionId: string): boolean {
+  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
+  if (active) {
+    diag.debug(`run compact abort check: sessionId=${sessionId} active=true`);
   }
   return active;
 }

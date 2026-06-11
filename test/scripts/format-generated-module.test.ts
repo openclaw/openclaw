@@ -49,6 +49,7 @@ describe("resolveGeneratedModuleFormatter", () => {
     expect(
       resolveGeneratedModuleFormatter({
         comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: { PATH: "" },
         existsSync: () => false,
         npmExecPath: "",
         outputPath: "C:\\Users\\test\\AppData\\Local\\Temp\\generated output.ts",

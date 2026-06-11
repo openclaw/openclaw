@@ -91,9 +91,11 @@ describe("qa scenario catalog", () => {
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
-    expect(JSON.stringify(readQaScenarioById("memory-failure-fallback").execution.flow)).toContain(
-      "liveTurnTimeoutMs(env, 180000)",
+    const fallbackFlow = JSON.stringify(
+      readQaScenarioById("memory-failure-fallback").execution.flow,
     );
+    expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -125,10 +127,12 @@ describe("qa scenario catalog", () => {
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
     const webSearch = readQaScenarioById("runtime-tool-web-search");
+    const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
     expect(applyPatch.runtimeParityTier).toBe("standard");
     expect(messageTool.runtimeParityTier).toBe("optional");
     expect(tavilySearch.runtimeParityTier).toBe("optional");
+    expect(imageGenerate.runtimeParityTier).toBe("optional");
     expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
       toolName: "apply_patch",
       toolCoverage: {
@@ -155,6 +159,15 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
+    expect(readQaScenarioExecutionConfig(imageGenerate.id)).toMatchObject({
+      toolName: "image_generate",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: false,
+      },
+    });
   });
 
   it("loads the Codex legacy Read vocabulary live parity canary", () => {
@@ -401,7 +414,10 @@ describe("qa scenario catalog", () => {
       "kitchen-sink-realtime-voice-provider",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
-      "only bundled plugins can register agent tool result middleware",
+      "agent tool result middleware must be a function",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "trusted tool policy registration requires id, description, and evaluate()",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
       "control UI descriptor registration requires id, surface, label, and valid optional fields",
