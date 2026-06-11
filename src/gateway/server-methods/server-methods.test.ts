@@ -3065,6 +3065,35 @@ describe("exec approval handlers", () => {
     expect(allowOnceRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("keeps deny available when request allowed decisions omit it", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        allowedDecisions: ["allow-once"],
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
   it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
     const manager = new ExecApprovalManager();
     const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");

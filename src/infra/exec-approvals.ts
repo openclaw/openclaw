@@ -1771,7 +1771,13 @@ export function resolveExecApprovalRequestAllowedDecisions(params?: {
   }
   const explicitDecisions = new Set(explicit);
   const narrowed = policyDecisions.filter((decision) => explicitDecisions.has(decision));
-  return narrowed.length > 0 ? narrowed : policyDecisions;
+  if (narrowed.length === 0) {
+    return policyDecisions;
+  }
+  if (!narrowed.includes("deny") && policyDecisions.includes("deny")) {
+    return [...narrowed, "deny"];
+  }
+  return narrowed;
 }
 
 export function isExecApprovalDecisionAllowed(params: {

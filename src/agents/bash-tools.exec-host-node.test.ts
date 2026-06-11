@@ -204,6 +204,10 @@ vi.mock("../infra/exec-approvals.js", () => ({
   resolveAllowAlwaysPatternCoverage: resolveAllowAlwaysPatternCoverageMock,
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
   resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
+  maxAsk: (a: ExecAsk, b: ExecAsk): ExecAsk => {
+    const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
+    return order[a] >= order[b] ? a : b;
+  },
 }));
 
 vi.mock("../infra/command-analysis/inline-eval.js", () => ({
@@ -1758,6 +1762,63 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "always",
+      allowAlwaysPersistence: {
+        kind: "patterns",
+        patterns: [{ pattern: "/trusted/bin/tool" }],
+      },
+    });
+    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+  });
+
+  it("omits allow-always from node approval prompts when node runtime policy is missing", async () => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "test reviewer would allow it",
+    }));
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: preparedPlan,
+      execPolicy: undefined,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "always",
+      allowAlwaysPersistence: {
+        kind: "patterns",
+        patterns: [{ pattern: "/trusted/bin/tool" }],
+      },
+    });
+    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
   it("does not use fallback-full when node auto-review cannot parse the command", async () => {

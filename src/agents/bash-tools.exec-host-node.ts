@@ -8,6 +8,7 @@ import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
   type ExecSecurity,
+  maxAsk,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
 } from "../infra/exec-approvals.js";
@@ -130,8 +131,10 @@ export async function executeNodeHostCommand(
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
+  const approvalDecisionAsk =
+    nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
   const allowedDecisions = resolveExecApprovalAllowedDecisions({
-    ask: hostAsk,
+    ask: approvalDecisionAsk,
     allowAlwaysPersistence,
   });
   const requiresAsk =
