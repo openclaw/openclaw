@@ -2,10 +2,19 @@
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
 
+export type ChatRunTiming = {
+  ackedAtMs: number;
+  connId: string;
+  dispatchStartedAtMs?: number;
+  firstAssistantEventSent?: boolean;
+  receivedAtMs: number;
+};
+
 export type ChatRunEntry = {
   sessionKey: string;
   agentId?: string;
   clientRunId: string;
+  chatSendTiming?: ChatRunTiming;
 };
 
 export type BufferedAgentEvent = {

@@ -498,14 +498,19 @@ tasks:
           "utf-8",
         );
         // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval — not due).
-        await seedSessionStore(storePath, sessionKey, {
-          sessionId: "sid",
-          updatedAt: nowMs,
-          lastChannel: "telegram",
-          lastProvider: "telegram",
-          lastTo: "155462274",
-          heartbeatTaskState: { "check-deployment": nowMs },
-        });
+        await fs.writeFile(
+          storePath,
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: nowMs,
+              lastChannel: "telegram",
+              lastProvider: "telegram",
+              lastTo: "155462274",
+              heartbeatTaskState: { "check-deployment": nowMs },
+            },
+          }),
+        );
         await saveCommitmentStore(undefined, {
           version: 1,
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],

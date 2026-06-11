@@ -261,18 +261,25 @@ describe("qa suite gateway helpers", () => {
       patchConfig({
         env,
         patch: { tools: { deny: ["read"] } },
+        replacePaths: ["tools.deny"],
         restartDelayMs: 0,
       }),
     ).resolves.toEqual({ ok: true });
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "config.patch",
-      expect.objectContaining({ baseHash: "hash-1" }),
+      expect.objectContaining({
+        baseHash: "hash-1",
+        replacePaths: ["tools.deny"],
+      }),
       { timeoutMs: 180_000 },
     );
     expect(gatewayCall).toHaveBeenCalledWith(
       "config.patch",
-      expect.objectContaining({ baseHash: "hash-2" }),
+      expect.objectContaining({
+        baseHash: "hash-2",
+        replacePaths: ["tools.deny"],
+      }),
       { timeoutMs: 180_000 },
     );
   });

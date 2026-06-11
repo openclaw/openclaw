@@ -195,7 +195,7 @@ describe("plugin update unchanged Docker E2E", () => {
             message:
               `Plugin "${CORRUPT_PLUGIN_ID}" could not be processed after the core update: ` +
               disabledAfterFailure.npm.outcomes[0].message +
-              " Run openclaw doctor --fix to attempt automatic repair. " +
+              " Run openclaw update repair to retry post-update plugin repair. " +
               `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
           },
         ],

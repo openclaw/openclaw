@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getMatrixExecApprovalApprovers,
@@ -342,12 +343,12 @@ describe("matrix exec approvals", () => {
     ).toBe(false);
   });
 
-  it("scopes non-matrix turn sources to the stored matrix account", () => {
+  it("scopes non-matrix turn sources to the stored matrix account", async () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({
+      {
         "agent:ops-agent:matrix:channel:!room:example.org": {
           sessionId: "main",
           updatedAt: 1,
@@ -359,8 +360,8 @@ describe("matrix exec approvals", () => {
           lastTo: "channel:C999",
           lastAccountId: "work",
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });
     const request = makeForeignChannelApprovalRequest({

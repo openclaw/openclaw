@@ -611,6 +611,7 @@ type ChatSendTimingPhase =
   | "server-dispatch-started"
   | "server-model-selected"
   | "server-agent-run-started"
+  | "server-first-assistant-event"
   | "server-dispatch-completed"
   | "server-post-dispatch-completed"
   | "first-assistant-visible"
@@ -637,6 +638,7 @@ type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
   | "agent-run-started"
+  | "first-assistant-event"
   | "dispatch-completed"
   | "post-dispatch-completed";
 
@@ -644,9 +646,15 @@ const CHAT_SEND_SERVER_TIMING_PHASES = new Set<ChatSendServerTimingPhase>([
   "dispatch-started",
   "model-selected",
   "agent-run-started",
+  "first-assistant-event",
   "dispatch-completed",
   "post-dispatch-completed",
 ]);
+const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
+
+function chatSendTimingOptions(slow: boolean) {
+  return { console: slow, warn: slow, maxBufferedEventsForType: 40 };
+}
 
 function recordChatSendTiming(
   host: ChatHost,
@@ -712,6 +720,7 @@ export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
   if (durationMs === undefined) {
     return;
   }
+  const slow = phase === "first-assistant-event" && durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
   recordControlUiPerformanceEvent(
     host as Parameters<typeof recordControlUiPerformanceEvent>[0],
     "control-ui.chat.send",
@@ -746,8 +755,9 @@ export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
       ...(typeof record.agentRunId === "string" && record.agentRunId.trim()
         ? { agentRunId: record.agentRunId.trim() }
         : {}),
+      ...(slow ? { slow: true } : {}),
     },
-    { console: false, maxBufferedEventsForType: 40 },
+    chatSendTimingOptions(slow),
   );
 }
 
@@ -881,12 +891,14 @@ export function recordFirstAssistantChatTiming(
   entry.firstAssistantVisibleRecorded = true;
   scheduleControlUiAfterPaint(host, () => {
     const paintedAtMs = controlUiNowMs();
+    const durationMs = roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs);
+    const slow = durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
     recordControlUiPerformanceEvent(
       host as Parameters<typeof recordControlUiPerformanceEvent>[0],
       "control-ui.chat.send",
       {
         phase,
-        durationMs: roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs),
+        durationMs,
         runId,
         sessionKey: entry.sessionKey ?? payload.sessionKey,
         agentId: entry.agentId ?? payload.agentId,
@@ -907,8 +919,9 @@ export function recordFirstAssistantChatTiming(
               ackToFirstAssistantEventMs: roundedControlUiDurationMs(eventAtMs - entry.ackAtMs),
             }
           : {}),
+        ...(slow ? { slow: true } : {}),
       },
-      { console: false, maxBufferedEventsForType: 40 },
+      chatSendTimingOptions(slow),
     );
     if (phase === "terminal-before-delta") {
       host.chatSendTimingsByRun?.delete(runId);
@@ -1508,7 +1521,7 @@ function historyIdleProofIsStaleForSelectedRow(
   return selectedStartedAt >= historyUpdatedAt;
 }
 
-function flushChatQueueAfterIdleSessionReconciliation(
+export function flushChatQueueAfterIdleSessionReconciliation(
   host: ChatHost,
   sessionKey: string,
   historyRefresh: Promise<ChatHistoryResult | undefined>,
@@ -2047,10 +2060,9 @@ export async function refreshChat(
       .then((metadataApplied) => {
         const metadataRefresh =
           opts?.startup === true && (metadataApplied.commands || metadataApplied.models)
-            ? Promise.allSettled([
-                ...(metadataApplied.models ? [] : [refreshChatModels(host)]),
-                ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
-              ])
+            ? metadataApplied.models
+              ? Promise.allSettled([])
+              : Promise.allSettled([refreshChatModels(host)])
             : Promise.allSettled([refreshChatMetadata(host)]);
         return Promise.allSettled([refreshChatAvatar(host), metadataRefresh]);
       })
@@ -2089,7 +2101,7 @@ async function refreshChatModels(host: ChatHost) {
   }
 }
 
-async function refreshChatCommands(host: ChatHost) {
+export async function refreshChatCommands(host: ChatHost) {
   await refreshSlashCommands({
     client: host.client,
     agentId: resolveAgentIdForSession(host),

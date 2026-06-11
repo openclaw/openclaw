@@ -775,7 +775,12 @@ vi.mock("./spawned-context.js", () => ({
 }));
 
 vi.mock("./timeout.js", () => ({
-  resolveAgentTimeoutMs: () => 30_000,
+  resolveAgentTimeoutMs: ({ overrideSeconds }: { overrideSeconds?: number | null }) =>
+    typeof overrideSeconds === "number" && Number.isFinite(overrideSeconds)
+      ? overrideSeconds === 0
+        ? 2_147_483_647
+        : Math.max(overrideSeconds * 1000, 1)
+      : 30_000,
 }));
 
 vi.mock("./workspace.js", () => ({
@@ -1140,6 +1145,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     expect(touchWrites).toHaveLength(1);
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes explicit timeout overrides into agent attempts", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      timeout: "600",
+    });
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      timeoutMs: 600_000,
+      runTimeoutOverrideMs: 600_000,
+    });
   });
 
   it("skips the initial session touch after gateway ingress already persisted activity", async () => {

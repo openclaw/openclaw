@@ -24,8 +24,8 @@ import {
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
 import {
-  resolveProviderRequestConfig,
-  sanitizeRuntimeProviderRequestOverrides,
+  applyPreparedRuntimeAuthToModel,
+  type ModelProviderRequestTransportOverrides,
 } from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import {
@@ -88,41 +88,22 @@ export function createEmbeddedRunAuthController(params: {
     runtimeModel: Model;
     preparedAuth: {
       baseUrl?: string;
-      request?: Parameters<typeof resolveProviderRequestConfig>[0]["request"];
+      request?: ModelProviderRequestTransportOverrides;
     };
   }): void => {
-    if (!paramsForApply.preparedAuth.baseUrl && !paramsForApply.preparedAuth.request) {
+    const runtimeModel = applyPreparedRuntimeAuthToModel(
+      paramsForApply.runtimeModel,
+      paramsForApply.preparedAuth,
+    );
+    if (runtimeModel === paramsForApply.runtimeModel) {
       return;
     }
-    const runtimeRequestConfig = resolveProviderRequestConfig({
-      provider: paramsForApply.runtimeModel.provider,
-      api: paramsForApply.runtimeModel.api,
-      baseUrl: paramsForApply.preparedAuth.baseUrl ?? paramsForApply.runtimeModel.baseUrl,
-      providerHeaders:
-        paramsForApply.runtimeModel.headers &&
-        typeof paramsForApply.runtimeModel.headers === "object"
-          ? paramsForApply.runtimeModel.headers
-          : undefined,
-      request: sanitizeRuntimeProviderRequestOverrides(paramsForApply.preparedAuth.request),
-      capability: "llm",
-      transport: "stream",
-    });
     // Runtime auth plugins may override baseUrl and safe request auth headers,
-    // but sanitizeRuntimeProviderRequestOverrides strips privileged transport knobs.
-    params.setRuntimeModel({
-      ...paramsForApply.runtimeModel,
-      ...(paramsForApply.preparedAuth.baseUrl
-        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
-        : {}),
-      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-    });
-    params.setEffectiveModel({
-      ...params.getEffectiveModel(),
-      ...(paramsForApply.preparedAuth.baseUrl
-        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
-        : {}),
-      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-    });
+    // while the shared applier strips privileged transport knobs.
+    params.setRuntimeModel(runtimeModel);
+    params.setEffectiveModel(
+      applyPreparedRuntimeAuthToModel(params.getEffectiveModel(), paramsForApply.preparedAuth),
+    );
   };
 
   const hasRefreshableRuntimeAuth = () =>
