@@ -1341,7 +1341,12 @@ export function createMsteamsRealtimeCall(params: {
         extraSystemPrompt:
           `${MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT} Produce minutes with these sections, omitting ` +
           `empty ones: Key points; Decisions; Action items (as a checklist). Keep it brief and ` +
-          `factual; no invented attribution. Then deliver by calling the message tool exactly once ` +
+          `factual; no invented attribution. Minutes artifact: if your file tools are available, ALSO ` +
+          `save the same minutes as a Word-openable document — write a complete HTML document (with a ` +
+          `title, the call/duration line, and the sections) to a local file named ` +
+          `meeting-minutes.doc, and attach it by passing the file's absolute path as the message ` +
+          `tool's media parameter on the SAME send. If file tools are unavailable or the attachment ` +
+          `fails, send the text-only message. Deliver by calling the message tool exactly once ` +
           `with action "send", channel "msteams", target "${
             // Group calls post minutes into the meeting thread itself (the channel's
             // conversation:<id> target form); 1:1 recaps go to the caller's chat.
