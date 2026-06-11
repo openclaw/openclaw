@@ -187,6 +187,7 @@ export const forcedUnitFastTestFiles = [
   "src/skills/security/scanner.test.ts",
   "src/security/audit-config-include-perms.test.ts",
   "src/security/context-visibility.test.ts",
+  "src/security/security-matrix/evaluate.test.ts",
   "src/realtime-transcription/websocket-session.test.ts",
   "src/talk/agent-consult-tool.test.ts",
   "src/routing/resolve-route.test.ts",
