@@ -788,6 +788,14 @@
     "target": "Parallel 插件"
   },
   {
+    "source": "Llama Cpp plugin",
+    "target": "Llama Cpp 插件"
+  },
+  {
+    "source": "llama-cpp",
+    "target": "llama-cpp"
+  },
+  {
     "source": "Parallel search",
     "target": "Parallel 搜索"
   },
