@@ -40,11 +40,11 @@ export function evaluateSecurityMatrixToolFacts(
   options: { policy?: SecurityMatrixPolicy; allowPolicyWeakening?: boolean } = {},
 ): SecurityMatrixEvaluation {
   return evaluateSecurityMatrix({
-    actor: facts.actor,
-    influencedBy: facts.influencedBy,
+    ...(facts.actor ? { actor: facts.actor } : {}),
+    ...(facts.influencedBy ? { influencedBy: facts.influencedBy } : {}),
     capability: facts.capability ?? resolveSecurityMatrixCapabilityFromTool(facts.toolName),
-    approvalState: facts.approvalState,
-    operatorPolicy: facts.operatorPolicy,
+    ...(facts.approvalState ? { approvalState: facts.approvalState } : {}),
+    ...(facts.operatorPolicy ? { operatorPolicy: facts.operatorPolicy } : {}),
     ...(options.policy ? { policy: options.policy } : {}),
     ...(options.allowPolicyWeakening ? { allowPolicyWeakening: true } : {}),
   });
