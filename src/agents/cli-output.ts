@@ -15,6 +15,13 @@ type CliUsage = {
   cacheRead?: number;
   cacheWrite?: number;
   total?: number;
+  /**
+   * Discriminator for heuristic counts produced by a backend's
+   * `estimateUsage` hook. Provider-supplied usage parsed from CLI stdout
+   * leaves this `undefined`; the hook MUST set it to `true` so UI/billing
+   * surfaces can render it differently (e.g. `~Xk (estimated)` vs `Xk`).
+   */
+  estimated?: true;
 };
 
 /** Normalized result from a CLI-backed model provider turn. */

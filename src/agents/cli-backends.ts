@@ -53,6 +53,7 @@ export type ResolvedCliBackend = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  estimateUsage?: CliBackendPlugin["estimateUsage"];
   nativeToolMode?: CliBackendNativeToolMode;
 };
 
@@ -88,6 +89,7 @@ type FallbackCliBackendPolicy = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  estimateUsage?: CliBackendPlugin["estimateUsage"];
   nativeToolMode?: CliBackendNativeToolMode;
 };
 
@@ -129,6 +131,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
+    estimateUsage: entry.backend.estimateUsage,
     nativeToolMode: entry.backend.nativeToolMode,
   };
 }
@@ -429,6 +432,7 @@ export function resolveCliBackendConfig(
       ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
+      estimateUsage: registered.estimateUsage,
       nativeToolMode: registered.nativeToolMode,
     };
   }
@@ -462,6 +466,7 @@ export function resolveCliBackendConfig(
       ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
       prepareExecution: fallbackPolicy.prepareExecution,
       resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
+      estimateUsage: fallbackPolicy.estimateUsage,
       nativeToolMode: fallbackPolicy.nativeToolMode,
     };
   }
@@ -492,6 +497,7 @@ export function resolveCliBackendConfig(
     ownsNativeCompaction: fallbackPolicy?.ownsNativeCompaction,
     prepareExecution: fallbackPolicy?.prepareExecution,
     resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
+    estimateUsage: fallbackPolicy?.estimateUsage,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
   };
 }

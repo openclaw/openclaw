@@ -191,6 +191,7 @@ export type {
 } from "./conversation-binding.types.js";
 export type {
   CliBackendAuthEpochMode,
+  CliBackendEstimateUsageContext,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendPreparedExecution,
@@ -199,6 +200,7 @@ export type {
   CliBackendResolveExecutionArgsContext,
   CliBackendThinkingLevel,
   CliBackendPlugin,
+  CliBackendUsageEstimate,
   CliBundleMcpMode,
   PluginTextReplacement,
   PluginTextTransforms,

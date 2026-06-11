@@ -64,6 +64,34 @@ export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on";
 
+/** Token-usage estimate returned by a backend-owned heuristic estimator. */
+export type CliBackendUsageEstimate = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+  /**
+   * Discriminator marker. Required `true` for any value returned by
+   * `estimateUsage` so downstream consumers (TUI footer, session-status,
+   * billing displays) can distinguish heuristic counts from provider-
+   * supplied exact usage and render them differently (e.g.
+   * `~Xk (estimated)` vs `Xk`). Keep this required, not optional: a
+   * missing flag would silently conflate heuristic and exact totals.
+   */
+  estimated: true;
+};
+
+/** Inputs given to a backend's `estimateUsage` hook for a single CLI turn. */
+export type CliBackendEstimateUsageContext = {
+  /** Final prompt text sent to the CLI subprocess (post-textTransforms.input). */
+  promptText: string;
+  /** Assistant text parsed from the CLI subprocess stdout. */
+  assistantText: string;
+  /** Model id used for this turn (post-alias resolution). */
+  modelId: string;
+};
+
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
   backendId: string;
@@ -195,4 +223,17 @@ export type CliBackendPlugin = {
    * closed instead of launching a native harness.
    */
   nativeToolMode?: CliBackendNativeToolMode;
+  /**
+   * Backend-owned token-usage estimator for text-output backends that cannot
+   * surface structured usage on stdout.
+   *
+   * Called by the CLI runner after a successful turn when the parsed output
+   * carries no `usage` field. Return `undefined` to leave usage unset.
+   *
+   * Heuristics live in the backend so the core runner stays
+   * tokenizer-agnostic. Example: a Gemini-targeted backend can apply Google's
+   * official "1 token ≈ 4 characters" rule without pulling a 100+ MB
+   * SentencePiece vocab into the bundle.
+   */
+  estimateUsage?: (ctx: CliBackendEstimateUsageContext) => CliBackendUsageEstimate | undefined;
 };
