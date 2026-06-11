@@ -3777,6 +3777,16 @@ export async function runEmbeddedAttempt(
           modelId: params.model.id,
           trigger: params.trigger,
           ...buildAgentHookContextChannelFields(params),
+          ...((params.messageChannel ?? params.messageProvider)
+            ? { turnSourceChannel: params.messageChannel ?? params.messageProvider }
+            : {}),
+          ...((params.currentChannelId ?? params.messageTo)
+            ? { turnSourceTo: params.currentChannelId ?? params.messageTo }
+            : {}),
+          ...(params.agentAccountId ? { turnSourceAccountId: params.agentAccountId } : {}),
+          ...((params.currentThreadTs ?? params.messageThreadId)
+            ? { turnSourceThreadId: params.currentThreadTs ?? params.messageThreadId }
+            : {}),
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
@@ -4388,6 +4398,16 @@ export async function runEmbeddedAttempt(
                   workspaceDir: params.workspaceDir,
                   trigger: params.trigger,
                   ...buildAgentHookContextChannelFields(params),
+                  ...((params.messageChannel ?? params.messageProvider)
+                    ? { turnSourceChannel: params.messageChannel ?? params.messageProvider }
+                    : {}),
+                  ...((params.currentChannelId ?? params.messageTo)
+                    ? { turnSourceTo: params.currentChannelId ?? params.messageTo }
+                    : {}),
+                  ...(params.agentAccountId ? { turnSourceAccountId: params.agentAccountId } : {}),
+                  ...((params.currentThreadTs ?? params.messageThreadId)
+                    ? { turnSourceThreadId: params.currentThreadTs ?? params.messageThreadId }
+                    : {}),
                 },
               )
               .catch((err: unknown) => {

@@ -59,6 +59,10 @@ type CodexDynamicToolHookContext = {
   currentThreadId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;

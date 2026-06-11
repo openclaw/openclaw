@@ -732,6 +732,16 @@ export async function runCodexAppServerAttempt(
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
+      ...((params.messageChannel ?? params.messageProvider)
+        ? { turnSourceChannel: params.messageChannel ?? params.messageProvider }
+        : {}),
+      ...((params.currentChannelId ?? params.messageTo)
+        ? { turnSourceTo: params.currentChannelId ?? params.messageTo }
+        : {}),
+      ...(params.agentAccountId ? { turnSourceAccountId: params.agentAccountId } : {}),
+      ...((params.currentThreadTs ?? params.messageThreadId)
+        ? { turnSourceThreadId: params.currentThreadTs ?? params.messageThreadId }
+        : {}),
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
