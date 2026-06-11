@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
-import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  frontmatterYamlSyntaxError,
+  parseFrontmatter,
+  resolveSkillInvocationPolicy,
+} from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
@@ -56,6 +60,8 @@ function loadSingleSkillDirectory(params: {
   source: string;
   rootRealPath: string;
   maxBytes?: number;
+  // Strict callers (skills lint) report malformed YAML the permissive runtime parser hides.
+  strictYaml?: boolean;
 }): LoadSingleSkillResult {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
   const filePath = path.resolve(skillFilePath);
@@ -67,6 +73,16 @@ function loadSingleSkillDirectory(params: {
   });
   if (!raw) {
     return { ok: false, failure: null };
+  }
+
+  if (params.strictYaml) {
+    const yamlError = frontmatterYamlSyntaxError(raw);
+    if (yamlError) {
+      return {
+        ok: false,
+        failure: { dir, filePath, reason: "parse-error", message: yamlError },
+      };
+    }
   }
 
   let frontmatter: Record<string, string>;
@@ -202,6 +218,67 @@ export function loadSkillsFromDirSafe(params: {
     frontmatterByFilePath,
     skipped,
   };
+}
+
+// Bounds so `skills lint` on a broad root cannot become an unbounded filesystem walk;
+// mirrors the spirit of runtime's budgeted nested skill-group discovery.
+const MAX_LINT_SCAN_DEPTH = 4;
+const MAX_LINT_CANDIDATE_DIRS = 2000;
+
+/**
+ * Recursively collects SKILL.md load failures under a root for `skills lint`, descending
+ * into nested skill groups the same way runtime discovery does (a directory that is itself
+ * a skill is a leaf). `strictYaml` additionally reports malformed YAML. Bounded by depth and
+ * a candidate cap. Symlinks are not followed, matching the safe single-dir loader.
+ */
+export function collectSkillLoadFailures(params: {
+  dir: string;
+  source: string;
+  strictYaml?: boolean;
+  maxBytes?: number;
+}): SkillLoadFailure[] {
+  const rootDir = path.resolve(params.dir);
+  let rootRealPath: string;
+  try {
+    rootRealPath = fs.realpathSync(rootDir);
+  } catch {
+    return [];
+  }
+
+  const failures: SkillLoadFailure[] = [];
+  const seen = new Set<string>();
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: rootDir, depth: 0 }];
+  let scanned = 0;
+  while (queue.length > 0 && scanned < MAX_LINT_CANDIDATE_DIRS) {
+    const current = queue.shift();
+    if (!current || seen.has(current.dir)) {
+      continue;
+    }
+    seen.add(current.dir);
+    scanned += 1;
+
+    if (fs.existsSync(path.join(current.dir, "SKILL.md"))) {
+      const result = loadSingleSkillDirectory({
+        skillDir: current.dir,
+        source: params.source,
+        rootRealPath,
+        maxBytes: params.maxBytes,
+        strictYaml: params.strictYaml,
+      });
+      if (!result.ok && result.failure) {
+        failures.push(result.failure);
+      }
+      // A directory that is itself a skill is a leaf; its subdirs are assets, not skills.
+      continue;
+    }
+    if (current.depth >= MAX_LINT_SCAN_DEPTH) {
+      continue;
+    }
+    for (const childDir of listCandidateSkillDirs(current.dir)) {
+      queue.push({ dir: childDir, depth: current.depth + 1 });
+    }
+  }
+  return failures;
 }
 
 export function readSkillFrontmatterSafe(params: {

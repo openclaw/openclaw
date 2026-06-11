@@ -37,7 +37,7 @@ describe("loadSkillsFromDirSafe skip diagnostics", () => {
 
     expect(result.skills).toHaveLength(0);
     expect(result.skipped).toHaveLength(1);
-    const failure = result.skipped[0]!;
+    const failure = result.skipped[0];
     expect(failure.reason).toBe("missing-required-field");
     if (failure.reason === "missing-required-field") {
       expect(failure.field).toBe("description");
@@ -62,6 +62,6 @@ describe("loadSkillsFromDirSafe skip diagnostics", () => {
 
     expect(result.skills.map((s) => s.name)).toEqual(["good"]);
     expect(result.skipped).toHaveLength(1);
-    expect(result.skipped[0]!.reason).toBe("missing-required-field");
+    expect(result.skipped[0].reason).toBe("missing-required-field");
   });
 });

@@ -1,6 +1,9 @@
 // Frontmatter helpers parse skill metadata from SKILL.md files.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { parseFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import {
+  frontmatterYamlSyntaxError,
+  parseFrontmatterBlock,
+} from "../../../packages/markdown-core/src/frontmatter.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
   applyOpenClawManifestInstallCommonFields,
@@ -25,6 +28,8 @@ import type { Skill } from "./skill-contract.js";
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
   return parseFrontmatterBlock(content);
 }
+
+export { frontmatterYamlSyntaxError };
 
 const BREW_FORMULA_PATTERN = /^[A-Za-z0-9][A-Za-z0-9@+._/-]*$/;
 const GO_MODULE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~+\-/]*(?:@[A-Za-z0-9][A-Za-z0-9._~+\-/]*)?$/;

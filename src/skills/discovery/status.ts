@@ -21,7 +21,7 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { loadSkillsFromDirSafe, type SkillLoadFailure } from "../loading/local-loader.js";
+import { collectSkillLoadFailures, type SkillLoadFailure } from "../loading/local-loader.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type {
   SkillEntry,
@@ -86,21 +86,34 @@ export type SkillLintReport = {
 };
 
 /**
- * Scans skill roots and reports SKILL.md directories that failed to load, so authors
- * see why a skill was silently dropped (parse error vs missing required field).
+ * Scans skill roots (recursively, including nested skill groups) and reports SKILL.md
+ * directories that failed to load, so authors see why a skill was silently dropped:
+ * malformed YAML (strict), a parse error, or a missing required field.
  */
 export function lintSkillRoots(roots: readonly string[]): SkillLintReport {
-  const seen = new Set<string>();
+  const seenRoots = new Set<string>();
+  const seenFailureFiles = new Set<string>();
   const failures: SkillLoadFailure[] = [];
   for (const root of roots) {
     const resolved = path.resolve(root);
-    if (seen.has(resolved)) {
+    if (seenRoots.has(resolved)) {
       continue;
     }
-    seen.add(resolved);
-    failures.push(...loadSkillsFromDirSafe({ dir: resolved, source: "lint" }).skipped);
+    seenRoots.add(resolved);
+    for (const failure of collectSkillLoadFailures({
+      dir: resolved,
+      source: "lint",
+      strictYaml: true,
+    })) {
+      // Overlapping roots can surface the same SKILL.md twice; report each file once.
+      if (seenFailureFiles.has(failure.filePath)) {
+        continue;
+      }
+      seenFailureFiles.add(failure.filePath);
+      failures.push(failure);
+    }
   }
-  return { roots: [...seen], failures };
+  return { roots: [...seenRoots], failures };
 }
 
 /** Default skill roots linted when no explicit path is passed: workspace and managed dirs. */

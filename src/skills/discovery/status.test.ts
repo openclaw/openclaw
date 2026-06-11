@@ -601,11 +601,49 @@ describe("lintSkillRoots", () => {
       const report = lintSkillRoots([root]);
 
       expect(report.failures).toHaveLength(1);
-      const failure = report.failures[0]!;
+      const failure = report.failures[0];
       expect(failure.reason).toBe("missing-required-field");
       if (failure.reason === "missing-required-field") {
         expect(failure.field).toBe("description");
       }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a malformed SKILL.md nested inside a skill group", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      const nestedDir = path.join(root, "group", "broken");
+      await fs.mkdir(nestedDir, { recursive: true });
+      await fs.writeFile(path.join(nestedDir, "SKILL.md"), "---\nname: broken\n---\n", "utf8");
+
+      const report = lintSkillRoots([root]);
+
+      expect(report.failures).toHaveLength(1);
+      expect(report.failures[0].filePath).toBe(path.join(nestedDir, "SKILL.md"));
+      expect(report.failures[0].reason).toBe("missing-required-field");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("flags malformed YAML that the permissive parser would otherwise accept", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      const skillDir = path.join(root, "bad-yaml");
+      await fs.mkdir(skillDir, { recursive: true });
+      // Unterminated flow sequence: the line parser extracts a value, strict YAML rejects it.
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: bad-yaml\ndescription: [unterminated\n---\n\nBody.\n",
+        "utf8",
+      );
+
+      const report = lintSkillRoots([root]);
+
+      expect(report.failures).toHaveLength(1);
+      expect(report.failures[0].reason).toBe("parse-error");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
