@@ -4,6 +4,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { listSkillProposals, proposeCreateSkill, proposeUpdateSkill } from "../workshop/service.js";
 import { readWorkspaceSkillFile, resolveSkillProposalTarget } from "../workshop/store.js";
+import {
+  shouldSkipSkillResearchAutoCaptureSession,
+  type SkillResearchAutoCaptureSessionContext,
+} from "./autocapture-session.js";
 import { extractDurableInstructionProposal } from "./signals.js";
 
 type SkillResearchAgentEndEvent = {
@@ -11,7 +15,7 @@ type SkillResearchAgentEndEvent = {
   success?: boolean;
 };
 
-type SkillResearchAgentContext = {
+type SkillResearchAgentContext = SkillResearchAutoCaptureSessionContext & {
   agentId?: string;
   workspaceDir?: string;
 };
@@ -36,6 +40,9 @@ export async function runSkillResearchAutoCapture(params: {
     return;
   }
   if (params.event.success === false) {
+    return;
+  }
+  if (shouldSkipSkillResearchAutoCaptureSession(params.ctx)) {
     return;
   }
   const workspaceDir = params.ctx.workspaceDir;
