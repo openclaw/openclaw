@@ -178,12 +178,16 @@ config keys, intentionally:
 **Either key alone is insufficient.** Only the combination grants direct-invoke
 read access:
 
-| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | `read` reachable           |
-| ------------------------------- | ------------------------- | -------------------------- |
-| no                              | no                        | ❌                         |
-| yes                             | no                        | ❌ (tool not materialized) |
-| no                              | yes                       | ❌ (filtered by HTTP deny) |
-| yes                             | yes                       | ✅                         |
+| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | `read` reachable                                                          |
+| ------------------------------- | ------------------------- | ------------------------------------------------------------------------- |
+| no                              | no                        | ❌                                                                        |
+| yes                             | no                        | ❌ (built-in not materialized; `dangerous_allow` audit fires — see below) |
+| no                              | yes                       | ❌ (filtered by HTTP deny)                                                |
+| yes                             | yes                       | ✅                                                                        |
+
+**Audit behavior:** Setting only `gateway.tools.allow: ["read"]` (without `hostFsRead: true`) does not materialize the built-in `read` tool, but it does remove `read` from the HTTP deny list. Because a plugin tool named `read` could be independently reachable, the config audit fires `gateway.tools_invoke_http.dangerous_allow`. To suppress that warning in favour of the more specific `host_read_allow` finding, set both keys together.
+
+**Plugin name collision:** When both keys are set and both a plugin and the built-in coding tool share the name `read`, the built-in takes precedence on the direct-invoke surface. This guarantees the documented filesystem behavior regardless of installed plugins.
 
 **Security:** When enabled, `read` can access any file the gateway process can
 open, **outside the configured workspace** unless `tools.fs.workspaceOnly: true`
@@ -216,19 +220,24 @@ write tools unreachable.
 
 Truth table (per tool name `T` ∈ `{write, edit}`):
 
-| `tools.allow` includes `T` | `directInvoke.hostFsWrite` | `T` reachable on direct-invoke |
-| -------------------------- | -------------------------- | ------------------------------ |
-| no                         | no                         | ❌                             |
-| yes                        | no                         | ❌ (tool not materialized)     |
-| no                         | yes                        | ❌ (filtered by HTTP deny)     |
-| yes                        | yes                        | ✅                             |
+| `tools.allow` includes `T` | `directInvoke.hostFsWrite` | `T` reachable on direct-invoke                                            |
+| -------------------------- | -------------------------- | ------------------------------------------------------------------------- |
+| no                         | no                         | ❌                                                                        |
+| yes                        | no                         | ❌ (built-in not materialized; `dangerous_allow` audit fires — see below) |
+| no                         | yes                        | ❌ (filtered by HTTP deny)                                                |
+| yes                        | yes                        | ✅                                                                        |
+
+**Audit behavior:** Setting only `gateway.tools.allow: ["write"]` (without `hostFsWrite: true`) does not materialize the built-in `write` tool, but it does remove `write` from the HTTP deny list. Because a plugin tool named `write` could be independently reachable, the config audit fires `gateway.tools_invoke_http.dangerous_allow`. Set both keys together to suppress that in favour of the more specific `host_write_allow` finding.
+
+**Plugin name collision:** When both keys are set, the built-in coding tool takes precedence over any plugin with the same name (`write` or `edit`) on the direct-invoke surface.
 
 **`apply_patch` is NOT in this set.** Although `apply_patch` is in
 `DEFAULT_GATEWAY_HTTP_TOOL_DENY` for future-proofing, the coding tool factory
 does not currently produce an `apply_patch` entry for the direct-invoke surface.
-Operators including `"apply_patch"` in `gateway.tools.allow` will see no effect
-on the direct-invoke surface; the entry remains inert until a future PR adds
-the factory wiring.
+Including `"apply_patch"` in `gateway.tools.allow` has no effect on built-in
+direct-invoke behavior, but it does remove the name from the HTTP deny list and
+will trigger `gateway.tools_invoke_http.dangerous_allow` (a same-named plugin
+could be reachable). The factory wiring is deferred to a future PR.
 
 **Security:** When enabled, write-class tools can mutate any file the gateway
 process can open, **outside the configured workspace** unless

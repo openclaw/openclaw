@@ -271,11 +271,14 @@ export function resolveGatewayScopedTools(params: {
       }).filter((tool) => directInvokeCodingToolNames.has(tool.name))
     : [];
 
-  // Gateway tools take precedence on name collision.
-  const gatewayToolNames = new Set(allTools.map((t) => t.name));
+  // Coding built-ins take precedence on name collision when a class opt-in is
+  // active, ensuring `read`/`write`/`edit` resolves to the built-in filesystem
+  // tool rather than a same-named plugin. When no class opt-in is active,
+  // `codingTools` is empty so `allTools` is returned unchanged.
+  const codingToolNames = new Set(codingTools.map((t) => t.name));
   const allToolsWithCoding = [
-    ...allTools,
-    ...codingTools.filter((t) => !gatewayToolNames.has(t.name)),
+    ...codingTools,
+    ...allTools.filter((t) => !codingToolNames.has(t.name)),
   ];
 
   const policyFiltered = applyToolPolicyPipeline({

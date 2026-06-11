@@ -131,26 +131,36 @@ describe("security audit gateway HTTP tool findings", () => {
     });
   });
 
-  // PR #85664 [P2] regression: inert `allow: ["read"]` (legacy config shape,
-  // without directInvoke.hostFsRead) must NOT trigger the generic
-  // `dangerous_allow` finding. The `read` tool is dual-key gated and stays
-  // unreachable in that state, so the generic warning is a false positive.
-  // PR #63919 extends this: same exemption applies to `write` and `edit`
-  // (dual-key gated by `hostFsWrite`).
-  describe("dangerous_allow exempts dual-key-gated tools", () => {
-    it("does NOT fire dangerous_allow when only allow:['read'] is set (inert config)", () => {
+  // `dangerous_allow` suppression is source-aware: only suppress for
+  // `read`/`write`/`edit` when the matching class opt-in is active. Without it,
+  // `allow` removes those names from the HTTP deny list and a same-named plugin
+  // could be reachable — so the generic warning must fire.
+  describe("dangerous_allow source-aware suppression for coding-tool names", () => {
+    it("fires dangerous_allow when only allow:['read'] is set (no hostFsRead opt-in)", () => {
       const cfg: OpenClawConfig = {
         gateway: {
-          bind: "lan", // would normally trigger critical if read were counted
+          bind: "lan",
           auth: { token: "secret" },
           tools: { allow: ["read"] },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(true);
+    });
+
+    it("does NOT fire dangerous_allow when allow:['read'] AND hostFsRead opt-in is set", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          auth: { token: "secret" },
+          tools: { allow: ["read"], directInvoke: { hostFsRead: true } },
         },
       };
       const findings = collectGatewayConfigFindings(cfg, cfg, {});
       expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(false);
     });
 
-    it("does NOT fire dangerous_allow when only allow:['write','edit'] is set (inert config)", () => {
+    it("fires dangerous_allow when only allow:['write','edit'] is set (no hostFsWrite opt-in)", () => {
       const cfg: OpenClawConfig = {
         gateway: {
           bind: "lan",
@@ -159,10 +169,22 @@ describe("security audit gateway HTTP tool findings", () => {
         },
       };
       const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(true);
+    });
+
+    it("does NOT fire dangerous_allow when allow:['write','edit'] AND hostFsWrite opt-in is set", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { token: "secret" },
+          tools: { allow: ["write", "edit"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
       expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(false);
     });
 
-    it("still fires dangerous_allow when allow includes a non-dual-key-gated tool alongside read/write", () => {
+    it("still fires dangerous_allow when allow includes a non-coding-tool name alongside read/write", () => {
       const cfg: OpenClawConfig = {
         gateway: {
           bind: "loopback",

@@ -100,17 +100,22 @@ export function collectGatewayConfigFindings(
   const gatewayToolsAllow = new Set(
     gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
   );
-  // Dual-key gated tools must NOT count toward `dangerous_allow`. Their
-  // `allow` entry alone is INERT (the tool is not materialized into the
-  // candidate set without the matching `directInvoke.<flag>` opt-in). The
-  // dedicated `host_read_allow` / `host_write_allow` findings handle the
-  // actual exposure when both gates are set. See ClawSweeper [P2] on PR
-  // #85664: "Keep inert read allow entries out of dangerous_allow".
-  // PR #85664: `read` gated by hostFsRead.
-  // PR #63919: `write`, `edit`, `apply_patch` gated by hostFsWrite.
-  const DUAL_KEY_GATED_TOOLS = new Set<string>(["read", "write", "edit", "apply_patch"]);
+  // Suppress `dangerous_allow` for `read`/`write`/`edit` only when the
+  // corresponding class opt-in is active. With it active, `host_read_allow`
+  // or `host_write_allow` fires instead (more specific). Without it, `allow`
+  // entries for these names remove them from the HTTP deny list, which can
+  // make same-named plugins reachable — `dangerous_allow` should fire.
+  // `apply_patch` is never suppressed: the coding-tool factory does not produce
+  // it so hostFsWrite has no effect on it; a same-named plugin remains
+  // reachable regardless of the opt-in.
+  const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  const hostFsWriteOptIn = cfg.gateway?.tools?.directInvoke?.hostFsWrite === true;
+  const classOptInActiveForTool = new Set<string>([
+    ...(hostFsReadOptIn ? ["read"] : []),
+    ...(hostFsWriteOptIn ? ["write", "edit"] : []),
+  ]);
   const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
-    (name) => gatewayToolsAllow.has(name) && !DUAL_KEY_GATED_TOOLS.has(name),
+    (name) => gatewayToolsAllow.has(name) && !classOptInActiveForTool.has(name),
   );
   if (reenabledOverHttp.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
@@ -127,12 +132,8 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  // Host-FS read opt-in finding: only fires when BOTH gates are set
-  // (`directInvoke.hostFsRead: true` AND `tools.allow` includes "read"). Set
-  // by either gate alone, the `read` tool is NOT materialized (see
-  // `tool-resolution.ts` dual-key gating) so no exposure exists — silence is
-  // correct in those cases.
-  const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  // Host-FS read opt-in finding: fires when BOTH gates are set
+  // (`directInvoke.hostFsRead: true` AND `tools.allow` includes "read").
   if (hostFsReadOptIn && gatewayToolsAllow.has("read")) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
     findings.push({
@@ -157,7 +158,6 @@ export function collectGatewayConfigFindings(
   // dangerous than read so the finding is always critical when both gates
   // are set + bind is non-loopback (escalated to critical even on tailnet),
   // and warn on loopback.
-  const hostFsWriteOptIn = cfg.gateway?.tools?.directInvoke?.hostFsWrite === true;
   // Only includes tool names the coding tool factory currently produces for
   // the direct-invoke surface. `apply_patch` is intentionally NOT included
   // (the factory does not produce it yet) so the audit does not falsely
