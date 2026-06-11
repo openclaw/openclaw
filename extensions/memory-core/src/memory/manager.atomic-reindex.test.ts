@@ -247,6 +247,33 @@ describe("memory manager atomic reindex", () => {
       "rm:index.sqlite.tmp-shm:closed",
     ]);
   });
+
+  it("atomic swap on POSIX: target file never goes absent during swap", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+
+    const existsChecks: boolean[] = [];
+    const realRename = fs.rename;
+    const rename: typeof fs.rename = vi.fn(async (source, target) => {
+      existsChecks.push(await fs.access(indexPath).then(() => true, () => false));
+      return realRename(source, target);
+    });
+
+    await runMemoryAtomicReindex({
+      targetPath: indexPath,
+      tempPath: tempIndexPath,
+      fileOptions: {
+        fileOps: { rename, rm: fs.rm, wait: vi.fn().mockResolvedValue(undefined) },
+      },
+      build: async () => undefined,
+    });
+
+    expect(readChunkMarker(indexPath)).toBe("after");
+    expect(existsChecks.length).toBeGreaterThan(0);
+    for (const exists of existsChecks) {
+      expect(exists).toBe(true);
+    }
+  });
 });
 
 function writeChunkMarker(dbPath: string, marker: string): void {

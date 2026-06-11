@@ -112,16 +112,40 @@ export async function removeMemoryIndexFiles(
   }
 }
 
-async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
-  const backupPath = `${targetPath}.backup-${randomUUID()}`;
-  await moveMemoryIndexFiles(targetPath, backupPath);
+async function swapMemoryIndexFiles(
+  targetPath: string,
+  tempPath: string,
+  options: MemoryIndexFileOptions = {},
+): Promise<void> {
+  // On POSIX (Linux/macOS), rename(2) atomically overwrites the target,
+  // so there is no absent-window between removing the old index and
+  // publishing the new one. On Windows, rename fails when the target
+  // exists, so the three-step backup protocol is retained.
+  const resolvedOptions = resolveMemoryIndexFileOptions(options);
   try {
-    await moveMemoryIndexFiles(tempPath, targetPath);
+    await moveMemoryIndexFiles(tempPath, targetPath, options);
   } catch (err) {
-    await moveMemoryIndexFiles(backupPath, targetPath);
-    throw err;
+    if ((err as NodeJS.ErrnoException).code === "EPERM" || (err as NodeJS.ErrnoException).code === "EEXIST") {
+      // Windows: target exists, use three-step backup protocol with rollback.
+      const backupPath = `${targetPath}.backup-${randomUUID()}`;
+      await moveMemoryIndexFiles(targetPath, backupPath, options);
+      try {
+        await moveMemoryIndexFiles(tempPath, targetPath, options);
+      } catch (moveErr) {
+        await moveMemoryIndexFiles(backupPath, targetPath, options);
+        throw moveErr;
+      }
+      await removeMemoryIndexFiles(backupPath, options);
+    } else {
+      throw err;
+    }
   }
-  await removeMemoryIndexFiles(backupPath);
+  // Clean up stale WAL/SHM sidecars from the old index that may
+  // linger if the previous index was in WAL mode. rename only
+  // moves the main file; -wal and -shm from the old live DB
+  // can remain at the target path if the old DB had them.
+  await rmWithRetry(`${targetPath}-wal`, resolvedOptions);
+  await rmWithRetry(`${targetPath}-shm`, resolvedOptions);
 }
 
 export async function runMemoryAtomicReindex<T>(params: {
@@ -133,7 +157,7 @@ export async function runMemoryAtomicReindex<T>(params: {
 }): Promise<T> {
   try {
     const result = await params.build();
-    await swapMemoryIndexFiles(params.targetPath, params.tempPath);
+    await swapMemoryIndexFiles(params.targetPath, params.tempPath, params.fileOptions);
     return result;
   } catch (err) {
     try {
