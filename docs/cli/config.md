@@ -37,6 +37,8 @@ openclaw config set channels.discord.token --ref-provider default --ref-source e
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
 openclaw config patch --file ./openclaw.patch.json5 --dry-run
 openclaw config unset plugins.entries.brave.config.webSearch.apiKey
+openclaw config unset secrets.providers.env-provider --dry-run
+openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
 openclaw config validate
 openclaw config validate --json
@@ -237,6 +239,86 @@ openclaw config set secrets.providers.vaultfile \
   '{"source":"file","path":"/etc/openclaw/secrets.json","mode":"json"}' \
   --strict-json
 ```
+
+## `config unset`
+
+Remove a config value by dot path. Use `--dry-run` to validate the removal before committing.
+
+```bash
+openclaw config unset plugins.entries.brave.config.webSearch.apiKey
+openclaw config unset secrets.providers.env-provider --dry-run
+openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
+```
+
+### Dry-run options
+
+<Tabs>
+  <Tab title="--dry-run">
+    Validate removal without writing `openclaw.json`. Checks that the path exists, validates the post-change config against the schema, and verifies SecretRef fallout for `secrets.providers`/`secrets.defaults` removals.
+
+    ```bash
+    openclaw config unset tools.alsoAllow --dry-run
+    ```
+
+  </Tab>
+  <Tab title="--dry-run --json">
+    Output structured JSON for scripting. Requires `--dry-run`.
+
+    ```bash
+    openclaw config unset tools.alsoAllow --dry-run --json
+    ```
+
+    Returns:
+    ```json
+    {
+      "ok": true,
+      "operations": 1,
+      "configPath": "~/.openclaw/openclaw.json",
+      "inputModes": ["unset"],
+      "checks": { "schema": true, "resolvability": true, "resolvabilityComplete": true },
+      "refsChecked": 0,
+      "skippedExecRefs": 0
+    }
+    ```
+
+  </Tab>
+  <Tab title="--allow-exec">
+    Allow exec SecretRef resolvability checks during dry-run. Exec providers are skipped by default to avoid command side effects. Requires `--dry-run`.
+
+    ```bash
+    openclaw config unset secrets.providers.vault --dry-run --allow-exec
+    ```
+
+  </Tab>
+</Tabs>
+
+<AccordionGroup>
+  <Accordion title="SecretRef fallout detection">
+    When unsetting `secrets.providers.<alias>` or `secrets.defaults`, `config unset --dry-run` checks whether any remaining SecretRefs would become unresolvable. If refs would break, dry-run fails with resolution errors:
+
+    ```bash
+    $ openclaw config unset secrets.providers.env-provider --dry-run
+
+    Dry run failed: 1 SecretRef assignment(s) could not be resolved.
+    - env:env-provider:TEST_API_KEY -> SecretProviderResolutionError: Secret provider "env-provider" is not configured.
+    ```
+
+  </Accordion>
+  <Accordion title="Exec SecretRef handling">
+    By default, exec-backed SecretRefs are skipped during dry-run to avoid executing arbitrary commands. Use `--allow-exec` to opt in:
+
+    ```bash
+    # Without --allow-exec: exec refs skipped
+    $ openclaw config unset secrets.providers.exec-provider --dry-run
+
+    Dry run note: skipped 1 exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.
+
+    # With --allow-exec: exec providers are executed
+    $ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
+    ```
+
+  </Accordion>
+</AccordionGroup>
 
 ## Provider builder flags
 
