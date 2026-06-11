@@ -5,8 +5,12 @@ import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
-import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
+import {
+  resolveGatewayInteractiveSurfaceAuth,
+  resolveGatewayProbeSurfaceAuth,
+} from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { hasCachedPairedDeviceToken } from "../../gateway/probe-auth.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
@@ -179,22 +183,58 @@ export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
   overrides: { token?: string; password?: string },
-): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
+): Promise<{ token?: string; password?: string; diagnostics?: string[]; failureReason?: string }> {
   const tokenOverride = normalizeOptionalString(overrides.token);
   const passwordOverride = normalizeOptionalString(overrides.password);
   if (tokenOverride || passwordOverride) {
     return { token: tokenOverride, password: passwordOverride };
   }
 
+  const surface =
+    target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local";
   const resolved = await resolveGatewayProbeSurfaceAuth({
     config: cfg,
-    surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
+    surface,
   });
-  return {
+  const auth = {
     token: resolved.token,
     password: resolved.password,
     ...(resolved.diagnostics ? { diagnostics: resolved.diagnostics } : {}),
   };
+  // Only apply the interactive-auth fail-fast when:
+  //   - the target is the known local loopback (not an explicit URL override),
+  //   - no credentials were resolved, and
+  //   - gateway.auth.mode is an explicit credential-requiring mode.
+  // Explicit URL overrides (kind === "explicit") are treated as non-local
+  // for fail-fast purposes: a user pointing at an arbitrary loopback port via
+  // --url should not be blocked by missing local auth config.
+  const authMode = cfg.gateway?.auth?.mode;
+  const isLocalLoopback = target.kind === "localLoopback";
+  const authModeRequiresCredentials =
+    authMode !== undefined && authMode !== "none" && authMode !== "trusted-proxy";
+  if (
+    surface === "local" &&
+    isLocalLoopback &&
+    !auth.token &&
+    !auth.password &&
+    authModeRequiresCredentials &&
+    // Paired CLI installs can have a cached operator device token that
+    // probeGateway resolves itself via the device-identity path. Skip the
+    // interactive failure-reason here when that path can still succeed,
+    // otherwise `openclaw gateway status` reports a missing token before
+    // `probeGateway` ever attempts the cached pairing. Mirrors the shared
+    // probe-auth resolver. ClawSweeper P1 finding on #68280 re-review.
+    !(await hasCachedPairedDeviceToken())
+  ) {
+    const interactive = await resolveGatewayInteractiveSurfaceAuth({
+      config: cfg,
+      surface: "local",
+    });
+    if (interactive.failureReason) {
+      return { ...auth, failureReason: interactive.failureReason };
+    }
+  }
+  return auth;
 }
 
 /** Extracts the config fields displayed by `openclaw gateway status --deep`. */
