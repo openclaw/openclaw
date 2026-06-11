@@ -42,6 +42,7 @@ describe("google gemini cli backend auth bridge", () => {
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-pro-preview",
         authProfileId: "google-gemini-cli:user@example.test",
+        // Private bundled-runtime bridge, not public Plugin SDK surface.
         authCredential: {
           type: "oauth",
           provider: "google-gemini-cli",
@@ -51,6 +52,16 @@ describe("google gemini cli backend auth bridge", () => {
           idToken: "id-token",
           email: "user@example.test",
         },
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+        authCredential: {
+          type: "oauth";
+          provider: "google-gemini-cli";
+          access: string;
+          refresh: string;
+          expires: number;
+          idToken: string;
+          email: string;
+        };
       });
 
       home = prepared?.env?.GEMINI_CLI_HOME;
@@ -72,11 +83,10 @@ describe("google gemini cli backend auth bridge", () => {
     await expect(fs.access(home ?? "")).rejects.toThrow();
   });
 
-  it("opts Gemini CLI into profile forwarding and profile-only auth epochs", () => {
+  it("uses profile-only auth epochs for the private Gemini CLI bridge", () => {
     const backend = buildGoogleGeminiCliBackend();
 
-    expect(backend.acceptsAuthProfileForwarding).toBe(true);
-    expect(backend.resolveAuthProfileForExecution).toBe(true);
     expect(backend.authEpochMode).toBe("profile-only");
+    expect(backend.prepareExecution).toBeTypeOf("function");
   });
 });

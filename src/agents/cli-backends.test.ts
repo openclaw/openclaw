@@ -33,8 +33,6 @@ function createBackendEntry(params: {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   ownsNativeCompaction?: boolean;
-  acceptsAuthProfileForwarding?: boolean;
-  resolveAuthProfileForExecution?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   normalizeConfig?: (
@@ -55,12 +53,6 @@ function createBackendEntry(params: {
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
       ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
-      ...(params.acceptsAuthProfileForwarding
-        ? { acceptsAuthProfileForwarding: params.acceptsAuthProfileForwarding }
-        : {}),
-      ...(params.resolveAuthProfileForExecution
-        ? { resolveAuthProfileForExecution: params.resolveAuthProfileForExecution }
-        : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
@@ -351,8 +343,6 @@ beforeEach(() => {
       id: "google-gemini-cli",
       bundleMcp: true,
       bundleMcpMode: "gemini-system-settings",
-      acceptsAuthProfileForwarding: true,
-      resolveAuthProfileForExecution: true,
       authEpochMode: "profile-only",
       prepareExecution: async () => null,
       config: {
@@ -952,8 +942,6 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
-    expect(resolved?.acceptsAuthProfileForwarding).toBe(true);
-    expect(resolved?.resolveAuthProfileForExecution).toBe(true);
     expect(resolved?.authEpochMode).toBe("profile-only");
     expect(resolved?.prepareExecution).toBeTypeOf("function");
     expect(resolved?.config.args).toEqual([

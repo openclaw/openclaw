@@ -190,7 +190,6 @@ export type {
   PluginConversationBindingResolutionDecision,
 } from "./conversation-binding.types.js";
 export type {
-  CliBackendAuthProfileCredential,
   CliBackendAuthEpochMode,
   CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,

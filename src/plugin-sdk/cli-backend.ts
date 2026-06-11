@@ -3,7 +3,6 @@
  */
 export type { CliBackendConfig } from "../config/types.js";
 export type {
-  CliBackendAuthProfileCredential,
   CliBackendAuthEpochMode,
   CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,

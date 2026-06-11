@@ -27,20 +27,7 @@ export type CliBackendPrepareExecutionContext = {
   provider: string;
   modelId: string;
   authProfileId?: string;
-  authCredential?: CliBackendAuthProfileCredential;
   executionMode?: CliBackendExecutionMode;
-};
-
-export type CliBackendAuthProfileCredential = {
-  type: "api_key" | "oauth" | "token";
-  provider: string;
-  access?: string;
-  refresh?: string;
-  expires?: number;
-  idToken?: string;
-  email?: string;
-  accountId?: string;
-  projectId?: string;
 };
 
 export type CliBackendPreparedExecution = {
@@ -185,16 +172,6 @@ export type CliBackendPlugin = {
    * owner for session invalidation when one is present.
    */
   authEpochMode?: CliBackendAuthEpochMode;
-  /**
-   * Whether CLI execution may forward a selected OpenClaw auth profile into
-   * this backend. Keep this opt-in so generic CLI providers continue using
-   * ambient local CLI auth unless the backend owns an explicit bridge.
-   */
-  acceptsAuthProfileForwarding?: boolean;
-  /**
-   * Refresh and pass the selected auth profile credential to prepareExecution.
-   */
-  resolveAuthProfileForExecution?: boolean;
   /**
    * Backend-owned execution bridge.
    *

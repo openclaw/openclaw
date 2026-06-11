@@ -5,7 +5,6 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
-import type { CliBackendAuthProfileCredential } from "openclaw/plugin-sdk/cli-backend";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
@@ -20,7 +19,16 @@ function normalizeString(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-type GeminiOAuthCredential = CliBackendAuthProfileCredential & {
+type GeminiAuthProfileCredential = {
+  type: "api_key" | "oauth" | "token";
+  provider: string;
+  access?: string;
+  refresh?: string;
+  expires?: number;
+  idToken?: string;
+};
+
+type GeminiOAuthCredential = GeminiAuthProfileCredential & {
   type: "oauth";
   provider: "google-gemini-cli";
   access: string;
@@ -29,7 +37,7 @@ type GeminiOAuthCredential = CliBackendAuthProfileCredential & {
 };
 
 function requireGeminiOAuthCredential(
-  credential: CliBackendAuthProfileCredential | undefined,
+  credential: GeminiAuthProfileCredential | undefined,
 ): GeminiOAuthCredential | null {
   if (!credential) {
     return null;
@@ -63,7 +71,7 @@ function requireGeminiOAuthCredential(
 }
 
 async function prepareGeminiCliOAuthHome(
-  credential: CliBackendAuthProfileCredential | undefined,
+  credential: GeminiAuthProfileCredential | undefined,
 ): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> } | null> {
   const oauth = requireGeminiOAuthCredential(credential);
   if (!oauth) {
@@ -125,10 +133,11 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "gemini-system-settings",
     nativeToolMode: "always-on",
-    acceptsAuthProfileForwarding: true,
-    resolveAuthProfileForExecution: true,
     authEpochMode: "profile-only",
-    prepareExecution: async (ctx) => await prepareGeminiCliOAuthHome(ctx.authCredential),
+    prepareExecution: async (ctx) =>
+      await prepareGeminiCliOAuthHome(
+        (ctx as typeof ctx & { authCredential?: GeminiAuthProfileCredential }).authCredential,
+      ),
     config: {
       command: "gemini",
       args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
