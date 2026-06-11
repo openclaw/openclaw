@@ -81,9 +81,16 @@ beforeEach(() => {
     },
     modelRegistry: {},
   });
-  hoisted.resolveModelAsyncMock.mockImplementation((...args: unknown[]) =>
-    Promise.resolve(hoisted.resolveModelMock(...args)),
-  );
+  hoisted.resolveModelAsyncMock.mockResolvedValue({
+    model: {
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    },
+    authStorage: {
+      setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+    },
+    modelRegistry: {},
+  });
   hoisted.getApiKeyForModelMock.mockResolvedValue({
     apiKey: "sk-test",
     source: "env:TEST_API_KEY",
