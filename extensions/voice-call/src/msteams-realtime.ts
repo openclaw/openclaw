@@ -434,6 +434,8 @@ export interface MsteamsRealtimeCall {
   notifyInboundFrame(): void;
   /** Live human participant count (excludes the bot); drives the deterministic group-call gate. */
   setHumanCount(count: number): void;
+  /** Active speaker's display name (unmixed-audio worker) — labels caller transcript turns. */
+  setCurrentSpeaker(name: string | undefined): void;
   /** Update Teams recording status (gates the consult tool + background task). */
   setRecordingActive(active: boolean): void;
   /**
@@ -515,6 +517,8 @@ export function createMsteamsRealtimeCall(params: {
   let humanCount = 1;
   let lastAddressedAt: number | undefined;
   let groupGateOpen = true;
+  /** Active speaker (unmixed-audio worker); labels the caller turn the model transcribes next. */
+  let currentSpeakerName: string | undefined;
 
   function recordTranscript(role: "user" | "assistant", text: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
@@ -686,7 +690,12 @@ export function createMsteamsRealtimeCall(params: {
         }
       }
       if (isFinal) {
-        recordTranscript(role, text);
+        // Unmixed-audio attribution: prefix the caller turn with the speaker who was active while
+        // it was spoken, so consults and meeting minutes can attribute per person.
+        recordTranscript(
+          role,
+          role === "user" && currentSpeakerName ? `${currentSpeakerName}: ${text}` : text,
+        );
         // Deterministic verbal interrupt ("stop" / "hold on" / "never mind"): flush the worker's
         // playback queue immediately instead of waiting for the model's own interruption handling —
         // the model is mid-generation when these arrive, so this is what makes the cut feel instant.
@@ -1335,7 +1344,9 @@ export function createMsteamsRealtimeCall(params: {
             `Write concise meeting minutes from this Microsoft Teams call transcript and deliver them.\n` +
             `Call: with ${callerName}, ~${durationMin} min, ${humanCount} human participant(s).\n` +
             `Transcript (most recent ${transcript.length} turns; "Caller side" may include multiple ` +
-            `people — do NOT attribute statements to named individuals):\n${lines}`,
+            `people. Some caller turns begin with "Name:" — that is real speaker attribution from ` +
+            `unmixed audio; attribute statements and action items ONLY via those prefixes, and ` +
+            `never guess attribution for unprefixed turns):\n${lines}`,
         },
         surface: "a Microsoft Teams call that just ended (meeting recap)",
         extraSystemPrompt:
@@ -1404,6 +1415,9 @@ export function createMsteamsRealtimeCall(params: {
     },
     setHumanCount: (count: number) => {
       humanCount = count;
+    },
+    setCurrentSpeaker: (name: string | undefined) => {
+      currentSpeakerName = name;
     },
     setRecordingActive: (active: boolean) => {
       recordingActive = active;

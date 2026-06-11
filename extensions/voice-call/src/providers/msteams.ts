@@ -611,9 +611,14 @@ export class MsteamsProvider implements VoiceCallProvider {
     );
   }
 
-  private handleAudioFrame(frame: { callId: string; payload: Buffer }): void {
+  private handleAudioFrame(frame: { callId: string; payload: Buffer; speakerName?: string }): void {
     const realtimeCall = this.realtimeCalls.get(frame.callId);
     if (realtimeCall) {
+      // Unmixed-audio attribution: remember who is speaking so the next transcribed
+      // caller turn carries their name (frames without a stamp keep the last speaker).
+      if (frame.speakerName) {
+        realtimeCall.setCurrentSpeaker(frame.speakerName);
+      }
       realtimeCall.pushAudio(frame.payload);
       return;
     }
