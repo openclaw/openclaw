@@ -391,6 +391,33 @@ describe("gateway tool", () => {
     });
   });
 
+  it("keeps explicit terminal array consent while not widening indexed consent", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: { bindings: [{ agentId: "main", match: { channel: "telegram" } }] },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+    const raw = '{ bindings: [{ agentId: "work", match: { channel: "discord" } }] }';
+
+    await tool.execute("call-array-replace-path", {
+      action: "config.patch",
+      raw,
+      replacePaths: ["bindings[]"],
+    });
+
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.patch",
+      raw,
+      replacePaths: ["bindings"],
+    });
+  });
+
   it("rejects config.patch when it changes safe bin approval paths", async () => {
     const tool = requireGatewayTool();
 
