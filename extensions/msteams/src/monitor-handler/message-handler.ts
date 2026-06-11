@@ -88,6 +88,7 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   return "";
 }
 
+import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
@@ -98,6 +99,7 @@ import {
   recordMSTeamsSentMessage,
   wasMSTeamsMessageSentWithPersistence,
 } from "../sent-message-cache.js";
+import { applyVoiceTranscripts, isAudioAttachment } from "../voice-message.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
@@ -233,7 +235,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
-    const rawBody = text || attachmentPlaceholder;
+    // `let`: voice-message transcription (#13) folds transcripts into the body after the audio
+    // attachments are downloaded below.
+    let rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
@@ -617,6 +621,40 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
         ?.preserveFilenames,
     });
+
+    // Voice messages (#13): transcribe audio attachments and fold the text into the body so the
+    // agent reads what was said instead of an opaque "<media:document>" placeholder. Opt-in
+    // (incurs an STT call); failures keep the placeholder and never block the reply.
+    if (msteamsCfg?.transcribeVoiceMessages) {
+      const audioMedia = mediaList.filter((m) => isAudioAttachment(m.contentType));
+      if (audioMedia.length > 0) {
+        const transcribed = await Promise.all(
+          audioMedia.map(async (m) => {
+            try {
+              const result = await transcribeAudioFile({
+                filePath: m.path,
+                cfg,
+                mime: m.contentType,
+              });
+              return { transcript: result.text?.trim() ?? "", placeholder: m.placeholder };
+            } catch (err) {
+              log.debug?.("voice message transcription failed", {
+                contentType: m.contentType,
+                error: formatUnknownError(err),
+              });
+              return { transcript: "", placeholder: m.placeholder };
+            }
+          }),
+        );
+        const merged = applyVoiceTranscripts(rawBody, transcribed);
+        if (merged !== rawBody) {
+          log.debug?.("transcribed voice message(s)", {
+            count: transcribed.filter((t) => t.transcript).length,
+          });
+          rawBody = merged;
+        }
+      }
+    }
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
 
