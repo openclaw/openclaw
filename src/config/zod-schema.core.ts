@@ -324,6 +324,7 @@ const ConfiguredModelProviderRequestSchema = z
   })
   .strict()
   .optional();
+export { ConfiguredModelProviderRequestSchema };
 
 const ModelAgentRuntimePolicySchema = z
   .object({

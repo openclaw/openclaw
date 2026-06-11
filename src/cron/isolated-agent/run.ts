@@ -549,10 +549,53 @@ async function prepareCronRunContext(params: {
     defaults: runtimeCfg.agents?.defaults,
     agentConfigOverride,
   });
-  const cfgWithAgentDefaults: OpenClawConfig = {
+  let cfgWithAgentDefaults: OpenClawConfig = {
     ...runtimeCfg,
     agents: Object.assign({}, runtimeCfg.agents, { defaults: agentCfg }),
   };
+  // Merge job-level provider overrides into the agent config so they take
+  // precedence over agent-level and global provider request config.
+  if (input.job.payload.kind === "agentTurn" && input.job.payload.providers) {
+    const existingList = cfgWithAgentDefaults.agents?.list ?? [];
+    const idx = existingList.findIndex((a) => a.id === agentId);
+    let agentList: typeof existingList;
+    if (idx >= 0) {
+      const existing = existingList[idx].providers ?? {};
+      const merged: Record<string, { request?: Record<string, unknown> }> = {
+        ...existing,
+        ...input.job.payload.providers,
+      };
+      for (const [pid, jp] of Object.entries(input.job.payload.providers)) {
+        if (existing[pid]?.request) {
+          const existingReq = existing[pid].request as Record<string, unknown> | undefined;
+          const jobReq = jp.request as Record<string, unknown> | undefined;
+          // Deep-merge headers so non-conflicting agent headers are preserved.
+          const existingHeaders = existingReq?.headers as Record<string, unknown> | undefined;
+          const jobHeaders = jobReq?.headers as Record<string, unknown> | undefined;
+          const mergedHeaders =
+            existingHeaders || jobHeaders ? { ...existingHeaders, ...jobHeaders } : undefined;
+          merged[pid] = {
+            ...existing[pid],
+            ...jp,
+            request: {
+              ...existingReq,
+              ...jobReq,
+              ...(mergedHeaders ? { headers: mergedHeaders } : {}),
+            },
+          };
+        }
+      }
+      agentList = existingList.map((a, i) => (i === idx ? { ...a, providers: merged } : a));
+    } else {
+      // Default-agent cron jobs without an agents.list entry: create one so
+      // resolveAgentProviderRequest can find the job-level overrides.
+      agentList = [...existingList, { id: agentId, providers: input.job.payload.providers }];
+    }
+    cfgWithAgentDefaults = {
+      ...cfgWithAgentDefaults,
+      agents: { ...cfgWithAgentDefaults.agents, list: agentList },
+    };
+  }
   let catalog: Awaited<ReturnType<CronModelCatalogRuntime["loadModelCatalog"]>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {

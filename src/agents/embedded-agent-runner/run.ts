@@ -745,6 +745,7 @@ export async function runEmbeddedAgent(
             // Plugin dynamic model hooks can resolve explicit model refs without
             // first generating OpenClaw models.json. This keeps one-shot model runs from
             // blocking on unrelated provider discovery.
+            agentId: params.agentId,
             skipAgentDiscovery: true,
             allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
             preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
@@ -773,6 +774,7 @@ export async function runEmbeddedAgent(
             agentDir,
             params.config,
             {
+              agentId: params.agentId,
               workspaceDir: resolvedWorkspace,
               authProfileId: params.authProfileId,
             },

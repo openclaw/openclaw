@@ -965,6 +965,11 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
   }
+  if (patch.providers && typeof patch.providers === "object") {
+    next.providers = patch.providers;
+  } else if (patch.providers === null) {
+    delete next.providers;
+  }
   return next;
 }
 
@@ -1002,6 +1007,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: patch.fallbacks,
     toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
+    providers: patch.providers && typeof patch.providers === "object" ? patch.providers : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,

@@ -5,6 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ConfiguredModelProviderRequest,
   ConfiguredProviderRequest,
@@ -850,4 +851,18 @@ export function getModelProviderRequestTransport(
   model: object,
 ): ModelProviderRequestTransportOverrides | undefined {
   return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
+}
+
+/** Resolves agent-level provider request overrides for a given agent and provider. */
+export function resolveAgentProviderRequest(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | undefined,
+  provider: string,
+): ModelProviderRequestTransportOverrides | undefined {
+  if (!cfg || !agentId) {
+    return undefined;
+  }
+  const agent = cfg.agents?.list?.find((a) => a.id === agentId);
+  const agentProvider = agent?.providers?.[provider];
+  return sanitizeConfiguredModelProviderRequest(agentProvider?.request);
 }

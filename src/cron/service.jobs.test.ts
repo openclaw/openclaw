@@ -413,6 +413,114 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("preserves payload.providers when patching other fields", () => {
+    const job = createIsolatedAgentTurnJob("job-providers-preserve", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      providers: { llmmllab: { request: { headers: { "X-Custom": "val" } } } },
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "updated",
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.message).toBe("updated");
+      expect(payload.providers).toEqual({
+        llmmllab: { request: { headers: { "X-Custom": "val" } } },
+      });
+    }
+  });
+
+  it("updates payload.providers when patch specifies new providers", () => {
+    const job = createIsolatedAgentTurnJob("job-providers-update", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      providers: { llmmllab: { request: { headers: { "X-Old": "old" } } } },
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        providers: { openai: { request: { headers: { "X-New": "new" } } } },
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.providers).toEqual({
+        openai: { request: { headers: { "X-New": "new" } } },
+      });
+    }
+  });
+
+  it("clears payload.providers when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-providers-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      providers: { llmmllab: { request: { headers: { "X-Custom": "val" } } } },
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        providers: null,
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.providers).toBeUndefined();
+    }
+  });
+
+  it("carries payload.providers when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-providers-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        providers: { llmmllab: { request: { headers: { "X-Custom": "val" } } } },
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.providers).toEqual({
+        llmmllab: { request: { headers: { "X-Custom": "val" } } },
+      });
+    }
+  });
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",

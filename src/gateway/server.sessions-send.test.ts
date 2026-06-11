@@ -139,6 +139,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  testState.agentsConfig = undefined;
+  testState.sessionStorePath = undefined;
+  cachedSessionsSendTool = null;
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
 });
