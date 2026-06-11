@@ -2985,9 +2985,15 @@ describe("matrix monitor handler draft streaming", () => {
       title?: string;
     }) => Promise<void>;
     onPatchSummary?: (payload: {
+      itemId?: string;
+      toolCallId?: string;
       phase: string;
+      name?: string;
       summary?: string;
       title?: string;
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
     }) => Promise<void>;
     disableBlockStreaming?: boolean;
   };
@@ -3263,6 +3269,55 @@ describe("matrix monitor handler draft streaming", () => {
         eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
     );
     expect(completedEdit?.[2]).not.toContain("install dependencies");
+  });
+
+  it("replaces Matrix patch progress when the patch summary completes", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: { mode: "progress", progress: { label: "Working" } },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onItemEvent?.({
+      itemId: "patch:call-3",
+      toolCallId: "call-3",
+      kind: "patch",
+      name: "apply_patch",
+      phase: "update",
+      progressText: "updating Matrix progress handling",
+    });
+    await opts.onItemEvent?.({
+      itemId: "patch:call-3",
+      toolCallId: "call-3",
+      kind: "patch",
+      name: "apply_patch",
+      phase: "update",
+      progressText: "updating Matrix progress handling",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toContain("updating Matrix progress handling");
+
+    await opts.onPatchSummary?.({
+      itemId: "patch:call-3",
+      toolCallId: "call-3",
+      phase: "end",
+      name: "apply_patch",
+      modified: ["extensions/matrix/src/matrix/monitor/handler.ts"],
+      summary: "1 file modified",
+    });
+
+    await finish();
+    const patchEdit = mockCalls(editMessageMatrixMock, "editMessageMatrix").find(
+      ([, eventId, body]) =>
+        eventId === "$draft1" && typeof body === "string" && body.includes("1 file modified"),
+    );
+    expect(patchEdit?.[2]).not.toContain("updating Matrix progress handling");
   });
 
   it("keeps Matrix tool progress mentions inside code formatting", async () => {

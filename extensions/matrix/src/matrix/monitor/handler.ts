@@ -2015,8 +2015,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               return;
             }
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "patch",
+                itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 phase: payload.phase,
                 title: payload.title,
                 name: payload.name,

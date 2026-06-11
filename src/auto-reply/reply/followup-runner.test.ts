@@ -2291,6 +2291,179 @@ describe("createFollowupRunner progress forwarding", () => {
     );
   });
 
+  it("forwards queued Codex command tool results as command output completion", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "result",
+            itemId: "command:queued-exec",
+            toolCallId: "queued-exec",
+            name: "exec",
+            status: "completed",
+            result: {
+              exitCode: 0,
+              durationMs: 24,
+            },
+          },
+        });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      itemId: "command:queued-exec",
+      phase: "end",
+      title: undefined,
+      toolCallId: "queued-exec",
+      name: "exec",
+      output: undefined,
+      status: "completed",
+      exitCode: 0,
+      durationMs: 24,
+      cwd: undefined,
+    });
+  });
+
+  it("marks queued Codex command tool result errors as failed command output", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "result",
+            itemId: "command:queued-exec",
+            toolCallId: "queued-exec",
+            name: "exec",
+            isError: true,
+            result: {
+              content: [{ type: "text", text: "command failed" }],
+            },
+          },
+        });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:queued-exec",
+        phase: "end",
+        toolCallId: "queued-exec",
+        name: "exec",
+        status: "failed",
+      }),
+    );
+  });
+
+  it("does not synthesize queued command output from bare exec tool results", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: "exec",
+            toolCallId: "queued-exec",
+            isError: false,
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            itemId: "command:queued-exec",
+            phase: "end",
+            title: "command ls",
+            toolCallId: "queued-exec",
+            name: "exec",
+            status: "completed",
+            exitCode: 0,
+          },
+        });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "command:queued-exec",
+        phase: "end",
+        status: "completed",
+      }),
+    );
+  });
+
   it("suppresses queued follow-up progress when verbose progress is disabled", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-progress-off-")),
