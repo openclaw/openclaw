@@ -1,5 +1,8 @@
+// Qa Lab plugin module implements qa transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { QaProviderMode } from "./model-selection.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusInboundMessageInput,
@@ -24,11 +27,12 @@ export type QaTransportGatewayClient = {
 export type QaTransportActionName = "delete" | "edit" | "react" | "thread-create";
 
 export type QaTransportReportParams = {
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  isolatedWorkers?: boolean;
 };
 
 export type QaTransportGatewayConfig = Pick<OpenClawConfig, "channels" | "messages">;
@@ -45,14 +49,14 @@ export type QaTransportState = {
   waitFor: (input: QaBusWaitForInput) => Promise<unknown>;
 };
 
-export type QaTransportFailureCursorSpace = "all" | "outbound";
+type QaTransportFailureCursorSpace = "all" | "outbound";
 
-export type QaTransportFailureAssertionOptions = {
+type QaTransportFailureAssertionOptions = {
   sinceIndex?: number;
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-export type QaTransportCommonCapabilities = {
+type QaTransportCommonCapabilities = {
   sendInboundMessage: QaTransportState["addInboundMessage"];
   injectOutboundMessage: QaTransportState["addOutboundMessage"];
   waitForOutboundMessage: (input: QaBusWaitForInput) => Promise<unknown>;
@@ -68,6 +72,7 @@ export type QaTransportCommonCapabilities = {
   waitForReady: (params: {
     gateway: QaTransportGatewayClient;
     timeoutMs?: number;
+    pollIntervalMs?: number;
   }) => Promise<void>;
   waitForCondition: <T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
@@ -82,13 +87,18 @@ export async function waitForQaTransportCondition<T>(
   timeoutMs = 15_000,
   intervalMs = 100,
 ): Promise<T> {
+  const pollIntervalMs = resolveTimerTimeoutMs(intervalMs, 100, 0);
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const value = await check();
     if (value !== null && value !== undefined) {
       return value;
     }
-    await sleep(intervalMs);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollIntervalMs, remainingMs));
   }
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
@@ -111,7 +121,7 @@ export function findFailureOutboundMessage(
   );
 }
 
-export function assertNoFailureReplies(
+function assertNoFailureReplies(
   state: QaTransportState,
   options?: QaTransportFailureAssertionOptions,
 ) {
@@ -134,7 +144,12 @@ export function createFailureAwareTransportWaitForCondition(state: QaTransportSt
           sinceIndex,
           cursorSpace: "all",
         });
-        return await check();
+        const value = await check();
+        assertNoFailureReplies(state, {
+          sinceIndex,
+          cursorSpace: "all",
+        });
+        return value;
       },
       timeoutMs,
       intervalMs,
@@ -150,7 +165,11 @@ export type QaTransportAdapter = {
   state: QaTransportState;
   capabilities: QaTransportCommonCapabilities;
   createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
-  waitReady: (params: { gateway: QaTransportGatewayClient; timeoutMs?: number }) => Promise<void>;
+  waitReady: (params: {
+    gateway: QaTransportGatewayClient;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  }) => Promise<void>;
   buildAgentDelivery: (params: { target: string }) => {
     channel: string;
     replyChannel: string;
@@ -194,8 +213,8 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
         await this.state.reset();
       },
       readNormalizedMessage: this.state.readMessage.bind(this.state),
-      executeGenericAction: (params) => this.handleAction(params),
-      waitForReady: (params) => this.waitReady(params),
+      executeGenericAction: (paramsValue) => this.handleAction(paramsValue),
+      waitForReady: (paramsLocal) => this.waitReady(paramsLocal),
       waitForCondition: createFailureAwareTransportWaitForCondition(this.state),
       assertNoFailureReplies: (options) => {
         assertNoFailureReplies(this.state, options);
@@ -207,6 +226,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   abstract waitReady: (params: {
     gateway: QaTransportGatewayClient;
     timeoutMs?: number;
+    pollIntervalMs?: number;
   }) => Promise<void>;
   abstract buildAgentDelivery: (params: { target: string }) => {
     channel: string;

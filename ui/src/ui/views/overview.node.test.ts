@@ -1,6 +1,12 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
-import { resolveAuthHintKind, shouldShowPairingHint } from "./overview-hints.ts";
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  resolveAuthHintKind,
+  resolvePairingHint,
+  shouldShowInsecureContextHint,
+  shouldShowPairingHint,
+} from "./overview-hints.ts";
 
 describe("shouldShowPairingHint", () => {
   it("returns true for 'pairing required' close reason", () => {
@@ -35,6 +41,21 @@ describe("shouldShowPairingHint", () => {
         ConnectErrorDetailCodes.PAIRING_REQUIRED,
       ),
     ).toBe(true);
+  });
+});
+
+describe("resolvePairingHint", () => {
+  it("detects scope-upgrade pending approval and keeps the request id", () => {
+    expect(
+      resolvePairingHint(
+        false,
+        "scope upgrade pending approval (requestId: req-123)",
+        ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      ),
+    ).toEqual({
+      kind: "scope-upgrade-pending",
+      requestId: "req-123",
+    });
   });
 });
 
@@ -85,5 +106,27 @@ describe("resolveAuthHintKind", () => {
         hasPassword: false,
       }),
     ).toBe("failed");
+  });
+});
+
+describe("shouldShowInsecureContextHint", () => {
+  it("returns true for browser WebSocket security errors", () => {
+    expect(
+      shouldShowInsecureContextHint(
+        false,
+        "Browser refused the Gateway WebSocket for security reasons.",
+        "BROWSER_WEBSOCKET_SECURITY_ERROR",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat generic WebSocket constructor errors as insecure context", () => {
+    expect(
+      shouldShowInsecureContextHint(
+        false,
+        "Could not create the Gateway WebSocket: constructor failed",
+        "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
+      ),
+    ).toBe(false);
   });
 });

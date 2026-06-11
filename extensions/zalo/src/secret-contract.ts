@@ -1,3 +1,4 @@
+// Zalo plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
   getChannelSurface,
@@ -7,7 +8,7 @@ import {
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries = [
+export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.accounts.*.botToken",
     targetType: "channels.zalo.accounts.*.botToken",
@@ -52,7 +53,7 @@ export const secretTargetRegistryEntries = [
     includeInConfigure: true,
     includeInAudit: true,
   },
-] satisfies SecretTargetRegistryEntry[];
+];
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };

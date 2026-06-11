@@ -1,3 +1,4 @@
+// Mattermost tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MattermostConfigSchema } from "./config-schema-core.js";
 
@@ -25,6 +26,25 @@ describe("MattermostConfigSchema", () => {
   it("accepts replyToMode", () => {
     const result = MattermostConfigSchema.safeParse({
       replyToMode: "all",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts documented streaming modes and progress config", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Shelling",
+          maxLines: 4,
+          toolProgress: false,
+        },
+      },
+      accounts: {
+        quiet: {
+          streaming: "off",
+        },
+      },
     });
     expect(result.success).toBe(true);
   });

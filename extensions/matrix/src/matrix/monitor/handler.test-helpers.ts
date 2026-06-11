@@ -1,6 +1,14 @@
-import { vi } from "vitest";
+// Matrix helper module supports handler helpers behavior.
+import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
+import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { vi, type Mock } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+import type {
+  MatrixConfig,
+  MatrixRoomConfig,
+  MatrixStreamingMode,
+  ReplyToMode,
+} from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -16,13 +24,18 @@ const DEFAULT_ROUTE = {
 
 type MatrixHandlerTestHarnessOptions = {
   accountId?: string;
+  accountConfig?: MatrixConfig;
   cfg?: unknown;
+  liveCfg?: unknown;
   client?: Partial<MatrixClient>;
   runtime?: RuntimeEnv;
   logger?: RuntimeLogger;
+  currentConfig?: () => unknown;
   logVerboseMessage?: (message: string) => void;
   allowFrom?: string[];
+  allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
   groupAllowFrom?: string[];
+  groupAllowFromResolvedEntries?: MatrixMonitorHandlerParams["groupAllowFromResolvedEntries"];
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: Set<string>;
@@ -33,6 +46,7 @@ type MatrixHandlerTestHarnessOptions = {
   dmThreadReplies?: "off" | "inbound" | "always";
   dmSessionScope?: "per-user" | "per-room";
   streaming?: MatrixStreamingMode;
+  previewToolProgressEnabled?: boolean;
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
@@ -48,7 +62,7 @@ type MatrixHandlerTestHarnessOptions = {
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
   buildPairingReply?: () => string;
   shouldHandleTextCommands?: () => boolean;
-  hasControlCommand?: () => boolean;
+  hasControlCommand?: MatrixMonitorHandlerParams["core"]["channel"]["text"]["hasControlCommand"];
   resolveMarkdownTableMode?: () => string;
   resolveAgentRoute?: () => typeof DEFAULT_ROUTE;
   resolveStorePath?: () => string;
@@ -70,6 +84,7 @@ type MatrixHandlerTestHarnessOptions = {
     queuedFinal: boolean;
     counts: { final: number; block: number; tool: number };
   }>;
+  runPrepared?: MatrixRunPreparedMock;
   withReplyDispatcher?: <T>(params: {
     dispatcher: {
       markComplete?: () => void;
@@ -83,6 +98,7 @@ type MatrixHandlerTestHarnessOptions = {
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
+  resolveLiveUserAllowlist?: MatrixMonitorHandlerParams["resolveLiveUserAllowlist"];
 };
 
 type MatrixHandlerTestHarness = {
@@ -96,8 +112,13 @@ type MatrixHandlerTestHarness = {
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   recordInboundSession: (...args: unknown[]) => Promise<void>;
   resolveAgentRoute: () => typeof DEFAULT_ROUTE;
+  runPrepared: MatrixRunPreparedMock;
   upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
+
+type MatrixRunPreparedInput = PreparedInboundReply<unknown>;
+type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
+type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
 
 export function createMatrixHandlerTestHarness(
   options: MatrixHandlerTestHarnessOptions = {},
@@ -107,7 +128,13 @@ export function createMatrixHandlerTestHarness(
     options.upsertPairingRequest ?? vi.fn(async () => ({ code: "ABCDEFGH", created: false }));
   const resolveAgentRoute = options.resolveAgentRoute ?? vi.fn(() => DEFAULT_ROUTE);
   const recordInboundSession = options.recordInboundSession ?? vi.fn(async () => {});
-  const finalizeInboundContext = options.finalizeInboundContext ?? vi.fn((ctx) => ctx);
+  const finalizeInboundContext =
+    options.finalizeInboundContext ??
+    vi.fn((ctx: unknown) =>
+      ctx && typeof ctx === "object"
+        ? finalizeCoreInboundContext(ctx as Record<string, unknown>)
+        : ctx,
+    );
   const dispatchReplyFromConfig =
     options.dispatchReplyFromConfig ??
     (async () => ({
@@ -115,6 +142,64 @@ export function createMatrixHandlerTestHarness(
       counts: { final: 0, block: 0, tool: 0 },
     }));
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
+  const runPrepared =
+    options.runPrepared ??
+    vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    });
+  const run = vi.fn(
+    async (
+      params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"]>[0],
+    ) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflightResult = await params.adapter.preflight?.(input, eventClass);
+      const preflight =
+        preflightResult && "kind" in preflightResult
+          ? { admission: preflightResult }
+          : (preflightResult ?? {});
+      const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
+      if ("runDispatch" in turn) {
+        return await runPrepared(turn);
+      }
+      throw new Error("matrix test helper only supports prepared turn dispatch");
+    },
+  );
+  const dmPolicy = options.dmPolicy ?? "open";
+  const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
+  const cfgForHandler =
+    options.cfg ??
+    ({
+      channels: {
+        matrix: {
+          dm: {
+            allowFrom,
+          },
+        },
+      },
+    } as const);
 
   const handler = createMatrixRoomMessageHandler({
     client: {
@@ -123,6 +208,9 @@ export function createMatrixHandlerTestHarness(
       ...options.client,
     } as never,
     core: {
+      config: {
+        current: options.currentConfig ?? (() => options.liveCfg ?? cfgForHandler),
+      },
       channel: {
         pairing: {
           readAllowFromStore,
@@ -172,9 +260,9 @@ export function createMatrixHandlerTestHarness(
               run: () => Promise<T>;
               onSettled?: () => void | Promise<void>;
             }) => {
-              const { dispatcher, run, onSettled } = params;
+              const { dispatcher, run: runLocal, onSettled } = params;
               try {
-                return await run();
+                return await runLocal();
               } finally {
                 dispatcher.markComplete?.();
                 try {
@@ -185,6 +273,9 @@ export function createMatrixHandlerTestHarness(
               }
             }),
         },
+        inbound: {
+          run,
+        },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),
         },
@@ -193,8 +284,9 @@ export function createMatrixHandlerTestHarness(
         enqueueSystemEvent,
       },
     } as never,
-    cfg: (options.cfg ?? {}) as never,
+    cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
+    accountConfig: options.accountConfig,
     runtime:
       options.runtime ??
       ({
@@ -208,8 +300,10 @@ export function createMatrixHandlerTestHarness(
         error: () => {},
       } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
-    allowFrom: options.allowFrom ?? [],
+    allowFrom,
+    allowFromResolvedEntries: options.allowFromResolvedEntries,
     groupAllowFrom: options.groupAllowFrom ?? [],
+    groupAllowFromResolvedEntries: options.groupAllowFromResolvedEntries,
     roomsConfig: options.roomsConfig,
     accountAllowBots: options.accountAllowBots,
     configuredBotUserIds: options.configuredBotUserIds,
@@ -219,9 +313,10 @@ export function createMatrixHandlerTestHarness(
     dmThreadReplies: options.dmThreadReplies,
     dmSessionScope: options.dmSessionScope,
     streaming: options.streaming ?? "off",
+    previewToolProgressEnabled: options.previewToolProgressEnabled ?? false,
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
-    dmPolicy: options.dmPolicy ?? "open",
+    dmPolicy,
     textLimit: options.textLimit ?? 8_000,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
@@ -234,6 +329,7 @@ export function createMatrixHandlerTestHarness(
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
+    resolveLiveUserAllowlist: options.resolveLiveUserAllowlist,
     historyLimit: options.historyLimit ?? 0,
   });
 
@@ -245,6 +341,7 @@ export function createMatrixHandlerTestHarness(
     readAllowFromStore,
     recordInboundSession,
     resolveAgentRoute,
+    runPrepared,
     upsertPairingRequest,
   };
 }
@@ -256,11 +353,13 @@ export function createMatrixTextMessageEvent(params: {
   originServerTs?: number;
   relatesTo?: RoomMessageEventContent["m.relates_to"];
   mentions?: RoomMessageEventContent["m.mentions"];
+  unsigned?: MatrixRawEvent["unsigned"];
 }): MatrixRawEvent {
   return createMatrixRoomMessageEvent({
     eventId: params.eventId,
     sender: params.sender,
     originServerTs: params.originServerTs,
+    unsigned: params.unsigned,
     content: {
       msgtype: "m.text",
       body: params.body,
@@ -274,6 +373,7 @@ export function createMatrixRoomMessageEvent(params: {
   eventId: string;
   sender?: string;
   originServerTs?: number;
+  unsigned?: MatrixRawEvent["unsigned"];
   content: RoomMessageEventContent;
 }): MatrixRawEvent {
   return {
@@ -282,6 +382,7 @@ export function createMatrixRoomMessageEvent(params: {
     event_id: params.eventId,
     origin_server_ts: params.originServerTs ?? Date.now(),
     content: params.content,
+    ...(params.unsigned ? { unsigned: params.unsigned } : {}),
   } as MatrixRawEvent;
 }
 

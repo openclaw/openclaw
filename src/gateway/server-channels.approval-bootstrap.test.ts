@@ -1,5 +1,8 @@
+/**
+ * Server channel approval bootstrap tests.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   runtimeForLogger,
@@ -95,7 +98,7 @@ function createManager(
   const runtime = runtimeForLogger(log);
   const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
   return createChannelManager({
-    loadConfig: () => ({}),
+    getRuntimeConfig: () => ({}),
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
@@ -129,9 +132,9 @@ describe("server-channels approval bootstrap", () => {
     const startAccount = vi.fn(
       async ({
         abortSignal,
-        channelRuntime,
+        channelRuntime: channelRuntimeLocal,
       }: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0]) => {
-        channelRuntime?.runtimeContexts.register({
+        channelRuntimeLocal?.runtimeContexts.register({
           channelId: "discord",
           accountId: DEFAULT_ACCOUNT_ID,
           capability: "approval.native",
@@ -157,16 +160,24 @@ describe("server-channels approval bootstrap", () => {
     await manager.startChannels();
     await started.promise;
 
-    expect(hoisted.startChannelApprovalHandlerBootstrap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        plugin: expect.objectContaining({ id: "discord" }),
-        cfg: {},
-        accountId: DEFAULT_ACCOUNT_ID,
-        channelRuntime: expect.objectContaining({
-          runtimeContexts: expect.any(Object),
-        }),
-      }),
-    );
+    const approvalBootstrapCalls = hoisted.startChannelApprovalHandlerBootstrap.mock
+      .calls as unknown as Array<
+      [
+        {
+          plugin: ChannelPlugin;
+          cfg: unknown;
+          accountId?: string;
+          channelRuntime?: PluginRuntime["channel"];
+        },
+      ]
+    >;
+    const approvalBootstrapArg = approvalBootstrapCalls.at(-1)?.[0];
+    expect(approvalBootstrapArg?.plugin.id).toBe("discord");
+    expect(approvalBootstrapArg?.cfg).toEqual({});
+    expect(approvalBootstrapArg?.accountId).toBe(DEFAULT_ACCOUNT_ID);
+    expect(typeof approvalBootstrapArg?.channelRuntime?.runtimeContexts.register).toBe("function");
+    expect(typeof approvalBootstrapArg?.channelRuntime?.runtimeContexts.get).toBe("function");
+    expect(typeof approvalBootstrapArg?.channelRuntime?.runtimeContexts.watch).toBe("function");
     expect(
       channelRuntime.runtimeContexts.get({
         channelId: "discord",
@@ -188,9 +199,25 @@ describe("server-channels approval bootstrap", () => {
     ).toBeUndefined();
   });
 
-  it("keeps the account stopped when approval bootstrap startup fails", async () => {
+  it("continues account startup when approval bootstrap startup fails", async () => {
     const channelRuntime = createRuntimeChannel();
-    const startAccount = vi.fn(async () => {});
+    const stopped = createDeferred();
+    const startAccount = vi.fn(
+      async ({
+        abortSignal,
+      }: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0]) => {
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener(
+            "abort",
+            () => {
+              stopped.resolve();
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      },
+    );
     hoisted.startChannelApprovalHandlerBootstrap.mockRejectedValue(new Error("boom"));
 
     installTestRegistry(createTestPlugin({ startAccount }));
@@ -198,16 +225,15 @@ describe("server-channels approval bootstrap", () => {
 
     await manager.startChannels();
 
-    expect(startAccount).not.toHaveBeenCalled();
+    expect(startAccount).toHaveBeenCalledTimes(1);
     const accountSnapshot =
       manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(accountSnapshot).toEqual(
-      expect.objectContaining({
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        restartPending: false,
-        lastError: "boom",
-      }),
-    );
+    expect(accountSnapshot?.accountId).toBe(DEFAULT_ACCOUNT_ID);
+    expect(accountSnapshot?.running).toBe(true);
+    expect(accountSnapshot?.restartPending).toBe(false);
+    expect(accountSnapshot?.lastError).toBeNull();
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await stopped.promise;
   });
 });

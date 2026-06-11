@@ -1,3 +1,4 @@
+// Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
 import {
   createAsyncComputedAccountStatusAdapter,
@@ -328,6 +329,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
           lastConnectedAt: 11,
           lastDisconnect: { at: 12, error: "boom" },
           lastEventAt: 13,
+          lastTransportActivityAt: 14,
           healthState: "healthy",
           running: true,
         },
@@ -342,6 +344,7 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         lastConnectedAt: 11,
         lastDisconnect: { at: 12, error: "boom" },
         lastEventAt: 13,
+        lastTransportActivityAt: 14,
         healthState: "healthy",
         probe: undefined,
       },

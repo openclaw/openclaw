@@ -1,3 +1,4 @@
+// Agent identity tests cover identity file creation, persistence, and command integration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +23,7 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
-import { agentsSetIdentityCommand } from "./agents.js";
+import { agentsSetIdentityCommand } from "./agents.commands.identity.js";
 
 const runtime = createTestRuntime();
 type ConfigWritePayload = {
@@ -43,8 +44,12 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
 }
 
 function getWrittenMainIdentity() {
-  const written = configMocks.writeConfigFile.mock.calls[0]?.[0] as ConfigWritePayload;
-  return written.agents?.list?.find((entry) => entry.id === "main")?.identity;
+  const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+  if (!written) {
+    throw new Error("expected written agent config");
+  }
+  const payload = written as ConfigWritePayload;
+  return payload.agents?.list?.find((entry) => entry.id === "main")?.identity;
 }
 
 async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity = true) {
@@ -116,7 +121,9 @@ describe("agents set-identity command", () => {
 
     await agentsSetIdentityCommand({ workspace }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Multiple agents match"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Multiple agents match ${workspace}: main, ops. Pass --agent to choose one.`,
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
@@ -212,7 +219,9 @@ describe("agents set-identity command", () => {
 
     await runIdentityCommandFromWorkspace(workspace);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("No identity data found"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      `No identity data found in ${path.join(workspace, "IDENTITY.md")}.`,
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });

@@ -1,8 +1,10 @@
-import type { SlashCommand } from "@mariozechner/pi-tui";
+// Defines TUI slash commands and their help metadata.
+import type { SlashCommand } from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const TRACE_LEVELS = ["on", "off"];
@@ -21,6 +23,9 @@ export type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  thinkingLevels?: Array<{ id: string; label: string }>;
+  local?: boolean;
+  dynamicCommands?: CommandEntry[];
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
@@ -40,6 +45,24 @@ function createLevelCompletion(
       }));
 }
 
+function normalizeSlashCommandName(value: string): string {
+  return value.replace(/^\//, "").trim();
+}
+
+function appendSlashCommand(
+  commands: SlashCommand[],
+  seen: Set<string>,
+  name: string,
+  description: string,
+) {
+  const normalizedName = normalizeSlashCommandName(name);
+  if (!normalizedName || seen.has(normalizedName)) {
+    return;
+  }
+  seen.add(normalizedName);
+  commands.push({ name: normalizedName, description });
+}
+
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.replace(/^\//, "").trim();
   if (!trimmed) {
@@ -54,7 +77,9 @@ export function parseCommand(input: string): ParsedCommand {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
+  const thinkLevels = options.thinkingLevels?.length
+    ? options.thinkingLevels.map((level) => level.label)
+    : listThinkingLevelLabels(options.provider, options.model);
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
   const traceCompletions = createLevelCompletion(TRACE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);
@@ -66,8 +91,10 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     { name: "help", description: "Show slash command help" },
     { name: "gateway-status", description: "Show gateway status summary" },
     { name: "gwstatus", description: "Alias for /gateway-status" },
+    ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
+    { name: "crestodian", description: "Return to Crestodian" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -124,8 +151,8 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
-    { name: "new", description: "Reset the session" },
-    { name: "reset", description: "Reset the session" },
+    { name: "new", description: "Spawn a new isolated session" },
+    { name: "reset", description: "Reset the current session" },
     { name: "settings", description: "Open settings" },
     { name: "exit", description: "Exit the TUI" },
     { name: "quit", description: "Exit the TUI" },
@@ -136,12 +163,14 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   for (const command of gatewayCommands) {
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
-      const name = alias.replace(/^\//, "").trim();
-      if (!name || seen.has(name)) {
-        continue;
-      }
-      seen.add(name);
-      commands.push({ name, description: command.description });
+      appendSlashCommand(commands, seen, alias, command.description);
+    }
+  }
+
+  for (const command of options.dynamicCommands ?? []) {
+    const aliases = command.textAliases?.length ? command.textAliases : [command.name];
+    for (const alias of aliases) {
+      appendSlashCommand(commands, seen, alias, command.description);
     }
   }
 
@@ -157,7 +186,9 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/status",
     "/gateway-status",
     "/gwstatus",
+    ...(options.local ? ["/auth [provider]"] : []),
     "/agent <id> (or /agents)",
+    "/crestodian [request]",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,

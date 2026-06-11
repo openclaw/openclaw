@@ -1,5 +1,8 @@
+// Openrouter plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
+  type ProviderReplayPolicy,
+  type ProviderReplayPolicyContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -12,20 +15,55 @@ import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { isOpenRouterMistralModelId } from "./models.js";
+import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
+import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildOpenrouterProvider } from "./provider-catalog.js";
+import {
+  buildOpenrouterProvider,
+  isOpenRouterProxyReasoningUnsupportedModel,
+  normalizeOpenRouterBaseUrl,
+  OPENROUTER_BASE_URL,
+} from "./provider-catalog.js";
+import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
+import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
+import {
+  resolveOpenRouterThinkingProfile,
+  supportsOpenRouterXHighThinking,
+} from "./thinking-policy.js";
+import {
+  buildOpenRouterVideoGenerationProvider,
+  listOpenRouterVideoModelCatalog,
+} from "./video-generation-provider.js";
 
 const PROVIDER_ID = "openrouter";
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "anthropic/",
+  "deepseek/",
   "moonshot/",
   "moonshotai/",
   "zai/",
 ] as const;
+
+function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
+  const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
+  const reasoning = isOpenRouterProxyReasoningUnsupportedModel(model.id) ? false : model.reasoning;
+  if (
+    (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) &&
+    reasoning === model.reasoning
+  ) {
+    return undefined;
+  }
+  return {
+    ...model,
+    ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
+    reasoning,
+  };
+}
 
 export default definePluginEntry({
   id: "openrouter",
@@ -42,8 +80,13 @@ export default definePluginEntry({
         api: "openai-completions",
         provider: PROVIDER_ID,
         baseUrl: OPENROUTER_BASE_URL,
-        reasoning: capabilities?.reasoning ?? false,
+        reasoning:
+          (capabilities?.reasoning ?? false) &&
+          !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
         input: capabilities?.input ?? ["text"],
+        ...(capabilities?.supportsTools !== undefined
+          ? { compat: { supportsTools: capabilities.supportsTools } }
+          : {}),
         cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,
@@ -52,6 +95,23 @@ export default definePluginEntry({
 
     function isOpenRouterCacheTtlModel(modelId: string): boolean {
       return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+    }
+
+    const passthroughReplayHook = PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy;
+    function buildOpenRouterReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
+      const base = passthroughReplayHook?.(ctx) ?? {};
+      // OpenRouter proxies Mistral, which uses non-base62 tool_call_ids and
+      // requires the 9-char id contract that direct `mistral` provider already
+      // applies. Without strict9, replayed assistant turns fail with HTTP 400
+      // `invalid_function_call` 3280 (#58012).
+      if (isOpenRouterMistralModelId(ctx.modelId)) {
+        return {
+          ...base,
+          sanitizeToolCallIds: true,
+          toolCallIdMode: "strict9",
+        };
+      }
+      return base;
     }
 
     api.registerProvider({
@@ -77,9 +137,11 @@ export default definePluginEntry({
             choiceLabel: "OpenRouter API key",
             groupId: "openrouter",
             groupLabel: "OpenRouter",
-            groupHint: "API key",
+            groupHint: "OAuth or API key",
+            onboardingScopes: ["text-inference", "music-generation"],
           },
         }),
+        createOpenRouterOAuthAuthMethod(),
       ],
       catalog: {
         order: "simple",
@@ -96,16 +158,51 @@ export default definePluginEntry({
           };
         },
       },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildOpenrouterProvider(),
+        }),
+      },
       resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);
       },
+      normalizeConfig: ({ providerConfig }) => {
+        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
+        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
+          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
+          : undefined;
+      },
+      normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
+        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
+        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
+          ? {
+              api: apiLocal,
+              baseUrl: normalizedBaseUrl,
+            }
+          : undefined;
+      },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
+      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
+      resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
+      extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
+    api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
+    api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: PROVIDER_ID,
+      kinds: ["video_generation"],
+      liveCatalog: listOpenRouterVideoModelCatalog,
+    });
+    api.registerSpeechProvider(buildOpenRouterSpeechProvider());
   },
 });

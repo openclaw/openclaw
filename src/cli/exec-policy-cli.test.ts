@@ -1,9 +1,10 @@
+// Exec policy CLI tests cover execution policy command behavior and persistence.
 import crypto from "node:crypto";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
-import { stripAnsi } from "../terminal/ansi.js";
 import { registerExecPolicyCli } from "./exec-policy-cli.js";
 
 function hashApprovalsFile(file: ExecApprovalsFile): string {
@@ -11,6 +12,64 @@ function hashApprovalsFile(file: ExecApprovalsFile): string {
     .createHash("sha256")
     .update(`${JSON.stringify(file, null, 2)}\n`)
     .digest("hex");
+}
+
+function createCurrentApprovalsSnapshot(path: string): ExecApprovalsSnapshot {
+  return {
+    path,
+    exists: true,
+    raw: JSON.stringify(mocks.getApprovals(), null, 2),
+    hash: hashApprovalsFile(mocks.getApprovals()),
+    file: structuredClone(mocks.getApprovals()),
+  };
+}
+
+function mockRollbackApprovalSnapshots(originalSnapshot: ExecApprovalsSnapshot) {
+  mocks.readExecApprovalsSnapshot
+    .mockImplementationOnce(() => originalSnapshot)
+    .mockImplementationOnce(() => createCurrentApprovalsSnapshot(originalSnapshot.path));
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function readLastJsonWrite(): Record<string, unknown> {
+  const calls = mocks.defaultRuntime.writeJson.mock.calls;
+  const [payload, space] = calls[calls.length - 1] ?? [];
+  expect(space).toBe(0);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected JSON write payload object");
+  }
+  return payload as Record<string, unknown>;
+}
+
+function readFirstPolicyScope(payload: Record<string, unknown>): Record<string, unknown> {
+  const effectivePolicy = payload.effectivePolicy as { scopes?: unknown[] } | undefined;
+  expect(Array.isArray(effectivePolicy?.scopes)).toBe(true);
+  const scope = effectivePolicy?.scopes?.[0];
+  if (!scope || typeof scope !== "object") {
+    throw new Error("expected first policy scope object");
+  }
+  return scope as Record<string, unknown>;
+}
+
+function readFirstReplaceConfigArg(): Record<string, unknown> {
+  const call = mocks.replaceConfigFile.mock.calls[0];
+  if (!call) {
+    throw new Error("expected replaceConfigFile call");
+  }
+  const arg = call[0];
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected replaceConfigFile argument");
+  }
+  return arg as Record<string, unknown>;
 }
 
 const mocks = vi.hoisted(() => {
@@ -64,6 +123,7 @@ const mocks = vi.hoisted(() => {
       return {
         path: "/tmp/openclaw.json",
         previousHash: "hash-1",
+        persistedHash: "hash-1",
         snapshot: { path: "/tmp/openclaw.json" },
         nextConfig: draft,
         result: undefined,
@@ -75,6 +135,7 @@ const mocks = vi.hoisted(() => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };
@@ -176,6 +237,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig: draft,
           result: undefined,
@@ -189,6 +251,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };
@@ -219,30 +282,24 @@ describe("exec-policy CLI", () => {
   it("shows the local merged exec policy as json", async () => {
     await runExecPolicyCommand(["exec-policy", "show", "--json"]);
 
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        configPath: "/tmp/openclaw.json",
-        approvalsPath: "/tmp/exec-approvals.json",
-        effectivePolicy: expect.objectContaining({
-          scopes: [
-            expect.objectContaining({
-              scopeLabel: "tools.exec",
-              security: expect.objectContaining({
-                requested: "allowlist",
-                host: "allowlist",
-                effective: "allowlist",
-              }),
-              ask: expect.objectContaining({
-                requested: "on-miss",
-                host: "on-miss",
-                effective: "on-miss",
-              }),
-            }),
-          ],
-        }),
-      }),
-      0,
-    );
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    const payload = readLastJsonWrite();
+    expectFields(payload, {
+      configPath: "/tmp/openclaw.json",
+      approvalsPath: "/tmp/exec-approvals.json",
+    });
+    const scope = readFirstPolicyScope(payload);
+    expectFields(scope, { scopeLabel: "tools.exec" });
+    expectFields(scope.security, {
+      requested: "allowlist",
+      host: "allowlist",
+      effective: "allowlist",
+    });
+    expectFields(scope.ask, {
+      requested: "on-miss",
+      host: "on-miss",
+      effective: "on-miss",
+    });
   });
 
   it("marks host=node scopes as node-managed in show output", async () => {
@@ -258,43 +315,32 @@ describe("exec-policy CLI", () => {
 
     await runExecPolicyCommand(["exec-policy", "show", "--json"]);
 
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        effectivePolicy: expect.objectContaining({
-          note: expect.stringContaining("host=node"),
-          scopes: [
-            expect.objectContaining({
-              scopeLabel: "tools.exec",
-              runtimeApprovalsSource: "node-runtime",
-              security: expect.objectContaining({
-                requested: "allowlist",
-                host: "unknown",
-                effective: "unknown",
-                hostSource: "node runtime approvals",
-              }),
-              ask: expect.objectContaining({
-                requested: "on-miss",
-                host: "unknown",
-                effective: "unknown",
-                hostSource: "node runtime approvals",
-              }),
-              askFallback: expect.objectContaining({
-                effective: "unknown",
-                source: "node runtime approvals",
-              }),
-            }),
-          ],
-        }),
-      }),
-      0,
-    );
-    const [{ effectivePolicy }] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) as [
-      Record<string, unknown>,
-      number,
-    ];
-    expect((effectivePolicy as { scopes: Record<string, unknown>[] }).scopes[0]).not.toHaveProperty(
-      "allowedDecisions",
-    );
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    const payload = readLastJsonWrite();
+    const effectivePolicy = payload.effectivePolicy as { note?: unknown } | undefined;
+    expect(String(effectivePolicy?.note)).toContain("host=node");
+    const scope = readFirstPolicyScope(payload);
+    expectFields(scope, {
+      scopeLabel: "tools.exec",
+      runtimeApprovalsSource: "node-runtime",
+    });
+    expectFields(scope.security, {
+      requested: "allowlist",
+      host: "unknown",
+      effective: "unknown",
+      hostSource: "node runtime approvals",
+    });
+    expectFields(scope.ask, {
+      requested: "on-miss",
+      host: "unknown",
+      effective: "unknown",
+      hostSource: "node runtime approvals",
+    });
+    expectFields(scope.askFallback, {
+      effective: "unknown",
+      source: "node runtime approvals",
+    });
+    expect(scope).not.toHaveProperty("allowedDecisions");
   });
 
   it("applies the yolo preset to both config and approvals", async () => {
@@ -310,11 +356,8 @@ describe("exec-policy CLI", () => {
       ask: "off",
       askFallback: "full",
     });
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseHash: "config-hash-1",
-      }),
-    );
+    const replaceConfigArg = readFirstReplaceConfigArg();
+    expectFields(replaceConfigArg, { baseHash: "config-hash-1" });
     expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
   });
@@ -454,17 +497,7 @@ describe("exec-policy CLI", () => {
       hash: "approvals-hash",
       file: originalApprovals,
     };
-    mocks.readExecApprovalsSnapshot
-      .mockImplementationOnce(() => originalSnapshot)
-      .mockImplementationOnce(
-        (): ExecApprovalsSnapshot => ({
-          path: "/tmp/exec-approvals.json",
-          exists: true,
-          raw: JSON.stringify(mocks.getApprovals(), null, 2),
-          hash: hashApprovalsFile(mocks.getApprovals()),
-          file: structuredClone(mocks.getApprovals()),
-        }),
-      );
+    mockRollbackApprovalSnapshots(originalSnapshot);
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
     });
@@ -486,17 +519,7 @@ describe("exec-policy CLI", () => {
       hash: "approvals-hash",
       file: { version: 1, agents: {} },
     };
-    mocks.readExecApprovalsSnapshot
-      .mockImplementationOnce(() => missingSnapshot)
-      .mockImplementationOnce(
-        (): ExecApprovalsSnapshot => ({
-          path: "/tmp/missing-exec-approvals.json",
-          exists: true,
-          raw: JSON.stringify(mocks.getApprovals(), null, 2),
-          hash: hashApprovalsFile(mocks.getApprovals()),
-          file: structuredClone(mocks.getApprovals()),
-        }),
-      );
+    mockRollbackApprovalSnapshots(missingSnapshot);
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
     });

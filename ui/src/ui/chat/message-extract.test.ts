@@ -1,3 +1,4 @@
+// Control UI tests cover message extract behavior.
 import { describe, expect, it } from "vitest";
 import {
   extractText,
@@ -15,7 +16,7 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBe(extractText(message));
   });
 
-  it("returns consistent output for repeated calls", () => {
+  it("returns consistent text output for repeated calls", () => {
     const message = {
       role: "user",
       content: "plain text",
@@ -77,6 +78,27 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBeNull();
     expect(extractTextCached(message)).toBeNull();
   });
+
+  it("strips internal runtime context blocks from user text", () => {
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "internal subagent payload",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "",
+            "visible ask",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    expect(extractText(message)).toBe("visible ask");
+    expect(extractTextCached(message)).toBe("visible ask");
+  });
 });
 
 describe("extractThinkingCached", () => {
@@ -88,7 +110,7 @@ describe("extractThinkingCached", () => {
     expect(extractThinkingCached(message)).toBe(extractThinking(message));
   });
 
-  it("returns consistent output for repeated calls", () => {
+  it("returns consistent thinking output for repeated calls", () => {
     const message = {
       role: "assistant",
       content: [{ type: "thinking", thinking: "Plan A" }],

@@ -1,3 +1,9 @@
+/**
+ * Public browser runtime barrel.
+ *
+ * Exposes the browser control server, client helpers, config resolution, and
+ * route/runtime primitives used by the plugin entrypoints and local CLI.
+ */
 export { startBrowserBridgeServer, stopBrowserBridgeServer } from "./browser/bridge-server.js";
 export type { BrowserBridge } from "./browser/bridge-server.js";
 export {
@@ -15,6 +21,7 @@ export {
   browserOpenTab,
   browserCreateProfile,
   browserDeleteProfile,
+  browserDoctor,
   browserProfiles,
   browserResetProfile,
   browserSnapshot,
@@ -28,6 +35,8 @@ export { runBrowserProxyCommand } from "./node-host/invoke-browser.js";
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
+  BrowserDoctorCheck,
+  BrowserDoctorReport,
   BrowserResetProfileResult,
   BrowserStatus,
   BrowserTab,
@@ -50,7 +59,11 @@ export {
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
 export { redactCdpUrl } from "./browser/cdp.helpers.js";
-export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/paths.js";
+export {
+  DEFAULT_UPLOAD_DIR,
+  resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
+} from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export {

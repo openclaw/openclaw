@@ -1,3 +1,4 @@
+// Covers config snapshot redaction and restoration behavior.
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
@@ -32,6 +33,32 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
+  it("does not expose internal plugin metadata snapshot fields", () => {
+    const snapshot = {
+      ...makeSnapshot({
+        plugins: {
+          allow: ["demo"],
+        },
+      }),
+      pluginMetadataSnapshot: {
+        manifestRegistry: {
+          plugins: [
+            {
+              id: "demo",
+              rootDir: "/private/plugin/root",
+              manifestPath: "/private/plugin/root/openclaw.plugin.json",
+            },
+          ],
+          diagnostics: [],
+        },
+      },
+    };
+
+    const result = redactConfigSnapshot(snapshot);
+
+    expect("pluginMetadataSnapshot" in result).toBe(false);
+  });
+
   it("redacts common secret field patterns across config sections", () => {
     const snapshot = makeSnapshot({
       gateway: {
@@ -330,6 +357,110 @@ describe("redactConfigSnapshot", () => {
     expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
   });
 
+  it("redacts model provider local service env values from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://127.0.0.1:18000/v1",
+        models: [],
+        localService: {
+          command: "/usr/local/bin/server",
+          env: {
+            HF_HOME: "local-service-secret-home",
+            MAX_TOKENS: "local-service-secret-limit",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            local: {
+              baseUrl: "http://127.0.0.1:18000/v1",
+              models: [],
+              localService: {
+                command: "/usr/local/bin/server",
+                env: {
+                  HF_HOME: "local-service-secret-home",
+                  MAX_TOKENS: "local-service-secret-limit",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.local.localService.env.HF_HOME).toBe(REDACTED_SENTINEL);
+    expect(cfg.models.providers.local.localService.env.MAX_TOKENS).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("local-service-secret-home");
+    expect(result.raw).not.toContain("local-service-secret-limit");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.local.localService.env.HF_HOME).toBe(
+      "local-service-secret-home",
+    );
+  });
+
+  it("redacts install policy env values from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  security: {
+    installPolicy: {
+      enabled: true,
+      exec: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-install-policy",
+        env: {
+          POLICY_TOKEN: "operator-policy-secret-token",
+          AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        security: {
+          installPolicy: {
+            enabled: true,
+            exec: {
+              source: "exec",
+              command: "/usr/local/bin/openclaw-install-policy",
+              env: {
+                POLICY_TOKEN: "operator-policy-secret-token",
+                AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.security.installPolicy.exec.env.POLICY_TOKEN).toBe(REDACTED_SENTINEL);
+    expect(cfg.security.installPolicy.exec.env.AUDIT_ENDPOINT).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("operator-policy-secret-token");
+    expect(result.raw).not.toContain("operator-policy-secret-endpoint");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.security.installPolicy.exec.env.POLICY_TOKEN).toBe(
+      "operator-policy-secret-token",
+    );
+  });
+
   it("redacts model provider request proxy URLs from config snapshots", () => {
     const hints = buildConfigSchema().uiHints;
     const raw = `{
@@ -622,9 +753,9 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).toBeNull();
     expect(result.parsed).toBeNull();
-    expect(result.sourceConfig).toEqual({});
-    expect(result.resolved).toEqual({});
-    expect(result.runtimeConfig).toEqual({});
+    expect(result.sourceConfig).toStrictEqual({});
+    expect(result.resolved).toStrictEqual({});
+    expect(result.runtimeConfig).toStrictEqual({});
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
   });
@@ -1161,5 +1292,68 @@ describe("redactConfigSnapshot", () => {
     >;
     expect(channels.slack.accounts[0].botToken).toBe(REDACTED_SENTINEL);
     expect(channels.slack.accounts[1].botToken).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  browser: {
+    cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+    profiles: {
+      remote: {
+        cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+      },
+      prod: {
+        cdpUrl: "https://alice:secret@chrome.prod.example.com",
+      },
+      local: {
+        cdpUrl: "ws://localhost:9222",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        browser: {
+          cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+          profiles: {
+            remote: {
+              cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+            },
+            prod: {
+              cdpUrl: "https://alice:secret@chrome.prod.example.com",
+            },
+            local: {
+              cdpUrl: "ws://localhost:9222",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.browser.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.remote.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.prod.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("user:pass@");
+    expect(result.raw).not.toContain("supersecret123");
+    expect(result.raw).not.toContain("staging-secret");
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.browser.cdpUrl).toBe(
+      "https://user:pass@chrome.browserless.io?token=supersecret123",
+    );
+    expect(restored.browser.profiles.remote.cdpUrl).toBe(
+      "https://chrome.staging.example.com?token=staging-secret",
+    );
+    expect(restored.browser.profiles.prod.cdpUrl).toBe(
+      "https://alice:secret@chrome.prod.example.com",
+    );
+    expect(restored.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
   });
 });

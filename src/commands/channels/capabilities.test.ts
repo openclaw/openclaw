@@ -1,3 +1,4 @@
+// Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +13,9 @@ const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveInstallableChannelPlugin: vi.fn(),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
 vi.mock("./shared.js", () => ({
@@ -27,6 +30,10 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(),
 }));
 
+vi.mock("../../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+}));
+
 vi.mock("../../config/config.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
@@ -36,6 +43,10 @@ vi.mock("../../config/config.js", async () => {
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
+
+vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+}));
 
 vi.mock("../channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
@@ -56,6 +67,24 @@ const runtime = {
 function resetOutput() {
   logs.length = 0;
   errors.length = 0;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstMockArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return requireRecord(call[0], `${label} request`);
 }
 
 function buildPlugin(params: {
@@ -100,6 +129,7 @@ describe("channelsCapabilitiesCommand", () => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
     mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: {} },
       configChanged: false,
@@ -142,11 +172,50 @@ describe("channelsCapabilitiesCommand", () => {
 
     await channelsCapabilitiesCommand({ channel: "slack" }, runtime);
 
-    const output = logs.join("\n");
-    expect(output).toContain("Bot scopes");
-    expect(output).toContain("User scopes");
-    expect(output).toContain("chat:write");
-    expect(output).toContain("users:read");
+    expect(logs).toStrictEqual([
+      [
+        "slack:default",
+        "Support: chatTypes=direct",
+        "Actions: send, broadcast, poll",
+        "Bot: @openclaw",
+        "Team: team",
+        "Bot scopes (auth.scopes): chat:write",
+        "User scopes (auth.scopes): users:read",
+      ].join("\n"),
+    ]);
+  });
+
+  it("prints an empty all-channel report when no channels are configured", async () => {
+    await channelsCapabilitiesCommand({ json: true }, runtime);
+
+    expect(errors).toStrictEqual([]);
+    expect(logs).toStrictEqual([JSON.stringify({ channels: [] }, null, 2)]);
+  });
+
+  it("rejects malformed timeouts before capability probes", async () => {
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+      probe: { ok: true },
+    });
+    plugin.status = { ...plugin.status, probeAccount };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await expect(
+      channelsCapabilitiesCommand({ channel: "slack", timeout: "10s" }, runtime),
+    ).rejects.toThrow('Received: "10s"');
+    expect(probeAccount).not.toHaveBeenCalled();
   });
 
   it("prints Teams Graph permission hints when present", async () => {
@@ -181,9 +250,15 @@ describe("channelsCapabilitiesCommand", () => {
 
     await channelsCapabilitiesCommand({ channel: "msteams" }, runtime);
 
-    const output = logs.join("\n");
-    expect(output).toContain("ChannelMessage.Read.All (channel history)");
-    expect(output).toContain("Files.Read.All (files (OneDrive))");
+    expect(logs).toStrictEqual([
+      [
+        "msteams:default",
+        "Support: chatTypes=direct",
+        "Actions: send, broadcast, poll",
+        "App: app-id",
+        "Graph roles: ChannelMessage.Read.All (channel history), Files.Read.All (files (OneDrive))",
+      ].join("\n"),
+    ]);
   });
 
   it("installs an explicit optional channel before rendering capabilities", async () => {
@@ -203,24 +278,37 @@ describe("channelsCapabilitiesCommand", () => {
       channelId: "whatsapp",
       plugin,
       configChanged: true,
+      pluginInstalled: true,
     });
     vi.mocked(listChannelPlugins).mockReturnValue([]);
     vi.mocked(getChannelPlugin).mockReturnValue(undefined);
 
     await channelsCapabilitiesCommand({ channel: "whatsapp" }, runtime);
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawChannel: "whatsapp",
-        allowInstall: true,
-      }),
+    const resolveParams = requireFirstMockArg(
+      mocks.resolveInstallableChannelPlugin,
+      "installable channel resolution",
     );
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: expect.objectContaining({
-        plugins: { entries: { whatsapp: { enabled: true } } },
-      }),
-      baseHash: "config-1",
+    expect(resolveParams.rawChannel).toBe("whatsapp");
+    expect(resolveParams.allowInstall).toBe(true);
+
+    const replaceParams = requireFirstMockArg(mocks.replaceConfigFile, "config replace");
+    expect(requireRecord(replaceParams.nextConfig, "replace next config").plugins).toStrictEqual({
+      entries: { whatsapp: { enabled: true } },
     });
-    expect(logs.join("\n")).toContain("Probe: linked");
+    expect(replaceParams.baseHash).toBe("config-1");
+
+    const refreshCalls = mocks.refreshPluginRegistryAfterConfigMutation.mock
+      .calls as unknown as Array<[{ reason?: string }]>;
+    const refreshParams = refreshCalls[0]?.[0];
+    expect(refreshParams?.reason).toBe("source-changed");
+    expect(logs).toStrictEqual([
+      [
+        "whatsapp:default",
+        "Support: chatTypes=direct",
+        "Actions: send, broadcast, poll",
+        "Probe: linked",
+      ].join("\n"),
+    ]);
   });
 });

@@ -1,14 +1,29 @@
+// Qa Lab plugin module implements model catalog behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+} from "./child-output.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
+import {
+  isPreferredQaLiveFrontierCatalogModel,
+  QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
+  QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+  QA_FRONTIER_PROVIDER_IDS,
+} from "./providers/live-frontier/catalog.js";
+import {
   createQaChannelGatewayConfig,
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
-
-const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
 
 type ModelRow = {
   key: string;
@@ -47,7 +62,7 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
         name: row.name,
         provider: parsed?.provider ?? "unknown",
         input: row.input,
-        preferred: row.key === "openai/gpt-5.4",
+        preferred: isPreferredQaLiveFrontierCatalogModel(row.key),
       } satisfies QaRunnerModelOption;
     });
 
@@ -63,6 +78,34 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
   });
 }
 
+function isModelRow(value: unknown): value is ModelRow {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const row = value as Partial<ModelRow>;
+  return (
+    typeof row.key === "string" &&
+    typeof row.name === "string" &&
+    typeof row.input === "string" &&
+    (row.available === true || row.available === false || row.available === null) &&
+    typeof row.missing === "boolean"
+  );
+}
+
+export function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(stdout) as unknown;
+  } catch {
+    throw new Error("qa model catalog returned malformed JSON");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("qa model catalog returned invalid JSON payload");
+  }
+  const rows = (payload as { models?: unknown }).models;
+  return selectQaRunnerModelOptions(Array.isArray(rows) ? rows.filter(isModelRow) : []);
+}
+
 const CATALOG_ABORT_ERROR_MESSAGE = "qa model catalog aborted";
 
 function createCatalogAbortError() {
@@ -75,7 +118,17 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
   }
   try {
     if (process.platform === "win32") {
-      process.kill(pid, signal);
+      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.once("error", () => {
+        try {
+          process.kill(pid, signal);
+        } catch {
+          // The process already exited.
+        }
+      });
       return;
     }
     process.kill(-pid, signal);
@@ -109,8 +162,8 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       gatewayToken: "qa-model-catalog",
       workspaceDir,
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "anthropic/claude-sonnet-4-6",
+      primaryModel: QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+      alternateModel: QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
       enabledProviderIds: [...QA_FRONTIER_PROVIDER_IDS],
       imageGenerationModel: null,
       controlUiEnabled: false,
@@ -121,29 +174,26 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
     });
     await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+    const stdout = createQaChildOutputCapture();
+    const stderr = createQaChildOutputTail();
+    const nodeExecPath = await resolveQaNodeExecPath();
     await new Promise<void>((resolve, reject) => {
       let aborted = params.signal?.aborted === true;
       let forceKillTimer: NodeJS.Timeout | undefined;
-      const child = spawn(
-        process.execPath,
-        ["dist/index.js", "models", "list", "--all", "--json"],
-        {
-          cwd: params.repoRoot,
-          env: {
-            ...process.env,
-            HOME: homeDir,
-            OPENCLAW_HOME: homeDir,
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
-            OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-          },
-          detached: process.platform !== "win32",
-          stdio: ["ignore", "pipe", "pipe"],
+      const child = spawn(nodeExecPath, ["dist/index.js", "models", "list", "--all", "--json"], {
+        cwd: params.repoRoot,
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          OPENCLAW_HOME: homeDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+          OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
         },
-      );
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       const cleanup = () => {
         params.signal?.removeEventListener("abort", abortCatalogLoad);
         if (forceKillTimer) {
@@ -163,8 +213,8 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       } else {
         params.signal?.addEventListener("abort", abortCatalogLoad, { once: true });
       }
-      child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-      child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+      child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
+      child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
       child.once("error", (error) => {
         cleanup();
         reject(aborted ? createCatalogAbortError() : error);
@@ -176,19 +226,23 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
           return;
         }
         if (code === 0) {
+          if (stdout.exceeded) {
+            reject(
+              new Error(
+                `qa model catalog stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
+              ),
+            );
+            return;
+          }
           resolve();
           return;
         }
-        reject(
-          new Error(
-            `qa model catalog failed (${code ?? "unknown"}): ${Buffer.concat(stderr).toString("utf8").trim()}`,
-          ),
-        );
+        const stderrText = formatQaChildOutputTail(stderr, "qa model catalog stderr");
+        reject(new Error(`qa model catalog failed (${code ?? "unknown"}): ${stderrText}`));
       });
     });
 
-    const payload = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { models?: ModelRow[] };
-    return selectQaRunnerModelOptions(payload.models ?? []);
+    return parseQaRunnerModelOptionsOutput(readQaChildOutput(stdout));
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

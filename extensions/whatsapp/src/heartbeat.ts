@@ -1,4 +1,6 @@
+// Whatsapp plugin module implements heartbeat behavior.
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { readWebAuthExistsForDecision, WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { loadWhatsAppChannelRuntime } from "./shared.js";
 
@@ -6,7 +8,7 @@ export async function checkWhatsAppHeartbeatReady(params: {
   cfg: OpenClawConfig;
   accountId?: string;
   deps?: {
-    webAuthExists?: (authDir: string) => Promise<boolean>;
+    readWebAuthExistsForDecision?: typeof readWebAuthExistsForDecision;
     hasActiveWebListener?: (accountId?: string) => boolean;
   };
 }) {
@@ -14,10 +16,13 @@ export async function checkWhatsAppHeartbeatReady(params: {
     return { ok: false as const, reason: "whatsapp-disabled" as const };
   }
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  const authExists = await (
-    params.deps?.webAuthExists ?? (await loadWhatsAppChannelRuntime()).webAuthExists
+  const authState = await (
+    params.deps?.readWebAuthExistsForDecision ?? readWebAuthExistsForDecision
   )(account.authDir);
-  if (!authExists) {
+  if (authState.outcome === "unstable") {
+    return { ok: false as const, reason: WHATSAPP_AUTH_UNSTABLE_CODE };
+  }
+  if (!authState.exists) {
     return { ok: false as const, reason: "whatsapp-not-linked" as const };
   }
   const listenerActive = params.deps?.hasActiveWebListener

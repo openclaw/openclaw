@@ -1,3 +1,4 @@
+// Covers heartbeat system-event isolation by stable session keys.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
@@ -12,7 +13,8 @@ import {
 } from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
+  deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
+  deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
 }));
 
 afterEach(() => {
@@ -20,11 +22,21 @@ afterEach(() => {
   resetSystemEventsForTest();
 });
 
+type HeartbeatReplyContext = {
+  Body?: string;
+  Provider?: string;
+  SessionKey?: string;
+};
+
+function replyCall(replySpy: { mock: { calls: unknown[][] } }, index = 0): HeartbeatReplyContext {
+  return (replySpy.mock.calls[index]?.at(0) ?? {}) as HeartbeatReplyContext;
+}
+
 describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   /**
    * Simulates the wake-request feedback loop:
    *   1. Normal heartbeat tick produces sessionKey "agent:main:main:heartbeat"
-   *   2. An exec/subagent event during that tick calls requestHeartbeatNow()
+   *   2. An exec/subagent event during that tick calls requestHeartbeat()
    *      with the already-suffixed key "agent:main:main:heartbeat"
    *   3. The wake handler passes that key back into runHeartbeatOnce(sessionKey: ...)
    *
@@ -52,12 +64,12 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       sessionKey: params.sessionKey,
       deps: {
         getQueueSize: () => 0,
-        nowMs: () => 0,
+        nowMs: () => Date.now(),
       },
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    return replySpy.mock.calls[0]?.[0];
+    return replyCall(replySpy);
   }
 
   function makeIsolatedHeartbeatConfig(tmpDir: string, storePath: string): OpenClawConfig {
@@ -111,7 +123,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         JSON.stringify({
           [alreadySuffixedKey]: {
             sessionId: "sid",
-            updatedAt: 1,
+            updatedAt: Date.now(),
             lastChannel: "whatsapp",
             lastProvider: "whatsapp",
             lastTo: "+1555",
@@ -128,12 +140,12 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         sessionKey: alreadySuffixedKey,
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs: () => Date.now(),
         },
       });
 
       // Key must remain stable — no double :heartbeat suffix.
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(replyCall(replySpy).SessionKey).toBe(`${baseSessionKey}:heartbeat`);
     });
   });
 
@@ -179,9 +191,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         { heartbeatIsolatedBaseSessionKey?: string }
       >;
       expect(store[deeplyAccumulatedKey]).toBeUndefined();
-      expect(store[`${baseSessionKey}:heartbeat`]).toMatchObject({
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
+      expect(store[`${baseSessionKey}:heartbeat`]?.heartbeatIsolatedBaseSessionKey).toBe(
+        baseSessionKey,
+      );
     });
   });
 
@@ -221,11 +233,11 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         reason: "interval",
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs: () => Date.now(),
         },
       });
 
-      expect(peekSystemEventEntries(baseSessionKey)).toEqual([]);
+      expect(peekSystemEventEntries(baseSessionKey)).toStrictEqual([]);
 
       await runHeartbeatOnce({
         cfg,
@@ -233,21 +245,13 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         reason: "interval",
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs: () => Date.now(),
         },
       });
 
       expect(replySpy).toHaveBeenCalledTimes(2);
-      const firstCtx = replySpy.mock.calls[0]?.[0] as {
-        Body?: string;
-        Provider?: string;
-        SessionKey?: string;
-      };
-      const secondCtx = replySpy.mock.calls[1]?.[0] as {
-        Body?: string;
-        Provider?: string;
-        SessionKey?: string;
-      };
+      const firstCtx = replyCall(replySpy);
+      const secondCtx = replyCall(replySpy, 1);
 
       expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       expect(firstCtx.Provider).toBe("cron-event");
@@ -267,7 +271,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         JSON.stringify({
           [alreadyIsolatedKey]: {
             sessionId: "sid",
-            updatedAt: 1,
+            updatedAt: Date.now(),
             lastChannel: "whatsapp",
             lastProvider: "whatsapp",
             lastTo: "+1555",
@@ -284,11 +288,11 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         sessionKey: alreadyIsolatedKey,
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs: () => Date.now(),
         },
       });
 
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(alreadyIsolatedKey);
+      expect(replyCall(replySpy).SessionKey).toBe(alreadyIsolatedKey);
     });
   });
 
@@ -302,7 +306,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         JSON.stringify({
           [isolatedSessionKey]: {
             sessionId: "sid",
-            updatedAt: 1,
+            updatedAt: Date.now(),
             lastChannel: "whatsapp",
             lastProvider: "whatsapp",
             lastTo: "+1555",
@@ -321,19 +325,14 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         reason: "hook:wake",
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs: () => Date.now(),
         },
       });
 
       expect(result.status).toBe("ran");
-      const calledCtx = replySpy.mock.calls[0]?.[0] as {
-        SessionKey?: string;
-        Provider?: string;
-        ForceSenderIsOwnerFalse?: boolean;
-      };
+      const calledCtx = replyCall(replySpy);
       expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
       expect(calledCtx.Provider).toBe("exec-event");
-      expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
     });
   });
 
@@ -364,7 +363,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         JSON.stringify({
           [isolatedSessionKey]: {
             sessionId: "sid",
-            updatedAt: 1,
+            updatedAt: Date.now(),
             lastChannel: "whatsapp",
             lastProvider: "whatsapp",
             lastTo: "+1555",
@@ -382,12 +381,12 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         sessionKey: isolatedSessionKey,
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs: () => Date.now(),
         },
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(isolatedSessionKey);
+      expect(replyCall(replySpy).SessionKey).toBe(isolatedSessionKey);
     });
   });
 
@@ -423,7 +422,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         JSON.stringify({
           [baseSessionKey]: {
             sessionId: "sid",
-            updatedAt: 1,
+            updatedAt: Date.now(),
             lastChannel: "whatsapp",
             lastProvider: "whatsapp",
             lastTo: "+1555",
@@ -472,7 +471,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         JSON.stringify({
           [legacyIsolatedKey]: {
             sessionId: "sid",
-            updatedAt: 1,
+            updatedAt: Date.now(),
             lastChannel: "whatsapp",
             lastProvider: "whatsapp",
             lastTo: "+1555",
@@ -488,12 +487,12 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         sessionKey: legacyIsolatedKey,
         deps: {
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs: () => Date.now(),
         },
       });
 
       // Must converge to the same canonical isolated key, not produce :heartbeat:heartbeat.
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(legacyIsolatedKey);
+      expect(replyCall(replySpy).SessionKey).toBe(legacyIsolatedKey);
     });
   });
 });

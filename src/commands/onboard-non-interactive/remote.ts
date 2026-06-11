@@ -1,12 +1,20 @@
+/**
+ * Remote non-interactive onboarding orchestration.
+ *
+ * It writes gateway.remote config without local gateway setup, preserving the
+ * same config commit path as local onboarding.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { replaceConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
+import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 
+/** Runs non-interactive setup for clients that connect to an existing remote gateway. */
 export async function runNonInteractiveRemoteSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -18,7 +26,11 @@ export async function runNonInteractiveRemoteSetup(params: {
 
   const remoteUrl = normalizeOptionalString(opts.remoteUrl);
   if (!remoteUrl) {
-    runtime.error("Missing --remote-url for remote mode.");
+    // Remote mode cannot infer a target gateway; fail before writing partial
+    // remote config that would leave status/agent commands misconfigured.
+    runtime.error(
+      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --mode remote --remote-url ws://127.0.0.1:3000")}.`,
+    );
     runtime.exit(1);
     return;
   }
@@ -34,10 +46,15 @@ export async function runNonInteractiveRemoteSetup(params: {
       },
     },
   };
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await replaceConfigFile({
+  await commitNonInteractiveOnboardConfig({
     nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
+    baseConfig,
+    baseHash,
+    reset: opts.reset,
   });
   logConfigUpdated(runtime);
 

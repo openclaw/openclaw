@@ -1,19 +1,30 @@
+/**
+ * Tool-call loop detection.
+ *
+ * Watches recent tool history for repeated no-progress patterns and circuit-breaker thresholds.
+ */
 import { createHash } from "node:crypto";
+import {
+  normalizeNullableString as nonEmptyStringField,
+  normalizeOptionalString as normalizeRunId,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import type { SessionState } from "../logging/diagnostic-session-state.js";
+import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
+import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
+import { stableStringify } from "./stable-stringify.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
-export type LoopDetectorKind =
+type LoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
   | "ping_pong";
 
-export type LoopDetectionResult =
+type LoopDetectionResult =
   | { stuck: false }
   | {
       stuck: true;
@@ -58,6 +69,18 @@ type ResolvedLoopDetectionConfig = {
   };
 };
 
+type ToolLoopDetectionScope = {
+  runId?: string;
+};
+
+function selectHistoryForScope(
+  history: readonly ToolCallRecord[],
+  scope?: ToolLoopDetectionScope,
+): ToolCallRecord[] {
+  const runId = normalizeRunId(scope?.runId);
+  return history.filter((record) => normalizeRunId(record.runId) === runId);
+}
+
 function asPositiveInt(value: number | undefined, fallback: number): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return fallback;
@@ -66,7 +89,7 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
 }
 
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
-  let warningThreshold = asPositiveInt(
+  const warningThreshold = asPositiveInt(
     config?.warningThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
   );
@@ -115,41 +138,9 @@ export function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${digestStable(params)}`;
 }
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).toSorted();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
-}
-
 function digestStable(value: unknown): string {
-  const serialized = stableStringifyFallback(value);
+  const serialized = stableStringify(value);
   return createHash("sha256").update(serialized).digest("hex");
-}
-
-function stableStringifyFallback(value: unknown): string {
-  try {
-    return stableStringify(value);
-  } catch {
-    if (value === null || value === undefined) {
-      return `${value}`;
-    }
-    if (typeof value === "string") {
-      return value;
-    }
-    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-      return `${value}`;
-    }
-    if (value instanceof Error) {
-      return `${value.name}:${value.message}`;
-    }
-    return Object.prototype.toString.call(value);
-  }
 }
 
 function isKnownPollToolCall(toolName: string, params: unknown): boolean {
@@ -202,6 +193,134 @@ function extractUnknownToolName(error: unknown): string | undefined {
   return toolName ? toolName.toLowerCase() : undefined;
 }
 
+function stringField(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
+  const status = stringField(details.status);
+  if (!status) {
+    return undefined;
+  }
+
+  if (status === "running") {
+    return digestStable({
+      status,
+      tail: stringField(details.tail) ?? "",
+    });
+  }
+
+  if (status === "completed" || status === "failed") {
+    return digestStable({
+      status,
+      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+      timedOut: details.timedOut === true,
+      output: nonEmptyStringField(details.aggregated) ?? text,
+    });
+  }
+
+  if (status === "approval-pending" || status === "approval-unavailable") {
+    return digestStable({
+      status,
+      reason: stringField(details.reason),
+      host: stringField(details.host),
+      command: stringField(details.command) ?? "",
+      warningText: stringField(details.warningText) ?? "",
+    });
+  }
+
+  return undefined;
+}
+
+// Delivery results carry fresh per-call ids (messageId/runId) in details and text, so
+// hashing them defeats no-progress loop blocking (#89090). Hash only id-stripped facts
+// for outbound-message actions; other `message` actions keep full hashing (real progress).
+const SEND_LIKE_MESSAGE_ACTIONS = new Set([
+  "send",
+  "broadcast",
+  "reply",
+  "thread-reply",
+  "sendWithEffect",
+  "sendAttachment",
+  "upload-file",
+  "sticker",
+  "poll",
+]);
+// Denylist of per-call volatile delivery ids/timestamps stripped before hashing. Must
+// cover the id/timestamp fields a channel's delivery result can carry; a new channel
+// emitting a volatile field name outside this set silently regresses its loop blocking.
+const VOLATILE_SEND_RESULT_KEYS = new Set([
+  "messageId",
+  "message_id",
+  "messageIds",
+  "platformMessageId",
+  "platformMessageIds",
+  "fileId",
+  "file_id",
+  "fileKey",
+  "pollId",
+  "poll_id",
+  "receipt",
+  "runId",
+  "idempotencyKey",
+  "ts",
+  "timestamp",
+  "sentAt",
+  "deliveredAt",
+  "createdAt",
+]);
+
+// A message object's own `id` is its volatile per-send id; a bare `id` elsewhere
+// (route/conversation) is a stable fact, so only strip `id` on the message object.
+function isMessageDeliveryObject(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.id === "string" &&
+    typeof value.text === "string" &&
+    (typeof value.direction === "string" ||
+      typeof value.senderId === "string" ||
+      typeof value.accountId === "string" ||
+      isPlainObject(value.conversation))
+  );
+}
+
+function stripVolatileSendIds(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripVolatileSendIds);
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const dropMessageObjectId = isMessageDeliveryObject(value);
+  const stripped: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (VOLATILE_SEND_RESULT_KEYS.has(key) || (key === "id" && dropMessageObjectId)) {
+      continue;
+    }
+    stripped[key] = stripVolatileSendIds(nested);
+  }
+  return stripped;
+}
+
+function isVolatileSendResult(toolName: string, params: unknown): boolean {
+  if (toolName === "sessions_send") {
+    return true;
+  }
+  const args = isPlainObject(params) ? params : {};
+  if (toolName === "message") {
+    return typeof args.action === "string" && SEND_LIKE_MESSAGE_ACTIONS.has(args.action);
+  }
+  // Provider-docked send tools (telegram/discord/...) return the same volatile-id shape.
+  // SEND_LIKE_MESSAGE_ACTIONS stays broader than the terminal-send set on purpose:
+  // broadcast/reply/sticker/poll carry volatile ids but are not terminal sends.
+  return isMessagingToolSendAction(toolName, args);
+}
+
+// Only the loop detector's own veto must not reset the streak; other blocked results
+// (plugin/approval vetoes) keep a hash so repeated identical denials still escalate.
+function isLoopVetoResult(details: Record<string, unknown>): boolean {
+  return details.status === "blocked" && details.deniedReason === "tool-loop";
+}
+
 function hashToolOutcome(
   toolName: string,
   params: unknown,
@@ -221,6 +340,17 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
+  // The loop detector's own veto is not real progress; giving it no result hash keeps a
+  // critical loop block sticky instead of letting the block reset the streak (#89090).
+  if (isLoopVetoResult(details)) {
+    return { resultHash: undefined };
+  }
+  if (toolName === "exec") {
+    const execHash = hashExecToolOutcome(details, text);
+    if (execHash) {
+      return { resultHash: execHash };
+    }
+  }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
     if (action === "poll") {
@@ -249,6 +379,10 @@ function hashToolOutcome(
         }),
       };
     }
+  }
+
+  if (isVolatileSendResult(toolName, params)) {
+    return { resultHash: digestStable(stripVolatileSendIds(details)) };
   }
 
   return {
@@ -430,12 +564,13 @@ export function detectToolCallLoop(
   toolName: string,
   params: unknown,
   config?: ToolLoopDetectionConfig,
+  scope?: ToolLoopDetectionScope,
 ): LoopDetectionResult {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!resolvedConfig.enabled) {
     return { stuck: false };
   }
-  const history = state.toolCallHistory ?? [];
+  const history = selectHistoryForScope(state.toolCallHistory ?? [], scope);
   const currentHash = hashToolCall(toolName, params);
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
@@ -538,10 +673,27 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector: warn on repeated identical calls, then block only after
+  // outcomes prove the calls are not making progress.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    noProgressStreak >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(`Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: noProgressStreak,
+      message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
+      warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+    };
+  }
 
   if (
     !knownPollTool &&
@@ -572,8 +724,10 @@ export function recordToolCall(
   params: unknown,
   toolCallId?: string,
   config?: ToolLoopDetectionConfig,
+  scope?: ToolLoopDetectionScope,
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(config);
+  const runId = normalizeRunId(scope?.runId);
   if (!state.toolCallHistory) {
     state.toolCallHistory = [];
   }
@@ -582,11 +736,12 @@ export function recordToolCall(
     toolName,
     argsHash: hashToolCall(toolName, params),
     toolCallId,
+    ...(runId && { runId }),
     timestamp: Date.now(),
   });
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
-    state.toolCallHistory.shift();
+    state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
 }
 
@@ -602,13 +757,15 @@ export function recordToolCallOutcome(
     result?: unknown;
     error?: unknown;
     config?: ToolLoopDetectionConfig;
+    runId?: string;
   },
-): void {
+): ToolCallRecord | undefined {
   const resolvedConfig = resolveLoopDetectionConfig(params.config);
+  const runId = normalizeRunId(params.runId);
   const outcome = hashToolOutcome(params.toolName, params.toolParams, params.result, params.error);
   const resultHash = outcome.resultHash;
   if (!resultHash) {
-    return;
+    return undefined;
   }
 
   if (!state.toolCallHistory) {
@@ -617,9 +774,13 @@ export function recordToolCallOutcome(
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
   let matched = false;
+  let recordedOutcome: ToolCallRecord | undefined;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
     const call = state.toolCallHistory[i];
     if (!call) {
+      continue;
+    }
+    if (normalizeRunId(call.runId) !== runId) {
       continue;
     }
     if (params.toolCallId && call.toolCallId !== params.toolCallId) {
@@ -634,23 +795,28 @@ export function recordToolCallOutcome(
     call.resultHash = resultHash;
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
+    recordedOutcome = call;
     break;
   }
 
   if (!matched) {
-    state.toolCallHistory.push({
+    const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
+      ...(runId && { runId }),
       resultHash,
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
-    });
+    };
+    state.toolCallHistory.push(record);
+    recordedOutcome = record;
   }
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
     state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
+  return recordedOutcome;
 }
 
 /**

@@ -1,15 +1,22 @@
+/**
+ * Tool display metadata registry.
+ *
+ * Agent UIs use this config to map tool names/actions to stable titles,
+ * icons, and detail keys without embedding presentation data in tool handlers.
+ */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
 
-export type ToolDisplaySpec = ToolDisplaySpecBase & {
+type ToolDisplaySpec = ToolDisplaySpecBase & {
   emoji?: string;
 };
 
-export type ToolDisplayConfig = {
+type ToolDisplayConfig = {
   version: number;
   fallback: ToolDisplaySpec;
   tools: Record<string, ToolDisplaySpec>;
 };
 
+/** Static display metadata for known tools plus fallback detail-key selection. */
 export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
   version: 1,
   fallback: {
@@ -249,10 +256,30 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    get_goal: {
+      emoji: "🎯",
+      title: "Get Goal",
+      detailKeys: [],
+    },
+    create_goal: {
+      emoji: "🎯",
+      title: "Create Goal",
+      detailKeys: ["objective", "token_budget"],
+    },
+    update_goal: {
+      emoji: "🎯",
+      title: "Update Goal",
+      detailKeys: ["status"],
+    },
     update_plan: {
       emoji: "🗺️",
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
+    },
+    skill_workshop: {
+      emoji: "🧰",
+      title: "Skill Workshop",
+      detailKeys: ["action", "name", "proposal_id"],
     },
     gateway: {
       emoji: "🔌",
@@ -261,140 +288,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         restart: {
           label: "restart",
           detailKeys: ["reason", "delayMs"],
-        },
-      },
-    },
-    whatsapp_login: {
-      emoji: "🟢",
-      title: "WhatsApp Login",
-      actions: {
-        start: {
-          label: "start",
-        },
-        wait: {
-          label: "wait",
-        },
-      },
-    },
-    discord: {
-      emoji: "💬",
-      title: "Discord",
-      actions: {
-        react: {
-          label: "react",
-          detailKeys: ["channelId", "messageId", "emoji"],
-        },
-        reactions: {
-          label: "reactions",
-          detailKeys: ["channelId", "messageId"],
-        },
-        sticker: {
-          label: "sticker",
-          detailKeys: ["to", "stickerIds"],
-        },
-        poll: {
-          label: "poll",
-          detailKeys: ["question", "to"],
-        },
-        permissions: {
-          label: "permissions",
-          detailKeys: ["channelId"],
-        },
-        readMessages: {
-          label: "read messages",
-          detailKeys: ["channelId", "limit"],
-        },
-        sendMessage: {
-          label: "send",
-          detailKeys: ["to", "content"],
-        },
-        editMessage: {
-          label: "edit",
-          detailKeys: ["channelId", "messageId"],
-        },
-        deleteMessage: {
-          label: "delete",
-          detailKeys: ["channelId", "messageId"],
-        },
-        threadCreate: {
-          label: "thread create",
-          detailKeys: ["channelId", "name"],
-        },
-        threadList: {
-          label: "thread list",
-          detailKeys: ["guildId", "channelId"],
-        },
-        threadReply: {
-          label: "thread reply",
-          detailKeys: ["channelId", "content"],
-        },
-        pinMessage: {
-          label: "pin",
-          detailKeys: ["channelId", "messageId"],
-        },
-        unpinMessage: {
-          label: "unpin",
-          detailKeys: ["channelId", "messageId"],
-        },
-        listPins: {
-          label: "list pins",
-          detailKeys: ["channelId"],
-        },
-        searchMessages: {
-          label: "search",
-          detailKeys: ["guildId", "content"],
-        },
-        memberInfo: {
-          label: "member",
-          detailKeys: ["guildId", "userId"],
-        },
-        roleInfo: {
-          label: "roles",
-          detailKeys: ["guildId"],
-        },
-        emojiList: {
-          label: "emoji list",
-          detailKeys: ["guildId"],
-        },
-        roleAdd: {
-          label: "role add",
-          detailKeys: ["guildId", "userId", "roleId"],
-        },
-        roleRemove: {
-          label: "role remove",
-          detailKeys: ["guildId", "userId", "roleId"],
-        },
-        channelInfo: {
-          label: "channel",
-          detailKeys: ["channelId"],
-        },
-        channelList: {
-          label: "channels",
-          detailKeys: ["guildId"],
-        },
-        voiceStatus: {
-          label: "voice",
-          detailKeys: ["guildId", "userId"],
-        },
-        eventList: {
-          label: "events",
-          detailKeys: ["guildId"],
-        },
-        eventCreate: {
-          label: "event create",
-          detailKeys: ["guildId", "name"],
-        },
-        timeout: {
-          label: "timeout",
-          detailKeys: ["guildId", "userId"],
-        },
-        kick: {
-          label: "kick",
-          detailKeys: ["guildId", "userId"],
-        },
-        ban: {
-          label: "ban",
-          detailKeys: ["guildId", "userId"],
         },
       },
     },
@@ -421,7 +314,17 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     sessions_list: {
       emoji: "🗂️",
       title: "Sessions",
-      detailKeys: ["kinds", "limit", "activeMinutes", "messageLimit"],
+      detailKeys: [
+        "kinds",
+        "label",
+        "agentId",
+        "search",
+        "limit",
+        "activeMinutes",
+        "includeDerivedTitles",
+        "includeLastMessage",
+        "messageLimit",
+      ],
     },
     sessions_send: {
       emoji: "📨",
@@ -432,6 +335,39 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧾",
       title: "Session History",
       detailKeys: ["sessionKey", "limit", "includeTools"],
+    },
+    transcripts: {
+      emoji: "🎙️",
+      title: "Transcripts",
+      actions: {
+        start: {
+          label: "start",
+          detailKeys: [
+            "sessionId",
+            "title",
+            "providerId",
+            "accountId",
+            "guildId",
+            "channelId",
+            "meetingUrl",
+          ],
+        },
+        stop: {
+          label: "stop",
+          detailKeys: ["sessionId"],
+        },
+        status: {
+          label: "status",
+        },
+        import: {
+          label: "import",
+          detailKeys: ["sessionId", "title", "providerId", "meetingUrl", "speakerLabel"],
+        },
+        summarize: {
+          label: "summarize",
+          detailKeys: ["sessionId"],
+        },
+      },
     },
     sessions_spawn: {
       emoji: "🧑‍🔧",
@@ -693,9 +629,3 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     },
   },
 };
-
-export function serializeToolDisplayConfig(
-  config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG,
-): string {
-  return `${JSON.stringify(config, null, 2)}\n`;
-}

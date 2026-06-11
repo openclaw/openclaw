@@ -1,9 +1,12 @@
+// Media generation runtime mocks install mocked runtime modules for tests.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ImageGenerationProvider } from "../../../src/image-generation/types.js";
 import type { MusicGenerationProvider } from "../../../src/music-generation/types.js";
 import type { VideoGenerationProvider } from "../../../src/video-generation/types.js";
 import { resetGenerationRuntimeMocks } from "./runtime-test-mocks.js";
+
+// Shared Vitest module mocks for image, music, and video generation runtimes.
 
 type ModelRef = { provider: string; model: string };
 
@@ -25,7 +28,7 @@ const mediaRuntimeMocks = vi.hoisted(() => {
     };
   };
   return {
-    createSubsystemLogger: vi.fn(() => ({ debug, warn: vi.fn() })),
+    createSubsystemLogger: vi.fn(() => ({ debug, warn })),
     describeFailoverError: vi.fn(),
     getImageGenerationProvider: vi.fn<
       (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
@@ -53,33 +56,58 @@ const mediaRuntimeMocks = vi.hoisted(() => {
       vi.fn<(raw?: string) => ModelRef | undefined>(parseGenerationModelRef),
     parseVideoGenerationModelRef:
       vi.fn<(raw?: string) => ModelRef | undefined>(parseGenerationModelRef),
+    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+    listProfilesForProvider: vi.fn(() => []),
+    resolveEnvApiKey: vi.fn(() => undefined),
     resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
     resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
+    resolveAgentModelTimeoutMsValue: vi.fn<(value: unknown) => number | undefined>((value) => {
+      if (!value || typeof value !== "object" || !("timeoutMs" in value)) {
+        return undefined;
+      }
+      const timeoutMs = (value as { timeoutMs?: unknown }).timeoutMs;
+      return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? Math.floor(timeoutMs)
+        : undefined;
+    }),
     resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
+    resolveProviderAuthLookupMaps: vi.fn(() => ({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+    })),
     debug,
     warn,
   };
 });
 
+vi.mock("../../../src/agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: mediaRuntimeMocks.ensureAuthProfileStore,
+  listProfilesForProvider: mediaRuntimeMocks.listProfilesForProvider,
+}));
+vi.mock("../../../src/agents/defaults.js", () => ({
+  DEFAULT_PROVIDER: "openai",
+}));
 vi.mock("../../../src/agents/failover-error.js", () => ({
   describeFailoverError: mediaRuntimeMocks.describeFailoverError,
   isFailoverError: mediaRuntimeMocks.isFailoverError,
 }));
+vi.mock("../../../src/agents/model-auth-env.js", () => ({
+  resolveEnvApiKey: mediaRuntimeMocks.resolveEnvApiKey,
+}));
 vi.mock("../../../src/config/model-input.js", () => ({
   resolveAgentModelFallbackValues: mediaRuntimeMocks.resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue: mediaRuntimeMocks.resolveAgentModelPrimaryValue,
+  resolveAgentModelTimeoutMsValue: mediaRuntimeMocks.resolveAgentModelTimeoutMsValue,
 }));
 vi.mock("../../../src/logging/subsystem.js", () => ({
   createSubsystemLogger: mediaRuntimeMocks.createSubsystemLogger,
 }));
-vi.mock("../../../src/secrets/provider-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/secrets/provider-env-vars.js")>();
-  return {
-    ...actual,
-    getProviderEnvVars: mediaRuntimeMocks.getProviderEnvVars,
-    resolveProviderAuthEnvVarCandidates: mediaRuntimeMocks.resolveProviderAuthEnvVarCandidates,
-  };
-});
+vi.mock("../../../src/secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: mediaRuntimeMocks.getProviderEnvVars,
+  resolveProviderAuthEnvVarCandidates: mediaRuntimeMocks.resolveProviderAuthEnvVarCandidates,
+  resolveProviderAuthLookupMaps: mediaRuntimeMocks.resolveProviderAuthLookupMaps,
+}));
 
 vi.mock("../../../src/image-generation/model-ref.js", () => ({
   parseImageGenerationModelRef: mediaRuntimeMocks.parseImageGenerationModelRef,
@@ -103,11 +131,14 @@ vi.mock("../../../src/video-generation/provider-registry.js", () => ({
   listVideoGenerationProviders: mediaRuntimeMocks.listVideoGenerationProviders,
 }));
 
+/** Return the hoisted shared media generation runtime mocks. */
 export function getMediaGenerationRuntimeMocks() {
   return mediaRuntimeMocks;
 }
 
+/** Reset image generation runtime mocks to default empty-provider behavior. */
 export function resetImageGenerationRuntimeMocks(): void {
+  resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
     ...mediaRuntimeMocks,
     getProvider: mediaRuntimeMocks.getImageGenerationProvider,
@@ -116,7 +147,9 @@ export function resetImageGenerationRuntimeMocks(): void {
   });
 }
 
+/** Reset music generation runtime mocks to default empty-provider behavior. */
 export function resetMusicGenerationRuntimeMocks(): void {
+  resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
     ...mediaRuntimeMocks,
     getProvider: mediaRuntimeMocks.getMusicGenerationProvider,
@@ -125,11 +158,23 @@ export function resetMusicGenerationRuntimeMocks(): void {
   });
 }
 
+/** Reset video generation runtime mocks to default empty-provider behavior. */
 export function resetVideoGenerationRuntimeMocks(): void {
+  resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
     ...mediaRuntimeMocks,
     getProvider: mediaRuntimeMocks.getVideoGenerationProvider,
     listProviders: mediaRuntimeMocks.listVideoGenerationProviders,
     parseModelRef: mediaRuntimeMocks.parseVideoGenerationModelRef,
   });
+}
+
+/** Reset shared auth/failover/logger mocks used by all media generation runtimes. */
+function resetSharedRuntimeImportMocks(): void {
+  mediaRuntimeMocks.ensureAuthProfileStore.mockReset();
+  mediaRuntimeMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+  mediaRuntimeMocks.listProfilesForProvider.mockReset();
+  mediaRuntimeMocks.listProfilesForProvider.mockReturnValue([]);
+  mediaRuntimeMocks.resolveEnvApiKey.mockReset();
+  mediaRuntimeMocks.resolveEnvApiKey.mockReturnValue(undefined);
 }

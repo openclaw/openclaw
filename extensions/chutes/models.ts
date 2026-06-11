@@ -1,19 +1,34 @@
+/**
+ * Chutes model catalog, static model definitions, and dynamic model discovery.
+ */
+import {
+  clearLiveCatalogCacheForTests,
+  getCachedLiveProviderModelRows,
+  LiveModelCatalogHttpError,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 const log = createSubsystemLogger("chutes-models");
 
+/** Base URL for Chutes OpenAI-compatible inference. */
 export const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
+/** Default Chutes model id used for onboarding. */
 export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-TEE";
+/** Default Chutes model ref used for onboarding. */
 export const CHUTES_DEFAULT_MODEL_REF = `chutes/${CHUTES_DEFAULT_MODEL_ID}`;
 
 const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
 const CHUTES_DEFAULT_MAX_TOKENS = 4096;
 
+/** Bundled fallback Chutes model catalog. */
 export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "Qwen/Qwen3-32B",
@@ -344,6 +359,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen2.5-VL-32B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 16384,
     maxTokens: 16384,
     cost: { input: 0.05, output: 0.22, cacheRead: 0, cacheWrite: 0 },
@@ -353,6 +371,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen3-VL-235B-A22B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 262144,
     maxTokens: 262144,
     cost: { input: 0.3, output: 1.2, cacheRead: 0, cacheWrite: 0 },
@@ -440,6 +461,7 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
   },
 ];
 
+/** Adds Chutes provider compat metadata to one model catalog entry. */
 export function buildChutesModelDefinition(
   model: (typeof CHUTES_MODEL_CATALOG)[number],
 ): ModelDefinitionConfig {
@@ -465,95 +487,42 @@ interface ChutesModelEntry {
   [key: string]: unknown;
 }
 
-interface OpenAIListModelsResponse {
-  data?: ChutesModelEntry[];
-}
-
 const CACHE_TTL = 5 * 60 * 1000;
-const CACHE_MAX_ENTRIES = 100;
 
-interface CacheEntry {
-  models: ModelDefinitionConfig[];
-  time: number;
-}
-
-const modelCache = new Map<string, CacheEntry>();
-
+/** Clears the dynamic Chutes model discovery cache for tests. */
 export function clearChutesModelCacheForTests(): void {
-  modelCache.clear();
+  clearLiveCatalogCacheForTests();
 }
 
-function pruneExpiredCacheEntries(now: number = Date.now()): void {
-  for (const [key, entry] of modelCache.entries()) {
-    if (now - entry.time >= CACHE_TTL) {
-      modelCache.delete(key);
-    }
-  }
+async function fetchChutesModelRows(accessToken?: string): Promise<readonly unknown[]> {
+  return await getCachedLiveProviderModelRows({
+    providerId: "chutes",
+    endpoint: `${CHUTES_BASE_URL}/models`,
+    discoveryApiKey: accessToken,
+    timeoutMs: 10_000,
+    ttlMs: CACHE_TTL,
+    buildRequestHeaders: ({ discoveryApiKey }) => ({
+      Accept: "application/json",
+      ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
+    }),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
+    auditContext: "chutes-model-discovery",
+  });
 }
 
-function cacheAndReturn(
-  tokenKey: string,
-  models: ModelDefinitionConfig[],
-): ModelDefinitionConfig[] {
-  const now = Date.now();
-  pruneExpiredCacheEntries(now);
-
-  if (!modelCache.has(tokenKey) && modelCache.size >= CACHE_MAX_ENTRIES) {
-    const oldest = modelCache.keys().next();
-    if (!oldest.done) {
-      modelCache.delete(oldest.value);
-    }
-  }
-
-  modelCache.set(tokenKey, { models, time: now });
-  return models;
-}
-
+/** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
   const trimmedKey = normalizeOptionalString(accessToken) ?? "";
-  const now = Date.now();
-  pruneExpiredCacheEntries(now);
-  const cached = modelCache.get(trimmedKey);
-  if (cached) {
-    return cached.models;
-  }
 
-  if (process.env.NODE_ENV === "test" || process.env.VITEST === "true") {
+  if (isChutesModelDiscoveryTestEnvironment()) {
     return CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
   }
 
-  let effectiveKey = trimmedKey;
-  const staticCatalog = () =>
-    cacheAndReturn(effectiveKey, CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition));
-
-  const headers: Record<string, string> = {};
-  if (trimmedKey) {
-    headers.Authorization = `Bearer ${trimmedKey}`;
-  }
+  const staticCatalog = () => CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
 
   try {
-    let response = await fetch(`${CHUTES_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(10_000),
-      headers,
-    });
-
-    if (response.status === 401 && trimmedKey) {
-      effectiveKey = "";
-      response = await fetch(`${CHUTES_BASE_URL}/models`, {
-        signal: AbortSignal.timeout(10_000),
-      });
-    }
-
-    if (!response.ok) {
-      if (response.status !== 401 && response.status !== 503) {
-        log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
-      }
-      return staticCatalog();
-    }
-
-    const body = (await response.json()) as OpenAIListModelsResponse;
-    const data = body?.data;
-    if (!Array.isArray(data) || data.length === 0) {
+    const data = await fetchChutesModelRows(trimmedKey || undefined);
+    if (data.length === 0) {
       log.warn("No models in response, using static catalog");
       return staticCatalog();
     }
@@ -561,7 +530,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     const seen = new Set<string>();
     const models: ModelDefinitionConfig[] = [];
 
-    for (const entry of data) {
+    for (const entry of data as ChutesModelEntry[]) {
       const id = normalizeOptionalString(entry?.id) ?? "";
       if (!id || seen.has(id)) {
         continue;
@@ -591,19 +560,30 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
           cacheRead: 0,
           cacheWrite: 0,
         },
-        contextWindow: entry.context_length || CHUTES_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: entry.max_output_length || CHUTES_DEFAULT_MAX_TOKENS,
+        contextWindow: asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: asPositiveSafeInteger(entry.max_output_length) ?? CHUTES_DEFAULT_MAX_TOKENS,
         compat: {
           supportsUsageInStreaming: false,
         },
       });
     }
 
-    return cacheAndReturn(
-      effectiveKey,
-      models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
-    );
+    if (models.length === 0) {
+      return staticCatalog();
+    }
+    return models;
   } catch (error) {
+    if (error instanceof LiveModelCatalogHttpError && error.status === 401 && trimmedKey) {
+      return await discoverChutesModels(undefined);
+    }
+    if (
+      error instanceof LiveModelCatalogHttpError &&
+      error.status !== 401 &&
+      error.status !== 503
+    ) {
+      log.warn(`GET /v1/models failed: HTTP ${error.status}, using static catalog`);
+      return staticCatalog();
+    }
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return staticCatalog();
   }

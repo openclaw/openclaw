@@ -1,3 +1,4 @@
+// Load context tests cover agent and workspace context resolution for plugin runtimes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn<typeof import("../../config/config.js").loadConfig>();
@@ -9,11 +10,28 @@ const resolveAgentWorkspaceDirMock = vi.fn<
 const resolveDefaultAgentIdMock = vi.fn<
   typeof import("../../agents/agent-scope.js").resolveDefaultAgentId
 >(() => "default");
+const manifestRegistry = { diagnostics: [], plugins: [] };
+const metadataSnapshot = {
+  configFingerprint: "fingerprint",
+  diagnostics: [],
+  index: { plugins: [], policyHash: "policy" },
+  manifestRegistry,
+  plugins: [],
+  policyHash: "policy",
+  workspaceDir: "/resolved-workspace",
+};
+const loadPluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
+const getCurrentPluginMetadataSnapshotMock = vi.fn(() => undefined);
+const setCurrentPluginMetadataSnapshotMock = vi.fn();
+const clearCurrentPluginMetadataSnapshotMock = vi.fn();
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
+let clearRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").setRuntimeConfigSnapshot;
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: loadConfigMock,
   loadConfig: loadConfigMock,
 }));
 
@@ -26,13 +44,35 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
 }));
 
+vi.mock("../plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  resolvePluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+}));
+
+vi.mock("../current-plugin-metadata-snapshot.js", () => ({
+  clearCurrentPluginMetadataSnapshot: clearCurrentPluginMetadataSnapshotMock,
+  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+  isReusableCurrentPluginMetadataSnapshot: (
+    _snapshot: typeof metadataSnapshot & { registrySource?: "derived" },
+  ) => true,
+  setCurrentPluginMetadataSnapshot: setCurrentPluginMetadataSnapshotMock,
+}));
+
 describe("resolvePluginRuntimeLoadContext", () => {
   beforeEach(async () => {
     vi.resetModules();
+    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+      await import("../../config/runtime-snapshot.js"));
     ({ resolvePluginRuntimeLoadContext, buildPluginRuntimeLoadOptions } =
       await import("./load-context.js"));
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
+    loadPluginMetadataSnapshotMock.mockClear();
+    getCurrentPluginMetadataSnapshotMock.mockClear();
+    setCurrentPluginMetadataSnapshotMock.mockClear();
+    clearCurrentPluginMetadataSnapshotMock.mockClear();
     resolveAgentWorkspaceDirMock.mockClear();
     resolveDefaultAgentIdMock.mockClear();
 
@@ -42,6 +82,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
+    clearRuntimeConfigSnapshot();
   });
 
   it("builds the runtime plugin load context from the auto-enabled config", () => {
@@ -68,24 +109,107 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
     });
 
-    expect(context).toEqual(
-      expect.objectContaining({
-        rawConfig,
-        config: resolvedConfig,
-        activationSourceConfig: rawConfig,
-        env,
-        workspaceDir: "/resolved-workspace",
-        autoEnabledReasons: {
-          demo: ["demo configured"],
-        },
-      }),
-    );
+    expect(context).toEqual({
+      rawConfig,
+      config: resolvedConfig,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+      workspaceDir: "/resolved-workspace",
+      env,
+      logger: context.logger,
+      manifestRegistry,
+      installRecords: {},
+    });
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
+      config: rawConfig,
+      env,
+      workspaceDir: "/resolved-workspace",
+    });
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: rawConfig,
       env,
+      manifestRegistry,
+    });
+    expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(metadataSnapshot, {
+      config: rawConfig,
+      compatibleConfigs: [resolvedConfig, rawConfig],
+      env,
+      workspaceDir: "/resolved-workspace",
     });
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
     expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
+  });
+
+  it("stores derived metadata as the reusable runtime snapshot", () => {
+    const derivedSnapshot = { ...metadataSnapshot } as typeof metadataSnapshot & {
+      registrySource: "derived";
+    };
+    derivedSnapshot.registrySource = "derived";
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(derivedSnapshot);
+
+    resolvePluginRuntimeLoadContext({
+      config: { plugins: {} },
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(derivedSnapshot, {
+      config: { plugins: {} },
+      compatibleConfigs: [{ plugins: {} }, { plugins: {} }],
+      env: { HOME: "/tmp/openclaw-home" },
+      workspaceDir: "/resolved-workspace",
+    });
+    expect(clearCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the source runtime snapshot for plugin activation source config", () => {
+    const runtimeConfig = { plugins: {} };
+    const sourceConfig = {
+      plugins: {
+        allow: ["trusted-plugin"],
+      },
+    };
+
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    loadConfigMock.mockReturnValue(runtimeConfig);
+
+    const context = resolvePluginRuntimeLoadContext();
+
+    expect(context.rawConfig).toBe(runtimeConfig);
+    expect(context.activationSourceConfig).toBe(sourceConfig);
+    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+      config: runtimeConfig,
+      env: process.env,
+      manifestRegistry,
+    });
+  });
+
+  it("threads install records from the metadata snapshot into the context and load options", () => {
+    const snapshotWithRecords = {
+      ...metadataSnapshot,
+      index: {
+        installRecords: {
+          demo: { source: "registry", version: "1.0.0" },
+        },
+        plugins: [],
+        policyHash: "policy",
+      },
+    };
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(snapshotWithRecords);
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: { plugins: {} },
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(context.installRecords).toEqual({
+      demo: { source: "registry", version: "1.0.0" },
+    });
+    expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual({
+      demo: { source: "registry", version: "1.0.0" },
+    });
   });
 
   it("builds plugin load options from the shared runtime context", () => {
@@ -101,18 +225,18 @@ describe("resolvePluginRuntimeLoadContext", () => {
         activate: false,
         onlyPluginIds: ["demo"],
       }),
-    ).toEqual(
-      expect.objectContaining({
-        config: context.config,
-        activationSourceConfig: context.activationSourceConfig,
-        autoEnabledReasons: context.autoEnabledReasons,
-        workspaceDir: "/explicit-workspace",
-        env: context.env,
-        logger: context.logger,
-        cache: false,
-        activate: false,
-        onlyPluginIds: ["demo"],
-      }),
-    );
+    ).toEqual({
+      config: context.config,
+      activationSourceConfig: context.activationSourceConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: "/explicit-workspace",
+      env: context.env,
+      logger: context.logger,
+      manifestRegistry,
+      installRecords: {},
+      cache: false,
+      activate: false,
+      onlyPluginIds: ["demo"],
+    });
   });
 });

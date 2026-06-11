@@ -1,8 +1,9 @@
+// Doctor channel capability tests cover channel capability inspection and diagnostics.
 import { describe, expect, it } from "vitest";
 import { getDoctorChannelCapabilities } from "./channel-capabilities.js";
 
 describe("doctor channel capabilities", () => {
-  it("returns nested route semantics for googlechat before plugin metadata loads", () => {
+  it("returns nested route semantics from googlechat plugin metadata", () => {
     expect(getDoctorChannelCapabilities("googlechat")).toEqual({
       dmAllowFromMode: "nestedOnly",
       groupModel: "route",
@@ -11,7 +12,7 @@ describe("doctor channel capabilities", () => {
     });
   });
 
-  it("returns built-in capability overrides for matrix", () => {
+  it("returns capability overrides from matrix plugin metadata", () => {
     expect(getDoctorChannelCapabilities("matrix")).toEqual({
       dmAllowFromMode: "nestedOnly",
       groupModel: "sender",
@@ -33,7 +34,7 @@ describe("doctor channel capabilities", () => {
     expect(getDoctorChannelCapabilities("msteams")).toEqual({
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     });
   });

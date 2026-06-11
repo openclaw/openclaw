@@ -1,3 +1,4 @@
+// Session send policy tests cover message send eligibility decisions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -65,6 +66,12 @@ describe("resolveSendPolicy", () => {
       cfg: cfgWithRules([{ action: "deny", match: { rawKeyPrefix: "agent:main:demo-channel:" } }]),
       sessionKey: "agent:main:other-channel:group:dev",
       expected: "allow",
+    },
+    {
+      name: "channel-scoped deny fires for direct session key without explicit channel field",
+      cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
+      sessionKey: "demo-channel:direct:user-1",
+      expected: "deny",
     },
   ])("$name", ({ cfg, entry, sessionKey, expected }) => {
     expect(resolveSendPolicy({ cfg, entry, sessionKey })).toBe(expected);

@@ -1,3 +1,4 @@
+// CLI startup context, banner/log presentation, and bootstrap orchestration.
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -6,18 +7,26 @@ import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
 type CliStartupPolicy = ReturnType<typeof resolveCliStartupPolicy>;
 
+const hasJsonFlag = (argv: readonly string[]) =>
+  argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
+
+const hasVersionFlag = (argv: readonly string[]) =>
+  argv.some((arg) => arg === "--version" || arg === "-V");
+
 export function resolveCliExecutionStartupContext(params: {
   argv: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
+  // Resolve argv once so startup policy, routing, and bootstrap share the same command path.
   const invocation = resolveCliArgvInvocation(params.argv);
   const { commandPath } = invocation;
   return {
     invocation,
     commandPath,
     startupPolicy: resolveCliStartupPolicy({
+      argv: params.argv,
       commandPath,
       jsonOutputMode: params.jsonOutputMode,
       env: params.env,
@@ -33,10 +42,14 @@ export async function applyCliExecutionStartupPresentation(params: {
   showBanner?: boolean;
   version?: string;
 }) {
+  // JSON-mode commands must keep stdout machine-readable; route diagnostics away first.
   if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
     routeLogsToStderr();
   }
   if (params.startupPolicy.hideBanner || params.showBanner === false || !params.version) {
+    return;
+  }
+  if (params.argv && (hasJsonFlag(params.argv) || hasVersionFlag(params.argv))) {
     return;
   }
   const { emitCliBanner } = await import("./banner.js");
@@ -61,6 +74,7 @@ export async function ensureCliExecutionBootstrap(params: {
     suppressDoctorStdout: params.startupPolicy.suppressDoctorStdout,
     allowInvalid: params.allowInvalid,
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
+    pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
   });
 }

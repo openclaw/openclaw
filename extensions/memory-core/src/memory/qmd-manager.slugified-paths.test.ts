@@ -1,3 +1,4 @@
+// Memory Core tests cover qmd manager.slugified paths plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -36,12 +37,7 @@ function createMockChild(params?: { autoClose?: boolean }): MockChild {
   return child;
 }
 
-function emitAndClose(
-  child: MockChild,
-  stream: "stdout" | "stderr",
-  data: string,
-  code: number = 0,
-) {
+function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: string, code = 0) {
   queueMicrotask(() => {
     child[stream].emit("data", data);
     child.closeWith(code);
@@ -254,6 +250,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
     await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: actualRelative,
       text: "line-1\nline-2\nline-3",
+      from: 1,
+      lines: 3,
     });
   });
 
@@ -324,6 +322,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
     await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: `qmd/${collectionName}/${actualRelative}`,
       text: "vault memory",
+      from: 1,
+      lines: 1,
     });
   });
 
@@ -381,6 +381,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
     await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: exactRelative,
       text: "exact slugified path",
+      from: 1,
+      lines: 1,
     });
   });
 });

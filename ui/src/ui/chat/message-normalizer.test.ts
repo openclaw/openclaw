@@ -1,9 +1,9 @@
+// Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  normalizeMessage,
-  normalizeRoleForGrouping,
-  isToolResultMessage,
-} from "./message-normalizer.ts";
+import { normalizeMessage } from "./message-normalizer.ts";
+
+const SENDER_METADATA_BLOCK =
+  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
 
 describe("message-normalizer", () => {
   describe("normalizeMessage", () => {
@@ -31,6 +31,24 @@ describe("message-normalizer", () => {
         id: "msg-1",
         senderLabel: null,
       });
+    });
+
+    it("strips sender metadata blocks before displaying message text", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `${SENDER_METADATA_BLOCK}\n\nVisible reply`,
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "Visible reply" }]);
+    });
+
+    it("drops standalone sender metadata blocks before display", () => {
+      const result = normalizeMessage({
+        role: "system",
+        content: SENDER_METADATA_BLOCK,
+      });
+
+      expect(result.content).toStrictEqual([]);
     });
 
     it("does not reinterpret directive-like user string content", () => {
@@ -70,6 +88,83 @@ describe("message-normalizer", () => {
         name: "bash",
         args: { command: "ls" },
       });
+    });
+
+    it("normalizes structured base64 audio content blocks as renderable attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            label: "tts.mp3",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
+              data: "//uQAA==",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "data:audio/mpeg;base64,//uQAA==",
+            kind: "audio",
+            label: "tts.mp3",
+            mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
+    it("normalizes structured URL audio content blocks as renderable attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            label: "clip.mp3",
+            source: {
+              type: "url",
+              media_type: "audio/mpeg",
+              url: "/tmp/openclaw/clip.mp3",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/clip.mp3",
+            kind: "audio",
+            label: "clip.mp3",
+            mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
+    it("does not normalize non-assistant structured audio blocks as attachments", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [
+          {
+            type: "audio",
+            label: "upload.mp3",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
+              data: "//uQAA==",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([]);
     });
 
     it("does not reinterpret directive-like user text blocks inside array content", () => {
@@ -245,13 +340,23 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("does not fall back to raw text when an invalid MEDIA line is stripped", () => {
+    it("keeps home-relative MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",
         content: "MEDIA:~/Pictures/My File.png",
       });
 
-      expect(result.content).toEqual([]);
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "~/Pictures/My File.png",
+            kind: "image",
+            label: "My File.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
     });
 
     it("preserves relative MEDIA references as visible text instead of dropping the assistant turn", () => {
@@ -280,7 +385,7 @@ describe("message-normalizer", () => {
       });
 
       expect(result.replyTarget).toEqual({ kind: "current" });
-      expect(result.content).toEqual([]);
+      expect(result.content).toStrictEqual([]);
     });
 
     it("preserves structured attachment content items", () => {
@@ -354,7 +459,7 @@ describe("message-normalizer", () => {
 
     it("handles missing content", () => {
       const result = normalizeMessage({ role: "user" });
-      expect(result.content).toEqual([]);
+      expect(result.content).toStrictEqual([]);
     });
 
     it("uses current timestamp when not provided", () => {
@@ -383,76 +488,11 @@ describe("message-normalizer", () => {
     it("preserves top-level sender labels", () => {
       const result = normalizeMessage({
         role: "user",
-        content: "Hello from Telegram",
+        content: "Hello from QuietChat",
         senderLabel: "Iris",
       });
 
       expect(result.senderLabel).toBe("Iris");
-    });
-  });
-
-  describe("normalizeRoleForGrouping", () => {
-    it("returns tool for toolresult", () => {
-      expect(normalizeRoleForGrouping("toolresult")).toBe("tool");
-      expect(normalizeRoleForGrouping("toolResult")).toBe("tool");
-      expect(normalizeRoleForGrouping("TOOLRESULT")).toBe("tool");
-    });
-
-    it("returns tool for tool_result", () => {
-      expect(normalizeRoleForGrouping("tool_result")).toBe("tool");
-      expect(normalizeRoleForGrouping("TOOL_RESULT")).toBe("tool");
-    });
-
-    it("returns tool for tool", () => {
-      expect(normalizeRoleForGrouping("tool")).toBe("tool");
-      expect(normalizeRoleForGrouping("Tool")).toBe("tool");
-    });
-
-    it("returns tool for function", () => {
-      expect(normalizeRoleForGrouping("function")).toBe("tool");
-      expect(normalizeRoleForGrouping("Function")).toBe("tool");
-    });
-
-    it("preserves user role", () => {
-      expect(normalizeRoleForGrouping("user")).toBe("user");
-      expect(normalizeRoleForGrouping("User")).toBe("User");
-    });
-
-    it("preserves assistant role", () => {
-      expect(normalizeRoleForGrouping("assistant")).toBe("assistant");
-    });
-
-    it("preserves system role", () => {
-      expect(normalizeRoleForGrouping("system")).toBe("system");
-    });
-  });
-
-  describe("isToolResultMessage", () => {
-    it("returns true for toolresult role", () => {
-      expect(isToolResultMessage({ role: "toolresult" })).toBe(true);
-      expect(isToolResultMessage({ role: "toolResult" })).toBe(true);
-      expect(isToolResultMessage({ role: "TOOLRESULT" })).toBe(true);
-    });
-
-    it("returns true for tool_result role", () => {
-      expect(isToolResultMessage({ role: "tool_result" })).toBe(true);
-      expect(isToolResultMessage({ role: "TOOL_RESULT" })).toBe(true);
-    });
-
-    it("returns false for other roles", () => {
-      expect(isToolResultMessage({ role: "user" })).toBe(false);
-      expect(isToolResultMessage({ role: "assistant" })).toBe(false);
-      expect(isToolResultMessage({ role: "tool" })).toBe(false);
-    });
-
-    it("returns false for missing role", () => {
-      expect(isToolResultMessage({})).toBe(false);
-      expect(isToolResultMessage({ content: "test" })).toBe(false);
-    });
-
-    it("returns false for non-string role", () => {
-      expect(isToolResultMessage({ role: 123 })).toBe(false);
-      expect(isToolResultMessage({ role: null })).toBe(false);
     });
   });
 });

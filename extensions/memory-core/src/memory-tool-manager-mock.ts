@@ -1,7 +1,8 @@
+// Memory Core plugin module implements memory tool manager mock behavior.
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 
-export type SearchImpl = (opts?: {
+type SearchImpl = (opts?: {
   maxResults?: number;
   minScore?: number;
   sessionKey?: string;
@@ -9,16 +10,31 @@ export type SearchImpl = (opts?: {
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
-export type MemoryReadResult = { text: string; path: string };
+type MemoryReadResult = {
+  text: string;
+  path: string;
+  truncated?: boolean;
+  from?: number;
+  lines?: number;
+  nextFrom?: number;
+};
 type MemoryBackend = "builtin" | "qmd";
 
 let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
+let getManagerImpl:
+  | ((params: { cfg?: unknown; agentId?: string }) => Promise<{
+      manager?: unknown;
+      error?: string;
+    }>)
+  | undefined;
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
   text: "",
   path: params.relPath,
+  from: params.from ?? 1,
+  lines: params.lines ?? 120,
 });
 
 const stubManager = {
@@ -43,7 +59,9 @@ const stubManager = {
   close: vi.fn(),
 };
 
-const getMemorySearchManagerMock = vi.fn(async () => ({ manager: stubManager }));
+const getMemorySearchManagerMock = vi.fn(async (params: { cfg?: unknown; agentId?: string }) =>
+  getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
+);
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
@@ -69,12 +87,21 @@ export function setMemoryWorkspaceDir(next: string): void {
   workspaceDir = next;
 }
 
-export function setMemoryStatusCustom(next: Record<string, unknown> | undefined): void {
+export function setMemoryCustomStatus(next: Record<string, unknown> | undefined): void {
   customStatus = next;
 }
 
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
+}
+
+export function setMemorySearchManagerImpl(
+  next: (params: { cfg?: unknown; agentId?: string }) => Promise<{
+    manager?: unknown;
+    error?: string;
+  }>,
+): void {
+  getManagerImpl = next;
 }
 
 export function setMemoryReadFileImpl(
@@ -91,15 +118,33 @@ export function resetMemoryToolMockState(overrides?: {
   backend = overrides?.backend ?? "builtin";
   workspaceDir = "/workspace";
   customStatus = undefined;
+  getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
   readFileImpl =
     overrides?.readFileImpl ??
-    (async (params: MemoryReadParams) => ({ text: "", path: params.relPath }));
+    (async (params: MemoryReadParams) => ({
+      text: "",
+      path: params.relPath,
+      from: params.from ?? 1,
+      lines: params.lines ?? 120,
+    }));
   vi.clearAllMocks();
 }
 
 export function getMemorySearchManagerMockCalls(): number {
   return getMemorySearchManagerMock.mock.calls.length;
+}
+
+export function getMemorySyncMockCalls(): number {
+  return stubManager.sync.mock.calls.length;
+}
+
+export function getMemorySearchManagerMockConfigs(): unknown[] {
+  return getMemorySearchManagerMock.mock.calls.map(([params]) => params.cfg);
+}
+
+export function getMemorySearchManagerMockParams(): Array<{ cfg?: unknown; agentId?: string }> {
+  return getMemorySearchManagerMock.mock.calls.map(([params]) => params);
 }
 
 export function getReadAgentMemoryFileMockCalls(): number {

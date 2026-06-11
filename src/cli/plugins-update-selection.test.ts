@@ -1,3 +1,4 @@
+// Plugin update selection tests cover CLI plugin update target selection.
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginUpdateSelection } from "./plugins-update-selection.js";
@@ -90,6 +91,26 @@ describe("resolvePluginUpdateSelection", () => {
       }),
     ).toEqual({
       pluginIds: ["openclaw-codex-app-server"],
+    });
+  });
+
+  it("maps a bare scoped npm package update to the tracked plugin id", () => {
+    expect(
+      resolvePluginUpdateSelection({
+        installs: {
+          "lossless-claw": createNpmInstall({
+            spec: "@martian-engineering/lossless-claw@0.9.0",
+            installPath: "/tmp/lossless-claw",
+            resolvedName: "@martian-engineering/lossless-claw",
+          }),
+        },
+        rawId: "@martian-engineering/lossless-claw",
+      }),
+    ).toEqual({
+      pluginIds: ["lossless-claw"],
+      specOverrides: {
+        "lossless-claw": "@martian-engineering/lossless-claw",
+      },
     });
   });
 });

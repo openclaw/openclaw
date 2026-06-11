@@ -1,10 +1,16 @@
+// Check Codex App Server Protocol script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  generateExperimentalCodexAppServerProtocolSource,
+  normalizeCodexAppServerProtocolJsonText,
+  selectedCodexAppServerJsonSchemas,
+} from "./lib/codex-app-server-protocol-source.js";
 
-const codexRepo = process.env.OPENCLAW_CODEX_REPO
-  ? path.resolve(process.env.OPENCLAW_CODEX_REPO)
-  : path.resolve(process.cwd(), "../codex");
-const schemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema/typescript");
+const generatedRoot = path.resolve(
+  process.cwd(),
+  "extensions/codex/src/app-server/protocol-generated",
+);
 
 const checks: Array<{ file: string; snippets: string[] }> = [
   {
@@ -19,10 +25,10 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadItem.ts",
     snippets: [
-      '"type": "contextCompaction"',
-      '"type": "dynamicToolCall"',
-      '"type": "commandExecution"',
-      '"type": "mcpToolCall"',
+      'type: "contextCompaction"',
+      'type: "dynamicToolCall"',
+      'type: "commandExecution"',
+      'type: "mcpToolCall"',
     ],
   },
   {
@@ -32,6 +38,22 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/CommandExecutionApprovalDecision.ts",
     snippets: ['"accept"', '"acceptForSession"', '"decline"', '"cancel"'],
+  },
+  {
+    file: "v2/Account.ts",
+    snippets: ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"'],
+  },
+  {
+    file: "v2/ThreadStartParams.ts",
+    snippets: [
+      "permissions?: string | null",
+      "dynamicTools?: Array<DynamicToolSpec> | null",
+      "experimentalRawEvents",
+    ],
+  },
+  {
+    file: "v2/TurnStartParams.ts",
+    snippets: ["permissions?: string | null", "serviceTier?: string | null"],
   },
   {
     file: "ReviewDecision.ts",
@@ -48,31 +70,78 @@ const checks: Array<{ file: string; snippets: string[] }> = [
 ];
 
 const failures: string[] = [];
+await main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
 
-for (const check of checks) {
-  const filePath = path.join(schemaRoot, check.file);
-  let text: string;
+async function main(): Promise<void> {
+  const source = await generateExperimentalCodexAppServerProtocolSource();
+
   try {
-    text = await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    failures.push(`${check.file}: missing (${String(error)})`);
-    continue;
+    await compareGeneratedProtocolMirror(source.jsonRoot);
+
+    for (const check of checks) {
+      const filePath = path.join(source.typescriptRoot, check.file);
+      let text: string;
+      try {
+        text = await fs.readFile(filePath, "utf8");
+      } catch (error) {
+        failures.push(`${check.file}: missing (${String(error)})`);
+        continue;
+      }
+      for (const snippet of check.snippets) {
+        if (!text.includes(snippet)) {
+          failures.push(`${check.file}: missing ${snippet}`);
+        }
+      }
+    }
+  } finally {
+    await source.cleanup();
   }
-  for (const snippet of check.snippets) {
-    if (!text.includes(snippet)) {
-      failures.push(`${check.file}: missing ${snippet}`);
+
+  if (failures.length > 0) {
+    console.error("Codex app-server generated protocol drift:");
+    for (const failure of failures) {
+      console.error(`- ${failure}`);
+    }
+    console.error(
+      `Run \`pnpm codex-app-server:protocol:sync\` after refreshing the Codex checkout at ${source.codexRepo}.`,
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,
+  );
+}
+
+async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<void> {
+  for (const schema of selectedCodexAppServerJsonSchemas) {
+    const sourcePath = path.join(sourceJsonRoot, schema);
+    const targetPath = path.join(generatedRoot, "json", schema);
+    let sourceValue: string;
+    let target: string;
+    try {
+      sourceValue = await fs.readFile(sourcePath, "utf8");
+    } catch (error) {
+      failures.push(
+        `protocol-generated/json/${schema}: missing upstream schema (${String(error)})`,
+      );
+      continue;
+    }
+    try {
+      target = await fs.readFile(targetPath, "utf8");
+    } catch (error) {
+      failures.push(`protocol-generated/json/${schema}: missing local schema (${String(error)})`);
+      continue;
+    }
+    if (normalizeJsonSchema(sourceValue) !== normalizeJsonSchema(target)) {
+      failures.push(`protocol-generated/json/${schema}: differs from source schema`);
     }
   }
 }
 
-if (failures.length > 0) {
-  console.error("Codex app-server generated protocol drift:");
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
-  }
-  process.exit(1);
+function normalizeJsonSchema(sourceLocal: string): string {
+  return normalizeCodexAppServerProtocolJsonText(sourceLocal);
 }
-
-console.log(
-  `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${schemaRoot}`,
-);

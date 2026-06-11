@@ -1,4 +1,6 @@
-import type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
+/**
+ * Public SDK subpath for runtime logging, env, backup, and process helpers.
+ */
 export type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 export { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
 export { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -29,5 +31,8 @@ export {
   formatPluginInstallPathIssue,
 } from "../infra/plugin-install-path-warnings.js";
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
-export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+export {
+  registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
+} from "../infra/unhandled-rejections.js";
 export { removePluginFromConfig } from "../plugins/uninstall.js";

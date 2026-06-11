@@ -1,4 +1,7 @@
+// Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
@@ -6,9 +9,8 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
-import { MODEL_APIS } from "./types.models.js";
+import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -19,6 +21,8 @@ const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
 function isAbsolutePath(value: string): boolean {
+  // `path.isAbsolute` follows the host OS, but config files can be authored for Windows from
+  // macOS/Linux. Accept Windows forms explicitly so cross-platform config validation stays stable.
   return (
     path.isAbsolute(value) ||
     WINDOWS_ABS_PATH_PATTERN.test(value) ||
@@ -75,12 +79,14 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+/** Config-level secret reference schema shared by model/provider/plugin credential fields. */
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
 ]);
 
+/** Accepts either legacy inline secret strings or structured secret references. */
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
 const SecretsEnvProviderSchema = z
@@ -102,10 +108,11 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
+    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 
-const SecretsExecProviderSchema = z
+const SecretsManualExecProviderSchema = z
   .object({
     source: z.literal("exec"),
     command: z
@@ -142,17 +149,36 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
-export const SecretProviderSchema = z.discriminatedUnion("source", [
+const SecretsPluginIntegrationExecProviderSchema = z
+  .object({
+    source: z.literal("exec"),
+    pluginIntegration: z
+      .object({
+        pluginId: z.string().min(1).max(128),
+        integrationId: z.string().min(1).max(128),
+      })
+      .strict(),
+  })
+  .strict();
+
+const SecretsExecProviderSchema = z.union([
+  SecretsManualExecProviderSchema,
+  SecretsPluginIntegrationExecProviderSchema,
+]);
+
+/** Schema for one configured env/file/exec secret provider entry. */
+export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
 ]);
 
+/** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
     providers: z
       .object({
-        // Keep this as a record so users can define multiple providers per source.
+        // Keep this as a record so users can define multiple named providers per source.
       })
       .catchall(SecretProviderSchema)
       .optional(),
@@ -181,32 +207,30 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-export const ModelApiSchema = z.enum(MODEL_APIS);
+const ModelApiSchema = z.enum(MODEL_APIS);
 
-export const ModelCompatSchema = z
+const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
+    supportsPromptCacheKey: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    strictMessageKeys: z.boolean().optional(),
+    visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
+    supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
+    reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
-    thinkingFormat: z
-      .union([
-        z.literal("openai"),
-        z.literal("openrouter"),
-        z.literal("zai"),
-        z.literal("qwen"),
-        z.literal("qwen-chat-template"),
-      ])
-      .optional(),
+    thinkingFormat: z.enum(MODEL_THINKING_FORMATS).optional(),
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
@@ -218,11 +242,11 @@ export const ModelCompatSchema = z
   .optional();
 
 type AssertAssignable<_T extends U, U> = true;
-type _ModelCompatSchemaAssignableToType = AssertAssignable<
+export type _ModelCompatSchemaAssignableToType = AssertAssignable<
   z.infer<typeof ModelCompatSchema>,
   ModelCompatConfig | undefined
 >;
-type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+export type _ModelCompatTypeAssignableToSchema = AssertAssignable<
   ModelCompatConfig | undefined,
   z.infer<typeof ModelCompatSchema>
 >;
@@ -301,54 +325,226 @@ const ConfiguredModelProviderRequestSchema = z
   .strict()
   .optional();
 
-export const ModelDefinitionSchema = z
+const ModelAgentRuntimePolicySchema = z
+  .object({
+    id: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const ModelImageInputSchema = z
+  .object({
+    maxBytes: z.number().int().positive().optional(),
+    maxPixels: z.number().int().positive().optional(),
+    maxSidePx: z.number().int().positive().optional(),
+    preferredSidePx: z.number().int().positive().optional(),
+    tokenMode: z.union([z.literal("tile"), z.literal("detail"), z.literal("provider")]).optional(),
+  })
+  .strict();
+
+const ModelMediaInputSchema = z
+  .object({
+    image: ModelImageInputSchema.optional(),
+  })
+  .strict();
+
+// Mirrors the runtime ThinkingLevelMap contract (model-registry TypeBox schema). Persisted model
+// entries carry thinkingLevelMap, so the strict config schema must accept it or updateConfig rolls back.
+const ThinkingLevelMapValueSchema = z.string().nullable();
+const ThinkingLevelMapSchema = z
+  .object({
+    off: ThinkingLevelMapValueSchema.optional(),
+    minimal: ThinkingLevelMapValueSchema.optional(),
+    low: ThinkingLevelMapValueSchema.optional(),
+    medium: ThinkingLevelMapValueSchema.optional(),
+    high: ThinkingLevelMapValueSchema.optional(),
+    xhigh: ThinkingLevelMapValueSchema.optional(),
+    max: ThinkingLevelMapValueSchema.optional(),
+  })
+  .strict();
+
+const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
+    baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
+    input: z
+      .array(
+        z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]),
+      )
+      .optional(),
     cost: z
       .object({
         input: z.number().optional(),
         output: z.number().optional(),
         cacheRead: z.number().optional(),
         cacheWrite: z.number().optional(),
+        tieredPricing: z
+          .array(
+            z
+              .object({
+                input: z.number(),
+                output: z.number(),
+                cacheRead: z.number(),
+                cacheWrite: z.number(),
+                range: z.union([z.tuple([z.number(), z.number()]), z.tuple([z.number()])]),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),
     contextWindow: z.number().positive().optional(),
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
+    thinkingLevelMap: ThinkingLevelMapSchema.optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    mediaInput: ModelMediaInputSchema.optional(),
+    metadataSource: z.literal("models-add").optional(),
   })
   .strict();
 
-export const ModelProviderSchema = z
+const ModelProviderLocalServiceSchema = z
   .object({
-    baseUrl: z.string().min(1),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    cwd: z.string().min(1).optional(),
+    env: z.record(z.string(), z.string().register(sensitive)).optional(),
+    healthUrl: z.string().min(1).optional(),
+    readyTimeoutMs: z.number().int().positive().optional(),
+    idleStopMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
+const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
+  "amazon-bedrock",
+  "amazon-bedrock-mantle",
+  "anthropic",
+  "anthropic-vertex",
+  "arcee",
+  "byteplus",
+  "byteplus-plan",
+  "cerebras",
+  "chutes",
+  "cloudflare-ai-gateway",
+  "codex",
+  "comfy",
+  "copilot-proxy",
+  "dashscope",
+  "deepinfra",
+  "deepseek",
+  "fal",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "google-antigravity",
+  "google-gemini-cli",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kilocode",
+  "kimi",
+  "kimi-coding",
+  "litellm",
+  "lmstudio",
+  "microsoft-foundry",
+  "minimax",
+  "minimax-portal",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
+  "ollama",
+  "openai",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qianfan",
+  "qwen",
+  "qwencloud",
+  "sglang",
+  "stepfun",
+  "stepfun-plan",
+  "synthetic",
+  "tencent-tokenhub",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "volcengine-plan",
+  "vydra",
+  "xai",
+  "xiaomi",
+  "xiaomi-token-plan",
+  "zai",
+]);
+
+export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
+  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
+}
+
+const ModelProviderSchema = z
+  .object({
+    baseUrl: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    contextWindow: z.number().positive().optional(),
+    contextTokens: z.number().int().positive().optional(),
+    maxTokens: z.number().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    region: z.string().min(1).optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
+    localService: ModelProviderLocalServiceSchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
-    models: z.array(ModelDefinitionSchema),
+    models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();
 
-export const BedrockDiscoverySchema = z
+const ModelProvidersSchema = z
+  .record(z.string(), ModelProviderSchema)
+  .superRefine((providers, ctx) => {
+    for (const [providerId, provider] of Object.entries(providers)) {
+      if (isBuiltInModelProviderOverlayId(providerId)) {
+        continue;
+      }
+      if (!provider.baseUrl) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "baseUrl"],
+          message:
+            "custom model providers must declare baseUrl; provider overlays without baseUrl are only supported for bundled providers",
+        });
+      }
+      if (!Array.isArray(provider.models)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "models"],
+          message:
+            "custom model providers must declare models; provider overlays without models are only supported for bundled providers",
+        });
+      }
+    }
+  });
+
+const ModelPricingConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    region: z.string().optional(),
-    providerFilter: z.array(z.string()).optional(),
-    refreshInterval: z.number().int().nonnegative().optional(),
-    defaultContextWindow: z.number().int().positive().optional(),
-    defaultMaxTokens: z.number().int().positive().optional(),
   })
   .strict()
   .optional();
@@ -356,15 +552,43 @@ export const BedrockDiscoverySchema = z
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
-    providers: z.record(z.string(), ModelProviderSchema).optional(),
+    providers: ModelProvidersSchema.optional(),
+    pricing: ModelPricingConfigSchema,
   })
   .strict()
   .optional();
+
+const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
+const AmbientGroupInboundSchema = z.enum(["user_request", "room_event"]);
+
+export const VisibleRepliesSchema = z
+  .union([VisibleRepliesValueSchema, z.boolean()])
+  .overwrite((value) => {
+    if (value === true) {
+      return "automatic";
+    }
+    if (value === false) {
+      return "message_tool";
+    }
+    return value;
+  });
+
+export const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
+
+export const MentionPatternsPolicySchema = z
+  .object({
+    mode: MentionPatternsModeSchema.optional(),
+    allowIn: z.array(z.string()).optional(),
+    denyIn: z.array(z.string()).optional(),
+  })
+  .strict();
 
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
+    unmentionedInbound: AmbientGroupInboundSchema.optional(),
+    visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()
   .optional();
@@ -385,20 +609,13 @@ export const IdentitySchema = z
   .strict()
   .optional();
 
-export const QueueModeSchema = z.union([
+const QueueModeSchema = z.union([
   z.literal("steer"),
   z.literal("followup"),
   z.literal("collect"),
-  z.literal("steer-backlog"),
-  z.literal("steer+backlog"),
-  z.literal("queue"),
   z.literal("interrupt"),
 ]);
-export const QueueDropSchema = z.union([
-  z.literal("old"),
-  z.literal("new"),
-  z.literal("summarize"),
-]);
+const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);
 export const ReplyToModeSchema = z.union([
   z.literal("off"),
   z.literal("first"),
@@ -478,12 +695,37 @@ const TtsProviderConfigSchema = z
       z.record(z.string(), z.unknown()),
     ]),
   );
+const TtsPersonaPromptSchema = z
+  .object({
+    profile: z.string().optional(),
+    scene: z.string().optional(),
+    sampleContext: z.string().optional(),
+    style: z.string().optional(),
+    accent: z.string().optional(),
+    pacing: z.string().optional(),
+    constraints: z.array(z.string()).optional(),
+  })
+  .strict();
+const TtsPersonaSchema = z
+  .object({
+    label: z.string().optional(),
+    description: z.string().optional(),
+    provider: TtsProviderSchema.optional(),
+    fallbackPolicy: z
+      .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
+      .optional(),
+    prompt: TtsPersonaPromptSchema.optional(),
+    providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
+  })
+  .strict();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
     enabled: z.boolean().optional(),
     mode: TtsModeSchema.optional(),
     provider: TtsProviderSchema.optional(),
+    persona: z.string().optional(),
+    personas: z.record(z.string(), TtsPersonaSchema).optional(),
     summaryModel: z.string().optional(),
     modelOverrides: z
       .object({
@@ -524,6 +766,19 @@ const CliBackendWatchdogModeSchema = z
   .strict()
   .optional();
 
+const CliBackendOutputLimitsSchema = z
+  .object({
+    maxTurnRawChars: z
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024)
+      .optional(),
+    maxTurnLines: z.number().int().min(100).max(100_000).optional(),
+  })
+  .strict()
+  .optional();
+
 export const CliBackendSchema = z
   .object({
     command: z.string(),
@@ -531,6 +786,7 @@ export const CliBackendSchema = z
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     jsonlDialect: z.literal("claude-stream-json").optional(),
+    liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),
@@ -545,6 +801,7 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileArg: z.string().optional(),
     systemPromptFileConfigArg: z.string().optional(),
     systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
@@ -555,8 +812,10 @@ export const CliBackendSchema = z
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
     imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
+    reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
     reliability: z
       .object({
+        outputLimits: CliBackendOutputLimitsSchema,
         watchdog: z
           .object({
             fresh: CliBackendWatchdogModeSchema,
@@ -632,25 +891,25 @@ export const RetryConfigSchema = z
   .strict()
   .optional();
 
-export const QueueModeBySurfaceSchema = z
+const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
     irc: QueueModeSchema.optional(),
+    googlechat: QueueModeSchema.optional(),
     slack: QueueModeSchema.optional(),
     mattermost: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
     imessage: QueueModeSchema.optional(),
     msteams: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
+    matrix: QueueModeSchema.optional(),
   })
   .strict()
   .optional();
 
-export const DebounceMsBySurfaceSchema = z
-  .record(z.string(), z.number().int().nonnegative())
-  .optional();
+const DebounceMsBySurfaceSchema = z.record(z.string(), z.number().int().nonnegative()).optional();
 
 export const QueueSchema = z
   .object({
@@ -695,13 +954,13 @@ export const ExecutableTokenSchema = z
   .string()
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
-export const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
+const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
 
-export const MediaUnderstandingCapabilitiesSchema = z
+const MediaUnderstandingCapabilitiesSchema = z
   .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
   .optional();
 
-export const MediaUnderstandingAttachmentsSchema = z
+const MediaUnderstandingAttachmentsSchema = z
   .object({
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
     maxAttachments: z.number().int().positive().optional(),
@@ -737,7 +996,7 @@ const MediaUnderstandingRuntimeFields = {
   request: ConfiguredProviderRequestSchema,
 };
 
-export const MediaUnderstandingModelSchema = z
+const MediaUnderstandingModelSchema = z
   .object({
     provider: z.string().optional(),
     model: z.string().optional(),
@@ -754,7 +1013,7 @@ export const MediaUnderstandingModelSchema = z
   .strict()
   .optional();
 
-export const ToolsMediaUnderstandingSchema = z
+const ToolsMediaUnderstandingSchema = z
   .object({
     enabled: z.boolean().optional(),
     scope: MediaUnderstandingScopeSchema,
@@ -787,16 +1046,16 @@ export const ToolsMediaSchema = z
   .optional();
 
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
+export type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
   ToolsMediaConfigFromSchema["asyncCompletion"],
   MediaToolsConfig["asyncCompletion"]
 >;
-type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
+export type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
   MediaToolsConfig["asyncCompletion"],
   ToolsMediaConfigFromSchema["asyncCompletion"]
 >;
 
-export const LinkModelSchema = z
+const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),
     command: z.string().min(1),

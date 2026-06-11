@@ -1,3 +1,4 @@
+// Irc plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -33,6 +34,7 @@ import {
 import { IrcChannelConfigSchema } from "./config-schema.js";
 import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
 import { startIrcGatewayAccount } from "./gateway.js";
+import { ircMessageAdapter } from "./message-adapter.js";
 import {
   isChannelTarget,
   looksLikeIrcTargetId,
@@ -233,12 +235,14 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       },
     },
     messaging: {
+      targetPrefixes: ["irc"],
       normalizeTarget: normalizeIrcMessagingTarget,
       targetResolver: {
         looksLikeId: looksLikeIrcTargetId,
         hint: "<#channel|nick>",
       },
     },
+    message: ircMessageAdapter,
     resolver: {
       resolveTargets: async ({ inputs, kind }) => {
         return inputs.map((input) => {
@@ -279,7 +283,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       listPeers: async (params) => listIrcDirectoryPeersFromConfig(params),
       listGroups: async (params) => {
         const entries = await listIrcDirectoryGroupsFromConfig(params);
-        return entries.map((entry) => ({ ...entry, name: entry.id }));
+        return entries.map((entry) => Object.assign({}, entry, { name: entry.id }));
       },
     }),
     status: createComputedAccountStatusAdapter<ResolvedIrcAccount, IrcProbe>({
@@ -322,13 +326,15 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       idLabel: "ircUser",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
-      notify: async ({ id, message }) => {
+      notify: async ({ cfg, id, message }) => {
         const target = normalizePairingTarget(id);
         if (!target) {
           throw new Error(`invalid IRC pairing id: ${id}`);
         }
         const { sendMessageIrc } = await loadIrcChannelRuntime();
-        await sendMessageIrc(target, message);
+        await sendMessageIrc(target, message, {
+          cfg: cfg as CoreConfig,
+        });
       },
     },
   },

@@ -1,13 +1,24 @@
+// Control UI module implements app settings behavior.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
+  startNodesPolling,
   stopLogsPolling,
+  stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  beginControlUiRefresh,
+  controlUiNowMs,
+  finishControlUiRefresh,
+  recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
+  scheduleControlUiTabVisibleTiming,
+} from "./control-ui-performance.ts";
 import { loadAgentFiles, type AgentFilesState } from "./controllers/agent-files.ts";
 import {
   loadAgentIdentities,
@@ -42,8 +53,15 @@ import {
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
+import {
+  loadSkillWorkshopProposals,
+  type SkillWorkshopState,
+} from "./controllers/skill-workshop.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { loadWorkboard } from "./controllers/workboard.ts";
+import { resolveCronJobLastRunStatus } from "./cron-status.ts";
+import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
   inferBasePathFromPathname,
@@ -53,17 +71,27 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
-import { saveSettings, type UiSettings } from "./storage.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import {
+  normalizeTextScale,
+  saveLocalUserIdentity,
+  saveSettings,
+  type LocalUserIdentity,
+  type UiSettings,
+} from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
+import { normalizeLocalUserIdentity } from "./user-identity.ts";
 import { resetChatViewState } from "./views/chat.ts";
 
 export { setLastActiveSessionKey } from "./app-last-active-session.ts";
 
 type SettingsHost = {
   settings: UiSettings;
+  userName?: string | null;
+  userAvatar?: string | null;
   password?: string;
   theme: ThemeName;
   themeMode: ThemeMode;
@@ -78,11 +106,19 @@ type SettingsHost = {
   eventLogBuffer: unknown[];
   basePath: string;
   agentsList?: AgentsListResult | null;
+  selectedAgentId?: string | null;
   agentsSelectedId?: string | null;
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
+  requestUpdate?: () => void;
+  updateComplete?: Promise<unknown>;
+  controlUiRefreshSeq?: number;
+  controlUiTabPaintSeq?: number;
+  controlUiOverviewRefreshSeq?: number;
+  controlUiCronRefreshSeq?: number;
+  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -92,6 +128,17 @@ type SettingsHost = {
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
 };
+
+type LocalUserIdentityHost = {
+  userName?: string | null;
+  userAvatar?: string | null;
+};
+
+function resolveDreamingAgentIdForSession(host: SettingsHost): string {
+  return normalizeAgentId(
+    parseAgentSessionKey(host.sessionKey)?.agentId ?? host.agentsList?.defaultId ?? "main",
+  );
+}
 
 type SettingsAppHost = SettingsHost &
   AgentFilesState &
@@ -110,6 +157,7 @@ type SettingsAppHost = SettingsHost &
   PresenceState &
   SessionsState &
   SkillsState &
+  SkillWorkshopState &
   ModelAuthStatusState &
   UsageState & {
     overviewLogCursor: number | null;
@@ -121,6 +169,7 @@ type SettingsAppHost = SettingsHost &
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
+    textScale: normalizeTextScale(next.textScale),
     lastActiveSessionKey:
       normalizeOptionalString(next.lastActiveSessionKey) ??
       normalizeOptionalString(next.sessionKey) ??
@@ -128,13 +177,29 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   };
   host.settings = normalized;
   saveSettings(normalized);
+  syncCustomThemeStyleTag(normalized.customTheme);
   if (next.theme !== host.theme || next.themeMode !== host.themeMode) {
     host.theme = next.theme;
     host.themeMode = next.themeMode;
     applyResolvedTheme(host, resolveTheme(next.theme, next.themeMode));
   }
-  applyBorderRadius(next.borderRadius);
+  applyBorderRadius(normalized.borderRadius);
+  applyTextScale(normalized.textScale);
   host.applySessionKey = host.settings.lastActiveSessionKey;
+}
+
+export function applyLocalUserIdentity(
+  host: LocalUserIdentityHost,
+  next: Partial<LocalUserIdentity>,
+) {
+  const normalized = normalizeLocalUserIdentity({
+    name: host.userName,
+    avatar: host.userAvatar,
+    ...next,
+  });
+  host.userName = normalized.name;
+  host.userAvatar = normalized.avatar;
+  saveLocalUserIdentity(normalized);
 }
 
 function applySessionSelection(host: SettingsHost, session: string) {
@@ -149,7 +214,45 @@ function applySessionSelection(host: SettingsHost, session: string) {
 /** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
 export let warnQueryToken = false;
 
+declare global {
+  interface Window {
+    __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
+      gatewayUrl?: string | null;
+      token?: string | null;
+      password?: string | null;
+    };
+  }
+}
+
+function applyNativeControlAuth(host: SettingsHost) {
+  const nativeAuth = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+  if (!nativeAuth) {
+    return;
+  }
+  try {
+    delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+  } catch {
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = undefined;
+  }
+
+  const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
+  const token = normalizeOptionalString(nativeAuth.token);
+  const password = normalizeOptionalString(nativeAuth.password);
+  const nextSettings = {
+    ...host.settings,
+    ...(gatewayUrl ? { gatewayUrl } : {}),
+    ...(token ? { token } : {}),
+  };
+  if (gatewayUrl || (token && token !== host.settings.token)) {
+    applySettings(host, nextSettings);
+  }
+  if (password && password !== host.password) {
+    host.password = password;
+  }
+}
+
 export function applySettingsFromUrl(host: SettingsHost) {
+  applyNativeControlAuth(host);
   if (!window.location.search && !window.location.hash) {
     return;
   }
@@ -295,77 +398,128 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
       return;
     case "cron":
       void loadCron(host);
-      return;
+    case "overview":
+    case "tools":
+    case undefined:
   }
 }
 
-export async function refreshActiveTab(host: SettingsHost) {
+function loadConfigSchemaAfterPrimary(
+  host: SettingsHost,
+  app: SettingsAppHost,
+  primaryRefresh: Promise<unknown>,
+) {
+  void primaryRefresh.then(
+    () => {
+      void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+    },
+    () => undefined,
+  );
+}
+
+export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?: boolean }) {
   const app = host as unknown as SettingsAppHost;
-  switch (host.tab) {
-    case "config":
-    case "communications":
-    case "appearance":
-    case "automation":
-    case "infrastructure":
-    case "aiAgents":
-      await loadConfigSchema(app);
-      await loadConfig(app);
-      return;
-    case "overview":
-      await loadOverview(host);
-      return;
-    case "channels":
-      await loadChannelsTab(host);
-      return;
-    case "instances":
-      await loadPresence(app);
-      return;
-    case "usage":
-      await loadUsage(app);
-      return;
-    case "sessions":
-      await loadSessions(app);
-      return;
-    case "cron":
-      await loadCron(host);
-      return;
-    case "skills":
-      await loadSkills(app);
-      return;
-    case "agents":
-      await refreshAgentsTab(host, app);
-      return;
-    case "nodes":
-      await loadNodes(app);
-      await loadDevices(app);
-      await loadConfig(app);
-      await loadExecApprovals(app);
-      return;
-    case "dreams":
-      await loadConfig(app);
-      await Promise.all([
-        loadDreamingStatus(app),
-        loadDreamDiary(app),
-        loadWikiImportInsights(app),
-        loadWikiMemoryPalace(app),
-      ]);
-      return;
-    case "chat":
-      await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
-      scheduleChatScroll(
-        host as unknown as Parameters<typeof scheduleChatScroll>[0],
-        !host.chatHasAutoScrolled,
-      );
-      return;
-    case "debug":
-      await loadDebug(app);
-      host.eventLog = host.eventLogBuffer;
-      return;
-    case "logs":
-      host.logsAtBottom = true;
-      await loadLogs(app, { reset: true });
-      scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
-      return;
+  const refreshRun = beginControlUiRefresh(host, host.tab);
+  try {
+    switch (host.tab) {
+      case "config":
+      case "communications":
+      case "appearance":
+      case "automation":
+      case "mcp":
+      case "infrastructure":
+      case "aiAgents":
+        {
+          const primaryRefresh = loadConfig(app);
+          loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
+          await primaryRefresh;
+        }
+        break;
+      case "overview":
+        await loadOverview(host);
+        break;
+      case "activity":
+        break;
+      case "workboard":
+        await Promise.all([
+          loadConfig(app),
+          loadSessions(app),
+          loadAgents(app),
+          loadWorkboard({
+            host,
+            client: app.client,
+            force: true,
+            requestUpdate: host.requestUpdate,
+          }),
+        ]);
+        break;
+      case "channels":
+        await loadChannelsTab(host);
+        break;
+      case "instances":
+        await loadPresence(app);
+        break;
+      case "usage":
+        await loadUsage(app);
+        break;
+      case "sessions":
+        await Promise.all([loadConfig(app), loadSessions(app)]);
+        break;
+      case "cron":
+        await loadCron(host);
+        break;
+      case "skills":
+        await loadSkills(app);
+        break;
+      case "skillWorkshop":
+        await loadSkillWorkshopProposals(app, { force: true });
+        break;
+      case "agents":
+        await refreshAgentsTab(host, app);
+        break;
+      case "nodes":
+        await loadNodes(app);
+        await Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]);
+        break;
+      case "dreams":
+        host.selectedAgentId = resolveDreamingAgentIdForSession(host);
+        await loadConfig(app);
+        await Promise.all([
+          loadDreamingStatus(app),
+          loadDreamDiary(app),
+          loadWikiImportInsights(app),
+          loadWikiMemoryPalace(app),
+        ]);
+        break;
+      case "chat": {
+        try {
+          await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
+            awaitHistory: opts?.chatStartup === true,
+            startup: opts?.chatStartup === true,
+          });
+          scheduleChatScroll(
+            host as unknown as Parameters<typeof scheduleChatScroll>[0],
+            !host.chatHasAutoScrolled,
+          );
+        } finally {
+          void loadModelAuthStatusState(app).catch(() => undefined);
+        }
+        break;
+      }
+      case "debug":
+        await loadDebug(app);
+        host.eventLog = host.eventLogBuffer;
+        break;
+      case "logs":
+        host.logsAtBottom = true;
+        await loadLogs(app, { reset: true });
+        scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
+        break;
+    }
+    finishControlUiRefresh(host, refreshRun, "ok");
+  } catch (err) {
+    finishControlUiRefresh(host, refreshRun, "error");
+    throw err;
   }
 }
 
@@ -373,7 +527,7 @@ export function inferBasePath() {
   if (typeof window === "undefined") {
     return "";
   }
-  const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
+  const configured = window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
   const normalizedConfigured = normalizeOptionalString(configured);
   if (normalizedConfigured) {
     return normalizeBasePath(normalizedConfigured);
@@ -382,10 +536,20 @@ export function inferBasePath() {
 }
 
 export function syncThemeWithSettings(host: SettingsHost) {
-  host.theme = host.settings.theme ?? "claw";
+  syncCustomThemeStyleTag(host.settings.customTheme);
+  const normalizedTheme =
+    host.settings.theme === "custom" && !host.settings.customTheme
+      ? "claw"
+      : (host.settings.theme ?? "claw");
+  host.theme = normalizedTheme;
   host.themeMode = host.settings.themeMode ?? "system";
+  if (normalizedTheme !== host.settings.theme) {
+    host.settings = { ...host.settings, theme: normalizedTheme };
+    saveSettings(host.settings);
+  }
   applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
   applyBorderRadius(host.settings.borderRadius ?? 50);
+  applyTextScale(host.settings.textScale);
   syncSystemThemeListener(host);
 }
 
@@ -408,6 +572,15 @@ export function applyBorderRadius(value: number) {
   root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
   root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
   root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
+}
+
+export function applyTextScale(value: unknown) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const scale = normalizeTextScale(value) / 100;
+  root.style.setProperty("--control-ui-text-scale", scale.toFixed(2));
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
@@ -488,11 +661,23 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   applyTabSelection(host, next, { refreshPolicy: "connected" });
 }
 
-function updateBrowserHistory(url: URL, replace: boolean) {
-  if (replace) {
-    return window.history.replaceState({}, "", url.toString());
+function clearPendingSessionsChangedReload(host: SettingsHost) {
+  if (host.sessionsChangedReloadTimer == null) {
+    return;
   }
-  return window.history.pushState({}, "", url.toString());
+  globalThis.clearTimeout(host.sessionsChangedReloadTimer);
+  host.sessionsChangedReloadTimer = null;
+}
+
+function updateBrowserHistory(url: URL, replace: boolean) {
+  const history = typeof window === "undefined" ? undefined : window.history;
+  if (!history) {
+    return;
+  }
+  if (replace) {
+    return history.replaceState({}, "", url.toString());
+  }
+  return history.pushState({}, "", url.toString());
 }
 
 function applyTabSelection(
@@ -502,6 +687,10 @@ function applyTabSelection(
 ) {
   const prev = host.tab;
   host.tab = next;
+  if (prev !== next) {
+    scheduleControlUiTabVisibleTiming(host, prev, next);
+    clearPendingSessionsChangedReload(host);
+  }
 
   // Cleanup chat module state when navigating away from chat
   if (prev === "chat" && next !== "chat") {
@@ -513,6 +702,9 @@ function applyTabSelection(
   }
   (next === "logs" ? startLogsPolling : stopLogsPolling)(
     host as unknown as Parameters<typeof startLogsPolling>[0],
+  );
+  (next === "nodes" ? startNodesPolling : stopNodesPolling)(
+    host as unknown as Parameters<typeof startNodesPolling>[0],
   );
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
@@ -528,12 +720,14 @@ function applyTabSelection(
 }
 
 export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
-  if (typeof window === "undefined") {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  const pathname = typeof window === "undefined" ? undefined : window.location?.pathname;
+  if (!href || !pathname) {
     return;
   }
   const targetPath = normalizePath(pathForTab(tab, host.basePath));
-  const currentPath = normalizePath(window.location.pathname);
-  const url = new URL(window.location.href);
+  const currentPath = normalizePath(pathname);
+  const url = new URL(href);
 
   if (tab === "chat" && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
@@ -548,32 +742,66 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
-  if (typeof window === "undefined") {
+export function syncUrlWithSessionKey(
+  _hostValue: SettingsHost,
+  sessionKey: string,
+  replace: boolean,
+) {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  if (!href) {
     return;
   }
-  const url = new URL(window.location.href);
+  const url = new URL(href);
   url.searchParams.set("session", sessionKey);
   updateBrowserHistory(url, replace);
 }
 
 export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolean }) {
   const app = host as SettingsAppHost;
+  const overviewSeq = (host.controlUiOverviewRefreshSeq ?? 0) + 1;
+  host.controlUiOverviewRefreshSeq = overviewSeq;
+  const isCurrentOverviewRefresh = () =>
+    host.controlUiOverviewRefreshSeq === overviewSeq && host.tab === "overview";
+
   await Promise.allSettled([
     loadChannels(app, false),
     loadPresence(app),
     loadSessions(app),
     loadCronStatus(app),
     loadCronJobsPage(app),
+  ]);
+  if (isCurrentOverviewRefresh()) {
+    buildAttentionItems(app);
+  }
+
+  const secondaryStartedAtMs = controlUiNowMs();
+  void Promise.allSettled([
     loadDebug(app),
     loadSkills(app),
-    loadUsage(app),
+    // The primary overview loaders can finish after the user has navigated away.
+    // Avoid starting the expensive usage RPC for stale overview refreshes.
+    isCurrentOverviewRefresh() ? loadUsage(app) : Promise.resolve(),
     loadOverviewLogs(app),
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
     loadModelAuthStatusState(app, { refresh: opts?.refresh }),
-  ]);
-  buildAttentionItems(app);
+  ]).then((results) => {
+    if (!isCurrentOverviewRefresh()) {
+      return;
+    }
+    const status = results.some((result) => result.status === "rejected") ? "error" : "ok";
+    buildAttentionItems(app);
+    recordControlUiPerformanceEvent(
+      app,
+      "control-ui.overview.secondary",
+      {
+        phase: "end",
+        status,
+        durationMs: roundedControlUiDurationMs(controlUiNowMs() - secondaryStartedAtMs),
+      },
+      { console: false },
+    );
+  });
 }
 
 export function hasOperatorReadAccess(
@@ -585,6 +813,32 @@ export function hasOperatorReadAccess(
   return roleScopesAllow({
     role: auth.role ?? "operator",
     requestedScopes: ["operator.read"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorWriteAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.write"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorAdminAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.admin"],
     allowedScopes: auth.scopes,
   });
 }
@@ -674,7 +928,7 @@ function buildAttentionItems(host: SettingsAppHost) {
   }
 
   const cronJobs = host.cronJobs ?? [];
-  const failedCron = cronJobs.filter((j) => j.state?.lastStatus === "error");
+  const failedCron = cronJobs.filter((j) => resolveCronJobLastRunStatus(j) === "error");
   if (failedCron.length > 0) {
     items.push({
       severity: "error",
@@ -702,7 +956,7 @@ function buildAttentionItems(host: SettingsAppHost) {
     // Use the same predicate as the Overview card so the two stay in sync.
     // Without this, a `missing` provider shows up on the card but never
     // produces the re-auth attention callout.
-    const monitored = modelAuth.providers.filter(isMonitoredAuthProvider);
+    const monitored = (modelAuth.providers ?? []).filter(isMonitoredAuthProvider);
     const expiredProviders = monitored.filter(
       (p) => p.status === "expired" || p.status === "missing",
     );
@@ -739,16 +993,41 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([loadChannels(app, true), loadConfigSchema(app), loadConfig(app)]);
+  const primaryRefresh = Promise.all([loadChannels(app, false), loadConfig(app)]);
+  loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
+  await primaryRefresh;
 }
 
 export async function loadCron(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
   const activeCronJobId = app.cronRunsScope === "job" ? app.cronRunsJobId : null;
+  const cronSeq = (host.controlUiCronRefreshSeq ?? 0) + 1;
+  host.controlUiCronRefreshSeq = cronSeq;
+  const isCurrentCronRefresh = () =>
+    host.controlUiCronRefreshSeq === cronSeq && host.tab === "cron";
+  const useTableFilters = host.tab === "cron";
+  const runsStartedAtMs = controlUiNowMs();
+  const runsRefresh = loadCronRuns(app, activeCronJobId)
+    .catch(() => "error" as const)
+    .then((status) => {
+      if (!isCurrentCronRefresh()) {
+        return;
+      }
+      recordControlUiPerformanceEvent(
+        app,
+        "control-ui.cron.runs",
+        {
+          phase: "end",
+          status,
+          durationMs: roundedControlUiDurationMs(controlUiNowMs() - runsStartedAtMs),
+        },
+        { console: false },
+      );
+    });
+  void runsRefresh;
   await Promise.all([
     loadChannels(app, false),
     loadCronStatus(app),
-    loadCronJobsPage(app),
-    loadCronRuns(app, activeCronJobId),
+    loadCronJobsPage(app, { tableFilters: useTableFilters }),
   ]);
 }

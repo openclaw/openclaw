@@ -1,3 +1,10 @@
+// Implements session commands for list, show, fork, reset, and routing state.
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
@@ -8,31 +15,67 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import {
+  buildRestartSuccessContinuation,
+  formatDoctorNonInteractiveHint,
+  removeRestartSentinelFile,
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "../../shared/number-coercion.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import {
+  isSessionDefaultDirectiveValue,
+  normalizeFastMode,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
-import type { CommandHandler } from "./commands-types.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+
+function buildRestartCommandSentinel(params: HandleCommandsParams): RestartSentinelPayload | null {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return null;
+  }
+  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const payload: RestartSentinelPayload = {
+    kind: "restart",
+    status: "ok",
+    ts: Date.now(),
+    sessionKey,
+    deliveryContext,
+    threadId,
+    message: "/restart",
+    continuation: buildRestartSuccessContinuation({ sessionKey }),
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: "gateway.restart",
+      reason: "/restart",
+    },
+  };
+  return payload;
+}
 
 function resolveSessionCommandUsage() {
   return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
@@ -46,18 +89,11 @@ function parseSessionDurationMs(raw: string): number {
   if (SESSION_DURATION_OFF_VALUES.has(normalized)) {
     return 0;
   }
-  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
-    const hours = Number(normalized);
-    if (!Number.isFinite(hours) || hours < 0) {
-      throw new Error("invalid duration");
-    }
-    return Math.round(hours * 60 * 60 * 1000);
-  }
   return parseDurationMs(normalized, { defaultUnit: "h" });
 }
 
 function formatSessionExpiry(expiresAt: number) {
-  return new Date(expiresAt).toISOString();
+  return timestampMsToIsoString(expiresAt) ?? "n/a";
 }
 
 function resolveSessionBindingDurationMs(
@@ -73,11 +109,17 @@ function resolveSessionBindingDurationMs(
 }
 
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
-  const raw = binding.metadata?.lastActivityAt;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+  const raw = asDateTimestampMs(binding.metadata?.lastActivityAt);
+  if (raw === undefined) {
     return binding.boundAt;
   }
   return Math.max(Math.floor(raw), binding.boundAt);
+}
+
+function resolveSessionBindingExpiryAt(baseMs: number, durationMs: number): number | undefined {
+  return durationMs > 0
+    ? resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: baseMs })
+    : undefined;
 }
 
 function resolveSessionBindingBoundBy(binding: SessionBindingRecord): string {
@@ -146,7 +188,10 @@ function resolveUpdatedBindingExpiry(params: {
         if (idleTimeoutMs <= 0) {
           return undefined;
         }
-        return Math.max(binding.lastActivityAt, binding.boundAt) + idleTimeoutMs;
+        return resolveSessionBindingExpiryAt(
+          Math.max(binding.lastActivityAt, binding.boundAt),
+          idleTimeoutMs,
+        );
       }
 
       const maxAgeMs =
@@ -156,7 +201,7 @@ function resolveUpdatedBindingExpiry(params: {
       if (maxAgeMs <= 0) {
         return undefined;
       }
-      return binding.boundAt + maxAgeMs;
+      return resolveSessionBindingExpiryAt(binding.boundAt, maxAgeMs);
     })
     .filter((expiresAt): expiresAt is number => typeof expiresAt === "number");
 
@@ -380,17 +425,29 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  const nextMode = normalizeFastMode(rawMode);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
+  const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
   if (nextMode === undefined) {
+    if (resetsToDefault) {
+      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+        delete targetSessionEntry.fastMode;
+        await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Fast mode reset to default." },
+      };
+    }
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|on|off" },
+      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
     };
   }
 
-  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
-    params.sessionEntry.fastMode = nextMode;
-    await persistSessionEntry(params);
+  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+    targetSessionEntry.fastMode = nextMode;
+    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }
 
   return {
@@ -494,12 +551,12 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     "idleTimeoutMs",
     24 * 60 * 60 * 1000,
   );
-  const idleExpiresAt =
-    idleTimeoutMs > 0
-      ? resolveSessionBindingLastActivityAt(activeBinding) + idleTimeoutMs
-      : undefined;
+  const idleExpiresAt = resolveSessionBindingExpiryAt(
+    resolveSessionBindingLastActivityAt(activeBinding),
+    idleTimeoutMs,
+  );
   const maxAgeMs = resolveSessionBindingDurationMs(activeBinding, "maxAgeMs", 0);
-  const maxAgeExpiresAt = maxAgeMs > 0 ? activeBinding.boundAt + maxAgeMs : undefined;
+  const maxAgeExpiresAt = resolveSessionBindingExpiryAt(activeBinding.boundAt, maxAgeMs);
 
   const durationArgRaw = tokens.slice(1).join("");
   if (!durationArgRaw) {
@@ -631,6 +688,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     );
     return { shouldContinue: false };
   }
+  const nonOwner = rejectNonOwnerCommand(params, "/restart");
+  if (nonOwner) {
+    return nonOwner;
+  }
   if (!isRestartEnabled(params.cfg)) {
     return {
       shouldContinue: false,
@@ -640,8 +701,26 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+  const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {
-    scheduleGatewaySigusr1Restart({ reason: "/restart" });
+    let sentinelPath: string | null = null;
+    scheduleGatewaySigusr1Restart({
+      reason: "/restart",
+      // Sibling session-routing guard: /restart writes a session-scoped sentinel
+      // with continuation, so the scheduler must own the pending slot under the
+      // same key to avoid cross-session continuation overwrite (#86742).
+      sessionKey: sentinelPayload?.sessionKey,
+      emitHooks: sentinelPayload
+        ? {
+            beforeEmit: async () => {
+              sentinelPath = await writeRestartSentinel(sentinelPayload);
+            },
+            afterEmitRejected: async () => {
+              await removeRestartSentinelFile(sentinelPath);
+            },
+          }
+        : undefined,
+    });
     return {
       shouldContinue: false,
       reply: {
@@ -649,8 +728,23 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  let sentinelPath: string | null = null;
+  try {
+    if (sentinelPayload) {
+      sentinelPath = await writeRestartSentinel(sentinelPayload);
+    }
+  } catch (err) {
+    logVerbose(`failed to write /restart sentinel: ${String(err)}`);
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
+      },
+    };
+  }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
+    await removeRestartSentinelFile(sentinelPath);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,

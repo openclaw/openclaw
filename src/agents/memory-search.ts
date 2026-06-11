@@ -1,15 +1,30 @@
+/**
+ * Resolves memory-search source, sync, and ranking configuration.
+ */
 import os from "node:os";
 import path from "node:path";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolvePositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -23,6 +38,7 @@ export type ResolvedMemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    nonBatchConcurrency?: number;
     batch?: {
       enabled: boolean;
       wait: boolean;
@@ -36,10 +52,14 @@ export type ResolvedMemorySearchConfig = {
   };
   fallback: string;
   model: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   outputDimensionality?: number;
   local: {
     modelPath?: string;
     modelCacheDir?: string;
+    contextSize?: number | "auto";
   };
   store: {
     driver: "sqlite";
@@ -62,6 +82,7 @@ export type ResolvedMemorySearchConfig = {
     watch: boolean;
     watchDebounceMs: number;
     intervalMinutes: number;
+    embeddingBatchTimeoutSeconds: number | undefined;
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
@@ -111,6 +132,30 @@ const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
+const MAX_REMOTE_BATCH_TIMEOUT_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
+
+function resolveRemoteBatchPollIntervalMs(
+  overrideValue: number | undefined,
+  defaultValue: number | undefined,
+): number {
+  return resolvePositiveTimerTimeoutMs(
+    overrideValue ?? defaultValue,
+    DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS,
+  );
+}
+
+function resolveRemoteBatchTimeoutMinutes(
+  overrideValue: number | undefined,
+  defaultValue: number | undefined,
+): number {
+  const value = overrideValue ?? defaultValue;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? clampInt(value, 1, MAX_REMOTE_BATCH_TIMEOUT_MINUTES)
+    : DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES;
+}
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
@@ -142,7 +187,29 @@ function resolveStorePath(agentId: string, raw?: string): string {
   return resolveUserPath(withToken);
 }
 
+function getConfiguredMemoryEmbeddingProvider(
+  providerId: string,
+  cfg: OpenClawConfig,
+): ReturnType<typeof getMemoryEmbeddingProvider> {
+  const directAdapter = getMemoryEmbeddingProvider(providerId);
+  if (directAdapter) {
+    return directAdapter;
+  }
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
+  const ownerApi = providerConfig?.api?.trim();
+  if (!ownerApi) {
+    return undefined;
+  }
+  const normalizedProvider = normalizeProviderId(providerId);
+  const normalizedOwner = normalizeProviderId(ownerApi);
+  if (!normalizedOwner || normalizedOwner === normalizedProvider) {
+    return undefined;
+  }
+  return getMemoryEmbeddingProvider(normalizedOwner);
+}
+
 function mergeConfig(
+  cfg: OpenClawConfig,
   defaults: MemorySearchConfig | undefined,
   overrides: MemorySearchConfig | undefined,
   agentId: string,
@@ -150,24 +217,31 @@ function mergeConfig(
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const provider = overrides?.provider ?? defaults?.provider ?? "auto";
-  const primaryAdapter = provider === "auto" ? undefined : getMemoryEmbeddingProvider(provider);
+  const rawProvider = overrides?.provider ?? defaults?.provider;
+  const provider =
+    rawProvider?.trim() === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const fallbackAdapter =
-    fallback && fallback !== "none" ? getMemoryEmbeddingProvider(fallback) : undefined;
+    fallback && fallback !== "none"
+      ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
+      : undefined;
   const hasRemoteConfig = Boolean(
     overrideRemote?.baseUrl ||
     overrideRemote?.apiKey ||
     overrideRemote?.headers ||
+    overrideRemote?.nonBatchConcurrency != null ||
     defaultRemote?.baseUrl ||
     defaultRemote?.apiKey ||
-    defaultRemote?.headers,
+    defaultRemote?.headers ||
+    defaultRemote?.nonBatchConcurrency != null,
   );
   const includeRemote =
     hasRemoteConfig ||
-    provider === "auto" ||
     primaryAdapter?.transport !== "local" ||
     fallbackAdapter?.transport === "remote";
   const batch = {
@@ -177,31 +251,44 @@ function mergeConfig(
       1,
       overrideRemote?.batch?.concurrency ?? defaultRemote?.batch?.concurrency ?? 2,
     ),
-    pollIntervalMs:
-      overrideRemote?.batch?.pollIntervalMs ?? defaultRemote?.batch?.pollIntervalMs ?? 2000,
-    timeoutMinutes:
-      overrideRemote?.batch?.timeoutMinutes ?? defaultRemote?.batch?.timeoutMinutes ?? 60,
+    pollIntervalMs: resolveRemoteBatchPollIntervalMs(
+      overrideRemote?.batch?.pollIntervalMs,
+      defaultRemote?.batch?.pollIntervalMs,
+    ),
+    timeoutMinutes: resolveRemoteBatchTimeoutMinutes(
+      overrideRemote?.batch?.timeoutMinutes,
+      defaultRemote?.batch?.timeoutMinutes,
+    ),
   };
   const remote = includeRemote
     ? {
         baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
         apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
         headers: overrideRemote?.headers ?? defaultRemote?.headers,
+        nonBatchConcurrency:
+          overrideRemote?.nonBatchConcurrency ?? defaultRemote?.nonBatchConcurrency,
         batch,
       }
     : undefined;
-  const modelDefault = provider === "auto" ? undefined : primaryAdapter?.defaultModel;
+  const modelDefault = primaryAdapter?.defaultModel;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
+  const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
+  const queryInputType =
+    overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
+  const documentInputType =
+    overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
+    contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const extraPaths = Array.from(new Set(rawPaths));
+  const rawPaths = normalizeStringEntries([
+    ...(defaults?.extraPaths ?? []),
+    ...(overrides?.extraPaths ?? []),
+  ]);
+  const extraPaths = uniqueStrings(rawPaths);
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
@@ -304,6 +391,9 @@ function mergeConfig(
     },
     fallback,
     model,
+    inputType,
+    queryInputType,
+    documentInputType,
     outputDimensionality,
     local,
     store,
@@ -359,6 +449,8 @@ function resolveSyncConfig(
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
     intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    embeddingBatchTimeoutSeconds:
+      overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
     sessions: {
       deltaBytes:
         overrides?.sync?.sessions?.deltaBytes ??
@@ -382,31 +474,19 @@ export function resolveMemorySearchConfig(
 ): ResolvedMemorySearchConfig | null {
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
-  const resolved = mergeConfig(defaults, overrides, agentId);
+  const resolved = mergeConfig(cfg, defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  const multimodalProvider =
-    resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
-  const builtinMultimodalSupport =
-    resolved.provider === "auto"
-      ? false
-      : supportsMemoryMultimodalEmbeddings({
-          provider: resolved.provider,
-          model: resolved.model,
-        });
+  const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
+  // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
+  // Keep multimodal validation on that config-aware adapter, not the raw id.
   if (
     multimodalActive &&
-    !(
-      // Fall back to the built-in helper when the provider is not registered yet
-      // or when a registered adapter does not implement multimodal capability checks.
-      (
-        multimodalProvider?.supportsMultimodalEmbeddings?.({
-          model: resolved.model,
-        }) ?? builtinMultimodalSupport
-      )
-    )
+    ((multimodalProvider &&
+      !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)) ||
+      (!multimodalProvider && getEmbeddingProvider(resolved.provider, cfg)))
   ) {
     throw new Error(
       "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",

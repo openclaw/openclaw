@@ -6,11 +6,18 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  formatErrorMessage,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
+let sendQueue: Promise<void> = Promise.resolve();
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -89,21 +96,14 @@ export async function sendMessage(
   // The @mention is optional but user_ids is mandatory
   const body = buildWebhookBody({ text }, userId);
 
-  // Internal rate limit: min 500ms between sends
-  const now = Date.now();
-  const elapsed = now - lastSendTime;
-  if (elapsed < MIN_SEND_INTERVAL_MS) {
-    await sleep(MIN_SEND_INTERVAL_MS - elapsed);
-  }
-
   // Retry with exponential backoff (3 attempts, 300ms base)
   const maxRetries = 3;
   const baseDelay = 300;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
+      await waitForSendSlot();
       const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-      lastSendTime = Date.now();
       if (ok) {
         return true;
       }
@@ -112,7 +112,7 @@ export async function sendMessage(
     }
 
     if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * Math.pow(2, attempt));
+      await sleep(baseDelay * 2 ** attempt);
     }
   }
 
@@ -128,11 +128,12 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = false,
 ): Promise<boolean> {
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
-
   try {
+    const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
+    const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
+
+    await waitForSendSlot();
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-    lastSendTime = Date.now();
     return ok;
   } catch {
     return false;
@@ -159,19 +160,27 @@ export async function fetchChatUsers(
   }
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (users: ChatUser[]) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(users);
+    };
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(listUrl);
     } catch {
       log?.warn("fetchChatUsers: invalid user_list URL, using cached data");
-      resolve(cached?.users ?? []);
+      finish(cached?.users ?? []);
       return;
     }
     const transport = parsedUrl.protocol === "https:" ? https : http;
     const requestOptions: http.RequestOptions | https.RequestOptions =
       parsedUrl.protocol === "https:" ? { rejectUnauthorized: !allowInsecureSsl } : {};
 
-    transport
+    const req = transport
       .get(listUrl, requestOptions, (res) => {
         let data = "";
         res.on("data", (c: Buffer) => {
@@ -181,7 +190,7 @@ export async function fetchChatUsers(
           const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
           if (!result) {
             log?.warn("fetchChatUsers: failed to parse user_list response");
-            resolve(cached?.users ?? []);
+            finish(cached?.users ?? []);
             return;
           }
 
@@ -191,19 +200,52 @@ export async function fetchChatUsers(
               users,
               cachedAt: now,
             });
-            resolve(users);
+            finish(users);
             return;
           }
 
           log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
-          resolve(cached?.users ?? []);
+          finish(cached?.users ?? []);
         });
       })
       .on("error", (err) => {
         log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
-        resolve(cached?.users ?? []);
+        finish(cached?.users ?? []);
       });
+    req.setTimeout?.(15_000, () => {
+      log?.warn("fetchChatUsers: request timed out, using cached data");
+      req.destroy?.();
+      finish(cached?.users ?? []);
+    });
   });
+}
+
+async function waitForSendSlot(): Promise<void> {
+  const next = sendQueue.then(async () => {
+    const elapsed = Date.now() - lastSendTime;
+    if (elapsed < MIN_SEND_INTERVAL_MS) {
+      await sleep(MIN_SEND_INTERVAL_MS - elapsed);
+    }
+    lastSendTime = Date.now();
+  });
+  sendQueue = next.catch(() => {});
+  await next;
+}
+
+async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(fileUrl);
+  } catch (err) {
+    throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Synology Chat file URL must use HTTP or HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  return parsed.toString();
 }
 
 /**
@@ -251,8 +293,10 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   if (userId === undefined) {
     return undefined;
   }
-  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-  return Number.isNaN(numericId) ? undefined : numericId;
+  if (typeof userId === "number") {
+    return Number.isSafeInteger(userId) ? userId : undefined;
+  }
+  return parseStrictNonNegativeInteger(userId);
 }
 
 function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
@@ -298,8 +342,4 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
     req.write(body);
     req.end();
   });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

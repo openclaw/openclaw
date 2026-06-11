@@ -1,7 +1,9 @@
-import type { ProviderRequestTransportOverrides } from "openclaw/plugin-sdk/provider-http";
+// Google tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isGoogleGenerativeAiApi,
+  isGoogleVertexBaseUrl,
+  isGoogleVertexHostname,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
   normalizeGoogleProviderConfig,
@@ -84,9 +86,36 @@ describe("google generative ai helpers", () => {
         models: [{ api: "openai-completions" }],
       }),
     ).toBe(false);
+    expect(
+      shouldNormalizeGoogleGenerativeAiProviderConfig("google-vertex", {
+        baseUrl: "https://aiplatform.googleapis.com",
+      }),
+    ).toBe(false);
+  });
+
+  it("detects native Google Vertex hosts by hostname only", () => {
+    expect(isGoogleVertexHostname("aiplatform.googleapis.com")).toBe(true);
+    expect(isGoogleVertexHostname("us-central1-aiplatform.googleapis.com")).toBe(true);
+    expect(isGoogleVertexHostname("generativelanguage.googleapis.com")).toBe(false);
+    expect(isGoogleVertexHostname("evil-aiplatform.googleapis.com.attacker.com")).toBe(false);
+    expect(
+      isGoogleVertexBaseUrl(
+        "https://generativelanguage.googleapis.com/v1beta/proxy/aiplatform.googleapis.com",
+      ),
+    ).toBe(false);
   });
 
   it("normalizes transport baseUrls only for Google Generative AI", () => {
+    expect(
+      resolveGoogleGenerativeAiTransport({
+        provider: "google",
+        api: undefined,
+        baseUrl: "https://generativelanguage.googleapis.com",
+      }),
+    ).toEqual({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
     expect(
       resolveGoogleGenerativeAiTransport({
         api: "google-generative-ai",
@@ -104,6 +133,28 @@ describe("google generative ai helpers", () => {
     ).toEqual({
       api: "openai-completions",
       baseUrl: "https://generativelanguage.googleapis.com",
+    });
+    expect(
+      resolveGoogleGenerativeAiTransport({
+        provider: "google-vertex",
+        api: undefined,
+        baseUrl: "https://us-central1-aiplatform.googleapis.com",
+      }),
+    ).toEqual({
+      api: "google-vertex",
+      baseUrl: "https://us-central1-aiplatform.googleapis.com",
+    });
+    expect(
+      resolveGoogleGenerativeAiTransport({
+        provider: "google-vertex",
+        api: "openai-completions",
+        baseUrl:
+          "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl:
+        "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
     });
   });
 
@@ -125,14 +176,20 @@ describe("google generative ai helpers", () => {
           },
         ],
       }),
-    ).toMatchObject({
+    ).toEqual({
       api: "openai-completions",
       baseUrl:
         "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
       models: [
-        expect.objectContaining({
-          id: "gemini-3.1-flash-lite-preview",
-        }),
+        {
+          contextWindow: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          id: "gemini-3.1-flash-lite",
+          input: ["text"],
+          maxTokens: 1,
+          name: "Gemini Flash Lite",
+          reasoning: false,
+        },
       ],
     });
   });
@@ -174,10 +231,8 @@ describe("google generative ai helpers", () => {
       capability: "audio",
       transport: "media-understanding",
     });
-    expect(oauthConfig).toMatchObject({
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      allowPrivateNetwork: false,
-    });
+    expect(oauthConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(oauthConfig.allowPrivateNetwork).toBe(false);
     expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toEqual({
       authorization: "Bearer oauth-token",
       "content-type": "application/json",
@@ -188,10 +243,8 @@ describe("google generative ai helpers", () => {
       capability: "image",
       transport: "http",
     });
-    expect(apiKeyConfig).toMatchObject({
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      allowPrivateNetwork: false,
-    });
+    expect(apiKeyConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(apiKeyConfig.allowPrivateNetwork).toBe(false);
     expect(Object.fromEntries(new Headers(apiKeyConfig.headers).entries())).toEqual({
       "content-type": "application/json",
       "x-goog-api-key": "api-key-123",
@@ -217,7 +270,7 @@ describe("google generative ai helpers", () => {
     expect(normalized).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
   });
 
-  it("rejects non-Google Gemini base URLs and ignores smuggled private-network flags", () => {
+  it("rejects non-Google Gemini base URLs and honors explicit private-network opt-in", () => {
     expect(() =>
       resolveGoogleGenerativeAiHttpRequestConfig({
         apiKey: "api-key-123",
@@ -241,8 +294,8 @@ describe("google generative ai helpers", () => {
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       capability: "image",
       transport: "http",
-      request: { allowPrivateNetwork: true } as unknown as ProviderRequestTransportOverrides,
+      request: { allowPrivateNetwork: true },
     });
-    expect(config.allowPrivateNetwork).toBe(false);
+    expect(config.allowPrivateNetwork).toBe(true);
   });
 });

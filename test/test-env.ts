@@ -1,3 +1,4 @@
+// Test environment helpers install process env defaults for tests.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -7,12 +8,18 @@ import JSON5 from "json5";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
-const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".gemini", ".minimax"] as const;
-const LIVE_EXTERNAL_AUTH_FILES = [".claude.json"] as const;
+const LIVE_EXTERNAL_AUTH_DIRS = [".claude/backups", ".gemini", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_FILES = [
+  ".claude.json",
+  ".claude/.credentials.json",
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  ".codex/auth.json",
+  ".codex/config.toml",
+] as const;
 const requireFromHere = createRequire(import.meta.url);
 
-type LegacyConfigCompatApi =
-  typeof import("../src/commands/doctor/shared/legacy-config-migrate.js");
+type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
 type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
@@ -46,7 +53,7 @@ function restoreEnv(entries: RestoreEntry[]): void {
 
 function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
   cachedLegacyConfigCompatApi ??= requireFromHere(
-    "../src/commands/doctor/shared/legacy-config-migrate.js",
+    "../src/commands/doctor/shared/legacy-config-compat.js",
   ) as LegacyConfigCompatApi;
   return cachedLegacyConfigCompatApi;
 }
@@ -168,7 +175,6 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
-    { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
     { key: "TELEGRAM_BOT_TOKEN", value: process.env.TELEGRAM_BOT_TOKEN },
     { key: "DISCORD_BOT_TOKEN", value: process.env.DISCORD_BOT_TOKEN },
     { key: "SLACK_BOT_TOKEN", value: process.env.SLACK_BOT_TOKEN },
@@ -199,7 +205,6 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   delete process.env.OPENCLAW_STATE_DIR;
   delete process.env.OPENCLAW_AGENT_DIR;
-  delete process.env.PI_CODING_AGENT_DIR;
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   delete process.env.OPENCLAW_GATEWAY_PORT;
   delete process.env.OPENCLAW_BRIDGE_ENABLED;
@@ -259,6 +264,15 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(sourcePath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
   ensureParentDir(targetPath);
   fs.copyFileSync(sourcePath, targetPath);
 }
@@ -290,6 +304,7 @@ function sanitizeLiveConfig(raw: string): string {
         defaults?: Record<string, unknown>;
         list?: Array<Record<string, unknown>>;
       };
+      diagnostics?: Record<string, unknown>;
     } = JSON5.parse(raw);
 
     if (!parsed || typeof parsed !== "object") {
@@ -311,6 +326,10 @@ function sanitizeLiveConfig(raw: string): string {
         delete nextEntry.agentDir;
         return nextEntry;
       });
+    }
+
+    if (parsed.diagnostics && typeof parsed.diagnostics === "object") {
+      delete parsed.diagnostics.memoryPressureSnapshot;
     }
 
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {

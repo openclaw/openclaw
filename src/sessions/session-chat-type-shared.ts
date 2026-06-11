@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Shared session chat type helpers expose cross-module chat type classification.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
@@ -9,10 +10,7 @@ function deriveBuiltInLegacySessionChatType(
   if (/^group:[^:]+$/.test(scopedSessionKey)) {
     return "group";
   }
-  if (/^[0-9]+(?:-[0-9]+)*@g\.us$/.test(scopedSessionKey)) {
-    return "group";
-  }
-  if (/^whatsapp:(?!.*:group:).+@g\.us$/.test(scopedSessionKey)) {
+  if (/^(?:whatsapp:)?[^:]+@g\.us$/.test(scopedSessionKey)) {
     return "group";
   }
   if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scopedSessionKey)) {

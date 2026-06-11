@@ -1,9 +1,17 @@
+// Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
+import {
+  testing,
   abortActiveReplyRuns,
   createReplyOperation,
+  forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
+  isReplyRunAbortableForCompaction,
   queueReplyRunMessage,
   replyRunRegistry,
   resolveActiveReplyRunSessionId,
@@ -12,7 +20,8 @@ import {
 
 describe("reply run registry", () => {
   afterEach(() => {
-    __testing.resetReplyRunRegistry();
+    testing.resetReplyRunRegistry();
+    resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
   });
 
@@ -50,6 +59,54 @@ describe("reply run registry", () => {
     }
   });
 
+  it("treats queued reply operations as non-abortable for compaction", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-compact",
+      resetTriggered: false,
+    });
+
+    expect(isReplyRunActiveForSessionId("session-compact")).toBe(true);
+    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
+  });
+
+  it("mirrors active reply operations into diagnostic work state", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:chat-1",
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.updateSessionId("session-2");
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.complete();
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBeUndefined();
+  });
+
   it("clears queued operations immediately on user abort", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -65,7 +122,81 @@ describe("reply run registry", () => {
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
   });
 
-  it("queues messages only through the active running backend", async () => {
+  it("runs completeThen callbacks after active state clears", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-complete",
+      resetTriggered: false,
+    });
+    const afterClear = vi.fn(() => {
+      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+      expect(isReplyRunActiveForSessionId("session-complete")).toBe(false);
+    });
+
+    operation.completeThen(afterClear);
+
+    expect(operation.result).toEqual({ kind: "completed" });
+    expect(afterClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("force-clears a running operation after abort without backend cleanup", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-running",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+
+      operation.abortByUser();
+      const waitPromise = waitForReplyRunEndBySessionId("session-running", 1_000);
+
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(cancel).toHaveBeenCalledWith("user_abort");
+      expect(isReplyRunActiveForSessionId("session-running")).toBe(true);
+
+      expect(forceClearReplyRunBySessionId("session-running", new Error("stuck"))).toBe(true);
+
+      expect(isReplyRunActiveForSessionId("session-running")).toBe(false);
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized wait timers instead of resolving idle waits immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-running",
+        resetTriggered: false,
+      });
+
+      const waitPromise = waitForReplyRunEndBySessionId(
+        "session-running",
+        MAX_TIMER_TIMEOUT_MS + 1,
+      );
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      operation.complete();
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("queues messages only through the active running backend", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",

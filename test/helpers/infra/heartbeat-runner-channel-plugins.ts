@@ -1,5 +1,7 @@
+// Heartbeat runner channel plugin fixtures build channel plugin contracts for tests.
 import type {
   ChannelId,
+  ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../../../src/channels/plugins/types.js";
@@ -9,6 +11,8 @@ import {
 } from "../../../src/infra/outbound/send-deps.js";
 import { createOutboundTestPlugin } from "../../../src/test-utils/channel-plugins.js";
 
+// Channel plugin fixtures used by heartbeat runner tests.
+
 type HeartbeatSendChannelId = "slack" | "telegram" | "whatsapp";
 type HeartbeatSendFn = (
   to: string,
@@ -16,6 +20,7 @@ type HeartbeatSendFn = (
   opts?: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>;
 
+/** Create an outbound adapter that routes through heartbeat send deps. */
 function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): ChannelOutboundAdapter {
   return {
     deliveryMode: "direct",
@@ -47,11 +52,13 @@ function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): Chan
   };
 }
 
+/** Create a channel plugin fixture with heartbeat/outbound behavior. */
 function createHeartbeatChannelPlugin(params: {
   id: HeartbeatSendChannelId;
   label: string;
   docsPath: string;
   heartbeat?: ChannelPlugin["heartbeat"];
+  messaging?: ChannelMessagingAdapter;
 }): ChannelPlugin {
   return {
     ...createOutboundTestPlugin({
@@ -59,23 +66,30 @@ function createHeartbeatChannelPlugin(params: {
       label: params.label,
       docsPath: params.docsPath,
       outbound: createHeartbeatOutboundAdapter(params.id),
+      ...(params.messaging ? { messaging: params.messaging } : {}),
     }),
     ...(params.heartbeat ? { heartbeat: params.heartbeat } : {}),
   };
 }
 
+/** Slack heartbeat channel fixture. */
 export const heartbeatRunnerSlackPlugin = createHeartbeatChannelPlugin({
   id: "slack",
   label: "Slack",
   docsPath: "/channels/slack",
 });
 
+/** Telegram heartbeat channel fixture with thread preservation. */
 export const heartbeatRunnerTelegramPlugin = createHeartbeatChannelPlugin({
   id: "telegram",
   label: "Telegram",
   docsPath: "/channels/telegram",
+  messaging: {
+    preserveHeartbeatThreadIdForGroupRoute: true,
+  },
 });
 
+/** WhatsApp heartbeat channel fixture with readiness checks. */
 export const heartbeatRunnerWhatsAppPlugin = createHeartbeatChannelPlugin({
   id: "whatsapp",
   label: "WhatsApp",

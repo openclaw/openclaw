@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements harness behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,7 @@ const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 const MATRIX_QA_DEFAULT_PORT = 28008;
 const MATRIX_QA_INTERNAL_PORT = 8008;
 const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
+const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 
 type MatrixQaHarnessManifest = {
   image: string;
@@ -27,7 +29,7 @@ type MatrixQaHarnessManifest = {
   dataDir: string;
 };
 
-export type MatrixQaHarnessFiles = {
+type MatrixQaHarnessFiles = {
   outputDir: string;
   composeFile: string;
   manifestPath: string;
@@ -37,7 +39,7 @@ export type MatrixQaHarnessFiles = {
   registrationToken: string;
 };
 
-export type MatrixQaHarness = MatrixQaHarnessFiles & {
+type MatrixQaHarness = MatrixQaHarnessFiles & {
   baseUrl: string;
   restartService(): Promise<void>;
   stopCommand: string;
@@ -52,6 +54,28 @@ async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: FetchLike) 
   return await fetchImpl(buildVersionsUrl(baseUrl))
     .then((response) => response.ok)
     .catch(() => false);
+}
+
+async function withMatrixQaHarnessTimeout<T>(
+  label: string,
+  timeoutMs: number,
+  task: Promise<T>,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function waitForReachableMatrixBaseUrl(params: {
@@ -111,7 +135,7 @@ function renderMatrixQaCompose(params: {
       - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
-      TUWUNEL_ALLOW_ENCRYPTION: "false"
+      TUWUNEL_ALLOW_ENCRYPTION: "true"
       TUWUNEL_ALLOW_FEDERATION: "false"
       TUWUNEL_ALLOW_REGISTRATION: "true"
       TUWUNEL_DATABASE_PATH: "/var/lib/tuwunel"
@@ -279,23 +303,29 @@ export async function startMatrixQaHarness(
     },
     stopCommand: `docker compose -f ${files.composeFile} down --remove-orphans`,
     async stop() {
-      await runCommand(
-        "docker",
-        ["compose", "-f", files.composeFile, "down", "--remove-orphans"],
-        repoRoot,
+      await withMatrixQaHarnessTimeout(
+        "Matrix homeserver cleanup",
+        MATRIX_QA_CLEANUP_TIMEOUT_MS,
+        runCommand(
+          "docker",
+          ["compose", "-f", files.composeFile, "down", "--remove-orphans"],
+          repoRoot,
+        ),
       );
     },
   };
 }
 
-export const __testing = {
+export const testing = {
   MATRIX_QA_DEFAULT_IMAGE,
   MATRIX_QA_DEFAULT_PORT,
   MATRIX_QA_DEFAULT_SERVER_NAME,
   MATRIX_QA_SERVICE,
+  MATRIX_QA_CLEANUP_TIMEOUT_MS,
   buildVersionsUrl,
   isMatrixVersionsReachable,
   renderMatrixQaCompose,
   resolveMatrixQaHarnessImage,
   waitForReachableMatrixBaseUrl,
 };
+export { testing as __testing };

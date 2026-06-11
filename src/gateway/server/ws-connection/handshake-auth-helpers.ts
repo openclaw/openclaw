@@ -1,5 +1,11 @@
+// Handshake auth helpers classify browser security context, pairing locality, and connect auth details.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
@@ -10,8 +16,6 @@ import {
   isPrivateOrLoopbackHost,
   resolveHostName,
 } from "../../net.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
 export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
@@ -20,6 +24,7 @@ export type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
   | "browser_container_local"
+  | "shared_secret_loopback_local"
   | "remote";
 
 export type HandshakeBrowserSecurityContext = {
@@ -34,6 +39,7 @@ type HandshakeConnectAuth = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
 };
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
@@ -76,15 +82,39 @@ export function shouldAllowSilentLocalPairing(params: {
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
   isWebchat: boolean;
+  isNativeAppUi?: boolean;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
-  return (
-    params.locality !== "remote" &&
-    (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" ||
-      params.reason === "scope-upgrade" ||
-      params.reason === "role-upgrade")
-  );
+  if (params.locality === "remote") {
+    return false;
+  }
+  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+    return false;
+  }
+  if (
+    params.reason === "not-paired" ||
+    params.reason === "scope-upgrade" ||
+    params.reason === "role-upgrade"
+  ) {
+    return true;
+  }
+  // metadata-upgrade auto-approves only for non-browser local reconnects that
+  // already proved possession of local/shared credentials. Direct-local
+  // metadata refresh is limited to first-party native app UI clients, covering
+  // same-host app reconnects after OS version metadata changes while keeping
+  // node-host, Browser, and Control-UI metadata pinning on the explicit approval path.
+  if (
+    params.reason === "metadata-upgrade" &&
+    !params.hasBrowserOriginHeader &&
+    !params.isControlUi &&
+    !params.isWebchat &&
+    ((params.locality === "direct_local" && params.isNativeAppUi === true) ||
+      params.locality === "cli_container_local" ||
+      params.locality === "shared_secret_loopback_local")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isCliContainerLocalEquivalent(params: {
@@ -102,6 +132,25 @@ function isCliContainerLocalEquivalent(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
     isCliClient &&
+    params.sharedAuthOk &&
+    usesSharedSecretAuth &&
+    !params.hasProxyHeaders &&
+    !params.hasBrowserOriginHeader &&
+    isLoopbackAddress(params.remoteAddress) &&
+    isPrivateOrLoopbackHost(resolveHostName(params.requestHost))
+  );
+}
+
+function isSharedSecretLoopbackLocalEquivalent(params: {
+  requestHost?: string;
+  remoteAddress?: string;
+  hasProxyHeaders: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  return (
     params.sharedAuthOk &&
     usesSharedSecretAuth &&
     !params.hasProxyHeaders &&
@@ -190,6 +239,18 @@ export function resolvePairingLocality(params: {
   ) {
     return "cli_container_local";
   }
+  if (
+    isSharedSecretLoopbackLocalEquivalent({
+      requestHost: params.requestHost,
+      remoteAddress: params.remoteAddress,
+      hasProxyHeaders: params.hasProxyHeaders,
+      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
+      sharedAuthOk: params.sharedAuthOk,
+      authMethod: params.authMethod,
+    })
+  ) {
+    return "shared_secret_loopback_local";
+  }
   return "remote";
 }
 
@@ -206,13 +267,19 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   if (!isBackendClient) {
     return false;
   }
+  const isLocal =
+    params.locality === "direct_local" || params.locality === "shared_secret_loopback_local";
+  if (!isLocal || params.hasBrowserOriginHeader) {
+    return false;
+  }
+  // No-auth local backend: scoped bypass — not shared secret, but local-only
+  // device-less operation is safe when auth.mode is explicitly "none".
+  if (params.authMethod === "none") {
+    return true;
+  }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (
-    params.locality === "direct_local" &&
-    !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
-  );
+  return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {
@@ -280,7 +347,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   return null;
 }
 
-export function resolveAuthProvidedKind(
+function resolveAuthProvidedKind(
   connectAuth: HandshakeConnectAuth | null | undefined,
 ): AuthProvidedKind {
   return connectAuth?.password
@@ -338,6 +405,12 @@ export function resolveUnauthorizedHandshakeContext(params: {
         authProvided,
         canRetryWithDeviceToken,
         recommendedNextStep: "update_auth_credentials",
+      });
+    case "scope_mismatch":
+      return buildUnauthorizedHandshakeContext({
+        authProvided,
+        canRetryWithDeviceToken,
+        recommendedNextStep: "review_auth_configuration",
       });
     case "rate_limited":
       return buildUnauthorizedHandshakeContext({

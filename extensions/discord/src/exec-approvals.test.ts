@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord tests cover exec approvals plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   getDiscordExecApprovalApprovers,
@@ -22,7 +23,7 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("auto-enables when owner approvers resolve and disables only when forced off", () => {
+  it("requires explicit enablement even when owner approvers resolve", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
@@ -33,13 +34,18 @@ describe("discord exec approvals", () => {
       isDiscordExecApprovalClientEnabled({
         cfg: buildConfig({ approvers: ["123"] }),
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: {
           ...buildConfig(),
           commands: { ownerAllowFrom: ["discord:789"] },
         } as OpenClawConfig,
+      }),
+    ).toBe(false);
+    expect(
+      isDiscordExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: "auto", approvers: ["123"] }),
       }),
     ).toBe(true);
     expect(
@@ -67,7 +73,7 @@ describe("discord exec approvals", () => {
       },
     );
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
   });
 

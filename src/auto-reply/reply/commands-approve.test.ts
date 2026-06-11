@@ -1,3 +1,4 @@
+// Tests approval command behavior for pending tool and execution requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -15,15 +16,49 @@ import {
 import { handleApproveCommand } from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const callGatewayMock = vi.hoisted(() => vi.fn());
+const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: callGatewayMock,
+vi.mock("../../infra/approval-gateway-resolver.js", () => ({
+  resolveApprovalOverGateway: resolveApprovalOverGatewayMock,
 }));
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function approvalResolverRequest(callIndex = 0) {
+  const call = resolveApprovalOverGatewayMock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected approval resolver call ${callIndex}`);
+  }
+  return requireRecord(call[0], `approval resolver call ${callIndex} request`);
+}
+
+function expectApprovalResolverCall(params: {
+  callIndex?: number;
+  method: string;
+  id: string;
+  decision?: string;
+}) {
+  const request = approvalResolverRequest(params.callIndex ?? 0);
+  expect(request).toHaveProperty("cfg");
+  expect(request).toHaveProperty("senderId");
+  expect(request.approvalId).toBe(params.id);
+  expect(request.decision).toBe(params.decision ?? "allow-once");
+  if (params.method === "plugin.approval.resolve") {
+    expect(request.resolveMethod).toBe("plugin");
+  } else {
+    expect(request).not.toHaveProperty("resolveMethod");
+  }
+  expect(request.clientDisplayName).toMatch(/^Chat approval \(.+\)$/);
+}
 
 function normalizeDiscordDirectApproverId(value: string | number): string | undefined {
   const normalized = String(value)
@@ -95,6 +130,19 @@ const slackApproveTestPlugin: ChannelPlugin = {
       chatTypes: ["direct", "group", "thread"],
       reactions: true,
       threads: true,
+      nativeCommands: true,
+    },
+  }),
+};
+
+const whatsappApproveTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "whatsapp",
+    label: "WhatsApp",
+    docsPath: "/channels/whatsapp",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
       nativeCommands: true,
     },
   }),
@@ -346,6 +394,7 @@ function setApprovePluginRegistry(): void {
     createTestRegistry([
       { pluginId: "discord", plugin: discordApproveTestPlugin, source: "test" },
       { pluginId: "slack", plugin: slackApproveTestPlugin, source: "test" },
+      { pluginId: "whatsapp", plugin: whatsappApproveTestPlugin, source: "test" },
       { pluginId: "signal", plugin: signalApproveTestPlugin, source: "test" },
       { pluginId: "telegram", plugin: telegramApproveTestPlugin, source: "test" },
     ]),
@@ -439,7 +488,7 @@ describe("handleApproveCommand", () => {
   });
 
   it("submits approval", async () => {
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const result = await handleApproveCommand(
       buildApproveParams(
         "/approve abc allow-once",
@@ -454,16 +503,11 @@ describe("handleApproveCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc", decision: "allow-once" },
-      }),
-    );
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc" });
   });
 
   it("accepts bare approve text for Slack-style manual approvals", async () => {
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const result = await handleApproveCommand(
       buildApproveParams(
         "approve abc allow-once",
@@ -482,12 +526,7 @@ describe("handleApproveCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc", decision: "allow-once" },
-      }),
-    );
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc" });
   });
 
   it("accepts Telegram /approve from configured approvers even when chat access is otherwise blocked", async () => {
@@ -497,17 +536,12 @@ describe("handleApproveCommand", () => {
       SenderId: "123",
     });
     params.command.isAuthorizedSender = false;
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("honors the configured default account for omitted-account /approve auth", async () => {
@@ -520,7 +554,7 @@ describe("handleApproveCommand", () => {
         },
       ]),
     );
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const params = buildApproveParams(
       "/approve abc12345 allow-once",
       {
@@ -549,12 +583,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("accepts Signal /approve from configured approvers even when chat access is otherwise blocked", async () => {
@@ -575,17 +604,12 @@ describe("handleApproveCommand", () => {
       },
     );
     params.command.isAuthorizedSender = false;
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("does not treat implicit default approval auth as a bypass for unauthorized senders", async () => {
@@ -605,7 +629,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
   });
 
   it("does not treat implicit same-chat approval auth as a bypass for unauthorized senders", async () => {
@@ -641,7 +665,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
   });
 
   it("does not allow empty helper approvers to bypass unauthorized sender checks", async () => {
@@ -666,11 +690,11 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
   });
 
   it("keeps same-chat /approve available to authorized senders when helper approvers are empty", async () => {
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     const params = buildApproveParams(
       "/approve abc12345 allow-once",
       {
@@ -692,12 +716,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("accepts Telegram /approve from exec target recipients when native approvals are disabled", async () => {
@@ -725,17 +744,12 @@ describe("handleApproveCommand", () => {
       },
     );
     params.command.isAuthorizedSender = false;
-    callGatewayMock.mockResolvedValue({ ok: true });
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
 
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("requires configured Discord approvers for exec approvals", async () => {
@@ -745,21 +759,21 @@ describe("handleApproveCommand", () => {
         cfg: createDiscordApproveCfg(null),
         senderId: "123",
         expectedText: "not authorized to approve",
-        expectedGatewayCalls: 0,
+        expectedResolverCalls: 0,
       },
       {
         name: "discord non approver",
         cfg: createDiscordApproveCfg({ enabled: true, approvers: ["999"], target: "channel" }),
         senderId: "123",
         expectedText: "not authorized to approve",
-        expectedGatewayCalls: 0,
+        expectedResolverCalls: 0,
       },
       {
         name: "discord approver with rich client disabled",
         cfg: createDiscordApproveCfg({ enabled: false, approvers: ["123"], target: "channel" }),
         senderId: "123",
         expectedText: "Approval allow-once submitted",
-        expectedGatewayCalls: 1,
+        expectedResolverCalls: 1,
         expectedMethod: "exec.approval.resolve",
       },
       {
@@ -767,13 +781,13 @@ describe("handleApproveCommand", () => {
         cfg: createDiscordApproveCfg({ enabled: true, approvers: ["123"], target: "channel" }),
         senderId: "123",
         expectedText: "Approval allow-once submitted",
-        expectedGatewayCalls: 1,
+        expectedResolverCalls: 1,
         expectedMethod: "exec.approval.resolve",
       },
     ] as const) {
-      callGatewayMock.mockReset();
-      if (testCase.expectedGatewayCalls > 0) {
-        callGatewayMock.mockResolvedValue({ ok: true });
+      resolveApprovalOverGatewayMock.mockReset();
+      if (testCase.expectedResolverCalls > 0) {
+        resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
       }
       const result = await handleApproveCommand(
         buildApproveParams("/approve abc12345 allow-once", testCase.cfg, {
@@ -785,14 +799,14 @@ describe("handleApproveCommand", () => {
       );
       expect(result?.shouldContinue, testCase.name).toBe(false);
       expect(result?.reply?.text, testCase.name).toContain(testCase.expectedText);
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
-      if ("expectedMethod" in testCase) {
-        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
-          expect.objectContaining({
-            method: testCase.expectedMethod,
-            params: { id: "abc12345", decision: "allow-once" },
-          }),
-        );
+      expect(resolveApprovalOverGatewayMock, testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedResolverCalls,
+      );
+      if ("expectedMethod" in testCase && testCase.expectedMethod) {
+        expectApprovalResolverCall({
+          method: testCase.expectedMethod,
+          id: "abc12345",
+        });
       }
     }
   });
@@ -810,8 +824,8 @@ describe("handleApproveCommand", () => {
         senderId: "123",
       },
     ] as const) {
-      callGatewayMock.mockReset();
-      callGatewayMock.mockResolvedValue({ ok: true });
+      resolveApprovalOverGatewayMock.mockReset();
+      resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
       const result = await handleApproveCommand(
         buildApproveParams("/approve legacy-plugin-123 allow-once", testCase.cfg, {
           Provider: "discord",
@@ -822,13 +836,15 @@ describe("handleApproveCommand", () => {
       );
       expect(result?.shouldContinue, testCase.name).toBe(false);
       expect(result?.reply?.text, testCase.name).toContain("not authorized to approve");
-      expect(callGatewayMock, testCase.name).not.toHaveBeenCalled();
+      expect(resolveApprovalOverGatewayMock, testCase.name).not.toHaveBeenCalled();
     }
   });
 
   it("preserves legacy unprefixed plugin approval fallback on Discord", async () => {
-    callGatewayMock.mockRejectedValueOnce(new Error("unknown or expired approval id"));
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    resolveApprovalOverGatewayMock.mockRejectedValueOnce(
+      new Error("unknown or expired approval id"),
+    );
+    resolveApprovalOverGatewayMock.mockResolvedValueOnce(undefined);
     const result = await handleApproveCommand(
       buildApproveParams(
         "/approve legacy-plugin-123 allow-once",
@@ -844,14 +860,12 @@ describe("handleApproveCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledTimes(2);
-    expect(callGatewayMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        method: "plugin.approval.resolve",
-        params: { id: "legacy-plugin-123", decision: "allow-once" },
-      }),
-    );
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(2);
+    expectApprovalResolverCall({
+      callIndex: 1,
+      method: "plugin.approval.resolve",
+      id: "legacy-plugin-123",
+    });
   });
 
   it("returns the underlying not-found error for plugin-only approval routing", async () => {
@@ -875,7 +889,9 @@ describe("handleApproveCommand", () => {
         },
       ]),
     );
-    callGatewayMock.mockRejectedValueOnce(new Error("unknown or expired approval id"));
+    resolveApprovalOverGatewayMock.mockRejectedValueOnce(
+      new Error("unknown or expired approval id"),
+    );
 
     const result = await handleApproveCommand(
       buildApproveParams(
@@ -896,13 +912,8 @@ describe("handleApproveCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Failed to submit approval");
     expect(result?.reply?.text).toContain("unknown or expired approval id");
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "plugin.approval.resolve",
-        params: { id: "abc123", decision: "allow-once" },
-      }),
-    );
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(1);
+    expectApprovalResolverCall({ method: "plugin.approval.resolve", id: "abc123" });
   });
 
   it("requires configured Discord approvers for plugin approvals", async () => {
@@ -912,19 +923,19 @@ describe("handleApproveCommand", () => {
         cfg: createDiscordApproveCfg({ enabled: false, approvers: ["999"], target: "channel" }),
         senderId: "123",
         expectedText: "not authorized to approve plugin requests",
-        expectedGatewayCalls: 0,
+        expectedResolverCalls: 0,
       },
       {
         name: "discord plugin approver",
         cfg: createDiscordApproveCfg({ enabled: false, approvers: ["123"], target: "channel" }),
         senderId: "123",
         expectedText: "Approval allow-once submitted",
-        expectedGatewayCalls: 1,
+        expectedResolverCalls: 1,
       },
     ] as const) {
-      callGatewayMock.mockReset();
-      if (testCase.expectedGatewayCalls > 0) {
-        callGatewayMock.mockResolvedValue({ ok: true });
+      resolveApprovalOverGatewayMock.mockReset();
+      if (testCase.expectedResolverCalls > 0) {
+        resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
       }
       const result = await handleApproveCommand(
         buildApproveParams("/approve plugin:abc123 allow-once", testCase.cfg, {
@@ -936,14 +947,11 @@ describe("handleApproveCommand", () => {
       );
       expect(result?.shouldContinue, testCase.name).toBe(false);
       expect(result?.reply?.text, testCase.name).toContain(testCase.expectedText);
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
-      if (testCase.expectedGatewayCalls > 0) {
-        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
-          expect.objectContaining({
-            method: "plugin.approval.resolve",
-            params: { id: "plugin:abc123", decision: "allow-once" },
-          }),
-        );
+      expect(resolveApprovalOverGatewayMock, testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedResolverCalls,
+      );
+      if (testCase.expectedResolverCalls > 0) {
+        expectApprovalResolverCall({ method: "plugin.approval.resolve", id: "plugin:abc123" });
       }
     }
   });
@@ -960,7 +968,7 @@ describe("handleApproveCommand", () => {
           SenderId: "123",
         },
         expectedText: "targets a different Telegram bot",
-        expectGatewayCalls: 0,
+        expectResolverCalls: 0,
       },
       {
         name: "unknown approval id",
@@ -971,9 +979,12 @@ describe("handleApproveCommand", () => {
           Surface: "telegram",
           SenderId: "123",
         },
-        setup: () => callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id")),
+        setup: () =>
+          resolveApprovalOverGatewayMock.mockRejectedValue(
+            new Error("unknown or expired approval id"),
+          ),
         expectedText: "unknown or expired approval id",
-        expectGatewayCalls: 2,
+        expectResolverCalls: 2,
       },
       {
         name: "telegram disabled native delivery reports the channel-disabled message",
@@ -985,7 +996,7 @@ describe("handleApproveCommand", () => {
           SenderId: "123",
         },
         expectedText: "Telegram exec approvals are not enabled",
-        expectGatewayCalls: 0,
+        expectResolverCalls: 0,
       },
       {
         name: "non approver",
@@ -997,10 +1008,10 @@ describe("handleApproveCommand", () => {
           SenderId: "123",
         },
         expectedText: "not authorized to approve",
-        expectGatewayCalls: 0,
+        expectResolverCalls: 0,
       },
     ] as const) {
-      callGatewayMock.mockReset();
+      resolveApprovalOverGatewayMock.mockReset();
       testCase.setup?.();
       const result = await handleApproveCommand(
         buildApproveParams(testCase.commandBody, testCase.cfg, testCase.ctx),
@@ -1008,7 +1019,9 @@ describe("handleApproveCommand", () => {
       );
       expect(result?.shouldContinue, testCase.name).toBe(false);
       expect(result?.reply?.text, testCase.name).toContain(testCase.expectedText);
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectGatewayCalls);
+      expect(resolveApprovalOverGatewayMock, testCase.name).toHaveBeenCalledTimes(
+        testCase.expectResolverCalls,
+      );
     }
   });
 
@@ -1020,21 +1033,21 @@ describe("handleApproveCommand", () => {
       {
         scopes: ["operator.write"],
         expectedText: "requires operator.approvals",
-        expectedGatewayCalls: 0,
+        expectedResolverCalls: 0,
       },
       {
         scopes: ["operator.approvals"],
         expectedText: "Approval allow-once submitted",
-        expectedGatewayCalls: 1,
+        expectedResolverCalls: 1,
       },
       {
         scopes: ["operator.admin"],
         expectedText: "Approval allow-once submitted",
-        expectedGatewayCalls: 1,
+        expectedResolverCalls: 1,
       },
     ] as const) {
-      callGatewayMock.mockReset();
-      callGatewayMock.mockResolvedValue({ ok: true });
+      resolveApprovalOverGatewayMock.mockReset();
+      resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
       const result = await handleApproveCommand(
         buildApproveParams("/approve abc allow-once", cfg, {
           Provider: "webchat",
@@ -1046,16 +1059,15 @@ describe("handleApproveCommand", () => {
 
       expect(result?.shouldContinue, String(testCase.scopes)).toBe(false);
       expect(result?.reply?.text, String(testCase.scopes)).toContain(testCase.expectedText);
-      expect(callGatewayMock, String(testCase.scopes)).toHaveBeenCalledTimes(
-        testCase.expectedGatewayCalls,
+      expect(resolveApprovalOverGatewayMock, String(testCase.scopes)).toHaveBeenCalledTimes(
+        testCase.expectedResolverCalls,
       );
-      if (testCase.expectedGatewayCalls > 0) {
-        expect(callGatewayMock, String(testCase.scopes)).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            method: "exec.approval.resolve",
-            params: { id: "abc", decision: "allow-once" },
-          }),
-        );
+      if (testCase.expectedResolverCalls > 0) {
+        expectApprovalResolverCall({
+          callIndex: resolveApprovalOverGatewayMock.mock.calls.length - 1,
+          method: "exec.approval.resolve",
+          id: "abc",
+        });
       }
     }
   });

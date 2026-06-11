@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+// Control UI tests cover channels behavior.
+import { render } from "lit";
+import { describe, expect, it, vi } from "vitest";
+import type { WhatsAppStatus } from "../types.ts";
 import {
   channelEnabled,
   resolveChannelConfigured,
   resolveChannelDisplayState,
 } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+import { renderWhatsAppCard } from "./channels.whatsapp.ts";
 
 function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   return {
@@ -41,80 +45,160 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   };
 }
 
+function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {
+  return {
+    configured: true,
+    linked: false,
+    running: false,
+    connected: false,
+    reconnectAttempts: 0,
+    ...overrides,
+  };
+}
+
+function renderWhatsAppButtons(params: {
+  linked?: boolean;
+  qrDataUrl?: string | null;
+  onWhatsAppStart?: ChannelsProps["onWhatsAppStart"];
+}) {
+  const whatsapp = createWhatsAppStatus({ linked: params.linked === true });
+  const props = createProps({
+    ts: Date.now(),
+    channelOrder: ["whatsapp"],
+    channelLabels: { whatsapp: "WhatsApp" },
+    channels: { whatsapp },
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  });
+  props.whatsappQrDataUrl = params.qrDataUrl ?? null;
+  if (params.onWhatsAppStart) {
+    props.onWhatsAppStart = params.onWhatsAppStart;
+  }
+
+  const container = document.createElement("div");
+  render(renderWhatsAppCard({ props, whatsapp, accountCountLabel: null }), container);
+  const buttons = Array.from(container.querySelectorAll("button"));
+  return {
+    buttons,
+    labels: buttons.map((button) => button.textContent?.trim()),
+  };
+}
+
 describe("channel display selectors", () => {
   it("returns the channel summary configured flag when present", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["discord"],
-      channelLabels: { discord: "Discord" },
-      channels: { discord: { configured: false } },
+      channelOrder: ["guildchat"],
+      channelLabels: { guildchat: "Guild Chat" },
+      channels: { guildchat: { configured: false } },
       channelAccounts: {
-        discord: [{ accountId: "discord-main", configured: true }],
+        guildchat: [{ accountId: "guild-main", configured: true }],
       },
-      channelDefaultAccountId: { discord: "discord-main" },
+      channelDefaultAccountId: { guildchat: "guild-main" },
     });
 
-    expect(resolveChannelConfigured("discord", props)).toBe(false);
-    expect(resolveChannelDisplayState("discord", props).configured).toBe(false);
+    expect(resolveChannelConfigured("guildchat", props)).toBe(false);
+    expect(resolveChannelDisplayState("guildchat", props).configured).toBe(false);
   });
 
   it("falls back to the default account when the channel summary omits configured", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["discord"],
-      channelLabels: { discord: "Discord" },
-      channels: { discord: { running: true } },
+      channelOrder: ["guildchat"],
+      channelLabels: { guildchat: "Guild Chat" },
+      channels: { guildchat: { running: true } },
       channelAccounts: {
-        discord: [
+        guildchat: [
           { accountId: "default", configured: false },
-          { accountId: "discord-main", configured: true },
+          { accountId: "guild-main", configured: true },
         ],
       },
-      channelDefaultAccountId: { discord: "discord-main" },
+      channelDefaultAccountId: { guildchat: "guild-main" },
     });
 
-    const displayState = resolveChannelDisplayState("discord", props);
+    const displayState = resolveChannelDisplayState("guildchat", props);
 
-    expect(resolveChannelConfigured("discord", props)).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("discord-main");
-    expect(channelEnabled("discord", props)).toBe(true);
+    expect(resolveChannelConfigured("guildchat", props)).toBe(true);
+    expect(displayState.defaultAccount?.accountId).toBe("guild-main");
+    expect(channelEnabled("guildchat", props)).toBe(true);
   });
 
   it("falls back to the first account when no default account id is available", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["slack"],
-      channelLabels: { slack: "Slack" },
-      channels: { slack: { running: true } },
+      channelOrder: ["workspace"],
+      channelLabels: { workspace: "Workspace" },
+      channels: { workspace: { running: true } },
       channelAccounts: {
-        slack: [{ accountId: "workspace-a", configured: true }],
+        workspace: [{ accountId: "workspace-a", configured: true }],
       },
       channelDefaultAccountId: {},
     });
 
-    const displayState = resolveChannelDisplayState("slack", props);
+    const displayState = resolveChannelDisplayState("workspace", props);
 
-    expect(resolveChannelConfigured("slack", props)).toBe(true);
+    expect(resolveChannelConfigured("workspace", props)).toBe(true);
     expect(displayState.defaultAccount?.accountId).toBe("workspace-a");
   });
 
   it("keeps disabled channels hidden when neither summary nor accounts are active", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["signal"],
-      channelLabels: { signal: "Signal" },
-      channels: { signal: {} },
+      channelOrder: ["quietchat"],
+      channelLabels: { quietchat: "Quiet Chat" },
+      channels: { quietchat: {} },
       channelAccounts: {
-        signal: [{ accountId: "default", configured: false, running: false, connected: false }],
+        quietchat: [{ accountId: "default", configured: false, running: false, connected: false }],
       },
-      channelDefaultAccountId: { signal: "default" },
+      channelDefaultAccountId: { quietchat: "default" },
     });
 
-    const displayState = resolveChannelDisplayState("signal", props);
+    const displayState = resolveChannelDisplayState("quietchat", props);
 
     expect(displayState.configured).toBe(false);
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
-    expect(channelEnabled("signal", props)).toBe(false);
+    expect(channelEnabled("quietchat", props)).toBe(false);
+  });
+});
+
+describe("WhatsApp card actions", () => {
+  it("shows QR as the primary action before WhatsApp is linked", () => {
+    const onWhatsAppStart = vi.fn();
+    const { buttons, labels } = renderWhatsAppButtons({
+      linked: false,
+      onWhatsAppStart,
+    });
+
+    expect(labels).toEqual(["Save", "Reload", "Show QR", "Logout", "Refresh"]);
+
+    const showQr = buttons.find((button) => button.textContent?.trim() === "Show QR");
+    expect(showQr).toBeInstanceOf(HTMLButtonElement);
+    showQr!.click();
+    expect(onWhatsAppStart).toHaveBeenCalledWith(false);
+  });
+
+  it("uses relink as the explicit action after WhatsApp is linked", () => {
+    const onWhatsAppStart = vi.fn();
+    const { buttons, labels } = renderWhatsAppButtons({
+      linked: true,
+      onWhatsAppStart,
+    });
+
+    expect(labels).toEqual(["Save", "Reload", "Relink", "Logout", "Refresh"]);
+
+    const relink = buttons.find((button) => button.textContent?.trim() === "Relink");
+    expect(relink).toBeInstanceOf(HTMLButtonElement);
+    relink!.click();
+    expect(onWhatsAppStart).toHaveBeenCalledWith(true);
+  });
+
+  it("shows wait for scan only while a QR is displayed", () => {
+    const { labels } = renderWhatsAppButtons({
+      linked: false,
+      qrDataUrl: "data:image/png;base64,current-qr",
+    });
+
+    expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
   });
 });

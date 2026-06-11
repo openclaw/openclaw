@@ -1,3 +1,8 @@
+/** Handles /bash and ! shell command chat shortcuts. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
 import { createExecTool } from "../../agents/bash-tools.js";
@@ -6,16 +11,13 @@ import { isCommandFlagEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
 const DEFAULT_FOREGROUND_MS = 2000;
@@ -65,7 +67,7 @@ function formatOutputBlock(text: string) {
 
 function parseBashRequest(raw: string): BashRequest | null {
   const trimmed = raw.trimStart();
-  let restSource = "";
+  let restSource;
   if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("/bash")) {
     const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
     if (!match) {
@@ -180,6 +182,7 @@ function buildUsageReply(): ReplyPayload {
   };
 }
 
+/** Parses, authorizes, starts, polls, or stops chat-driven bash commands. */
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -210,7 +213,11 @@ export async function handleBashChatCommand(params: {
   if (!params.elevated.enabled || !params.elevated.allowed) {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      sessionKey: resolveRuntimePolicySessionKey({
+        cfg: params.cfg,
+        ctx: params.ctx,
+        sessionKey: params.sessionKey,
+      }),
     }).sandboxed;
     return {
       text: formatElevatedUnavailableMessage({
@@ -347,6 +354,8 @@ export async function handleBashChatCommand(params: {
       allowBackground: true,
       timeoutSec,
       sessionKey: params.sessionKey,
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
       notifyOnExit,
       notifyOnExitEmptySuccess,
       elevated: {
@@ -401,8 +410,4 @@ export async function handleBashChatCommand(params: {
       text: [`⚠️ bash failed: ${commandText}`, formatOutputBlock(message)].join("\n"),
     };
   }
-}
-
-export function resetBashChatCommandForTests() {
-  activeJob = null;
 }

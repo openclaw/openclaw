@@ -1,3 +1,5 @@
+// Covers outbound session context construction for canonical keys, policy keys,
+// conversation type inference, requester metadata, and agent derivation.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn());
@@ -102,16 +104,59 @@ describe("buildOutboundSessionContext", () => {
     expect(
       buildOutboundSessionContext({
         cfg: {} as never,
-        requesterSenderId: "id:telegram:123",
+        requesterSenderId: "id:forum:123",
         requesterSenderName: "  Alice  ",
         requesterSenderUsername: "  alice_u  ",
         requesterSenderE164: "  +15551234567  ",
       }),
     ).toEqual({
-      requesterSenderId: "id:telegram:123",
+      requesterSenderId: "id:forum:123",
       requesterSenderName: "Alice",
       requesterSenderUsername: "alice_u",
       requesterSenderE164: "+15551234567",
+    });
+  });
+
+  it("normalizes explicit conversation type for policy resolution", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:generic",
+        conversationType: "channel",
+      }),
+    ).toEqual({
+      key: "agent:main:generic",
+      conversationType: "group",
+    });
+
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        conversationType: "dm",
+      }),
+    ).toEqual({
+      conversationType: "direct",
+    });
+  });
+
+  it("falls back to isGroup when no explicit conversation type is provided", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "agent:main:generic",
+        isGroup: true,
+      }),
+    ).toEqual({
+      key: "agent:main:generic",
+      conversationType: "group",
+    });
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        isGroup: false,
+      }),
+    ).toEqual({
+      conversationType: "direct",
     });
   });
 

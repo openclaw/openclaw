@@ -1,6 +1,9 @@
+// Covers Bedrock AWS SDK auth markers and marker-backed discovery secret guardrails.
 import { describe, expect, it } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import {
+  resolveApiKeyFromCredential,
   resolveAwsSdkApiKeyVarName,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
@@ -42,7 +45,7 @@ describe("resolveMissingProviderApiKey — aws-sdk auth", () => {
       profileApiKey: undefined,
     });
 
-    // Provider should be returned unchanged — no apiKey field added
+    // Provider stays unchanged; instance-role auth must not become a fake apiKey marker.
     expect(result).toBe(baseProvider);
     expect(result.apiKey).toBeUndefined();
   });
@@ -119,7 +122,7 @@ describe("resolveMissingProviderApiKey — aws-sdk auth", () => {
       profileApiKey: undefined,
     });
 
-    // Should return unchanged — already has apiKey
+    // Existing apiKey config wins over inferred AWS environment markers.
     expect(result).toBe(providerWithKey);
     expect(result.apiKey).toBe("existing-key");
   });
@@ -154,5 +157,40 @@ describe("resolveAwsSdkApiKeyVarName", () => {
         AWS_PROFILE: "default",
       }),
     ).toBe("AWS_PROFILE");
+  });
+});
+
+describe("provider discovery auth marker guardrails", () => {
+  it("suppresses discovery secrets for marker-backed vLLM credentials", () => {
+    const resolved = resolveApiKeyFromCredential({
+      type: "api_key",
+      provider: "vllm",
+      keyRef: { source: "file", provider: "vault", id: "/vllm/apiKey" },
+    });
+
+    expect(resolved?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(resolved?.discoveryApiKey).toBeUndefined();
+  });
+
+  it("suppresses discovery secrets for marker-backed Hugging Face credentials", () => {
+    const resolved = resolveApiKeyFromCredential({
+      type: "api_key",
+      provider: "huggingface",
+      keyRef: { source: "exec", provider: "vault", id: "providers/hf/token" },
+    });
+
+    expect(resolved?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(resolved?.discoveryApiKey).toBeUndefined();
+  });
+
+  it("keeps all-caps plaintext API keys for authenticated discovery", () => {
+    const resolved = resolveApiKeyFromCredential({
+      type: "api_key",
+      provider: "vllm",
+      key: "ALLCAPS_SAMPLE",
+    });
+
+    expect(resolved?.apiKey).toBe("ALLCAPS_SAMPLE");
+    expect(resolved?.discoveryApiKey).toBe("ALLCAPS_SAMPLE");
   });
 });

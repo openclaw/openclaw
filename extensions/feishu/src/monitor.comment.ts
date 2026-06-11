@@ -1,6 +1,7 @@
+// Feishu plugin module implements monitor.comment behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient } from "./client.js";
 import {
@@ -53,6 +54,7 @@ type ResolveDriveCommentEventParams = {
   cfg: ClawdbotConfig;
   accountId: string;
   event: FeishuDriveCommentNoticeEvent;
+  account?: ResolvedFeishuAccount;
   botOpenId?: string;
   createClient?: (account: ResolvedFeishuAccount) => FeishuRequestClient;
   verificationTimeoutMs?: number;
@@ -60,7 +62,7 @@ type ResolveDriveCommentEventParams = {
   waitMs?: (ms: number) => Promise<void>;
 };
 
-export type ResolvedDriveCommentEventTurn = {
+type ResolvedDriveCommentEventTurn = {
   eventId: string;
   messageId: string;
   commentId: string;
@@ -162,10 +164,6 @@ type ResolvedWholeCommentTimelineEntry = {
   isBotAuthored: boolean;
   content: ParsedCommentContent;
 };
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -334,7 +332,7 @@ async function resolveParsedCommentContent(params: {
               resolvedObjToken: objToken,
             };
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger?.(
               `feishu[${params.accountId}]: wiki link resolution threw token=${link.wikiNodeToken} error=${formatErrorMessage(error)}`,
             );
@@ -364,7 +362,9 @@ async function resolveParsedCommentContent(params: {
 }
 
 async function delayMs(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function buildDriveCommentTargetUrl(params: {
@@ -486,7 +486,7 @@ async function requestFeishuOpenApi<T>(params: {
     { timeoutMs: params.timeoutMs },
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))
-    .catch((error) => {
+    .catch((error: unknown) => {
       params.logger?.(`${params.errorLabel}: ${formatErrorDetails(error)}`);
       return null;
     });
@@ -1224,8 +1224,9 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     cfg,
     accountId,
     event,
+    account,
     botOpenId,
-    createClient = (account) => createFeishuClient(account) as FeishuRequestClient,
+    createClient,
     verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
     waitMs = delayMs,
@@ -1262,8 +1263,11 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     return null;
   }
 
-  const account = resolveFeishuAccount({ cfg, accountId });
-  const client = createClient(account);
+  const client = createClient
+    ? createClient(account ?? ({ accountId } as ResolvedFeishuAccount))
+    : (createFeishuClient(
+        (await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }),
+      ) as FeishuRequestClient);
   const context = await fetchDriveCommentContext({
     client,
     fileToken,

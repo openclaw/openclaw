@@ -1,15 +1,23 @@
-import { listPotentialConfiguredChannelIds } from "../../../channels/config-presence.js";
+// Doctor warnings for configured channels blocked by disabled channel plugins.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  listExplicitConfiguredChannelIdsForConfig,
+  resolveConfiguredChannelPresencePolicy,
+} from "../../../plugins/channel-plugin-ids.js";
 import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 
 export type ChannelPluginBlockerHit = {
+  /** Normalized configured channel id whose backing plugin is unavailable. */
   channelId: string;
+  /** Plugin id that would provide the configured channel. */
   pluginId: string;
+  /** Effective activation reason preventing the plugin from loading. */
   reason: "disabled in config" | "plugins disabled";
 };
 
@@ -32,6 +40,7 @@ function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
   });
 }
 
+/** Find configured channel ids whose backing plugins are explicitly disabled. */
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -40,17 +49,30 @@ export function scanConfiguredChannelPluginBlockers(
     return [];
   }
   const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(cfg, env).map((id) => id.trim()),
+    listExplicitConfiguredChannelIdsForConfig(cfg)
+      .map((channelId) => normalizeOptionalLowercaseString(channelId))
+      .filter((channelId): channelId is string => Boolean(channelId)),
   );
   if (configuredChannelIds.size === 0) {
     return [];
   }
 
   const pluginsConfig = normalizePluginsConfig(cfg.plugins);
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     env,
+    includeDisabled: true,
   });
+  const activeConfiguredChannelIds = new Set(
+    resolveConfiguredChannelPresencePolicy({
+      config: cfg,
+      env,
+      includePersistedAuthState: false,
+      manifestRecords: registry.plugins,
+    })
+      .filter((entry) => entry.effective)
+      .map((entry) => entry.channelId),
+  );
   const hits: ChannelPluginBlockerHit[] = [];
 
   for (const plugin of registry.plugins) {
@@ -74,8 +96,15 @@ export function scanConfiguredChannelPluginBlockers(
       continue;
     }
 
-    for (const channelId of plugin.channels) {
+    for (const rawChannelId of plugin.channels) {
+      const channelId = normalizeOptionalLowercaseString(rawChannelId);
+      if (!channelId) {
+        continue;
+      }
       if (!configuredChannelIds.has(channelId)) {
+        continue;
+      }
+      if (activeConfiguredChannelIds.has(channelId)) {
         continue;
       }
       hits.push({
@@ -99,6 +128,7 @@ function formatReason(hit: ChannelPluginBlockerHit): string {
   return `plugin "${sanitizeForLog(hit.pluginId)}" is not loadable (${sanitizeForLog(hit.reason)}).`;
 }
 
+/** Format doctor warnings for configured channels blocked by plugin activation state. */
 export function collectConfiguredChannelPluginBlockerWarnings(
   hits: ChannelPluginBlockerHit[],
 ): string[] {
@@ -108,6 +138,7 @@ export function collectConfiguredChannelPluginBlockerWarnings(
   );
 }
 
+/** Return true when a setup warning targets a channel already explained by plugin blockers. */
 export function isWarningBlockedByChannelPlugin(
   warning: string,
   hits: ChannelPluginBlockerHit[],

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Feishu tests cover comment dispatcher plugin behavior.
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -34,7 +35,52 @@ vi.mock("./runtime.js", () => ({
 
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
+}
+
 describe("createFeishuCommentReplyDispatcher", () => {
+  afterAll(() => {
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./comment-dispatcher-runtime-api.js");
+    vi.doUnmock("./comment-reaction.js");
+    vi.doUnmock("./drive.js");
+    vi.doUnmock("./runtime.js");
+    vi.resetModules();
+  });
+
+  function createTestCommentReplyDispatcher() {
+    createFeishuCommentReplyDispatcher({
+      cfg: {} as never,
+      agentId: "main",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      accountId: "main",
+      fileToken: "doc_token_1",
+      fileType: "docx",
+      commentId: "comment_1",
+      replyId: "reply_1",
+      isWholeComment: false,
+    });
+  }
+
+  function latestReplyDispatcherOptions() {
+    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    if (!options) {
+      throw new Error("expected reply dispatcher options");
+    }
+    return options as {
+      deliver: (payload: { text: string }, phase: { kind: string }) => Promise<void> | void;
+      onCleanup?: () => Promise<void> | void;
+      onReplyStart?: () => Promise<void> | void;
+    };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     resolveFeishuRuntimeAccountMock.mockReturnValue({
@@ -94,39 +140,29 @@ describe("createFeishuCommentReplyDispatcher", () => {
       cleanup,
     });
 
-    createFeishuCommentReplyDispatcher({
-      cfg: {} as never,
-      agentId: "main",
-      runtime: { log: vi.fn(), error: vi.fn() } as never,
-      accountId: "main",
-      fileToken: "doc_token_1",
-      fileType: "docx",
-      commentId: "comment_1",
-      replyId: "reply_1",
-      isWholeComment: false,
-    });
+    createTestCommentReplyDispatcher();
 
-    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
-    const deliverPromise = options.deliver({ text: "hello world" }, { kind: "final" });
-    const status = await Promise.race([
-      deliverPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const options = latestReplyDispatcherOptions();
+    const deliverPromise = Promise.resolve(
+      options.deliver({ text: "hello world" }, { kind: "final" }),
+    );
+    const status = await raceWithNextMacrotask(deliverPromise.then(() => "done"));
 
     expect(status).toBe("done");
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        file_token: "doc_token_1",
-        file_type: "docx",
-        comment_id: "comment_1",
-        content: "hello world",
-        is_whole_comment: false,
-      }),
-    );
+    const client = createFeishuClientMock.mock.results[0]?.value;
+    if (!client) {
+      throw new Error("Expected Feishu client");
+    }
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(client, {
+      file_token: "doc_token_1",
+      file_type: "docx",
+      comment_id: "comment_1",
+      content: "hello world",
+      is_whole_comment: false,
+    });
     expect(cleanup).not.toHaveBeenCalled();
 
-    options.onCleanup?.();
+    void options.onCleanup?.();
     expect(cleanup).toHaveBeenCalledTimes(1);
 
     resolveCleanup?.();
@@ -140,19 +176,9 @@ describe("createFeishuCommentReplyDispatcher", () => {
       cleanup: vi.fn(async () => {}),
     });
 
-    createFeishuCommentReplyDispatcher({
-      cfg: {} as never,
-      agentId: "main",
-      runtime: { log: vi.fn(), error: vi.fn() } as never,
-      accountId: "main",
-      fileToken: "doc_token_1",
-      fileType: "docx",
-      commentId: "comment_1",
-      replyId: "reply_1",
-      isWholeComment: false,
-    });
+    createTestCommentReplyDispatcher();
 
-    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    const options = latestReplyDispatcherOptions();
     await options.onReplyStart?.();
 
     expect(start).toHaveBeenCalledTimes(1);

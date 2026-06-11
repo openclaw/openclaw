@@ -1,10 +1,10 @@
+// Feishu plugin module implements comment shared behavior.
 import {
-  asOptionalRecord,
-  hasNonEmptyString as sharedHasNonEmptyString,
   isRecord as sharedIsRecord,
   normalizeOptionalString,
+  normalizeStringEntries,
   readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FEISHU_COMMENT_FILE_TYPES, type CommentFileType } from "./comment-target.js";
 
 export function encodeQuery(params: Record<string, string | undefined>): string {
@@ -25,22 +25,187 @@ export const normalizeString = normalizeOptionalString;
 
 export const isRecord = sharedIsRecord;
 
-export const asRecord = asOptionalRecord;
+export function formatFeishuApiError(
+  error: unknown,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): string {
+  if (!isRecord(error)) {
+    return typeof error === "string" ? error : JSON.stringify(error);
+  }
+  const config = isRecord(error.config) ? error.config : undefined;
+  const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response?.data : undefined;
+  const feishuLogId =
+    readString(responseData?.log_id) ||
+    (options.includeNestedErrorLogId
+      ? readString(isRecord(responseData?.error) ? responseData.error.log_id : undefined)
+      : undefined);
+  const nestedError = isRecord(responseData?.error) ? responseData.error : undefined;
 
-export const hasNonEmptyString = sharedHasNonEmptyString;
+  return JSON.stringify({
+    message:
+      typeof error.message === "string"
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : JSON.stringify(error),
+    code: readString(error.code),
+    method: readString(config?.method),
+    url: readString(config?.url),
+    ...(options.includeConfigParams ? { params: config?.params } : {}),
+    http_status: typeof response?.status === "number" ? response.status : undefined,
+    feishu_code:
+      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
+    feishu_msg: readString(responseData?.msg),
+    feishu_log_id: feishuLogId,
+    feishu_troubleshooter:
+      readString(responseData?.troubleshooter) || readString(nestedError?.troubleshooter),
+  });
+}
 
-export type ParsedCommentDocumentRef = {
+function formatFeishuApiFailure(
+  error: unknown,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): string {
+  const details = formatFeishuApiError(error, options);
+  return `${errorPrefix}: ${details || "unknown error"}`;
+}
+
+export function createFeishuApiError(
+  error: unknown,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): Error {
+  return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
+}
+
+// Feishu message-API error codes that signal a transient rate limit; safe to retry with backoff.
+// 230020: per-chat rate limit (ext=chat rate limit) — confirmed by real concurrent load test.
+// 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
+// Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
+const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+const FEISHU_SEND_MAX_RETRIES = 2;
+const FEISHU_SEND_RETRY_BASE_MS = 500;
+
+/**
+ * Returns a numeric rate-limit signal when an AxiosError indicates a retryable
+ * Feishu message-API rate limit. Sources, in priority order:
+ *   1. Gateway-level HTTP 429 (app-wide quota; `x-ogw-ratelimit-reset` header)
+ *   2. Business-level `code` in `error.response.data.code` matching
+ *      FEISHU_SEND_RATE_LIMIT_CODES (e.g. 230020 per-chat, 11232 tenant-level).
+ * Returns `undefined` for all other errors so they propagate without retry.
+ */
+export function getFeishuSendRateLimitCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  // HTTP 429: Feishu Open API gateway-level rate limit, always retry.
+  if (typeof response?.status === "number" && response.status === 429) {
+    return 429;
+  }
+  const data = isRecord(response?.data) ? response.data : undefined;
+  const code = data?.code;
+  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
+
+/**
+ * Returns a retryable rate-limit code when a fulfilled (non-throwing) Feishu
+ * SDK response embeds it in the response body. The Feishu node SDK can resolve
+ * with `{ code: 11232, msg: "..." }` instead of throwing — see typing.ts
+ * (getBackoffCodeFromResponse) and issue #28157 for the same behavior on
+ * messageReaction.create. Without this classification, requestFeishuApi would
+ * `return` the rate-limited body and downstream `assertFeishuMessageApiSuccess`
+ * would fail once with no retry.
+ */
+export function getFeishuSendRateLimitCodeFromResponse(response: unknown): number | undefined {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+  const code = (response as { code?: unknown }).code;
+  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
+
+export async function requestFeishuApi<T>(
+  request: () => Promise<T>,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+    /** Base delay per retry attempt in ms; multiplied by attempt index. @internal */
+    retryDelayMs?: number;
+  } = {},
+): Promise<T> {
+  const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
+  let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
+  for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, attempt * retryDelayMs);
+      });
+    }
+    try {
+      const result = await request();
+      // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
+      // instead of throwing. Classify before returning so retry covers both shapes.
+      const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
+      if (fulfilledRateLimit !== undefined) {
+        // Capture for the synthetic-error path below; on a non-final attempt
+        // continue retrying, on the final attempt fall through so the loop
+        // exits and the wrapped exhaustion error is thrown.
+        lastFulfilledRateLimit = { response: result, code: fulfilledRateLimit };
+        if (attempt < FEISHU_SEND_MAX_RETRIES) {
+          continue;
+        }
+        break;
+      }
+      return result;
+    } catch (error) {
+      const isRetryable =
+        attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
+      if (!isRetryable) {
+        throw createFeishuApiError(error, errorPrefix, options);
+      }
+      // Rate-limit on a non-final attempt — loop continues to next retry.
+    }
+  }
+  // Exhausted retries while the SDK kept fulfilling rate-limit bodies. Surface
+  // the last response as an error so callers see the same wrapped shape they
+  // would have seen if the SDK had thrown.
+  if (lastFulfilledRateLimit) {
+    const synthetic = Object.assign(
+      new Error(`Request fulfilled with rate-limit code ${lastFulfilledRateLimit.code}`),
+      { response: { status: 200, data: lastFulfilledRateLimit.response } },
+    );
+    throw createFeishuApiError(synthetic, errorPrefix, options);
+  }
+  // Unreachable: every iteration either returns or throws. Required for TypeScript exhaustiveness.
+  throw createFeishuApiError(new Error("unreachable"), errorPrefix, options);
+}
+
+type ParsedCommentDocumentRef = {
   fileType?: CommentFileType;
   fileToken?: string;
 };
 
-export type ParsedCommentMention = {
+type ParsedCommentMention = {
   userId: string;
   displayText: string;
   isBotMention: boolean;
 };
 
-export type ParsedCommentLinkedDocumentKind =
+type ParsedCommentLinkedDocumentKind =
   | CommentFileType
   | "wiki"
   | "mindnote"
@@ -48,7 +213,7 @@ export type ParsedCommentLinkedDocumentKind =
   | "base"
   | "unknown";
 
-export type ParsedCommentResolvedDocumentType = Exclude<
+type ParsedCommentResolvedDocumentType = Exclude<
   ParsedCommentLinkedDocumentKind,
   "wiki" | "unknown"
 >;
@@ -164,10 +329,7 @@ function parseCommentLinkedDocumentPath(pathname: string): {
   urlKind: ParsedCommentResolvedDocumentType | "wiki";
   token: string;
 } | null {
-  const segments = pathname
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = normalizeStringEntries(pathname.split("/"));
   const offset = segments[0]?.toLowerCase() === "space" ? 1 : 0;
   const kind = COMMENT_LINK_KIND_ALIASES.get(segments[offset]?.toLowerCase() ?? "");
   const token = normalizeString(segments[offset + 1]);
@@ -319,10 +481,6 @@ export function parseCommentContentElements(params: {
     linkedDocuments,
     botMentioned,
   };
-}
-
-export function extractCommentElementText(element: unknown): string | undefined {
-  return parseCommentContentElements({ elements: [element] }).plainText;
 }
 
 export function extractReplyText(

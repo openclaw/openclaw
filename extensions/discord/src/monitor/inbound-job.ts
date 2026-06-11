@@ -1,3 +1,10 @@
+// Discord plugin module implements inbound job behavior.
+import {
+  resolveDiscordChannelIdSafe,
+  resolveDiscordChannelInfoSafe,
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentSafe,
+} from "./channel-access.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type DiscordInboundJobRuntimeField =
@@ -6,17 +13,14 @@ type DiscordInboundJobRuntimeField =
   | "guildHistories"
   | "client"
   | "threadBindings"
+  // Function-backed feedback stays runtime-only; payload must remain
+  // materializable data so queued jobs cannot accidentally serialize it.
+  | "replyTypingFeedback"
   | "discordRestFetch";
 
-export type DiscordInboundJobRuntime = Pick<
-  DiscordMessagePreflightContext,
-  DiscordInboundJobRuntimeField
->;
+type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
 
-export type DiscordInboundJobPayload = Omit<
-  DiscordMessagePreflightContext,
-  DiscordInboundJobRuntimeField
->;
+type DiscordInboundJobPayload = Omit<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
 
 export type DiscordInboundJob = {
   queueKey: string;
@@ -26,6 +30,8 @@ export type DiscordInboundJob = {
 };
 
 export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
+  // This key is both the run-queue serialization key and the typing prestart
+  // dedupe key, so keep it aligned with the eventual session route.
   const sessionKey = ctx.route.sessionKey?.trim();
   if (sessionKey) {
     return sessionKey;
@@ -47,6 +53,7 @@ export function buildDiscordInboundJob(
     guildHistories,
     client,
     threadBindings,
+    replyTypingFeedback,
     discordRestFetch,
     message,
     data,
@@ -72,6 +79,7 @@ export function buildDiscordInboundJob(
       guildHistories,
       client,
       threadBindings,
+      replyTypingFeedback,
       discordRestFetch,
     },
     replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
@@ -101,16 +109,18 @@ function normalizeDiscordThreadChannel(
   if (!threadChannel) {
     return null;
   }
+  const channelInfo = resolveDiscordChannelInfoSafe(threadChannel);
+  const parent = resolveDiscordChannelParentSafe(threadChannel);
   return {
     id: threadChannel.id,
-    name: threadChannel.name,
-    parentId: threadChannel.parentId,
-    parent: threadChannel.parent
+    name: channelInfo.name,
+    parentId: channelInfo.parentId,
+    parent: parent
       ? {
-          id: threadChannel.parent.id,
-          name: threadChannel.parent.name,
+          id: resolveDiscordChannelIdSafe(parent),
+          name: resolveDiscordChannelNameSafe(parent),
         }
       : undefined,
-    ownerId: threadChannel.ownerId,
+    ownerId: channelInfo.ownerId,
   };
 }

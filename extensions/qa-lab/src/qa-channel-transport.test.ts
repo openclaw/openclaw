@@ -1,3 +1,4 @@
+// Qa Lab tests cover qa channel transport plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
@@ -24,6 +25,7 @@ describe("qa channel transport", () => {
       messages: {
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
+          visibleReplies: "automatic",
         },
       },
     });
@@ -57,9 +59,42 @@ describe("qa channel transport", () => {
     await transport.waitReady({
       gateway: { call },
       timeoutMs: 2_000,
+      pollIntervalMs: 1,
     });
 
     expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces the last reported qa-channel account status on timeout", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const call = vi.fn().mockResolvedValue({
+      channelAccounts: {
+        "qa-channel": [{ accountId: "default", running: false, restartPending: true }],
+      },
+    });
+
+    await expect(
+      transport.waitReady({
+        gateway: { call },
+        timeoutMs: 5,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow(
+      'timed out after 5ms waiting for qa-channel ready; last status: {"accountId":"default","running":false,"restartPending":true}',
+    );
+  });
+
+  it("surfaces the last probe error on timeout", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const call = vi.fn().mockRejectedValue(new Error("channels.status exploded"));
+
+    await expect(
+      transport.waitReady({
+        gateway: { call },
+        timeoutMs: 5,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow("last probe error: channels.status exploded");
   });
 
   it("inherits the shared normalized message capabilities", async () => {
@@ -73,14 +108,14 @@ describe("qa channel transport", () => {
     });
 
     expect(transport.capabilities.getNormalizedMessageState().messages).toHaveLength(1);
-    expect(
-      await transport.capabilities.readNormalizedMessage({
-        messageId: inbound.id,
-      }),
-    ).toMatchObject({
-      id: inbound.id,
-      text: "hello from the operator",
+    const message = await transport.capabilities.readNormalizedMessage({
+      messageId: inbound.id,
     });
+    if (!message) {
+      throw new Error("expected normalized QA message");
+    }
+    expect(message.id).toBe(inbound.id);
+    expect(message.text).toBe("hello from the operator");
   });
 
   it("inherits the shared failure-aware wait helper", async () => {
@@ -118,5 +153,13 @@ describe("qa channel transport", () => {
     await expect(transport.capabilities.waitForCondition(async () => "ok", 50, 10)).resolves.toBe(
       "ok",
     );
+  });
+
+  it("keeps oversized wait helper intervals within the timeout", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+
+    await expect(
+      transport.capabilities.waitForCondition(async () => undefined, 5, Number.MAX_SAFE_INTEGER),
+    ).rejects.toThrow("timed out after 5ms");
   });
 });

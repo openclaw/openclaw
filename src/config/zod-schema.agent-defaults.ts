@@ -1,12 +1,15 @@
+// Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
-  AgentEmbeddedHarnessSchema,
+  AgentContextLimitsSchema,
+  AgentModelRuntimeEntrySchema,
   AgentModelSchema,
+  AgentToolModelSchema,
   MemorySearchSchema,
+  AgentRunRetriesConfigSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -16,43 +19,81 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+
+const NonNegativeByteSizeSchema = z.union([
+  z.number().int().nonnegative(),
+  z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+]);
+
+const OptionalBootstrapFileNameSchema = z.enum([
+  "SOUL.md",
+  "USER.md",
+  "HEARTBEAT.md",
+  "IDENTITY.md",
+]);
+
+const EmbeddedAgentConfigSchema = z
+  .object({
+    projectSettingsPolicy: z
+      .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
+      .optional(),
+    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+  })
+  .strict();
+
+export const SilentReplyPolicyConfigSchema = z
+  .object({
+    group: SilentReplyPolicySchema.optional(),
+    internal: SilentReplyPolicySchema.optional(),
+  })
+  .strict();
+
 export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
-    imageModel: AgentModelSchema.optional(),
-    imageGenerationModel: AgentModelSchema.optional(),
-    videoGenerationModel: AgentModelSchema.optional(),
-    musicGenerationModel: AgentModelSchema.optional(),
+    imageModel: AgentToolModelSchema.optional(),
+    imageGenerationModel: AgentToolModelSchema.optional(),
+    videoGenerationModel: AgentToolModelSchema.optional(),
+    musicGenerationModel: AgentToolModelSchema.optional(),
+    voiceModel: AgentToolModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
-    pdfModel: AgentModelSchema.optional(),
+    pdfModel: AgentToolModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
-            params: z.record(z.string(), z.unknown()).optional(),
-            /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
+    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
+    silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
-    systemPromptOverride: z.string().optional(),
+    promptOverlays: z
+      .object({
+        gpt5: z
+          .object({
+            personality: z
+              .union([z.literal("friendly"), z.literal("on"), z.literal("off")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skipBootstrap: z.boolean().optional(),
-    contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
+    skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
+    contextInjection: z
+      .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
+      .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
-    localModelMode: z.union([z.literal("default"), z.literal("lean")]).optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     bootstrapPromptTruncationWarning: z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
@@ -73,6 +114,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    contextLimits: AgentContextLimitsSchema,
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
@@ -113,19 +155,6 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
-    llm: z
-      .object({
-        idleTimeoutSeconds: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe(
-            `Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
-          ),
-      })
-      .strict()
-      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
@@ -147,6 +176,12 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        midTurnPrecheck: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
@@ -154,33 +189,22 @@ export const AgentDefaultsSchema = z
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
+            model: z.string().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
-            forceFlushTranscriptBytes: z
-              .union([
-                z.number().int().nonnegative(),
-                z
-                  .string()
-                  .refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
-              ])
-              .optional(),
+            forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
+        truncateAfterCompaction: z.boolean().optional(),
+        maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()
       .optional(),
-    embeddedPi: z
-      .object({
-        projectSettingsPolicy: z
-          .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
-          .optional(),
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-      })
-      .strict()
-      .optional(),
+    runRetries: AgentRunRetriesConfigSchema.optional(),
+    embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),
@@ -190,9 +214,12 @@ export const AgentDefaultsSchema = z
         z.literal("high"),
         z.literal("xhigh"),
         z.literal("adaptive"),
+        z.literal("max"),
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
+    toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
+    reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
       .optional(),
@@ -204,12 +231,14 @@ export const AgentDefaultsSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
+    imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z

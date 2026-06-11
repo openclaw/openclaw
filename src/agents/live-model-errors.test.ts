@@ -1,3 +1,4 @@
+// Covers provider error text classifiers used by live model validation.
 import { describe, expect, it } from "vitest";
 import {
   isMiniMaxModelNotFoundErrorMessage,
@@ -6,6 +7,8 @@ import {
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
+    // Providers wrap 404/model-missing failures in inconsistent plain text and
+    // JSON strings; keep matching broad enough without classifying all 404s.
     const openRouterJson404Payload =
       '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
 
@@ -17,6 +20,11 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage("model: MiniMax-M2.7-highspeed not found")).toBe(true);
     expect(
       isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
+    ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        '400 Provider returned error {"code":400,"msg":"model[Alibaba-NLP/Tongyi-DeepResearch-30B-A3B] router not found"}',
+      ),
     ).toBe(true);
     expect(
       isModelNotFoundErrorMessage(

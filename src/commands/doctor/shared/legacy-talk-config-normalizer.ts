@@ -1,4 +1,6 @@
+// Legacy Talk config normalizer for provider scalar fields and realtime aliases.
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTalkSection } from "../../../config/talk.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 
@@ -14,10 +16,53 @@ function buildLegacyTalkProviderCompat(
   return Object.keys(compat).length > 0 ? compat : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function buildLegacyRealtimeTalkCompat(
+  talk: Record<string, unknown>,
+  normalizedTalk: NonNullable<OpenClawConfig["talk"]>,
+): Record<string, unknown> | undefined {
+  if (talk.realtime !== undefined) {
+    return undefined;
+  }
+  const compat: Record<string, unknown> = {};
+  for (const key of ["model", "voice", "mode", "transport", "brain"] as const) {
+    if (talk[key] !== undefined) {
+      compat[key] = talk[key];
+    }
+  }
+  if (Object.keys(compat).length === 0) {
+    return undefined;
+  }
+  if (normalizedTalk.provider !== undefined) {
+    compat.provider = normalizedTalk.provider;
+  }
+  if (normalizedTalk.providers !== undefined) {
+    compat.providers = normalizedTalk.providers;
+  }
+  return normalizeTalkSection({ realtime: compat } as OpenClawConfig["talk"])?.realtime;
 }
 
+function removeDerivedRealtimeSpeakerVoice(
+  rawTalk: Record<string, unknown>,
+  normalizedTalk: NonNullable<OpenClawConfig["talk"]>,
+): void {
+  const rawRealtime = rawTalk.realtime;
+  const normalizedRealtime = normalizedTalk.realtime;
+  if (
+    !isRecord(rawRealtime) ||
+    !normalizedRealtime ||
+    rawRealtime.speakerVoice !== undefined ||
+    normalizedRealtime.speakerVoice === undefined ||
+    normalizedRealtime.speakerVoice !== normalizedRealtime.voice
+  ) {
+    return;
+  }
+
+  // Runtime clients still get speakerVoice from the deprecated voice alias, but
+  // doctor should not persist that derived value or report it as provider repair.
+  delete normalizedRealtime.speakerVoice;
+}
+
+/** Normalize legacy Talk provider/realtime fields into current talk.providers and talk.realtime. */
 export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const rawTalk = cfg.talk;
   if (!isRecord(rawTalk)) {
@@ -35,6 +80,14 @@ export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]
       },
     };
   }
+  const legacyRealtimeCompat = buildLegacyRealtimeTalkCompat(rawTalk, normalizedTalk);
+  if (legacyRealtimeCompat) {
+    normalizedTalk.realtime = {
+      ...legacyRealtimeCompat,
+      ...normalizedTalk.realtime,
+    };
+  }
+  removeDerivedRealtimeSpeakerVoice(rawTalk, normalizedTalk);
   if (Object.keys(normalizedTalk).length === 0 || isDeepStrictEqual(normalizedTalk, rawTalk)) {
     return cfg;
   }
@@ -42,6 +95,9 @@ export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]
   changes.push(
     "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
   );
+  if (legacyRealtimeCompat) {
+    changes.push("Moved legacy realtime Talk provider/model fields into talk.realtime.");
+  }
   return {
     ...cfg,
     talk: normalizedTalk,

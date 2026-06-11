@@ -1,3 +1,4 @@
+// Tests queued reply runtime secret resolution for agent and channel scopes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -17,9 +18,27 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
     hoisted.getScopedChannelsCommandSecretTargetsMock(...args),
 }));
 
-const { resolveQueuedReplyExecutionConfig } = await import("./agent-runner-utils.js");
+const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
+  await import("./agent-runner-utils.js");
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
   await import("../../config/config.js");
+
+type ResolveCommandSecretRefsCall = {
+  config: OpenClawConfig;
+  commandName: string;
+  targetIds?: Set<string>;
+  allowedPaths?: Set<string>;
+};
+
+function resolveCommandSecretRefsCall(callIndex = 0): ResolveCommandSecretRefsCall {
+  const call = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[callIndex]?.[0] as
+    | ResolveCommandSecretRefsCall
+    | undefined;
+  if (!call) {
+    throw new Error(`expected command secret resolution call ${callIndex}`);
+  }
+  return call;
+}
 
 describe("resolveQueuedReplyExecutionConfig channel scope", () => {
   beforeEach(() => {
@@ -69,11 +88,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
 
     expect(resolved).toBe(scopedResolved);
     expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(2);
-    const baseCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[0]?.[0] as {
-      config: OpenClawConfig;
-      commandName: string;
-      targetIds: Set<string>;
-    };
+    const baseCall = resolveCommandSecretRefsCall();
     expect(baseCall.config).toBe(sourceConfig);
     expect(baseCall.commandName).toBe("reply");
     expect(baseCall.targetIds).toEqual(new Set(["skills.entries.*.apiKey"]));
@@ -82,12 +97,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       channel: "discord",
       accountId: "work",
     });
-    const scopedCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[1]?.[0] as {
-      config: OpenClawConfig;
-      commandName: string;
-      targetIds: Set<string>;
-      allowedPaths?: Set<string>;
-    };
+    const scopedCall = resolveCommandSecretRefsCall(1);
     expect(scopedCall.config).toBe(baseResolved);
     expect(scopedCall.commandName).toBe("reply");
     expect(scopedCall.targetIds).toEqual(new Set(["channels.discord.token"]));
@@ -133,10 +143,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       messageProvider: "discord",
     });
 
-    const baseCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[0]?.[0] as {
-      config: OpenClawConfig;
-      commandName: string;
-    };
+    const baseCall = resolveCommandSecretRefsCall();
     expect(baseCall.config).toBe(runtimeConfig);
     expect(baseCall.commandName).toBe("reply");
     expect(hoisted.getScopedChannelsCommandSecretTargetsMock).toHaveBeenCalledWith({
@@ -144,5 +151,47 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       channel: "discord",
       accountId: undefined,
     });
+  });
+
+  it("does not replace an already resolved run config with a stale runtime snapshot", () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const staleRuntimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "stale-runtime-key",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const scopedResolvedConfig = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "fresh-scoped-key",
+            models: [],
+          },
+        },
+      },
+      tools: {
+        experimental: {
+          planTool: true,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(staleRuntimeConfig, sourceConfig);
+
+    expect(resolveQueuedReplyRuntimeConfig(structuredClone(sourceConfig))).toBe(staleRuntimeConfig);
+    expect(resolveQueuedReplyRuntimeConfig(scopedResolvedConfig)).toBe(scopedResolvedConfig);
   });
 });

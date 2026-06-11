@@ -1,3 +1,4 @@
+// Control UI i18n module implements registry behavior.
 import type { Locale, TranslationMap } from "./types.ts";
 
 type LazyLocale = Exclude<Locale, "en">;
@@ -19,10 +20,16 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "ja-JP",
   "ko",
   "fr",
+  "ar",
+  "it",
   "tr",
   "uk",
   "id",
   "pl",
+  "th",
+  "vi",
+  "nl",
+  "fa",
 ];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
@@ -58,6 +65,14 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "fr",
     loader: () => import("../locales/fr.ts"),
   },
+  ar: {
+    exportName: "ar",
+    loader: () => import("../locales/ar.ts"),
+  },
+  it: {
+    exportName: "it",
+    loader: () => import("../locales/it.ts"),
+  },
   tr: {
     exportName: "tr",
     loader: () => import("../locales/tr.ts"),
@@ -73,6 +88,22 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   pl: {
     exportName: "pl",
     loader: () => import("../locales/pl.ts"),
+  },
+  th: {
+    exportName: "th",
+    loader: () => import("../locales/th.ts"),
+  },
+  vi: {
+    exportName: "vi",
+    loader: () => import("../locales/vi.ts"),
+  },
+  nl: {
+    exportName: "nl",
+    loader: () => import("../locales/nl.ts"),
+  },
+  fa: {
+    exportName: "fa",
+    loader: () => import("../locales/fa.ts"),
   },
 };
 
@@ -108,6 +139,12 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   if (navLang.startsWith("fr")) {
     return "fr";
   }
+  if (navLang.startsWith("ar")) {
+    return "ar";
+  }
+  if (navLang.startsWith("it")) {
+    return "it";
+  }
   if (navLang.startsWith("tr")) {
     return "tr";
   }
@@ -119,6 +156,18 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   }
   if (navLang.startsWith("pl")) {
     return "pl";
+  }
+  if (navLang.startsWith("th")) {
+    return "th";
+  }
+  if (navLang.startsWith("vi")) {
+    return "vi";
+  }
+  if (navLang.startsWith("nl")) {
+    return "nl";
+  }
+  if (navLang.startsWith("fa")) {
+    return "fa";
   }
   return DEFAULT_LOCALE;
 }

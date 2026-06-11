@@ -1,3 +1,4 @@
+// Regresses ACP binding cutover config compatibility behavior.
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -38,6 +39,27 @@ describe("ACP binding cutover schema", () => {
           acp: {
             label: "codex-main",
             backend: "acpx",
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts route binding session dmScope overrides", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "1497598990336790559" },
+          },
+          session: {
+            dmScope: "per-account-channel-peer",
           },
         },
       ],

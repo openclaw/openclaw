@@ -1,3 +1,4 @@
+// Verifies compaction settings config parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { applyCompactionDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
@@ -26,12 +27,17 @@ describe("config compaction settings", () => {
         enabled: true,
         maxRetries: 2,
       },
+      midTurnPrecheck: {
+        enabled: true,
+      },
       memoryFlush: {
         enabled: false,
+        model: "ollama/qwen3:8b",
         softThresholdTokens: 1234,
         prompt: "Write notes.",
         systemPrompt: "Flush memory now.",
       },
+      maxActiveTranscriptBytes: "20mb",
     });
 
     expect(compaction?.reserveTokensFloor).toBe(12_345);
@@ -42,13 +48,16 @@ describe("config compaction settings", () => {
     expect(compaction?.identifierInstructions).toBe("Keep ticket IDs unchanged.");
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
+    expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
+    expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
     expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
     expect(compaction?.memoryFlush?.prompt).toBe("Write notes.");
     expect(compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
+    expect(compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
-  it("preserves pi compaction override values", () => {
+  it("preserves legacy compaction override values", () => {
     const compaction = materializeCompactionConfig({
       reserveTokens: 15_000,
       keepRecentTokens: 12_000,

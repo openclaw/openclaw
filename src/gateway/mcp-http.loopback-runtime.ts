@@ -1,24 +1,38 @@
-export type McpLoopbackRuntime = {
+// Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+type McpLoopbackRuntime = {
   port: number;
-  token: string;
+  ownerToken: string;
+  nonOwnerToken: string;
 };
 
 let activeRuntime: McpLoopbackRuntime | undefined;
 
+/** Return a copy of the active loopback runtime, if one has been installed. */
 export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
   return activeRuntime ? { ...activeRuntime } : undefined;
 }
 
+/** Install the active loopback runtime used by in-process MCP callers. */
 export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
   activeRuntime = { ...runtime };
 }
 
-export function clearActiveMcpLoopbackRuntime(token: string): void {
-  if (activeRuntime?.token === token) {
+/** Choose the bearer token matching owner/non-owner caller identity. */
+export function resolveMcpLoopbackBearerToken(
+  runtime: McpLoopbackRuntime,
+  senderIsOwner: boolean,
+): string {
+  return senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
+}
+
+/** Clear loopback runtime only when the owning token matches the active runtime. */
+export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): void {
+  if (activeRuntime?.ownerToken === ownerToken) {
     activeRuntime = undefined;
   }
 }
 
+/** Build the MCP server config injected into agents for loopback tool access. */
 export function createMcpLoopbackServerConfig(port: number) {
   return {
     mcpServers: {
@@ -31,7 +45,12 @@ export function createMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-          "x-openclaw-sender-is-owner": "${OPENCLAW_MCP_SENDER_IS_OWNER}",
+          "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
+          "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
+          "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
+          "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
+          "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
+          "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
         },
       },
     },

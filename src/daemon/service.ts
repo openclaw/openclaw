@@ -1,4 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+/** Platform service registry and shared gateway service start/repair logic. */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { VERSION } from "../version.js";
+import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
@@ -28,6 +34,7 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
   GatewayServiceStageArgs,
   GatewayServiceState,
@@ -50,11 +57,13 @@ export type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
   GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
 
+// Platform service adapter used by CLI commands across launchd, systemd, and schtasks.
 function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
   write: (args: TArgs) => Promise<unknown>,
 ): (args: TArgs) => Promise<void> {
@@ -84,10 +93,87 @@ function mergeGatewayServiceEnv(
   if (!command?.environment) {
     return baseEnv;
   }
-  return {
+  const merged = {
     ...baseEnv,
     ...command.environment,
   };
+  for (const key of [
+    "OPENCLAW_LAUNCHD_LABEL",
+    "OPENCLAW_SYSTEMD_UNIT",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+  ]) {
+    // Explicit caller env selects the target service identity; installed command
+    // env may come from a different profile or stale service file.
+    const value = baseEnv[key]?.trim();
+    if (value) {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
+  path.resolve(entry),
+);
+
+function pathIsSameOrChild(candidate: string, parent: string): boolean {
+  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+}
+
+function isTemporaryProgramPath(value: string | undefined): boolean {
+  if (!value || !path.isAbsolute(value)) {
+    return false;
+  }
+  const resolved = path.resolve(value);
+  return TEMP_PROGRAM_ROOTS.some((root) => pathIsSameOrChild(resolved, root));
+}
+
+function isMissingProgramPath(value: string | undefined): boolean {
+  if (!value || !path.isAbsolute(value)) {
+    return false;
+  }
+  return !fs.existsSync(value);
+}
+
+function collectGatewayServiceStartRepairIssues(
+  state: GatewayServiceState,
+): GatewayServiceStartRepairIssue[] {
+  const command = state.command;
+  if (!state.loaded || !command) {
+    return [];
+  }
+  const issues: GatewayServiceStartRepairIssue[] = [];
+  const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
+  if (serviceVersion && serviceVersion !== VERSION) {
+    // Version drift often means the service points at old package paths; require
+    // reinstall/repair before pretending restart succeeded.
+    issues.push({
+      code: "version-mismatch",
+      message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
+    });
+  }
+  for (const candidate of command.programArguments.slice(0, 2)) {
+    if (isTemporaryProgramPath(candidate)) {
+      issues.push({
+        code: "temporary-program",
+        message: `service command points at a temporary path: ${candidate}`,
+      });
+      continue;
+    }
+    if (isMissingProgramPath(candidate)) {
+      issues.push({
+        code: "missing-program",
+        message: `service command points at a missing path: ${candidate}`,
+      });
+    }
+  }
+  return issues;
+}
+
+export function formatGatewayServiceStartRepairIssues(
+  issues: GatewayServiceStartRepairIssue[],
+): string {
+  return issues.map((issue) => issue.message).join("; ");
 }
 
 export async function readGatewayServiceState(
@@ -120,6 +206,15 @@ export async function startGatewayService(
     return {
       outcome: "missing-install",
       state,
+    };
+  }
+
+  const repairIssues = collectGatewayServiceStartRepairIssues(state);
+  if (repairIssues.length > 0) {
+    return {
+      outcome: "repair-required",
+      state,
+      issues: repairIssues,
     };
   }
 
@@ -184,7 +279,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     readRuntime: readLaunchAgentRuntime,
   },
   linux: {
-    label: "systemd",
+    label: "systemd user",
     loadedText: "enabled",
     notLoadedText: "disabled",
     stage: ignoreServiceWriteResult(stageSystemdService),
@@ -211,6 +306,34 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
+function withFutureConfigGuard(service: GatewayService): GatewayService {
+  return {
+    ...service,
+    stage: async (args) => {
+      // Service mutations rewrite durable launchd/systemd/schtasks files, so
+      // block them when config was produced by a newer OpenClaw.
+      await assertFutureConfigActionAllowed("rewrite the gateway service");
+      return await service.stage(args);
+    },
+    install: async (args) => {
+      await assertFutureConfigActionAllowed("install or rewrite the gateway service");
+      return await service.install(args);
+    },
+    uninstall: async (args) => {
+      await assertFutureConfigActionAllowed("uninstall the gateway service");
+      return await service.uninstall(args);
+    },
+    stop: async (args) => {
+      await assertFutureConfigActionAllowed("stop the gateway service");
+      return await service.stop(args);
+    },
+    restart: async (args) => {
+      await assertFutureConfigActionAllowed("restart the gateway service");
+      return await service.restart(args);
+    },
+  };
+}
+
 function isSupportedGatewayServicePlatform(
   platform: NodeJS.Platform,
 ): platform is SupportedGatewayServicePlatform {
@@ -219,7 +342,7 @@ function isSupportedGatewayServicePlatform(
 
 export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
-    return GATEWAY_SERVICE_REGISTRY[process.platform];
+    return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   throw new Error(`Gateway service install not supported on ${process.platform}`);
 }

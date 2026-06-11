@@ -8,13 +8,13 @@
  * aliases before release.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const distFile = resolve(scriptDir, "..", "dist", "plugin-sdk", "index.js");
 if (!existsSync(distFile)) {
   console.error("ERROR: dist/plugin-sdk/index.js not found. Run `pnpm build` first.");
   process.exit(1);
@@ -42,6 +42,17 @@ const exportedNames = exportMatch[1]
 const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
+const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
+const requiredSubpathExports = {
+  "secret-input-runtime": [
+    "coerceSecretRef",
+    "hasConfiguredSecretInput",
+    "isSecretRef",
+    "normalizeResolvedSecretInputString",
+    "normalizeSecretInputString",
+    "resolveSecretInputString",
+  ],
+};
 
 // The root plugin-sdk entry intentionally stays tiny. Keep this list aligned
 // with src/plugin-sdk/index.ts runtime exports.
@@ -60,9 +71,9 @@ for (const name of requiredExports) {
   }
 }
 
-for (const entry of pluginSdkSubpaths) {
-  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
-  const dtsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
+for (const entry of publicPluginSdkSubpaths) {
+  const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
+  const dtsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
   if (!existsSync(jsPath)) {
     console.error(`MISSING SUBPATH JS: dist/plugin-sdk/${entry}.js`);
     missing += 1;
@@ -74,10 +85,50 @@ for (const entry of pluginSdkSubpaths) {
 }
 
 for (const entry of requiredRuntimeShimEntries) {
-  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  const shimPath = resolve(scriptDir, "..", "dist", "plugin-sdk", entry);
   if (!existsSync(shimPath)) {
     console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;
+  }
+}
+
+for (const [entry, names] of Object.entries(requiredSubpathExports)) {
+  const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
+  if (!existsSync(jsPath)) {
+    continue;
+  }
+  let runtime;
+  try {
+    runtime = await import(pathToFileURL(jsPath).href);
+  } catch (err) {
+    console.error(`BROKEN SUBPATH JS: dist/plugin-sdk/${entry}.js`);
+    console.error(err instanceof Error ? err.message : String(err));
+    missing += 1;
+    continue;
+  }
+  for (const name of names) {
+    if (typeof runtime[name] !== "function") {
+      console.error(`MISSING SUBPATH EXPORT: dist/plugin-sdk/${entry}.js#${name}`);
+      missing += 1;
+    }
+  }
+}
+
+for (const entry of readdirSync(resolve(scriptDir, "..", "dist", "plugin-sdk"), {
+  withFileTypes: true,
+})) {
+  if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+    continue;
+  }
+  const dtsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", entry.name);
+  const dtsContent = readFileSync(dtsPath, "utf8");
+  for (const specifier of forbiddenPublicDeclarationSpecifiers) {
+    if (dtsContent.includes(`"${specifier}`) || dtsContent.includes(`'${specifier}`)) {
+      console.error(
+        `FORBIDDEN PUBLIC DTS SPECIFIER: dist/plugin-sdk/${entry.name} imports ${specifier}`,
+      );
+      missing += 1;
+    }
   }
 }
 

@@ -1,10 +1,16 @@
+// Control UI chat module implements slash commands behavior.
+import type {
+  CommandEntry,
+  CommandsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
-import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/protocol/index.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
+
+export type SlashCommandTier = "essential" | "standard" | "power";
 
 export type SlashCommandDef = {
   key: string;
@@ -20,6 +26,8 @@ export type SlashCommandDef = {
   argOptions?: string[];
   /** Keyboard shortcut hint shown in the menu (display only). */
   shortcut?: string;
+  /** Progressive disclosure tier. Defaults to "standard" when omitted. */
+  tier?: SlashCommandTier;
 };
 
 type LocalArgChoice = string | { value: string; label: string };
@@ -35,6 +43,7 @@ type CommandLike = {
     choices?: LocalArgChoice[];
   }>;
   category?: string;
+  tier?: string;
 };
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
@@ -60,8 +69,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   compact: "loader",
   stop: "stop",
   clear: "trash",
-  focus: "eye",
-  unfocus: "eye",
   model: "brain",
   models: "brain",
   think: "brain",
@@ -69,7 +76,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   fast: "zap",
   agents: "monitor",
   subagents: "folder",
-  kill: "x",
   steer: "send",
   tts: "volume2",
 };
@@ -80,7 +86,6 @@ const LOCAL_COMMANDS = new Set([
   "reset",
   "stop",
   "compact",
-  "focus",
   "model",
   "think",
   "fast",
@@ -88,7 +93,6 @@ const LOCAL_COMMANDS = new Set([
   "export-session",
   "usage",
   "agents",
-  "kill",
   "steer",
   "redirect",
 ]);
@@ -101,15 +105,17 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "trash",
     category: "session",
     executeLocal: true,
+    tier: "standard",
   },
   {
     key: "redirect",
     name: "redirect",
     description: "Abort and restart with a new message",
-    args: "[id] <message>",
+    args: "<message>",
     icon: "refresh",
     category: "agents",
     executeLocal: true,
+    tier: "power",
   },
 ];
 
@@ -124,7 +130,6 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   tts: "tools",
   agents: "agents",
   subagents: "agents",
-  kill: "agents",
   steer: "agents",
   redirect: "agents",
   session: "session",
@@ -132,8 +137,6 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   reset: "session",
   new: "session",
   compact: "session",
-  focus: "session",
-  unfocus: "session",
   model: "model",
   models: "model",
   think: "model",
@@ -149,7 +152,7 @@ const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "[id] <message>",
+  steer: "<message>",
 };
 
 function normalizeUiKey(command: CommandLike): string {
@@ -213,6 +216,14 @@ function mapIcon(command: CommandLike): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 
+function mapTier(command: CommandLike): SlashCommandTier {
+  const raw = command.tier;
+  if (raw === "essential" || raw === "standard" || raw === "power") {
+    return raw;
+  }
+  return "standard";
+}
+
 function toSlashCommand(
   command: CommandLike,
   source: "local" | "remote" = "local",
@@ -231,6 +242,7 @@ function toSlashCommand(
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     argOptions: getArgOptions(command),
+    tier: source === "local" ? mapTier(command) : "standard",
   };
 }
 
@@ -309,15 +321,16 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
         choices: Array.isArray(arg.choices) ? arg.choices : undefined,
       })),
       category: command.category,
+      tier: command.tier,
     }))
     .map((command) => toSlashCommand(command, "local"))
     .filter((command): command is SlashCommandDef => command !== null);
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(): Set<string> {
+function buildReservedLocalSlashNames(localCommands = buildLocalSlashCommands()): Set<string> {
   const reserved = new Set<string>();
-  for (const command of buildLocalSlashCommands()) {
+  for (const command of localCommands) {
     reserved.add(normalizeLowercaseStringOrEmpty(command.name));
     for (const alias of command.aliases ?? []) {
       const normalized = normalizeSlashIdentifier(alias);
@@ -352,11 +365,13 @@ function normalizeCommandEntry(
       choices: getArgChoices(arg).slice(0, MAX_REMOTE_CHOICES),
     }))
     .filter((arg) => arg.name.length > 0)
-    .map((arg) => ({
-      name: arg.name,
-      ...(arg.required ? { required: true } : {}),
-      ...(arg.choices.length > 0 ? { choices: arg.choices } : {}),
-    }));
+    .map((arg) =>
+      Object.assign(
+        { name: arg.name },
+        arg.required ? { required: true } : {},
+        arg.choices.length > 0 ? { choices: arg.choices } : {},
+      ),
+    );
   return {
     key: primaryName,
     name: primaryName,
@@ -373,7 +388,7 @@ function replaceSlashCommands(next: SlashCommandDef[]) {
 
 function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
   const local = buildLocalSlashCommands();
-  const reservedLocalNames = buildReservedLocalSlashNames();
+  const reservedLocalNames = buildReservedLocalSlashNames(local);
   const mapped = entries
     .slice(0, MAX_REMOTE_COMMANDS)
     .map((entry) => normalizeCommandEntry(entry, reservedLocalNames))
@@ -407,41 +422,134 @@ function buildFallbackSlashCommands(): SlashCommandDef[] {
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
 
-let _refreshSeq = 0;
+let refreshSeq = 0;
+const REMOTE_SLASH_COMMAND_CACHE_TTL_MS = 60_000;
+
+type RemoteSlashCommandCacheEntry = {
+  commands?: SlashCommandDef[];
+  expiresAt: number;
+  inFlight?: Promise<SlashCommandDef[]>;
+};
+
+let remoteSlashCommandCache = new WeakMap<
+  GatewayBrowserClient,
+  Map<string, RemoteSlashCommandCacheEntry>
+>();
+
+function remoteSlashCommandCacheKey(agentId: string | undefined): string {
+  return agentId ?? "";
+}
+
+function getRemoteSlashCommandCache(
+  client: GatewayBrowserClient,
+): Map<string, RemoteSlashCommandCacheEntry> {
+  let cache = remoteSlashCommandCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    remoteSlashCommandCache.set(client, cache);
+  }
+  return cache;
+}
+
+async function requestRemoteSlashCommands(
+  client: GatewayBrowserClient,
+  agentId: string | undefined,
+  fallback: SlashCommandDef[] | undefined,
+): Promise<SlashCommandDef[]> {
+  try {
+    const result = await client.request<CommandsListResult>("commands.list", {
+      ...(agentId ? { agentId } : {}),
+      includeArgs: true,
+      scope: "text",
+    });
+    if (!Array.isArray(result?.commands)) {
+      return buildFallbackSlashCommands();
+    }
+    const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
+    const cache = getRemoteSlashCommandCache(client);
+    cache.set(remoteSlashCommandCacheKey(agentId), {
+      commands,
+      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
+    });
+    return commands;
+  } catch {
+    return fallback ?? buildFallbackSlashCommands();
+  }
+}
+
+function loadRemoteSlashCommands(
+  client: GatewayBrowserClient,
+  agentId: string | undefined,
+): Promise<SlashCommandDef[]> {
+  const cache = getRemoteSlashCommandCache(client);
+  const key = remoteSlashCommandCacheKey(agentId);
+  const cached = cache.get(key);
+  const now = Date.now();
+  if (cached?.commands && cached.expiresAt > now) {
+    return Promise.resolve(cached.commands);
+  }
+  if (cached?.inFlight) {
+    return cached.inFlight;
+  }
+  const inFlight = requestRemoteSlashCommands(client, agentId, cached?.commands).finally(() => {
+    const latest = cache.get(key);
+    if (latest?.inFlight === inFlight) {
+      delete latest.inFlight;
+    }
+  });
+  cache.set(key, {
+    ...(cached?.commands ? { commands: cached.commands } : {}),
+    expiresAt: cached?.expiresAt ?? 0,
+    inFlight,
+  });
+  return inFlight;
+}
+
+export function applyRemoteSlashCommandsResult(params: {
+  client: GatewayBrowserClient | null;
+  agentId?: string | null;
+  result: CommandsListResult | null | undefined;
+}): boolean {
+  if (!Array.isArray(params.result?.commands)) {
+    return false;
+  }
+  const agentId = params.agentId?.trim();
+  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
+  if (params.client) {
+    const cache = getRemoteSlashCommandCache(params.client);
+    cache.set(remoteSlashCommandCacheKey(agentId), {
+      commands,
+      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
+    });
+  }
+  refreshSeq += 1;
+  replaceSlashCommands(commands);
+  return true;
+}
 
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
 }): Promise<void> {
-  const seq = ++_refreshSeq;
+  const seq = ++refreshSeq;
   const agentId = params.agentId?.trim();
   if (!params.client) {
-    if (seq !== _refreshSeq) {
+    if (seq !== refreshSeq) {
       return;
     }
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
-  try {
-    const result = await params.client.request<CommandsListResult>("commands.list", {
-      ...(agentId ? { agentId } : {}),
-      includeArgs: true,
-      scope: "text",
-    });
-    if (seq !== _refreshSeq) {
-      return;
-    }
-    replaceSlashCommands(buildSlashCommandsFromEntries(getRemoteCommandEntries(result)));
-  } catch {
-    if (seq !== _refreshSeq) {
-      return;
-    }
-    replaceSlashCommands(buildFallbackSlashCommands());
+  const commands = await loadRemoteSlashCommands(params.client, agentId);
+  if (seq !== refreshSeq) {
+    return;
   }
+  replaceSlashCommands(commands);
 }
 
 export function resetSlashCommandsForTest(): void {
-  _refreshSeq = 0;
+  refreshSeq = 0;
+  remoteSlashCommandCache = new WeakMap();
   replaceSlashCommands(buildFallbackSlashCommands());
 }
 
@@ -454,9 +562,19 @@ export const CATEGORY_LABELS: Record<SlashCommandCategory, string> = {
   tools: "Tools",
 };
 
-export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
+const TIER_ORDER: Record<SlashCommandTier, number> = {
+  essential: 0,
+  standard: 1,
+  power: 2,
+};
+
+export function getSlashCommandCompletions(
+  filter: string,
+  options?: { showAll?: boolean },
+): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
-  const commands = lower
+  const showAll = options?.showAll ?? false;
+  let commands = lower
     ? SLASH_COMMANDS.filter(
         (cmd) =>
           cmd.name.startsWith(lower) ||
@@ -464,7 +582,19 @@ export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
           normalizeLowercaseStringOrEmpty(cmd.description).includes(lower),
       )
     : SLASH_COMMANDS;
+
+  // When no filter text and not explicitly showing all, hide "power" tier commands
+  if (!lower && !showAll) {
+    commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
+  }
+
   return commands.toSorted((a, b) => {
+    // Sort by tier first (essential → standard → power)
+    const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
+    const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
+    if (aTier !== bTier) {
+      return aTier - bTier;
+    }
     const ai = CATEGORY_ORDER.indexOf(a.category ?? "session");
     const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
     if (ai !== bi) {
@@ -479,6 +609,11 @@ export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
     }
     return 0;
   });
+}
+
+/** Count of commands hidden by tier filtering (for "Show N more" UI). */
+export function getHiddenCommandCount(): number {
+  return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
 }
 
 export type ParsedSlashCommand = {

@@ -1,28 +1,26 @@
-import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type {
-  AllowlistMatch,
-  ChannelGroupContext,
-  GroupPolicy,
-  GroupToolPolicyConfig,
-} from "../runtime-api.js";
+// Nextcloud Talk plugin module implements policy behavior.
 import {
   buildChannelKeyCandidates,
-  evaluateMatchedGroupAccessForPolicy,
   normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-targets";
+import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
-function normalizeAllowEntry(raw: string): string {
-  return normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, ""));
+export function normalizeNextcloudTalkAllowEntry(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .toLowerCase();
 }
 
 export function normalizeNextcloudTalkAllowlist(
   values: Array<string | number> | undefined,
 ): string[] {
-  return (values ?? []).map((value) => normalizeAllowEntry(String(value))).filter(Boolean);
+  return (values ?? [])
+    .map((value) => normalizeNextcloudTalkAllowEntry(String(value)))
+    .filter(Boolean);
 }
 
 export function resolveNextcloudTalkAllowlistMatch(params: {
@@ -36,14 +34,14 @@ export function resolveNextcloudTalkAllowlistMatch(params: {
   if (allowFrom.includes("*")) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
-  const senderId = normalizeAllowEntry(params.senderId);
+  const senderId = normalizeNextcloudTalkAllowEntry(params.senderId);
   if (allowFrom.includes(senderId)) {
     return { allowed: true, matchKey: senderId, matchSource: "id" };
   }
   return { allowed: false };
 }
 
-export type NextcloudTalkRoomMatch = {
+type NextcloudTalkRoomMatch = {
   roomConfig?: NextcloudTalkRoomConfig;
   wildcardConfig?: NextcloudTalkRoomConfig;
   roomKey?: string;
@@ -111,73 +109,4 @@ export function resolveNextcloudTalkRequireMention(params: {
     return params.wildcardConfig.requireMention;
   }
   return true;
-}
-
-export function resolveNextcloudTalkGroupAllow(params: {
-  groupPolicy: GroupPolicy;
-  outerAllowFrom: Array<string | number> | undefined;
-  innerAllowFrom: Array<string | number> | undefined;
-  senderId: string;
-}): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
-  const outerAllow = normalizeNextcloudTalkAllowlist(params.outerAllowFrom);
-  const innerAllow = normalizeNextcloudTalkAllowlist(params.innerAllowFrom);
-  const outerMatch = resolveNextcloudTalkAllowlistMatch({
-    allowFrom: params.outerAllowFrom,
-    senderId: params.senderId,
-  });
-  const innerMatch = resolveNextcloudTalkAllowlistMatch({
-    allowFrom: params.innerAllowFrom,
-    senderId: params.senderId,
-  });
-  const access = evaluateMatchedGroupAccessForPolicy({
-    groupPolicy: params.groupPolicy,
-    allowlistConfigured: outerAllow.length > 0 || innerAllow.length > 0,
-    allowlistMatched: resolveNestedAllowlistDecision({
-      outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
-      outerMatched: outerAllow.length > 0 ? outerMatch.allowed : true,
-      innerConfigured: innerAllow.length > 0,
-      innerMatched: innerMatch.allowed,
-    }),
-  });
-
-  return {
-    allowed: access.allowed,
-    outerMatch:
-      params.groupPolicy === "open"
-        ? { allowed: true }
-        : params.groupPolicy === "disabled"
-          ? { allowed: false }
-          : outerMatch,
-    innerMatch:
-      params.groupPolicy === "open"
-        ? { allowed: true }
-        : params.groupPolicy === "disabled"
-          ? { allowed: false }
-          : innerMatch,
-  };
-}
-
-export function resolveNextcloudTalkMentionGate(params: {
-  isGroup: boolean;
-  requireMention: boolean;
-  wasMentioned: boolean;
-  allowTextCommands: boolean;
-  hasControlCommand: boolean;
-  commandAuthorized: boolean;
-}): { shouldSkip: boolean; shouldBypassMention: boolean } {
-  const result = resolveInboundMentionDecision({
-    facts: {
-      canDetectMention: true,
-      wasMentioned: params.wasMentioned,
-      implicitMentionKinds: [],
-    },
-    policy: {
-      isGroup: params.isGroup,
-      requireMention: params.requireMention,
-      allowTextCommands: params.allowTextCommands,
-      hasControlCommand: params.hasControlCommand,
-      commandAuthorized: params.commandAuthorized,
-    },
-  });
-  return { shouldSkip: result.shouldSkip, shouldBypassMention: result.shouldBypassMention };
 }

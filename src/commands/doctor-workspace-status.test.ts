@@ -1,17 +1,20 @@
+// Doctor workspace status tests cover workspace inspection and status output.
 import { describe, expect, it, vi } from "vitest";
+import * as noteModule from "../../packages/terminal-core/src/note.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginVersionDriftReport } from "../plugins/plugin-version-drift.js";
 import {
   createPluginLoadResult,
   createPluginRecord,
   createTypedHook,
 } from "../plugins/status.test-helpers.js";
-import * as noteModule from "../terminal/note.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildWorkspaceSkillStatus: vi.fn(),
-  buildPluginDiagnosticsReport: vi.fn(),
+  buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
@@ -22,12 +25,13 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: (...args: unknown[]) => mocks.buildWorkspaceSkillStatus(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginDiagnosticsReport: (...args: unknown[]) => mocks.buildPluginDiagnosticsReport(...args),
+  buildPluginRegistrySnapshotReport: (...args: unknown[]) =>
+    mocks.buildPluginRegistrySnapshotReport(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
@@ -44,16 +48,19 @@ async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
   compatibilityWarnings: string[] = [],
   opts?: {
+    cfg?: OpenClawConfig;
+    pluginVersionDrift?: PluginVersionDriftReport;
     flows?: unknown[];
     tasksByFlowId?: (flowId: string) => unknown[];
   },
 ) {
+  const cfg: OpenClawConfig = opts?.cfg ?? {};
   mocks.resolveDefaultAgentId.mockReturnValue("default");
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
   mocks.buildWorkspaceSkillStatus.mockReturnValue({
     skills: [],
   });
-  mocks.buildPluginDiagnosticsReport.mockReturnValue({
+  mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
   });
@@ -64,7 +71,9 @@ async function runNoteWorkspaceStatusForTest(
   );
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-  noteWorkspaceStatus({});
+  noteWorkspaceStatus(cfg, {
+    pluginVersionDrift: opts?.pluginVersionDrift,
+  });
   return noteSpy;
 }
 
@@ -85,7 +94,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });
@@ -149,6 +158,86 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
+  it("surfaces active official managed plugin version drift", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "codex",
+            name: "Codex",
+            origin: "global",
+            source: "/tmp/codex/index.js",
+          }),
+        ],
+      }),
+      [],
+      {
+        cfg: {
+          plugins: {
+            entries: {
+              codex: { enabled: true },
+            },
+          },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.1",
+          drifts: [
+            {
+              pluginId: "codex",
+              installedVersion: "2026.5.30-beta.1",
+              gatewayVersion: "2026.6.1",
+              source: "npm",
+            },
+          ],
+        },
+      },
+    );
+    try {
+      const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
+      expect(driftCalls).toHaveLength(1);
+      const [[body]] = driftCalls;
+      expect(body).toContain("1 active official plugin not on OpenClaw 2026.6.1");
+      expect(body).toContain("codex: 2026.5.30-beta.1 (npm) -> expected 2026.6.1");
+      expect(body).toContain("openclaw plugins update codex");
+      expect(body).toContain("openclaw gateway restart");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("omits plugin version drift when no daemon status report is supplied", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "codex",
+            name: "Codex",
+            origin: "global",
+            source: "/tmp/codex/index.js",
+          }),
+        ],
+      }),
+      [],
+      {
+        cfg: {
+          gateway: {
+            mode: "remote",
+          },
+          plugins: {
+            entries: {
+              codex: { enabled: true },
+            },
+          },
+        },
+      },
+    );
+    try {
+      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin version drift");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("omits plugin compatibility note when no legacy compatibility paths are present", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
@@ -162,7 +251,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(noteSpy.mock.calls.some(([, title]) => title === "Plugin compatibility")).toBe(false);
+      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin compatibility");
     } finally {
       noteSpy.mockRestore();
     }
@@ -183,7 +272,7 @@ describe("noteWorkspaceStatus", () => {
       "legacy-plugin still uses legacy before_agent_start",
     ]);
     try {
-      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });

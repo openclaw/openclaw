@@ -1,6 +1,9 @@
+// Session binding service multiplexes channel adapters and the generic current
+// conversation store behind one bind/list/resolve/touch/unbind API.
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
-  __testing as genericCurrentConversationBindingTesting,
+  testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
@@ -97,7 +100,7 @@ function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindin
     Boolean(value),
   );
   if (placements && placements.length > 0) {
-    return [...new Set(placements)];
+    return uniqueValues(placements);
   }
   return ["current", "child"];
 }
@@ -135,7 +138,7 @@ const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapt
 
 function getActiveAdapterForKey(key: string): SessionBindingAdapter | null {
   const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  return registrations?.[0]?.normalizedAdapter ?? null;
+  return registrations?.at(-1)?.normalizedAdapter ?? null;
 }
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
@@ -153,6 +156,8 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
   });
   const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
   const registrations = existing ? [...existing] : [];
+  // Registrations are stacked so duplicate module graphs can temporarily
+  // coexist and unregister without tearing down the active replacement.
   registrations.push({
     adapter,
     normalizedAdapter,
@@ -210,7 +215,7 @@ function resolveAdapterForChannelAccount(params: {
 
 function getActiveRegisteredAdapters(): SessionBindingAdapter[] {
   return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()]
-    .map((registrations) => registrations[0]?.normalizedAdapter ?? null)
+    .map((registrations) => registrations.at(-1)?.normalizedAdapter ?? null)
     .filter((adapter): adapter is SessionBindingAdapter => Boolean(adapter));
 }
 
@@ -394,7 +399,7 @@ export function getSessionBindingService(): SessionBindingService {
   return DEFAULT_SESSION_BINDING_SERVICE;
 }
 
-export const __testing = {
+export const testing = {
   resetSessionBindingAdaptersForTests() {
     ADAPTERS_BY_CHANNEL_ACCOUNT.clear();
     genericCurrentConversationBindingTesting.resetCurrentConversationBindingsForTests({
@@ -405,3 +410,4 @@ export const __testing = {
     return [...ADAPTERS_BY_CHANNEL_ACCOUNT.keys()];
   },
 };
+export { testing as __testing };

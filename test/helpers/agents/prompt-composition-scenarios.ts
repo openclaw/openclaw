@@ -1,3 +1,4 @@
+// Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,19 +8,28 @@ import {
   buildBootstrapPromptWarning,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
-import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
+import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { buildEmbeddedSystemPrompt } from "../../../src/agents/embedded-agent-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
-import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
-import { buildGroupChatContext, buildGroupIntro } from "../../../src/auto-reply/reply/groups.js";
+import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
+import {
+  buildDirectChatContext,
+  buildGroupChatContext,
+  buildGroupIntro,
+} from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
+import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
 
+// Prompt composition scenarios for system/body prompt stability tests.
+
+/** One turn in a prompt composition scenario. */
 export type PromptScenarioTurn = {
   id: string;
   label: string;
@@ -28,6 +38,7 @@ export type PromptScenarioTurn = {
   notes: string[];
 };
 
+/** Multi-turn prompt composition scenario fixture. */
 export type PromptScenario = {
   scenario: string;
   focus: string;
@@ -57,8 +68,8 @@ function buildCommonSystemParams(workspaceDir: string) {
       os: "Darwin 24.0.0",
       arch: "arm64",
       node: process.version,
-      model: "anthropic/claude-sonnet-4-5",
-      defaultModel: "anthropic/claude-sonnet-4-5",
+      model: "anthropic/claude-sonnet-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       shell: "zsh",
     },
     userTimezone: "America/Los_Angeles",
@@ -74,6 +85,7 @@ function buildSystemPrompt(params: {
   skillsPrompt?: string;
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
+  silentReplyPromptMode?: "generic" | "none";
 }) {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
     buildCommonSystemParams(params.workspaceDir);
@@ -87,6 +99,7 @@ function buildSystemPrompt(params: {
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
+    silentReplyPromptMode: params.silentReplyPromptMode,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
@@ -98,6 +111,23 @@ function buildAutoReplyBody(params: { ctx: TemplateContext; body: string; eventL
   return [params.eventLine, buildInboundUserContextPrefix(params.ctx), params.body]
     .filter(Boolean)
     .join("\n\n");
+}
+
+function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string }): string {
+  const inboundUserContext = buildInboundUserContextPrefix(params.ctx);
+  const envelope = buildReplyPromptEnvelope({
+    ctx: params.ctx,
+    sessionCtx: params.ctx,
+    baseBody: params.body,
+    hasUserBody: true,
+    inboundUserContext,
+    isBareSessionReset: false,
+    startupAction: "new",
+  });
+  return buildCurrentInboundPrompt({
+    context: envelope.currentInboundContext,
+    prompt: envelope.queuedBody,
+  });
 }
 
 async function readContextFiles(workspaceDir: string, fileNames: string[]) {
@@ -118,7 +148,18 @@ function buildAutoReplySystemPrompt(params: {
 }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx),
-    params.includeGroupChatContext ? buildGroupChatContext({ sessionCtx: params.sessionCtx }) : "",
+    params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
+      ? buildDirectChatContext({
+          sessionCtx: params.sessionCtx,
+        })
+      : "",
+    params.includeGroupChatContext
+      ? buildGroupChatContext({
+          sessionCtx: params.sessionCtx,
+          silentToken: SILENT_REPLY_TOKEN,
+          silentReplyPolicy: "allow",
+        })
+      : "",
     params.includeGroupIntro
       ? buildGroupIntro({
           cfg: {} as OpenClawConfig,
@@ -132,6 +173,12 @@ function buildAutoReplySystemPrompt(params: {
   return buildSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+    silentReplyPromptMode:
+      params.sessionCtx.ChatType === "direct" ||
+      params.sessionCtx.ChatType === "dm" ||
+      params.includeGroupChatContext
+        ? "none"
+        : "generic",
   });
 }
 
@@ -155,7 +202,7 @@ function buildToolRichSystemPrompt(params: {
     "web_search",
     "x_search",
     "web_fetch",
-  ].map((name) => ({ ...createStubTool(name), description: `${name} tool` }));
+  ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
   return buildEmbeddedSystemPrompt({
     workspaceDir: params.workspaceDir,
     reasoningTagHint: false,
@@ -179,7 +226,7 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
     OriginatingChannel: "slack",
     OriginatingTo: "D123",
     AccountId: "A1",
-    ChatType: "direct",
+    ChatType: "dm",
     SenderId: "U1",
     SenderName: "Alice",
     Body: "hi",
@@ -396,6 +443,61 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
   };
 }
 
+function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
+  const body = "Please summarize the deploy log.";
+  const baseCtx: TemplateContext = {
+    Provider: "discord",
+    Surface: "discord",
+    OriginatingChannel: "discord",
+    OriginatingTo: "channel:987654321",
+    AccountId: "A1",
+    ChatType: "channel",
+    GroupSubject: "#ops-bridge",
+    GroupChannel: "#ops-bridge",
+    GroupSpace: "guild-123",
+    SenderId: "U3",
+    SenderName: "Cael",
+    MessageSid: "1503084621145964846",
+    Body: body,
+    BodyStripped: body,
+    UntrustedStructuredContext: [
+      {
+        label: "Discord channel metadata",
+        source: "discord",
+        type: "channel_metadata",
+        payload: {
+          topic: "Deploy coordination",
+        },
+      },
+    ],
+  };
+  return {
+    scenario: "auto-reply-discord-boundary",
+    focus:
+      "Discord inbound body remains one user turn while supplemental context is structured metadata",
+    expectedStableSystemAfterTurnIds: [],
+    turns: [
+      {
+        id: "t1",
+        label: "Discord turn with channel metadata",
+        systemPrompt: buildAutoReplySystemPrompt({
+          workspaceDir,
+          sessionCtx: baseCtx,
+          includeGroupChatContext: true,
+        }),
+        bodyPrompt: buildAutoReplyModelPrompt({
+          ctx: baseCtx,
+          body,
+        }),
+        notes: [
+          "Inbound body should appear once in the model-bound prompt",
+          "Channel metadata should not use raw EXTERNAL_UNTRUSTED_CONTENT wrappers",
+        ],
+      },
+    ],
+  };
+}
+
 async function createToolRichScenario(workspaceDir: string): Promise<PromptScenario> {
   const skillsPrompt = [
     "<available_skills>",
@@ -568,7 +670,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "Store durable memories only in memory/2026-03-15.md (create memory/ if needed).",
     "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
     "If nothing to store, reply with NO_REPLY.",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const memoryFlushSystemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -592,7 +695,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "## Red Lines",
     "Do not delete production data.",
     "",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -634,6 +738,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   };
 }
 
+/** Create a temp workspace with prompt composition context files. */
 export async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
   const workspaceDir = await makeTempWorkspace("openclaw-prompt-cache-");
   await writeWorkspaceFile({
@@ -662,6 +767,7 @@ export async function createWorkspaceWithPromptCompositionFiles(): Promise<strin
   return workspaceDir;
 }
 
+/** Create all prompt composition scenarios plus cleanup handles. */
 export async function createPromptCompositionScenarios(): Promise<{
   workspaceDir: string;
   warningWorkspaceDir: string;
@@ -673,6 +779,7 @@ export async function createPromptCompositionScenarios(): Promise<{
   const scenarios = [
     createDirectScenario(workspaceDir),
     createGroupScenario(workspaceDir),
+    createDiscordBoundaryScenario(workspaceDir),
     await createToolRichScenario(workspaceDir),
     await createBootstrapWarningScenario(warningWorkspaceDir),
     await createMaintenanceScenario(workspaceDir),

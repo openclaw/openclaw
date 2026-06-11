@@ -1,5 +1,6 @@
+// Qa Matrix tests cover client plugin behavior.
 import { describe, expect, it } from "vitest";
-import { __testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
+import { testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
 import { buildDefaultMatrixQaTopologySpec } from "./topology.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
@@ -22,7 +23,7 @@ function parseJsonRequestBody(init?: RequestInit) {
 describe("matrix driver client", () => {
   it("builds Matrix HTML mentions for QA driver messages", () => {
     expect(
-      __testing.buildMatrixQaMessageContent({
+      testing.buildMatrixQaMessageContent({
         body: "@sut:matrix-qa.test reply with exactly: TOKEN",
         mentionUserIds: ["@sut:matrix-qa.test"],
       }),
@@ -40,7 +41,7 @@ describe("matrix driver client", () => {
 
   it("omits Matrix HTML markup when the body has no visible mention token", () => {
     expect(
-      __testing.buildMatrixQaMessageContent({
+      testing.buildMatrixQaMessageContent({
         body: "reply with exactly: TOKEN",
         mentionUserIds: ["@sut:matrix-qa.test"],
       }),
@@ -54,7 +55,7 @@ describe("matrix driver client", () => {
   });
 
   it("builds trimmed Matrix reaction relations for QA driver events", () => {
-    expect(__testing.buildMatrixReactionRelation(" $msg-1 ", " 👍 ")).toEqual({
+    expect(testing.buildMatrixReactionRelation(" $msg-1 ", " 👍 ")).toEqual({
       "m.relates_to": {
         rel_type: "m.annotation",
         event_id: "$msg-1",
@@ -63,8 +64,35 @@ describe("matrix driver client", () => {
     });
   });
 
+  it("builds Matrix replacement messages with replacement-local mention metadata", () => {
+    expect(
+      testing.buildMatrixQaReplacementMessageContent({
+        body: "@sut:matrix-qa.test updated prompt",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        targetEventId: " $msg-1 ",
+      }),
+    ).toEqual({
+      body: "* @sut:matrix-qa.test updated prompt",
+      msgtype: "m.text",
+      "m.new_content": {
+        body: "@sut:matrix-qa.test updated prompt",
+        msgtype: "m.text",
+        format: "org.matrix.custom.html",
+        formatted_body:
+          '<a href="https://matrix.to/#/%40sut%3Amatrix-qa.test">@sut:matrix-qa.test</a> updated prompt',
+        "m.mentions": {
+          user_ids: ["@sut:matrix-qa.test"],
+        },
+      },
+      "m.relates_to": {
+        rel_type: "m.replace",
+        event_id: "$msg-1",
+      },
+    });
+  });
+
   it("advances Matrix registration through token then dummy auth stages", () => {
-    const firstStage = __testing.resolveNextRegistrationAuth({
+    const firstStage = testing.resolveNextRegistrationAuth({
       registrationToken: "reg-token",
       response: {
         session: "uiaa-session",
@@ -79,7 +107,7 @@ describe("matrix driver client", () => {
     });
 
     expect(
-      __testing.resolveNextRegistrationAuth({
+      testing.resolveNextRegistrationAuth({
         registrationToken: "reg-token",
         response: {
           session: "uiaa-session",
@@ -95,7 +123,7 @@ describe("matrix driver client", () => {
 
   it("rejects Matrix UIAA flows that require unsupported stages", () => {
     expect(() =>
-      __testing.resolveNextRegistrationAuth({
+      testing.resolveNextRegistrationAuth({
         registrationToken: "reg-token",
         response: {
           session: "uiaa-session",
@@ -103,6 +131,54 @@ describe("matrix driver client", () => {
         },
       }),
     ).toThrow("Matrix registration requires unsupported auth stages:");
+  });
+
+  it("logs in with Matrix password auth to create a secondary QA device", async () => {
+    const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({
+        body: parseJsonRequestBody(init),
+        url: resolveRequestUrl(input),
+      });
+      return new Response(
+        JSON.stringify({
+          access_token: "secondary-token",
+          device_id: "SECONDARYDEVICE",
+          user_id: "@qa-driver:matrix-qa.test",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const client = createMatrixQaClient({
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    const login = await client.loginWithPassword({
+      deviceName: "OpenClaw Matrix QA Stale Device",
+      password: "driver-password",
+      userId: "@qa-driver:matrix-qa.test",
+    });
+    expect(login.accessToken).toBe("secondary-token");
+    expect(login.deviceId).toBe("SECONDARYDEVICE");
+    expect(login.password).toBe("driver-password");
+    expect(login.userId).toBe("@qa-driver:matrix-qa.test");
+
+    expect(requests).toEqual([
+      {
+        url: "http://127.0.0.1:28008/_matrix/client/v3/login",
+        body: {
+          type: "m.login.password",
+          identifier: {
+            type: "m.id.user",
+            user: "@qa-driver:matrix-qa.test",
+          },
+          initial_device_display_name: "OpenClaw Matrix QA Stale Device",
+          password: "driver-password",
+        },
+      },
+    ]);
   });
 
   it("issues Matrix room membership control requests for QA topology changes", async () => {
@@ -189,6 +265,173 @@ describe("matrix driver client", () => {
     ).resolves.toBe("$reaction-1");
   });
 
+  it("sends Matrix replacements and redactions through protocol endpoints", async () => {
+    const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({
+        body: parseJsonRequestBody(init),
+        url: resolveRequestUrl(input),
+      });
+      const eventId = requests.length === 1 ? "$replacement-1" : "$redaction-1";
+      return new Response(JSON.stringify({ event_id: eventId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.sendReplacementMessage({
+        body: "@sut:matrix-qa.test updated prompt",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!room:matrix-qa.test",
+        targetEventId: "$msg-1",
+      }),
+    ).resolves.toBe("$replacement-1");
+    await expect(
+      client.redactEvent({
+        eventId: "$reaction-1",
+        reason: "qa cleanup",
+        roomId: "!room:matrix-qa.test",
+      }),
+    ).resolves.toBe("$redaction-1");
+
+    expect(requests[0]?.url).toContain(
+      "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.room.message/",
+    );
+    const relation = requests[0]?.body?.["m.relates_to"] as
+      | { event_id?: string; rel_type?: string }
+      | undefined;
+    expect(relation?.rel_type).toBe("m.replace");
+    expect(relation?.event_id).toBe("$msg-1");
+    expect(requests[1]?.url).toMatch(
+      /^http:\/\/127\.0\.0\.1:28008\/_matrix\/client\/v3\/rooms\/!room%3Amatrix-qa\.test\/redact\/%24reaction-1\/[0-9a-f-]{36}$/,
+    );
+    expect(requests[1]?.body).toEqual({
+      reason: "qa cleanup",
+    });
+  });
+
+  it("uploads Matrix media before sending the room event", async () => {
+    const requests: Array<{
+      body: RequestInit["body"];
+      headers: HeadersInit | undefined;
+      url: string;
+    }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({
+        body: init?.body,
+        headers: init?.headers,
+        url: resolveRequestUrl(input),
+      });
+      if (requests.length === 1) {
+        return new Response(
+          JSON.stringify({ content_uri: "mxc://matrix-qa.test/red-top-blue-bottom" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ event_id: "$media-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.sendMediaMessage({
+        body: "@sut:matrix-qa.test Image understanding check",
+        buffer: Buffer.from("png-bytes"),
+        contentType: "image/png",
+        fileName: "red-top-blue-bottom.png",
+        kind: "image",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!room:matrix-qa.test",
+      }),
+    ).resolves.toBe("$media-1");
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.url).toBe(
+      "http://127.0.0.1:28008/_matrix/media/v3/upload?filename=red-top-blue-bottom.png",
+    );
+    expect(requests[0]?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(requests[0]?.body as Uint8Array)).toEqual(
+      Array.from(Buffer.from("png-bytes")),
+    );
+    expect(requests[1]?.url).toContain(
+      "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.room.message/",
+    );
+    const messageBody =
+      typeof requests[1]?.body === "string" ? JSON.parse(requests[1].body) : requests[1]?.body;
+    expect(messageBody.body).toBe("@sut:matrix-qa.test Image understanding check");
+    expect(messageBody.msgtype).toBe("m.image");
+    expect(messageBody.filename).toBe("red-top-blue-bottom.png");
+    expect(messageBody.url).toBe("mxc://matrix-qa.test/red-top-blue-bottom");
+    expect(messageBody.info?.mimetype).toBe("image/png");
+    expect(messageBody.info?.size).toBe("png-bytes".length);
+    expect(messageBody["m.mentions"]?.user_ids).toEqual(["@sut:matrix-qa.test"]);
+  });
+
+  it("adds Matrix room encryption state when provisioning encrypted QA rooms", async () => {
+    const createRoomBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      createRoomBodies.push(parseJsonRequestBody(init));
+      expect(resolveRequestUrl(input)).toBe("http://127.0.0.1:28008/_matrix/client/v3/createRoom");
+      return new Response(JSON.stringify({ room_id: "!encrypted:matrix-qa.test" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.createPrivateRoom({
+        encrypted: true,
+        inviteUserIds: ["@sut:matrix-qa.test"],
+        name: "Encrypted QA Room",
+      }),
+    ).resolves.toBe("!encrypted:matrix-qa.test");
+
+    expect(createRoomBodies).toStrictEqual([
+      {
+        creation_content: { "m.federate": false },
+        initial_state: [
+          {
+            type: "m.room.history_visibility",
+            state_key: "",
+            content: { history_visibility: "joined" },
+          },
+          {
+            type: "m.room.encryption",
+            state_key: "",
+            content: { algorithm: "m.megolm.v1.aes-sha2" },
+          },
+        ],
+        invite: ["@sut:matrix-qa.test"],
+        is_direct: false,
+        name: "Encrypted QA Room",
+        preset: "private_chat",
+      },
+    ]);
+  });
+
   it("provisions a three-member room so Matrix QA runs in a group context", async () => {
     const createRoomBodies: Array<Record<string, unknown>> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
@@ -255,7 +498,7 @@ describe("matrix driver client", () => {
     });
 
     expect(result.roomId).toBe("!room:matrix-qa.test");
-    expect(result.topology).toMatchObject({
+    expect(result.topology).toEqual({
       defaultRoomId: "!room:matrix-qa.test",
       defaultRoomKey: "main",
       rooms: [
@@ -270,16 +513,27 @@ describe("matrix driver client", () => {
           ],
           requireMention: true,
           roomId: "!room:matrix-qa.test",
+          name: "OpenClaw Matrix QA",
+          encrypted: false,
         },
       ],
     });
     expect(result.observer.userId).toBe("@qa-observer:matrix-qa.test");
     expect(createRoomBodies).toEqual([
-      expect.objectContaining({
+      {
+        creation_content: { "m.federate": false },
+        initial_state: [
+          {
+            type: "m.room.history_visibility",
+            state_key: "",
+            content: { history_visibility: "joined" },
+          },
+        ],
         invite: ["@qa-observer:matrix-qa.test", "@qa-sut:matrix-qa.test"],
         is_direct: false,
+        name: "OpenClaw Matrix QA",
         preset: "private_chat",
-      }),
+      },
     ]);
   });
 
@@ -345,21 +599,61 @@ describe("matrix driver client", () => {
       },
     });
 
-    expect(result.topology.rooms).toMatchObject([
-      { key: "group", kind: "group", roomId: "!group:matrix-qa.test", requireMention: true },
-      { key: "sut-dm", kind: "dm", roomId: "!dm:matrix-qa.test", requireMention: false },
+    expect(result.topology.rooms).toEqual([
+      {
+        encrypted: false,
+        key: "group",
+        kind: "group",
+        memberRoles: ["driver", "observer", "sut"],
+        memberUserIds: [
+          "@qa-driver:matrix-qa.test",
+          "@qa-observer:matrix-qa.test",
+          "@qa-sut:matrix-qa.test",
+        ],
+        name: "Matrix Group",
+        requireMention: true,
+        roomId: "!group:matrix-qa.test",
+      },
+      {
+        encrypted: false,
+        key: "sut-dm",
+        kind: "dm",
+        memberRoles: ["driver", "sut"],
+        memberUserIds: ["@qa-driver:matrix-qa.test", "@qa-sut:matrix-qa.test"],
+        name: "Matrix Driver/SUT DM",
+        requireMention: false,
+        roomId: "!dm:matrix-qa.test",
+      },
     ]);
     expect(createRoomBodies).toEqual([
-      expect.objectContaining({
+      {
+        creation_content: { "m.federate": false },
+        initial_state: [
+          {
+            type: "m.room.history_visibility",
+            state_key: "",
+            content: { history_visibility: "joined" },
+          },
+        ],
         invite: ["@qa-observer:matrix-qa.test", "@qa-sut:matrix-qa.test"],
         is_direct: false,
         name: "Matrix Group",
-      }),
-      expect.objectContaining({
+        preset: "private_chat",
+      },
+      {
+        creation_content: { "m.federate": false },
+        initial_state: [
+          {
+            type: "m.room.history_visibility",
+            state_key: "",
+            content: { history_visibility: "joined" },
+          },
+        ],
         invite: ["@qa-sut:matrix-qa.test"],
         is_direct: true,
         name: "Matrix Driver/SUT DM",
-      }),
+        preset: "private_chat",
+      },
     ]);
   });
 });

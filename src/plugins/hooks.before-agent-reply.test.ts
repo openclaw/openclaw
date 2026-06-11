@@ -1,3 +1,4 @@
+// Covers plugin hooks that run before agent replies are emitted.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
@@ -107,7 +108,7 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
 
     expect(result).toEqual({ handled: true, reply: { text: "ok" } });
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("before_agent_reply handler from test-plugin failed: Error: boom"),
+      "[hooks] before_agent_reply handler from test-plugin failed: boom",
     );
   });
 

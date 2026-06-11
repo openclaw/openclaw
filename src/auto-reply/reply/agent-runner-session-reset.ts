@@ -1,3 +1,4 @@
+// Handles session reset requests produced during agent runner execution.
 import fs from "node:fs";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -10,6 +11,7 @@ import {
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { replayRecentUserAssistantMessages } from "./session-transcript-replay.js";
 
 type ResetSessionOptions = {
   failureLabel: string;
@@ -55,10 +57,17 @@ export async function resetReplyRunSession(params: {
   }
   const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
   const nextSessionId = deps.generateSecureUuid();
+  const now = Date.now();
   const nextEntry: SessionEntry = {
     ...prevEntry,
     sessionId: nextSessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    sessionStartedAt: now,
+    usageFamilyKey: prevEntry.usageFamilyKey ?? params.sessionKey,
+    usageFamilySessionIds: Array.from(
+      new Set([...(prevEntry.usageFamilySessionIds ?? []), prevEntry.sessionId, nextSessionId]),
+    ),
+    lastInteractionAt: now,
     systemSent: false,
     abortedLastRun: false,
     modelProvider: undefined,
@@ -71,6 +80,7 @@ export async function resetReplyRunSession(params: {
     cacheRead: undefined,
     cacheWrite: undefined,
     contextTokens: undefined,
+    contextBudgetStatus: undefined,
     systemPromptReport: undefined,
     fallbackNoticeSelectedModel: undefined,
     fallbackNoticeActiveModel: undefined,
@@ -93,6 +103,13 @@ export async function resetReplyRunSession(params: {
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,
     );
   }
+  // Silent rotations (compaction/role-ordering) fire without user intent, so
+  // preserve recent user/assistant turns for direct-chat continuity.
+  await replayRecentUserAssistantMessages({
+    sourceTranscript: prevEntry.sessionFile,
+    targetTranscript: nextSessionFile,
+    newSessionId: nextSessionId,
+  });
   params.followupRun.run.sessionId = nextSessionId;
   params.followupRun.run.sessionFile = nextSessionFile;
   deps.refreshQueuedFollowupSession({

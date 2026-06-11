@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements echo behavior.
 export type EchoTracker = {
   rememberText: (
     text: string | undefined,
@@ -47,7 +48,7 @@ export function createEchoTracker(params: {
     }
     if (opts.logVerboseMessage) {
       params.logVerbose?.(
-        `Added to echo detection set (size now: ${recentlySent.size}): ${text.substring(0, 50)}...`,
+        `Added to echo detection set (size now: ${recentlySent.size}): ${text.slice(0, 50)}...`,
       );
     }
     trim();

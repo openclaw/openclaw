@@ -1,7 +1,10 @@
 package ai.openclaw.app.ui
 
-import androidx.compose.foundation.BorderStroke
+import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.mobileCardSurface
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +41,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,24 +50,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.gateway.GatewayEndpoint
-import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
   SetupCode,
   Manual,
 }
 
+/** Gateway connection screen for setup-code and manual endpoint pairing. */
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
   val context = LocalContext.current
   val statusText by viewModel.statusText.collectAsState()
+  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
@@ -101,8 +102,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       containerColor = mobileCardSurface,
       title = { Text("Trust this gateway?", style = mobileHeadline, color = mobileText) },
       text = {
+        val message =
+          if (prompt.previousFingerprintSha256.isNullOrBlank()) {
+            "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}"
+          } else {
+            "The gateway TLS certificate changed. Only continue if you expected this.\n\nOld SHA-256 fingerprint:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256 fingerprint:\n${prompt.fingerprintSha256}"
+          }
         Text(
-          "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
+          message,
           style = mobileCallout,
           color = mobileText,
         )
@@ -127,9 +134,10 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   }
 
   val setupResolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
-  val manualResolvedEndpoint = remember(manualHostInput, manualPortInput, manualTlsInput) {
-    composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
-  }
+  val manualResolvedEndpoint =
+    remember(manualHostInput, manualPortInput, manualTlsInput) {
+      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
+    }
 
   val activeEndpoint =
     remember(isConnected, remoteAddress, setupResolvedEndpoint, manualResolvedEndpoint, inputMode) {
@@ -140,13 +148,10 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       }
     }
 
-  val showDiagnostics = !isConnected && gatewayStatusHasDiagnostics(statusText)
-  val pairingRequired = !isConnected && gatewayStatusLooksLikePairing(statusText)
-  val statusLabel = gatewayStatusForDisplay(statusText)
-
-  PairingAutoRetryEffect(enabled = pairingRequired) {
-    viewModel.refreshGatewayConnection()
-  }
+  val showDiagnostics = !isConnected && (gatewayConnectionProblem != null || gatewayStatusHasDiagnostics(statusText))
+  val pairingRequired = !isConnected && (gatewayConnectionProblem?.isPairingRequired == true || gatewayStatusLooksLikePairing(statusText))
+  val pairingInstruction = gatewayPairingInstruction(gatewayConnectionProblem)
+  val statusLabel = gatewayStatusForDisplay(gatewayConnectionProblem?.message ?: statusText)
 
   Column(
     modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
@@ -284,25 +289,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           }
 
           validationText = null
-          if (inputMode == ConnectInputMode.SetupCode) {
-            viewModel.resetGatewaySetupAuth()
-          }
-          viewModel.setManualEnabled(true)
-          viewModel.setManualHost(config.host)
-          viewModel.setManualPort(config.port)
-          viewModel.setManualTls(config.tls)
-          viewModel.setGatewayBootstrapToken(config.bootstrapToken)
-          if (config.token.isNotBlank()) {
-            viewModel.setGatewayToken(config.token)
-          } else if (config.bootstrapToken.isNotBlank()) {
-            viewModel.setGatewayToken("")
-          }
-          viewModel.setGatewayPassword(config.password)
-          viewModel.connect(
-            GatewayEndpoint.manual(host = config.host, port = config.port),
-            token = config.token.ifEmpty { null },
-            bootstrapToken = config.bootstrapToken.ifEmpty { null },
-            password = config.password.ifEmpty { null },
+          viewModel.saveGatewayConfigAndConnect(
+            host = config.host,
+            port = config.port,
+            tls = config.tls,
+            token = config.token,
+            bootstrapToken = config.bootstrapToken,
+            password = config.password,
+            resetSetupAuth = inputMode == ConnectInputMode.SetupCode,
           )
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -332,7 +326,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           Text(statusLabel, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
           if (pairingRequired) {
             Text(
-              "Approve this phone on the gateway. OpenClaw retries automatically while this screen stays open.",
+              pairingInstruction,
               style = mobileCallout,
               color = mobileTextSecondary,
             )
@@ -544,7 +538,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               colors = outlinedColors(),
             )
 
-            Text("Password (optional)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(
+              "Password (optional)",
+              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+              color = mobileTextSecondary,
+            )
             OutlinedTextField(
               value = passwordInput,
               onValueChange = { passwordInput = it },
@@ -577,8 +575,19 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   }
 }
 
+private fun gatewayPairingInstruction(problem: GatewayConnectionProblem?): String =
+  if (problem?.canAutoRetry == true) {
+    "Approve this phone on the gateway. OpenClaw will reconnect automatically."
+  } else {
+    "Approve this phone on the gateway, then retry the connection."
+  }
+
 @Composable
-private fun MethodChip(label: String, active: Boolean, onClick: () -> Unit) {
+private fun MethodChip(
+  label: String,
+  active: Boolean,
+  onClick: () -> Unit,
+) {
   Button(
     onClick = onClick,
     modifier = Modifier.height(40.dp),
@@ -596,7 +605,10 @@ private fun MethodChip(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun QuickFillChip(label: String, onClick: () -> Unit) {
+private fun QuickFillChip(
+  label: String,
+  onClick: () -> Unit,
+) {
   Button(
     onClick = onClick,
     shape = RoundedCornerShape(999.dp),

@@ -1,13 +1,16 @@
-import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/config-runtime";
+// Talk Voice plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-function mask(s: string, keep: number = 6): string {
+function mask(s: string, keep = 6): string {
   const trimmed = s.trim();
   if (trimmed.length <= keep) {
     return "***";
@@ -95,6 +98,10 @@ function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function parsePositiveIntegerToken(value: unknown): number | undefined {
+  return parseStrictPositiveInteger(value);
+}
+
 function resolveCommandLabel(channel: string): string {
   return channel === "discord" ? "/talkvoice" : "/voice";
 }
@@ -134,7 +141,7 @@ export default definePluginEntry({
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = normalizeLowercaseStringOrEmpty(tokens[0] ?? "status");
 
-        const cfg = api.runtime.config.loadConfig();
+        const cfg = api.runtime.config.current() as OpenClawConfig;
         const active = resolveActiveTalkProviderConfig(cfg.talk);
         if (!active) {
           return {
@@ -162,7 +169,7 @@ export default definePluginEntry({
         }
 
         if (action === "list") {
-          const limit = Number.parseInt(tokens[1] ?? "12", 10);
+          const limit = parsePositiveIntegerToken(tokens[1]) ?? 12;
           try {
             const voices = await api.runtime.tts.listVoices({
               provider: providerId,
@@ -171,7 +178,7 @@ export default definePluginEntry({
               baseUrl,
             });
             return {
-              text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12, providerId),
+              text: formatVoiceList(voices, limit, providerId),
             };
           } catch (error) {
             const message = formatErrorMessage(error);
@@ -208,22 +215,27 @@ export default definePluginEntry({
             return { text: `No voice found for ${hint}. Try: ${commandLabel} list` };
           }
 
-          const nextConfig = {
-            ...cfg,
-            talk: {
-              ...cfg.talk,
-              provider: providerId,
-              providers: {
-                ...cfg.talk?.providers,
-                [providerId]: {
-                  ...cfg.talk?.providers?.[providerId],
-                  voiceId: chosen.id,
+          await api.runtime.config.mutateConfigFile({
+            afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              const nextConfig = {
+                ...draft,
+                talk: {
+                  ...draft.talk,
+                  provider: providerId,
+                  providers: {
+                    ...draft.talk?.providers,
+                    [providerId]: {
+                      ...draft.talk?.providers?.[providerId],
+                      voiceId: chosen.id,
+                    },
+                  },
+                  ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
                 },
-              },
-              ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
+              };
+              Object.assign(draft, nextConfig);
             },
-          };
-          await api.runtime.config.writeConfigFile(nextConfig);
+          });
 
           const name = (chosen.name ?? "").trim() || "(unnamed)";
           return { text: `✅ ${providerLabel} Talk voice set to ${name}\n${chosen.id}` };

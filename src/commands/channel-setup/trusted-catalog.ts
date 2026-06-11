@@ -1,6 +1,7 @@
+// Trusted channel catalog helpers that hide unenabled workspace-shadowed entries.
 import {
   getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
@@ -33,6 +34,7 @@ function isTrustedWorkspaceChannelCatalogEntry(
   ).enabled;
 }
 
+/** Resolve a catalog entry, falling back to non-workspace metadata when workspace entry is untrusted. */
 export function getTrustedChannelPluginCatalogEntry(
   channelId: string,
   params: {
@@ -53,48 +55,46 @@ export function getTrustedChannelPluginCatalogEntry(
   });
 }
 
+function listChannelPluginCatalogEntriesWithTrustedFallback(
+  params: {
+    cfg: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+  onMissingFallback: (entry: ChannelPluginCatalogEntry) => ChannelPluginCatalogEntry[],
+): ChannelPluginCatalogEntry[] {
+  const unfiltered = listRawChannelPluginCatalogEntries({
+    workspaceDir: params.workspaceDir,
+  });
+  const fallbackById = new Map(
+    listRawChannelPluginCatalogEntries({
+      workspaceDir: params.workspaceDir,
+      excludeWorkspace: true,
+    }).map((entry) => [entry.id, entry]),
+  );
+  return unfiltered.flatMap((entry) => {
+    if (isTrustedWorkspaceChannelCatalogEntry(entry, params.cfg, params.env)) {
+      return [entry];
+    }
+    const fallback = fallbackById.get(entry.id);
+    return fallback ? [fallback] : onMissingFallback(entry);
+  });
+}
+
+/** List trusted catalog entries, dropping untrusted workspace-only shadows. */
 export function listTrustedChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ChannelPluginCatalogEntry[] {
-  const unfiltered = listChannelPluginCatalogEntries({
-    workspaceDir: params.workspaceDir,
-  });
-  const fallbackById = new Map(
-    listChannelPluginCatalogEntries({
-      workspaceDir: params.workspaceDir,
-      excludeWorkspace: true,
-    }).map((entry) => [entry.id, entry]),
-  );
-  return unfiltered.flatMap((entry) => {
-    if (isTrustedWorkspaceChannelCatalogEntry(entry, params.cfg, params.env)) {
-      return [entry];
-    }
-    const fallback = fallbackById.get(entry.id);
-    return fallback ? [fallback] : [];
-  });
+  return listChannelPluginCatalogEntriesWithTrustedFallback(params, () => []);
 }
 
+/** List setup discovery entries, preserving untrusted workspace-only entries for install prompts. */
 export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ChannelPluginCatalogEntry[] {
-  const unfiltered = listChannelPluginCatalogEntries({
-    workspaceDir: params.workspaceDir,
-  });
-  const fallbackById = new Map(
-    listChannelPluginCatalogEntries({
-      workspaceDir: params.workspaceDir,
-      excludeWorkspace: true,
-    }).map((entry) => [entry.id, entry]),
-  );
-  return unfiltered.flatMap((entry) => {
-    if (isTrustedWorkspaceChannelCatalogEntry(entry, params.cfg, params.env)) {
-      return [entry];
-    }
-    const fallback = fallbackById.get(entry.id);
-    return fallback ? [fallback] : [entry];
-  });
+  return listChannelPluginCatalogEntriesWithTrustedFallback(params, (entry) => [entry]);
 }

@@ -1,3 +1,4 @@
+// Gateway request scope tracks request-local plugin runtime context across async work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   GatewayRequestContext,
@@ -10,6 +11,13 @@ export type PluginRuntimeGatewayRequestScope = {
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
   pluginId?: string;
+  pluginSource?: string;
+  gatewayMethodDispatchAllowed?: boolean;
+};
+
+export type PluginRuntimePluginScope = {
+  pluginId: string;
+  pluginSource?: string;
 };
 
 const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
@@ -36,15 +44,27 @@ export function withPluginRuntimeGatewayRequestScope<T>(
 /**
  * Runs work under the current gateway request scope while attaching plugin identity.
  */
-export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
+export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope, run: () => T): T {
   const current = pluginRuntimeGatewayRequestScope.getStore();
   const scoped: PluginRuntimeGatewayRequestScope = current
-    ? { ...current, pluginId }
+    ? { ...current, pluginId: scope.pluginId }
     : {
-        pluginId,
+        pluginId: scope.pluginId,
         isWebchatConnect: () => false,
       };
+  if (scope.pluginSource !== undefined) {
+    scoped.pluginSource = scope.pluginSource;
+  } else {
+    delete scoped.pluginSource;
+  }
   return pluginRuntimeGatewayRequestScope.run(scoped, run);
+}
+
+/**
+ * Runs work under the current gateway request scope while attaching plugin identity.
+ */
+export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
+  return withPluginRuntimePluginScope({ pluginId }, run);
 }
 
 /**

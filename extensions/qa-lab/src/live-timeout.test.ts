@@ -1,3 +1,4 @@
+// Qa Lab tests cover live timeout plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 
@@ -8,7 +9,7 @@ describe("qa live timeout policy", () => {
         {
           providerMode: "mock-openai",
           primaryModel: "anthropic/claude-sonnet-4-6",
-          alternateModel: "anthropic/claude-opus-4-6",
+          alternateModel: "anthropic/claude-opus-4-8",
         },
         30_000,
       ),
@@ -20,8 +21,8 @@ describe("qa live timeout policy", () => {
       resolveQaLiveTurnTimeoutMs(
         {
           providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.4",
-          alternateModel: "openai/gpt-5.4",
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5",
         },
         30_000,
       ),
@@ -47,7 +48,7 @@ describe("qa live timeout policy", () => {
         {
           providerMode: "live-frontier",
           primaryModel: "anthropic/claude-sonnet-4-6",
-          alternateModel: "anthropic/claude-opus-4-6",
+          alternateModel: "anthropic/claude-opus-4-8",
         },
         30_000,
       ),
@@ -60,10 +61,10 @@ describe("qa live timeout policy", () => {
         {
           providerMode: "live-frontier",
           primaryModel: "anthropic/claude-sonnet-4-6",
-          alternateModel: "anthropic/claude-opus-4-6",
+          alternateModel: "anthropic/claude-opus-4-8",
         },
         30_000,
-        "anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-4-8",
       ),
     ).toBe(240_000);
   });

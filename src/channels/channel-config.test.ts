@@ -1,3 +1,4 @@
+// Channel config tests cover channel config normalization and account lookup behavior.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { typedCases } from "../test-utils/typed-cases.js";
@@ -138,7 +139,7 @@ describe("resolveChannelMatchConfig", () => {
 describe("validateSenderIdentity", () => {
   it("allows direct messages without sender fields", () => {
     const ctx: MsgContext = { ChatType: "direct" };
-    expect(validateSenderIdentity(ctx)).toEqual([]);
+    expect(validateSenderIdentity(ctx)).toStrictEqual([]);
   });
 
   it("requires some sender identity for non-direct chats", () => {

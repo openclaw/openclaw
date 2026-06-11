@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+// Qa Lab plugin module implements cli behavior.
 import {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
@@ -22,15 +22,13 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "telegram",
     credentialOptions: {
       sourceDescription: "Credential source for Telegram QA: env or convex (default: env)",
-      roleDescription: "Credential role for convex auth: maintainer or ci (default: maintainer)",
+      roleDescription:
+        "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },
     description: "Run the manual Telegram live QA lane against a private bot-to-bot group harness",
+    listScenariosHelp: "Print available Telegram scenario ids and exit",
     outputDirHelp: "Telegram QA artifact directory",
     scenarioHelp: "Run only the named Telegram QA scenario (repeatable)",
     sutAccountHelp: "Temporary Telegram account id inside the QA gateway config",
     run: runQaTelegram,
   });
-
-export function registerTelegramQaCli(qa: Command) {
-  telegramQaCliRegistration.register(qa);
-}

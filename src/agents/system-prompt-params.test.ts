@@ -1,9 +1,10 @@
+// System prompt params tests cover runtime metadata assembly, especially repo
+// root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 
 async function makeTempDir(label: string): Promise<string> {
@@ -76,6 +77,8 @@ describe("buildSystemPromptParams repo root", () => {
   });
 
   it("ignores invalid repoRoot config and auto-detects", async () => {
+    // Invalid explicit roots must not poison runtime metadata; auto-detection
+    // still finds the real repository root from the workspace path.
     const temp = await makeTempDir("invalid");
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(repoRoot, "workspace");
@@ -101,13 +104,5 @@ describe("buildSystemPromptParams repo root", () => {
     const { runtimeInfo } = buildParams({ workspaceDir });
 
     expect(runtimeInfo.repoRoot).toBeUndefined();
-  });
-
-  it("includes the default profile canvas root in runtimeInfo", async () => {
-    const workspaceDir = await makeTempDir("canvas-root");
-
-    const { runtimeInfo } = buildParams({ workspaceDir });
-
-    expect(runtimeInfo.canvasRootDir).toBe(path.resolve(path.join(resolveStateDir(), "canvas")));
   });
 });

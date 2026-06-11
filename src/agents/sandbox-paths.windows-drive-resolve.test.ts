@@ -1,7 +1,8 @@
+// Verifies Windows drive-letter paths are treated as absolute under POSIX hosts.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveToolPathAgainstWorkspaceRoot } from "./agent-tools.read.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
-import { resolveToolPathAgainstWorkspaceRoot } from "./pi-tools.read.js";
 
 describe("resolveSandboxInputPath (Windows drive paths under POSIX rules)", () => {
   it("does not join workspace cwd when path looks like a Windows drive path", () => {

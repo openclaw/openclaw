@@ -1,3 +1,8 @@
+/**
+ * Fast generic tool stubs.
+ *
+ * Provides lightweight tool records and shared mocks for media/web/plugin tool imports.
+ */
 import { vi } from "vitest";
 
 export type StubTool = {
@@ -33,6 +38,8 @@ vi.mock("../tools/web-tools.js", () => ({
 }));
 
 vi.mock("../../plugins/tools.js", () => ({
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
+    JSON.stringify([pluginId, toolName]),
   copyPluginToolMeta: (_from: unknown, to: unknown) => to,
   getPluginToolMeta: () => undefined,
   resolvePluginTools: () => [],

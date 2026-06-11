@@ -1,8 +1,14 @@
+/**
+ * Internal channel plugin type barrel.
+ *
+ * Re-exports curated core-facing channel plugin types without helper-only implementation details.
+ */
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
 export { CHANNEL_MESSAGE_CAPABILITIES } from "./message-capabilities.js";
 
+/** Stable message action name union derived from the registered action list. */
 export type ChannelMessageActionName = ChannelMessageActionNameFromList;
 export type { ChannelMessageCapability } from "./message-capabilities.js";
 
@@ -33,6 +39,7 @@ export type {
   ChannelLogoutContext,
   ChannelLogoutResult,
   ChannelOutboundAdapter,
+  ChannelOutboundChunkContext,
   ChannelOutboundContext,
   ChannelOutboundPayloadHint,
   ChannelOutboundTargetRef,
@@ -79,6 +86,7 @@ export type {
   ChannelStatusIssue,
   ChannelStreamingAdapter,
   ChannelStructuredComponents,
+  ChannelCrossContextPresentationFactory,
   ChannelThreadingAdapter,
   ChannelThreadingContext,
   ChannelThreadingToolContext,

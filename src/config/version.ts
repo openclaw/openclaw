@@ -1,9 +1,10 @@
+// Normalizes config version metadata and compatibility comparisons.
 import {
   comparePrereleaseIdentifiers,
   normalizeLegacyDotBetaVersion,
 } from "../infra/semver-compare.js";
 
-export type OpenClawVersion = {
+type OpenClawVersion = {
   major: number;
   minor: number;
   patch: number;
@@ -13,6 +14,7 @@ export type OpenClawVersion = {
 
 const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
+/** Parses stable, prerelease, and legacy dot-beta OpenClaw versions. */
 export function parseOpenClawVersion(raw: string | null | undefined): OpenClawVersion | null {
   if (!raw) {
     return null;
@@ -111,10 +113,11 @@ export function shouldWarnOnTouchedVersion(
     parsedTouched &&
     parsedCurrent.major === parsedTouched.major &&
     parsedCurrent.minor === parsedTouched.minor &&
-    parsedCurrent.patch === parsedTouched.patch &&
-    parsedTouched.revision != null
+    parsedCurrent.patch === parsedTouched.patch
   ) {
-    return false;
+    if (!parsedTouched.prerelease?.length) {
+      return false;
+    }
   }
   if (isSameOpenClawStableFamily(current, touched)) {
     return false;

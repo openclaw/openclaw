@@ -1,6 +1,8 @@
+// Control UI tests cover chat model ref behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildChatModelOption,
+  buildQualifiedChatModelValue,
   createChatModelOverride,
   formatCatalogChatModelDisplay,
   formatChatModelDisplay,
@@ -30,9 +32,7 @@ describe("chat-model-ref helpers", () => {
   });
 
   it("preserves already-qualified model refs without prepending provider", () => {
-    expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai-codex")).toBe(
-      "ollama/qwen3:30b",
-    );
+    expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai")).toBe("ollama/qwen3:30b");
   });
 
   it("prefixes provider-native catalog ids that already contain slashes", () => {
@@ -156,6 +156,10 @@ describe("chat-model-ref helpers", () => {
     expect(formatChatModelDisplay("alias-only")).toBe("alias-only");
   });
 
+  it("does not double-prefix provider-native catalog ids", () => {
+    expect(buildQualifiedChatModelValue("openrouter/auto", "openrouter")).toBe("openrouter/auto");
+  });
+
   it("resolves server session data to qualified option values", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
@@ -232,6 +236,20 @@ describe("chat-model-ref helpers", () => {
     expect(resolvePreferredServerChatModelValue("openai/gpt-5-mini", "zai", [])).toBe(
       "openai/gpt-5-mini",
     );
+  });
+
+  it("keeps nested provider-qualified server values stable when the catalog already confirms them", () => {
+    const nestedModel = {
+      id: "deepseek-ai/deepseek-v3.2",
+      name: "DeepSeek V3.2",
+      provider: "nvidia",
+    };
+
+    expect(
+      resolvePreferredServerChatModelValue("nvidia/deepseek-ai/deepseek-v3.2", "nvidia", [
+        nestedModel,
+      ]),
+    ).toBe("nvidia/deepseek-ai/deepseek-v3.2");
   });
 
   it("uses catalog resolution for provider-less raw server model values", () => {

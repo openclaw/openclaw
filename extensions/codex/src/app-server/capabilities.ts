@@ -1,8 +1,13 @@
+/**
+ * Capability helpers for optional Codex app-server control-plane methods.
+ */
 import { CodexAppServerRpcError } from "./client.js";
 
+/** Known app-server methods used by OpenClaw control surfaces. */
 export const CODEX_CONTROL_METHODS = {
   account: "account/read",
   compact: "thread/compact/start",
+  feedback: "feedback/upload",
   listMcpServers: "mcpServerStatus/list",
   listSkills: "skills/list",
   listThreads: "thread/list",
@@ -11,9 +16,11 @@ export const CODEX_CONTROL_METHODS = {
   review: "review/start",
 } as const;
 
-export type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;
+type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;
+/** App-server method name from the known control method map. */
 export type CodexControlMethod = (typeof CODEX_CONTROL_METHODS)[CodexControlName];
 
+/** Formats unsupported control calls differently from ordinary RPC failures. */
 export function describeControlFailure(error: unknown): string {
   if (isUnsupportedControlError(error)) {
     return "unsupported by this Codex app-server";

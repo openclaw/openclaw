@@ -48,7 +48,7 @@ import Testing
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/openclaw.js")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v22.19.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
@@ -164,6 +164,9 @@ import Testing
         } else {
             #expect(Bool(false))
         }
+        #expect(cmd.contains("StrictHostKeyChecking=yes"))
+        #expect(!cmd.contains("StrictHostKeyChecking=accept-new"))
+        #expect(cmd.contains("UpdateHostKeys=yes"))
         #expect(cmd.contains("-i"))
         #expect(cmd.contains("/tmp/id_ed25519"))
         if let script = cmd.last {
@@ -174,6 +177,28 @@ import Testing
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
         }
+    }
+
+    @Test func `empty remote defaults fall back to config remote values`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set(" ", forKey: remoteTargetKey)
+        defaults.set("", forKey: remoteIdentityKey)
+
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshTarget": "alice@gateway.local",
+                        "sshIdentity": "/tmp/config-id",
+                    ],
+                ],
+            ])
+
+        #expect(settings.target == "alice@gateway.local")
+        #expect(settings.identity == "/tmp/config-id")
     }
 
     @Test func `rejects unsafe SSH targets`() {
@@ -204,5 +229,24 @@ import Testing
         if cmd.count >= 2 {
             #expect(cmd[1] == "daemon")
         }
+    }
+
+    @Test func `remote settings fall back to config ssh target`() {
+        let defaults = self.makeDefaults()
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshTarget": "alice@gateway.example:2222",
+                        "sshIdentity": "/tmp/id_ed25519",
+                    ],
+                ],
+            ])
+
+        #expect(settings.mode == .remote)
+        #expect(settings.target == "alice@gateway.example:2222")
+        #expect(settings.identity == "/tmp/id_ed25519")
     }
 }

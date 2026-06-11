@@ -1,9 +1,10 @@
+// Tests hardlink guard detection for unsafe filesystem paths.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { assertNoHardlinkedFinalPath } from "./hardlink-guards.js";
+import { assertNoHardlinkedFinalPath } from "./fs-safe-advanced.js";
 
 async function withHardlinkFixture(
   cb: (context: { root: string; source: string; linked: string; dirPath: string }) => Promise<void>,

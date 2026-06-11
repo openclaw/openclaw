@@ -1,13 +1,16 @@
+// Collects operating system summary facts for diagnostics.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-export type OsSummary = {
+type OsSummary = {
   platform: NodeJS.Platform;
   arch: string;
   release: string;
   label: string;
 };
+
+const cachedOsSummaryByKey = new Map<string, OsSummary>();
 
 function macosVersion(): string {
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
@@ -15,10 +18,18 @@ function macosVersion(): string {
   return out || os.release();
 }
 
+/** Resolves a compact OS label for diagnostics, logs, and environment summaries. */
 export function resolveOsSummary(): OsSummary {
   const platform = os.platform();
   const release = os.release();
   const arch = os.arch();
+  const cacheKey = `${platform}\0${release}\0${arch}`;
+  // Cache by stable os.* facts; darwin's sw_vers lookup is comparatively slow
+  // and only needed once per observed platform/release/arch tuple.
+  const cached = cachedOsSummaryByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const label = (() => {
     if (platform === "darwin") {
       return `macos ${macosVersion()} (${arch})`;
@@ -28,5 +39,7 @@ export function resolveOsSummary(): OsSummary {
     }
     return `${platform} ${release} (${arch})`;
   })();
-  return { platform, arch, release, label };
+  const summary = { platform, arch, release, label };
+  cachedOsSummaryByKey.set(cacheKey, summary);
+  return summary;
 }

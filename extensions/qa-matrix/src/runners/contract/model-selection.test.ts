@@ -1,9 +1,10 @@
+// Qa Matrix tests cover model selection plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadQaRuntimeModule = vi.hoisted(() => vi.fn());
 const defaultQaRuntimeModelForMode = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/qa-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
   loadQaRuntimeModule,
 }));
 

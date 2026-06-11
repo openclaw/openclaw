@@ -1,23 +1,36 @@
+// Session utility tests cover key parsing, store migration, agent/default rows,
+// model identity resolution, title derivation, and byte-capped row payloads.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  canonicalizeSpawnedByForAgent,
+  buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
   pruneLegacyStoreKeys,
+  resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
+  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
@@ -51,26 +64,197 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
 
 function createModelDefaultsConfig(params: {
   primary: string;
-  models?: Record<string, Record<string, never>>;
+  models?: Record<string, { agentRuntime?: { id: string } }>;
+  agentRuntime?: { id: string };
 }): OpenClawConfig {
   return {
     agents: {
       defaults: {
         model: { primary: params.primary },
-        models: params.models,
+        models: {
+          ...params.models,
+          ...(params.agentRuntime
+            ? { [params.primary]: { agentRuntime: params.agentRuntime } }
+            : {}),
+        },
       },
     },
   } as OpenClawConfig;
 }
 
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
+    resetPluginRuntimeStateForTest();
   });
 
   test("capArrayByJsonBytes trims from the front", () => {
     const res = capArrayByJsonBytes(["a", "b", "c"], 10);
     expect(res.items).toEqual(["b", "c"]);
+  });
+
+  test("session lists apply a bounded default and expose truncation metadata", async () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 101 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+
+    expect(listed.sessions).toHaveLength(100);
+    expect(listed.count).toBe(100);
+    expect(listed.totalCount).toBe(101);
+    expect(listed.limitApplied).toBe(100);
+    expect(listed.nextOffset).toBe(100);
+    expect(listed.hasMore).toBe(true);
+    expect(listed.sessions[0]?.key).toBe("session-0");
+    expect(listed.sessions.at(-1)?.key).toBe("session-99");
+  });
+
+  test("session lists honor explicit caller limits", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { limit: 3 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual([
+      "session-0",
+      "session-1",
+      "session-2",
+    ]);
+    expect(listed.count).toBe(3);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.limitApplied).toBe(3);
+    expect(listed.nextOffset).toBe(3);
+    expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists page from an offset after filtering and sorting", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 6 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+          displayName: index === 5 ? "Different project" : `Project Alpha ${index}`,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "alpha", limit: 2, offset: 2 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["session-2", "session-3"]);
+    expect(listed.count).toBe(2);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.limitApplied).toBe(2);
+    expect(listed.offset).toBe(2);
+    expect(listed.nextOffset).toBe(4);
+    expect(listed.hasMore).toBe(true);
+  });
+
+  test("session list search includes direct-session origin display labels", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const store = {
+      "agent:main:telegram:direct:42": {
+        chatType: "direct",
+        channel: "telegram",
+        origin: { label: "openclaw-tui" },
+        updatedAt: 2,
+      } as SessionEntry,
+      "agent:main:telegram:direct:99": {
+        chatType: "direct",
+        channel: "telegram",
+        origin: { label: "other-direct" },
+        updatedAt: 1,
+      } as SessionEntry,
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "openclaw-tui" },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual([
+      "agent:main:telegram:direct:42",
+    ]);
+    expect(listed.sessions[0]?.displayName).toBe("openclaw-tui");
+  });
+
+  test("session lists mark the final offset page without hasMore", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { limit: 2, offset: 4 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["session-4"]);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.offset).toBe(4);
+    expect(listed.nextOffset).toBeNull();
+    expect(listed.hasMore).toBe(false);
   });
 
   test("parseGroupKey handles group keys", () => {
@@ -87,6 +271,463 @@ describe("gateway session utils", () => {
     expect(parseGroupKey("foo:bar")).toBeNull();
   });
 
+  test("session defaults include provider-owned thinking options", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "test",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "OpenAI Codex",
+        auth: [],
+        resolveThinkingProfile: ({ modelId }) => ({
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "adaptive" },
+            { id: "high" },
+            ...(modelId === "gpt-5.5" ? [{ id: "xhigh" as const }] : []),
+            { id: "max", label: "maximum" },
+          ],
+          defaultLevel: "adaptive",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const defaults = getSessionDefaults(createModelDefaultsConfig({ primary: "openai/gpt-5.5" }));
+
+    expectFields(defaults, {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      thinkingDefault: "adaptive",
+    });
+    const levelLabels = Object.fromEntries(
+      defaults.thinkingLevels?.map((level) => [level.id, level.label]) ?? [],
+    );
+    expectFields(levelLabels, {
+      adaptive: "adaptive",
+      xhigh: "xhigh",
+      max: "maximum",
+    });
+    expect(defaults.thinkingOptions).toContain("adaptive");
+    expect(defaults.thinkingOptions).toContain("xhigh");
+    expect(defaults.thinkingOptions).toContain("maximum");
+  });
+
+  test("session defaults and rows use catalog reasoning metadata for provider thinking options", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "ollama",
+      source: "test",
+      provider: {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        resolveThinkingProfile: ({ reasoning }) => ({
+          levels:
+            reasoning === true
+              ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+              : [{ id: "off" }],
+          defaultLevel: reasoning === true ? "medium" : "off",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const cfg = createModelDefaultsConfig({ primary: "ollama/qwen3:0.6b" });
+    const catalog = [
+      {
+        provider: "ollama",
+        id: "qwen3:0.6b",
+        name: "qwen3:0.6b",
+        reasoning: true,
+      },
+    ];
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+      modelCatalog: catalog,
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(row.thinkingLevels?.map((level) => level.id)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(defaults.thinkingDefault).toBe("medium");
+    expect(row.thinkingDefault).toBe("medium");
+  });
+
+  test("session rows ignore malformed compaction checkpoints", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-older",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 10,
+            reason: "manual",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+          null,
+          {
+            checkpointId: "",
+            createdAt: 30,
+            reason: "manual",
+          },
+          {
+            checkpointId: "checkpoint-bad-reason",
+            createdAt: 40,
+            reason: "bogus",
+          },
+          {
+            checkpointId: "checkpoint-newer",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 50,
+            reason: "overflow-retry",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+        ],
+      } as unknown as SessionEntry,
+    });
+
+    expect(row.compactionCheckpointCount).toBe(2);
+    expect(row.latestCompactionCheckpoint).toEqual({
+      checkpointId: "checkpoint-newer",
+      createdAt: 50,
+      reason: "overflow-retry",
+    });
+  });
+
+  test("async session list reuses thinking metadata for lightweight rows", async () => {
+    const resolveThinkingProfile = vi.fn(() => ({
+      levels: [{ id: "off" as const }, { id: "medium" as const }],
+      defaultLevel: "medium" as const,
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "test",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "OpenAI Codex",
+        auth: [],
+        resolveThinkingProfile,
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          updatedAt: Date.now() - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const result = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(5);
+    const missingMediumLevelSessionIds = result.sessions
+      .filter((session) => !session.thinkingLevels?.some((level) => level.id === "medium"))
+      .map((session) => session.sessionId);
+    const missingMediumOptionSessionIds = result.sessions
+      .filter((session) => !session.thinkingOptions?.includes("medium"))
+      .map((session) => session.sessionId);
+
+    expect(missingMediumLevelSessionIds).toStrictEqual([]);
+    expect(missingMediumOptionSessionIds).toStrictEqual([]);
+    expect(result.sessions.map((session) => session.thinkingDefault)).toEqual(
+      Array.from({ length: result.sessions.length }, () => "medium"),
+    );
+    expect(resolveThinkingProfile).toHaveBeenCalled();
+  });
+
+  test("session list thinking cache preserves case-distinct model catalog entries", () => {
+    const cfg = createModelDefaultsConfig({ primary: "custom/CaseModel" });
+    const modelCatalog = [
+      {
+        provider: "custom",
+        id: "CaseModel",
+        name: "CaseModel",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+      {
+        provider: "custom",
+        id: "casemodel",
+        name: "casemodel",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      },
+    ];
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      modelCatalog,
+      store: {
+        upper: {
+          sessionId: "upper",
+          modelProvider: "custom",
+          model: "CaseModel",
+          updatedAt: 2,
+        } satisfies SessionEntry,
+        lower: {
+          sessionId: "lower",
+          modelProvider: "custom",
+          model: "casemodel",
+          updatedAt: 1,
+        } satisfies SessionEntry,
+      },
+      opts: {},
+    });
+
+    const upper = result.sessions.find((session) => session.key === "upper");
+    const lower = result.sessions.find((session) => session.key === "lower");
+    expect(upper?.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(lower?.thinkingLevels?.map((level) => level.id)).not.toContain("xhigh");
+  });
+
+  test("session defaults and rows expose xhigh from configured catalog compat", () => {
+    const cfg = createModelDefaultsConfig({ primary: "gmn/gpt-5.4" });
+    const catalog = [
+      {
+        provider: "gmn",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ];
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+      modelCatalog: catalog,
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+  });
+
+  test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
+
+    const defaults = getSessionDefaults(cfg);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+  });
+
+  test("session defaults use configured thinking default", () => {
+    const defaults = getSessionDefaults({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          thinkingDefault: "high",
+        },
+      },
+    } as OpenClawConfig);
+
+    expectFields(defaults, {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      thinkingDefault: "high",
+    });
+  });
+
+  test("session rows expose estimated context budget status", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/openclaw/agents/main/sessions/session-1.jsonl",
+        updatedAt: 1,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 2,
+          provider: "anthropic",
+          model: "claude-sonnet-4.6",
+          route: "compact_then_truncate",
+          shouldCompact: true,
+          estimatedPromptTokens: 640_000,
+          contextTokenBudget: 200_000,
+          promptBudgetBeforeReserve: 180_000,
+          reserveTokens: 20_000,
+          effectiveReserveTokens: 20_000,
+          remainingPromptBudgetTokens: 0,
+          overflowTokens: 460_000,
+          toolResultReducibleChars: 12_000,
+          messageCount: 42,
+          unwindowedMessageCount: 39,
+          sessionId: "session-1",
+        },
+      },
+    });
+
+    expect(row.contextBudgetStatus).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4.6",
+      estimatedPromptTokens: 640_000,
+      contextTokenBudget: 200_000,
+      sessionId: "session-1",
+    });
+  });
+
+  test("selected global rows read transcript usage from the selected agent", async () => {
+    await withStateDirEnv("session-utils-selected-global-usage-", async ({ stateDir }) => {
+      const sessionId = "selected-global-usage";
+      for (const [agentId, input] of [
+        ["main", 10],
+        ["work", 40],
+      ] as const) {
+        const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessionsDir, `${sessionId}.jsonl`),
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({
+              message: {
+                role: "assistant",
+                content: "done",
+                usage: { input, output: 2 },
+              },
+            }),
+          ].join("\n"),
+          "utf-8",
+        );
+      }
+
+      const row = buildGatewaySessionRow({
+        cfg: {
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        } as OpenClawConfig,
+        storePath: "",
+        store: {},
+        key: "global",
+        agentId: "work",
+        entry: { sessionId, updatedAt: 1 },
+      });
+
+      expect(row.totalTokens).toBe(40);
+    });
+  });
+
+  test("session rows use per-agent thinking default from config", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          thinkingDefault: "low",
+          models: {
+            "openai/gpt-5.5": {
+              params: { thinking: "max" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "alpha",
+            default: true,
+            thinkingDefault: "high",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:alpha:main",
+    });
+
+    expectFields(row, {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      thinkingDefault: "high",
+    });
+  });
+
+  test("session rows prefer per-model thinking over global default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          thinkingDefault: "low",
+          models: {
+            "openai/gpt-5.5": {
+              params: { thinking: "max" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+    });
+
+    expectFields(row, {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      thinkingDefault: "max",
+    });
+  });
+
   test("classifySessionKey respects chat type + prefixes", () => {
     expect(classifySessionKey("global")).toBe("global");
     expect(classifySessionKey("unknown")).toBe("unknown");
@@ -94,6 +735,60 @@ describe("gateway session utils", () => {
     expect(classifySessionKey("main")).toBe("direct");
     const entry = { chatType: "group" } as SessionEntry;
     expect(classifySessionKey("main", entry)).toBe("group");
+  });
+
+  test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "telegram",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:42": entry },
+      key: "agent:main:telegram:direct:42",
+      entry,
+    });
+    expect(row.displayName).toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow displayName uses group display name for group sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "group",
+      channel: "telegram",
+      subject: "Engineering",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:group:99": entry },
+      key: "agent:main:telegram:group:99",
+      entry,
+    });
+    expect(row.displayName).toMatch(/^telegram:/);
+    expect(row.displayName).not.toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "telegram",
+      label: "Alice",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:42": entry },
+      key: "agent:main:telegram:direct:42",
+      entry,
+    });
+    expect(row.displayName).toBe("Alice");
   });
 
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {
@@ -105,7 +800,136 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:MAIN" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:main:main" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:main:work" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "MAIN" })).toBe("agent:ops:work");
+  });
+
+  test("resolveSessionStoreKey preserves non-alias agent:main keys for deleted-agent checks", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:main:discord:direct:u1" })).toBe(
+      "agent:main:discord:direct:u1",
+    );
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey rejects non-alias main keys when main is absent", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const legacyMainAlias = resolveSessionStoreKey({ cfg, sessionKey: "agent:main:main" });
+
+    expect(legacyMainAlias).toBe("agent:ops:work");
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, legacyMainAlias)).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "global")).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "unknown")).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "main")).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey ignores confirmed ACP runtime session keys", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const acpEntry = (agent: string, runtimeSessionName: string) =>
+      ({
+        acp: {
+          backend: "acpx",
+          agent,
+          runtimeSessionName,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      }) as SessionEntry;
+    const claudeKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
+    const cursorKey = "agent:cursor:acp:22222222-2222-4222-8222-222222222222";
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, claudeKey, acpEntry("claude", claudeKey)),
+    ).toBeNull();
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, cursorKey, acpEntry("cursor", cursorKey)),
+    ).toBeNull();
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey rejects ACP-shaped bridge keys without ACP metadata", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:acp:configured-bridge-without-meta", {
+        acp: undefined,
+        sessionId: "sess-configured-bridge",
+        updatedAt: 1,
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveDeletedAgentIdFromSessionKey(
+        cfg,
+        "agent:deleted-agent:acp:bridge-session-without-runtime-meta",
+        { acp: undefined, sessionId: "sess-deleted-bridge", updatedAt: 1 },
+      ),
+    ).toBe("deleted-agent");
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey repairs canonical ACP metadata aliases", async () => {
+    await withStateDirEnv("session-utils-acp-deleted-agent-repair-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
+      const acpKey = "agent:claude:acp:55555555-5555-4555-8555-555555555555";
+      const legacyAcpKey = "agent:CLAUDE:acp:55555555-5555-4555-8555-555555555555";
+      const entry = {
+        sessionId: "sess-acp-repair",
+        updatedAt: 1,
+      } satisfies SessionEntry;
+      writeSessionStoreForTest(storePath, {
+        [acpKey]: entry,
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: legacyAcpKey,
+        sessionId: "sess-acp-repair",
+        meta: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: legacyAcpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      });
+      const cfg = {
+        session: {
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      expect(
+        resolveDeletedAgentIdFromSessionKey(cfg, acpKey, entry, {
+          acpMetadataSessionKey: acpKey,
+        }),
+      ).toBeNull();
+    });
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey rejects deleted configured ACP binding owners", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    expect(
+      resolveDeletedAgentIdFromSessionKey(
+        cfg,
+        "agent:deleted-agent:acp:binding:discord:default:feedface",
+      ),
+    ).toBe("deleted-agent");
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:acp:binding:discord:default:feedface"),
+    ).toBeNull();
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {
@@ -155,6 +979,34 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("resolveSessionStoreKey preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    expect(resolveSessionStoreKey({ cfg, sessionKey: `Signal:Group:${mixedGroupId}` })).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: `Agent:Alpha:Signal:Group:${mixedGroupId}` }),
+    ).toBe(`agent:alpha:signal:group:${mixedGroupId}`);
+  });
+
+  test("canonicalizeSpawnedByForAgent preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+
+    expect(canonicalizeSpawnedByForAgent(cfg, "ops", `Signal:Group:${mixedGroupId}`)).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      canonicalizeSpawnedByForAgent(cfg, "ops", `Agent:Main:Signal:Group:${mixedGroupId}`),
+    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
+  });
+
   test("resolveSessionStoreKey honors global scope", () => {
     const cfg = {
       session: { scope: "global", mainKey: "work" },
@@ -179,7 +1031,8 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("agent:ops:main");
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
+    expect(target.storeKeys).toContain("agent:ops:main");
+    expect(target.storeKeys).toContain("main");
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
   });
 
@@ -197,9 +1050,8 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
     expect(target.canonicalKey).toBe("agent:ops:mysession");
-    expect(target.storeKeys).toEqual(
-      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
-    );
+    expect(target.storeKeys).toContain("agent:ops:mysession");
+    expect(target.storeKeys).toContain("agent:ops:MySession");
     const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
     const found = target.storeKeys.some((k) => Boolean(store[k]));
     expect(found).toBe(true);
@@ -221,9 +1073,8 @@ describe("gateway session utils", () => {
       agents: { list: [{ id: "ops", default: true }] },
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
-    expect(target.storeKeys).toEqual(
-      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
-    );
+    expect(target.storeKeys).toContain("agent:ops:mysession");
+    expect(target.storeKeys).toContain("agent:ops:MySession");
   });
 
   test("resolveGatewaySessionStoreTarget finds legacy main alias key when mainKey is customized", () => {
@@ -240,7 +1091,7 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:main" });
     expect(target.canonicalKey).toBe("agent:ops:work");
-    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
+    expect(target.storeKeys).toContain("agent:ops:MAIN");
   });
 
   test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
@@ -297,6 +1148,167 @@ describe("gateway session utils", () => {
 
         expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
         expect(loaded.entry?.sessionId).toBe("sess-retired");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntry can borrow the cached store for read-only hot paths", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-entry-borrowed-", async ({ stateDir }) => {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const storePath = path.join(sessionsDir, "sessions.json");
+        fs.writeFileSync(
+          storePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntry("agent:main:main", { clone: false });
+        const borrowedStore = loadSessionStore(loaded.storePath, { clone: false });
+
+        expect(loaded.entry).toBe(borrowedStore["agent:main:main"]);
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("resolveGatewaySessionStoreTargetWithStore returns the caller-provided store", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-target-store-", async ({ stateDir }) => {
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        const store: Record<string, SessionEntry> = {
+          "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
+        };
+
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key: "agent:main:main",
+          store,
+        });
+
+        expect(target.store).toBe(store);
+        expect(target.storeKeys).toContain("agent:main:main");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntry preserves a listed deleted main session over the live default main", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
+        const storeTemplate = path.join(
+          stateDir,
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        );
+        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(liveSessionsDir, { recursive: true });
+        fs.mkdirSync(deletedSessionsDir, { recursive: true });
+        const liveStorePath = path.join(liveSessionsDir, "sessions.json");
+        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          liveStorePath,
+          JSON.stringify({
+            "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
+          }),
+          "utf8",
+        );
+        fs.writeFileSync(
+          deletedStorePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: { mainKey: "main", store: storeTemplate },
+          agents: { list: [{ id: "ops", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main" });
+        const loaded = loadSessionEntry("agent:main:main");
+
+        expect(target.canonicalKey).toBe("agent:main:main");
+        expect(target.agentId).toBe("main");
+        expect(target.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.canonicalKey).toBe("agent:main:main");
+        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntry resolves deleted main aliases when mainKey is customized", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
+        const storeTemplate = path.join(
+          stateDir,
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        );
+        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(liveSessionsDir, { recursive: true });
+        fs.mkdirSync(deletedSessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(liveSessionsDir, "sessions.json"),
+          JSON.stringify({
+            "agent:ops:work": { sessionId: "sess-live-default", updatedAt: 10 },
+          }),
+          "utf8",
+        );
+        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          deletedStorePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: { mainKey: "work", store: storeTemplate },
+          agents: { list: [{ id: "ops", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntry("agent:main:work");
+
+        expect(loaded.canonicalKey).toBe("agent:main:work");
+        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
       });
     } finally {
       resetConfigRuntimeState();
@@ -499,6 +1511,64 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("listAgentsForGateway falls back to identity.name when name is unset", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, identity: { name: "开发助手" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: "开发助手",
+      identity: { name: "开发助手" },
+    });
+  });
+
+  test("listAgentsForGateway prefers explicit name over identity.name", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            name: "Ops",
+            identity: { name: "开发助手" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: "Ops",
+      identity: { name: "开发助手" },
+    });
+  });
+
+  test("listAgentsForGateway leaves name unset when both configured and identity names are absent", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, identity: {} }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: undefined,
+      identity: {},
+    });
+  });
+
   test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {
     await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
       fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
@@ -522,7 +1592,7 @@ describe("gateway session utils", () => {
           workspace: "/tmp/default-workspace",
           model: {
             primary: "openai/gpt-5.4",
-            fallbacks: ["openai-codex/gpt-5.4"],
+            fallbacks: ["openai/gpt-5.4"],
           },
         },
         list: [{ id: "main", default: true }],
@@ -530,13 +1600,47 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
 
     const result = listAgentsForGateway(cfg);
-    expect(result.agents[0]).toMatchObject({
+    expectFields(result.agents[0], {
       id: "main",
       workspace: "/tmp/default-workspace",
-      model: {
-        primary: "openai/gpt-5.4",
-        fallbacks: ["openai-codex/gpt-5.4"],
+    });
+    expect(result.agents[0]?.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["openai/gpt-5.4"],
+    });
+    expect(result.agents[0]?.agentRuntime).toEqual({
+      id: "codex",
+      source: "implicit",
+    });
+  });
+
+  test("listAgentsForGateway reports explicit plugin runtime metadata", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "codex" },
+            models: [],
+          },
+        },
       },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expectFields(result.agents[0], {
+      id: "main",
+    });
+    expect(result.agents[0]?.agentRuntime).toEqual({
+      id: "codex",
+      source: "provider",
     });
   });
 
@@ -547,7 +1651,7 @@ describe("gateway session utils", () => {
         defaults: {
           model: {
             primary: "openai/gpt-5.4",
-            fallbacks: ["openai-codex/gpt-5.4"],
+            fallbacks: ["openai/gpt-5.4"],
           },
         },
         list: [
@@ -567,6 +1671,56 @@ describe("gateway session utils", () => {
     const ops = result.agents.find((agent) => agent.id === "ops");
     expect(ops?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
   });
+
+  test("listAgentsForGateway reports per-agent thinking defaults from the agent model", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: { primary: "minimax/MiniMax-M2.7" },
+          thinkingDefault: "off",
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "investment-master",
+            model: { primary: "deepseek/deepseek-v4-flash" },
+            thinkingDefault: "xhigh",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    const agent = result.agents.find((row) => row.id === "investment-master");
+
+    expect(agent?.model).toEqual({ primary: "deepseek/deepseek-v4-flash" });
+    expect(agent?.thinkingDefault).toBe("xhigh");
+    expect(agent?.thinkingLevels?.map((level) => level.id)).toEqual(
+      expect.arrayContaining(["off", "minimal", "low", "medium", "high", "xhigh"]),
+    );
+    expect(agent?.thinkingOptions).toEqual(agent?.thinkingLevels?.map((level) => level.label));
+  });
+
+  test("listAgentsForGateway uses the model catalog for per-agent thinking metadata", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: { primary: "local/custom-reasoner" },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg, [
+      { provider: "local", id: "custom-reasoner", name: "Custom Reasoner", reasoning: true },
+    ]);
+    const agent = result.agents.find((row) => row.id === "main");
+
+    expect(agent?.thinkingDefault).toBe("medium");
+    expect(agent?.thinkingLevels?.map((level) => level.id)).toContain("medium");
+  });
 });
 
 describe("resolveSessionModelRef", () => {
@@ -578,7 +1732,7 @@ describe("resolveSessionModelRef", () => {
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s1",
       updatedAt: Date.now(),
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.4",
       modelOverride: "claude-opus-4-6",
       providerOverride: "anthropic",
@@ -613,10 +1767,10 @@ describe("resolveSessionModelRef", () => {
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s2",
       updatedAt: Date.now(),
-      modelOverride: "openai-codex/gpt-5.4",
+      modelOverride: "openai/gpt-5.4",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
   });
 
   test("keeps nested model ids under the stored provider override", () => {
@@ -662,16 +1816,16 @@ describe("resolveSessionModelRef", () => {
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s-qualified-override",
       updatedAt: Date.now(),
-      providerOverride: "openai-codex",
-      modelOverride: "openai-codex/gpt-5.4",
+      providerOverride: "openai",
+      modelOverride: "openai/gpt-5.4",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
   });
 
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
@@ -689,7 +1843,7 @@ describe("resolveSessionModelRef", () => {
 
   test("preserves provider from slash-prefixed model when modelProvider is missing", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
@@ -704,6 +1858,185 @@ describe("resolveSessionModelRef", () => {
 });
 
 describe("listSessionsFromStore selected model display", () => {
+  test("async list yields during bulk transcript title and last-message hydration", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-yield-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const store: Record<string, SessionEntry> = {};
+      const now = Date.now();
+      for (let i = 0; i < 11; i += 1) {
+        const sessionId = `sess-yield-${i}`;
+        store[`agent:main:${sessionId}`] = {
+          sessionId,
+          updatedAt: now - i,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          totalTokens: 1,
+          totalTokensFresh: true,
+          contextTokens: 1,
+          estimatedCostUsd: 0,
+        } as SessionEntry;
+        fs.writeFileSync(
+          path.join(tmpDir, `${sessionId}.jsonl`),
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
+            JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
+          ].join("\n"),
+          "utf-8",
+        );
+      }
+
+      const params = {
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 11 },
+      };
+      const expected = listSessionsFromStore(params);
+      const listedPromise = listSessionsFromStoreAsync(params);
+      let settled = false;
+      void listedPromise.then(() => {
+        settled = true;
+      });
+
+      await Promise.resolve();
+
+      expect(settled).toBe(false);
+      const listed = await listedPromise;
+      expect(listed.path).toBe(expected.path);
+      expect(listed.count).toBe(expected.count);
+      expect(listed.defaults).toEqual(expected.defaults);
+      expect(listed.sessions).toHaveLength(expected.sessions.length);
+      expectFields(listed.sessions[0], {
+        key: "agent:main:sess-yield-0",
+        derivedTitle: "title 0",
+        lastMessagePreview: "last 0",
+      });
+      expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
+      expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
+      expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
+      expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
+      expect(listed.sessions[0]?.thinkingDefault).toBe("off");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("caps transcript title and last-message hydration for bulk list responses", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-cap-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const store: Record<string, SessionEntry> = {};
+      const now = Date.now();
+      for (let i = 0; i < 101; i += 1) {
+        const sessionId = `sess-${i}`;
+        store[`agent:main:${sessionId}`] = {
+          sessionId,
+          updatedAt: now - i,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        } as SessionEntry;
+        if (i === 0 || i === 99 || i === 100) {
+          fs.writeFileSync(
+            path.join(tmpDir, `${sessionId}.jsonl`),
+            [
+              JSON.stringify({ type: "session", version: 1, id: sessionId }),
+              JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
+              JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
+            ].join("\n"),
+            "utf-8",
+          );
+        }
+      }
+
+      const result = await listSessionsFromStoreAsync({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 101 },
+      });
+
+      expect(result.sessions).toHaveLength(101);
+      expect(result.sessions[0]?.derivedTitle).toBe("title 0");
+      expect(result.sessions[0]?.lastMessagePreview).toBe("last 0");
+      expect(result.sessions[99]?.derivedTitle).toBe("title 99");
+      expect(result.sessions[99]?.lastMessagePreview).toBe("last 99");
+      expect(result.sessions[100]?.derivedTitle).toBeUndefined();
+      expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("uses bounded top-N selection for small limited lists", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:old": { sessionId: "old", updatedAt: now - 10_000 } as SessionEntry,
+      "agent:main:newest": { sessionId: "newest", updatedAt: now } as SessionEntry,
+      "agent:main:middle-a": { sessionId: "middle-a", updatedAt: now - 5_000 } as SessionEntry,
+      "agent:main:middle-b": { sessionId: "middle-b", updatedAt: now - 5_000 } as SessionEntry,
+      "agent:main:newer": { sessionId: "newer", updatedAt: now - 1_000 } as SessionEntry,
+    };
+    const result = listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { limit: 4 },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:newest",
+      "agent:main:newer",
+      "agent:main:middle-a",
+      "agent:main:middle-b",
+    ]);
+  });
+
+  test("keeps the scoped global row when filtering by agent", () => {
+    const now = Date.now();
+    const result = listSessionsFromStore({
+      cfg: {
+        ...createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.4" } },
+          list: [
+            { id: "main", default: true, model: { primary: "openai/gpt-5.4" } },
+            { id: "work", model: { primary: "anthropic/claude-opus-4-6" } },
+          ],
+        },
+      } as OpenClawConfig,
+      storePath: "/tmp/sessions.json",
+      store: {
+        global: { sessionId: "global", updatedAt: now } as SessionEntry,
+        "agent:main:main": { sessionId: "main", updatedAt: now - 1 } as SessionEntry,
+        "agent:work:main": { sessionId: "work", updatedAt: now - 2 } as SessionEntry,
+      },
+      opts: { agentId: "work", includeGlobal: true, search: "global" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["global"]);
+    expect(result.sessions[0]).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+  });
+
+  test("filters phantom agent store placeholder rows from session lists", () => {
+    const now = Date.now();
+    const result = listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:sessions": {} as SessionEntry,
+        "agent:main:main": { sessionId: "sess-main", updatedAt: now } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
+  });
+
   test("shows the selected override model even when a fallback runtime model exists", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",
@@ -718,7 +2051,7 @@ describe("listSessionsFromStore selected model display", () => {
           updatedAt: Date.now(),
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-6",
-          modelProvider: "openai-codex",
+          modelProvider: "openai",
           model: "gpt-5.4",
         } as SessionEntry,
       },
@@ -728,13 +2061,166 @@ describe("listSessionsFromStore selected model display", () => {
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-opus-4-6");
   });
+
+  test("separates Claude CLI runtime metadata from canonical model identity", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-7",
+      agentRuntime: { id: "claude-cli" },
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
+    expect(result.sessions[0]?.agentRuntime).toEqual({
+      id: "claude-cli",
+      source: "model",
+    });
+  });
+
+  test("infers canonical provider for bare CLI models before default-provider fallback", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai/gpt-5.4",
+      models: {
+        "anthropic/claude-opus-4-7": {},
+      },
+      agentRuntime: { id: "claude-cli" },
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
+  });
+
+  test("uses qualified selected defaults for rows without runtime model metadata", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+        list: [
+          { id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } },
+          {
+            id: "review",
+            model: { primary: "vercel-ai-gateway/anthropic/claude-haiku-4-5" },
+          },
+          { id: "alias", model: { primary: "anthropic/sonnet-4.6" } },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 2,
+        } as SessionEntry,
+        "agent:review:review": {
+          sessionId: "sess-review",
+          updatedAt: 1,
+        } as SessionEntry,
+        "agent:alias:alias": {
+          sessionId: "sess-alias",
+          updatedAt: 0,
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(
+      result.sessions.map((session) => [session.key, session.modelProvider, session.model]),
+    ).toEqual([
+      ["agent:main:main", "anthropic", "claude-sonnet-4-6"],
+      ["agent:review:review", "vercel-ai-gateway", "anthropic/claude-haiku-4-5"],
+      ["agent:alias:alias", "anthropic", "claude-sonnet-4-6"],
+    ]);
+  });
+
+  test("uses persisted runtime model metadata before selected defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+        list: [{ id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.5",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("openai");
+    expect(result.sessions[0]?.model).toBe("gpt-5.5");
+  });
+
+  test("uses complete model overrides without default-model fallback", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+        list: [{ id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "sonnet-4.6",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {
-  const resolveLegacyIdentityRef = (
-    cfg: OpenClawConfig,
-    modelProvider: string | undefined = undefined,
-  ) =>
+  const resolveLegacyIdentityRef = (cfg: OpenClawConfig, modelProvider?: string) =>
     resolveSessionModelIdentityRef(cfg, {
       sessionId: "legacy-session",
       updatedAt: Date.now(),
@@ -744,7 +2230,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("does not inherit default provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveLegacyIdentityRef(cfg);
@@ -754,7 +2240,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers provider from configured model allowlist when unambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "anthropic/claude-sonnet-4-6": {},
       },
@@ -767,7 +2253,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers provider from configured provider catalogs when allowlist is absent", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
     cfg.models = {
       providers: {
@@ -789,7 +2275,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("keeps provider unknown when configured models are ambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "anthropic/claude-sonnet-4-6": {},
         "minimax/claude-sonnet-4-6": {},
@@ -803,7 +2289,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("keeps provider unknown when configured provider catalog matches are ambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
     cfg.models = {
       providers: {
@@ -828,7 +2314,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("preserves provider from slash-prefixed runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelIdentityRef(cfg, {
@@ -843,7 +2329,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers wrapper provider for slash-prefixed runtime model when allowlist match is unique", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
       },
@@ -860,6 +2346,43 @@ describe("resolveSessionModelIdentityRef", () => {
       provider: "vercel-ai-gateway",
       model: "anthropic/claude-sonnet-4-6",
     });
+  });
+});
+
+describe("resolveSessionDisplayModelIdentityRef", () => {
+  test("canonicalizes CLI runtime provider to the selected model provider", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-7",
+      agentRuntime: { id: "claude-cli" },
+    });
+
+    expect(
+      resolveSessionDisplayModelIdentityRef({
+        cfg,
+        agentId: "main",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
+  });
+
+  test("prefers configured provider inference over default-provider parsing for bare CLI models", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai/gpt-5.4",
+      models: {
+        "anthropic/claude-opus-4-7": {},
+      },
+      agentRuntime: { id: "claude-cli" },
+    });
+
+    expect(
+      resolveSessionDisplayModelIdentityRef({
+        cfg,
+        agentId: "main",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
   });
 });
 
@@ -902,10 +2425,9 @@ describe("deriveSessionTitle", () => {
     } as SessionEntry;
     const longMsg =
       "This is a very long message that exceeds sixty characters and should be truncated appropriately";
-    const result = deriveSessionTitle(entry, longMsg);
-    expect(result).toBeDefined();
-    expect(result!.length).toBeLessThanOrEqual(60);
-    expect(result!.endsWith("…")).toBe(true);
+    const result = requireString(deriveSessionTitle(entry, longMsg), "truncated session title");
+    expect(result.length).toBeLessThanOrEqual(60);
+    expect(result.endsWith("…")).toBe(true);
   });
 
   test("truncates at word boundary when possible", () => {
@@ -914,10 +2436,9 @@ describe("deriveSessionTitle", () => {
       updatedAt: Date.now(),
     } as SessionEntry;
     const longMsg = "This message has many words and should be truncated at a word boundary nicely";
-    const result = deriveSessionTitle(entry, longMsg);
-    expect(result).toBeDefined();
-    expect(result!.endsWith("…")).toBe(true);
-    expect(result!.includes("  ")).toBe(false);
+    const result = requireString(deriveSessionTitle(entry, longMsg), "word-boundary session title");
+    expect(result.endsWith("…")).toBe(true);
+    expect(result.includes("  ")).toBe(false);
   });
 
   test("falls back to sessionId prefix with date", () => {
@@ -1003,5 +2524,67 @@ describe("resolveGatewayModelSupportsImages", () => {
         ],
       }),
     ).resolves.toBe(true);
+  });
+
+  test("matches catalog model ids case-insensitively for explicit providers", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "Qwen/Qwen3.5-35B-A3B",
+        provider: "modelscope",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5 35B",
+            provider: "modelscope",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("does not borrow image support from another provider when provider is explicit", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-4", name: "GPT-4", provider: "other", input: ["text", "image"] },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("uses a unique providerless catalog match", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "Qwen/Qwen3.5-35B-A3B",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5 35B",
+            provider: "modelscope",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("fails closed on ambiguous providerless catalog matches", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "shared-vision",
+        loadGatewayModelCatalog: async () => [
+          { id: "shared-vision", name: "Shared Vision", provider: "first", input: ["text"] },
+          {
+            id: "shared-vision",
+            name: "Shared Vision",
+            provider: "second",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
   });
 });

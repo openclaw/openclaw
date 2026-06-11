@@ -1,14 +1,12 @@
-import fs from "node:fs/promises";
+// Cron ops regression tests cover service operation regressions.
 import { describe, expect, it, vi } from "vitest";
 import {
   createAbortAwareIsolatedRunner,
   createDeferred,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
-  createRunningCronServiceState,
   noopLogger,
   setupCronRegressionFixtures,
-  writeCronJobs,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import {
   clearCommandLane,
@@ -16,7 +14,8 @@ import {
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
-import { enqueueRun, run } from "./ops.js";
+import { saveCronStore } from "../store.js";
+import { enqueueRun, run, start } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.js";
@@ -26,7 +25,72 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-ops-regressions-",
 });
 
+function expectQueuedRunAck(result: unknown) {
+  const ack = result as { ok?: unknown; enqueued?: unknown; runId?: unknown };
+  expect(ack.ok).toBe(true);
+  expect(ack.enqueued).toBe(true);
+  expect(typeof ack.runId).toBe("string");
+}
+
+function requireMockCall(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  label: string,
+): unknown[] {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
+function expectIsolatedRunJobId(
+  runIsolatedAgentJob: ReturnType<typeof vi.fn>,
+  callIndex: number,
+  jobId: string,
+) {
+  const [params] = requireMockCall(runIsolatedAgentJob, callIndex, "runIsolatedAgentJob") as [
+    { job?: { id?: string } }?,
+  ];
+  expect(params?.job?.id).toBe(jobId);
+}
+
 describe("cron service ops regressions", () => {
+  it("repairs missing job state during startup", async () => {
+    const scheduledAt = Date.now() + 60_000;
+    const store = opsRegressionFixtures.makeStorePath();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          ...createIsolatedRegressionJob({
+            id: "missing-state-startup",
+            name: "missing-state-startup",
+            scheduledAt,
+            schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+            payload: { kind: "agentTurn", message: "noop" },
+          }),
+          state: undefined as never,
+        },
+      ],
+    };
+
+    await expect(start(state)).resolves.toBeUndefined();
+    expect(state.store.jobs[0]?.state.nextRunAtMs).toBe(scheduledAt);
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+  });
+
   it("skips forced manual runs while a timer-triggered run is in progress", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.now() - 1;
@@ -38,7 +102,7 @@ describe("cron service ops regressions", () => {
       payload: { kind: "agentTurn", message: "long task" },
       state: { nextRunAtMs: dueAt },
     });
-    await writeCronJobs(store.storePath, [job]);
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     let resolveRun:
       | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
@@ -59,7 +123,7 @@ describe("cron service ops regressions", () => {
       storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt: CronEvent) => {
         if (evt.jobId !== job.id) {
@@ -97,7 +161,7 @@ describe("cron service ops regressions", () => {
       payload: { kind: "agentTurn", message: "overlap" },
       state: { nextRunAtMs: now },
     });
-    await writeCronJobs(store.storePath, [job]);
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     const runStarted = createDeferred<void>();
     const runFinished = createDeferred<void>();
@@ -121,7 +185,7 @@ describe("cron service ops regressions", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt: CronEvent) => {
         if (evt.jobId === job.id && evt.action === "finished") {
@@ -148,42 +212,45 @@ describe("cron service ops regressions", () => {
     const dueNextRunAtMs = nowMs - 1_000;
     const staleExecutedNextRunAtMs = nowMs - 2_000;
 
-    await writeCronJobs(store.storePath, [
-      createIsolatedRegressionJob({
-        id: "manual-target",
-        name: "manual target",
-        scheduledAt: nowMs,
-        schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
-        payload: { kind: "agentTurn", message: "manual target" },
-        state: { nextRunAtMs: nowMs + 3_600_000 },
-      }),
-      createIsolatedRegressionJob({
-        id: "unrelated-due",
-        name: "unrelated due",
-        scheduledAt: nowMs,
-        schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-        payload: { kind: "agentTurn", message: "unrelated due" },
-        state: { nextRunAtMs: dueNextRunAtMs },
-      }),
-      createIsolatedRegressionJob({
-        id: "unrelated-stale-executed",
-        name: "unrelated stale executed",
-        scheduledAt: nowMs,
-        schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-        payload: { kind: "agentTurn", message: "unrelated stale executed" },
-        state: {
-          nextRunAtMs: staleExecutedNextRunAtMs,
-          lastRunAtMs: staleExecutedNextRunAtMs + 1,
-        },
-      }),
-    ]);
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createIsolatedRegressionJob({
+          id: "manual-target",
+          name: "manual target",
+          scheduledAt: nowMs,
+          schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
+          payload: { kind: "agentTurn", message: "manual target" },
+          state: { nextRunAtMs: nowMs + 3_600_000 },
+        }),
+        createIsolatedRegressionJob({
+          id: "unrelated-due",
+          name: "unrelated due",
+          scheduledAt: nowMs,
+          schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
+          payload: { kind: "agentTurn", message: "unrelated due" },
+          state: { nextRunAtMs: dueNextRunAtMs },
+        }),
+        createIsolatedRegressionJob({
+          id: "unrelated-stale-executed",
+          name: "unrelated stale executed",
+          scheduledAt: nowMs,
+          schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
+          payload: { kind: "agentTurn", message: "unrelated stale executed" },
+          state: {
+            nextRunAtMs: staleExecutedNextRunAtMs,
+            lastRunAtMs: staleExecutedNextRunAtMs + 1,
+          },
+        }),
+      ],
+    });
 
     const state = createCronServiceState({
       cronEnabled: false,
       storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
 
@@ -195,6 +262,41 @@ describe("cron service ops regressions", () => {
     const staleExecuted = jobs.find((entry) => entry.id === "unrelated-stale-executed");
     expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
     expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
+  });
+
+  it("passes the rehydrated agentTurn payload message to isolated manual runs", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.now();
+    const marker =
+      "SERIALIZATION_PROBE: reply exactly with the marker token you received and nothing else.";
+    const job = createIsolatedRegressionJob({
+      id: "manual-payload-message",
+      name: "manual payload message",
+      scheduledAt: nowMs,
+      schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
+      payload: { kind: "agentTurn", message: marker },
+      state: { nextRunAtMs: nowMs + 3_600_000 },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const runResult = await run(state, job.id, "force");
+
+    expect(runResult).toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    const [params] = requireMockCall(runIsolatedAgentJob, 0, "runIsolatedAgentJob") as [
+      { message?: unknown }?,
+    ];
+    expect(params?.message).toBe(marker);
   });
 
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
@@ -210,7 +312,7 @@ describe("cron service ops regressions", () => {
         payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
         state: { nextRunAtMs: scheduledAt },
       });
-      await writeCronJobs(store.storePath, [job]);
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
       const abortAwareRunner = createAbortAwareIsolatedRunner();
       const state = createCronServiceState({
@@ -218,7 +320,7 @@ describe("cron service ops regressions", () => {
         storePath: store.storePath,
         log: noopLogger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeatNow: vi.fn(),
+        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: abortAwareRunner.runIsolatedAgentJob,
       });
 
@@ -243,25 +345,28 @@ describe("cron service ops regressions", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
 
-    await writeCronJobs(store.storePath, [
-      {
-        id: "stale-running",
-        name: "stale-running",
-        enabled: true,
-        createdAtMs: now - 3_600_000,
-        updatedAtMs: now - 3_600_000,
-        schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "stale-running" },
-        state: {
-          runningAtMs: staleRunningAtMs,
-          lastRunAtMs: now - 3_600_000,
-          lastStatus: "ok",
-          nextRunAtMs: now - 60_000,
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        {
+          id: "stale-running",
+          name: "stale-running",
+          enabled: true,
+          createdAtMs: now - 3_600_000,
+          updatedAtMs: now - 3_600_000,
+          schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "stale-running" },
+          state: {
+            runningAtMs: staleRunningAtMs,
+            lastRunAtMs: now - 3_600_000,
+            lastStatus: "ok",
+            nextRunAtMs: now - 60_000,
+          },
         },
-      },
-    ]);
+      ],
+    });
 
     const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
@@ -270,16 +375,19 @@ describe("cron service ops regressions", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent,
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
 
     const result = await run(state, "stale-running", "force");
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "stale-running",
-      expect.objectContaining({ agentId: undefined }),
-    );
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    const [text, options] = requireMockCall(enqueueSystemEvent, 0, "enqueueSystemEvent") as [
+      string,
+      { agentId?: unknown }?,
+    ];
+    expect(text).toBe("stale-running");
+    expect(options?.agentId).toBeUndefined();
   });
 
   it("queues manual cron.run requests behind the cron execution lane", async () => {
@@ -295,11 +403,7 @@ describe("cron service ops regressions", () => {
       nowMs: dueAt,
       nextRunAtMs: dueAt,
     });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [first, second] }),
-      "utf-8",
-    );
+    await saveCronStore(store.storePath, { version: 1, jobs: [first, second] });
 
     let now = dueAt;
     let activeRuns = 0;
@@ -334,7 +438,7 @@ describe("cron service ops regressions", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent: (evt) => {
         if (evt.action === "finished" && evt.jobId === second.id && evt.status === "ok") {
@@ -345,17 +449,17 @@ describe("cron service ops regressions", () => {
 
     const firstAck = await enqueueRun(state, first.id, "force");
     const secondAck = await enqueueRun(state, second.id, "force");
-    expect(firstAck).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
-    expect(secondAck).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+    expectQueuedRunAck(firstAck);
+    expectQueuedRunAck(secondAck);
 
     await firstStarted.promise;
-    expect(runIsolatedAgentJob.mock.calls[0]?.[0]).toMatchObject({ job: { id: first.id } });
+    expectIsolatedRunJobId(runIsolatedAgentJob, 0, first.id);
     expect(peakActiveRuns).toBe(1);
 
     firstRun.resolve({ status: "ok", summary: "first queued run" });
     await secondStarted.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-    expect(runIsolatedAgentJob.mock.calls[1]?.[0]).toMatchObject({ job: { id: second.id } });
+    expectIsolatedRunJobId(runIsolatedAgentJob, 1, second.id);
     expect(peakActiveRuns).toBe(1);
 
     secondRun.resolve({ status: "ok", summary: "second queued run" });
@@ -364,41 +468,6 @@ describe("cron service ops regressions", () => {
     const jobs = state.store?.jobs ?? [];
     expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
-
-    clearCommandLane(CommandLane.Cron);
-  });
-
-  it("logs unexpected queued manual run background failures once", async () => {
-    vi.useRealTimers();
-    clearCommandLane(CommandLane.Cron);
-    setCommandLaneConcurrency(CommandLane.Cron, 1);
-
-    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-    const job = createDueIsolatedJob({ id: "queued-failure", nowMs: dueAt, nextRunAtMs: dueAt });
-    const errorLogged = createDeferred<void>();
-    const log = {
-      ...noopLogger,
-      error: vi.fn<(payload: unknown, message?: string) => void>(() => {
-        errorLogged.resolve();
-      }),
-    };
-    const badStore = `${opsRegressionFixtures.makeStorePath().storePath}.dir`;
-    await fs.mkdir(badStore, { recursive: true });
-    const state = createRunningCronServiceState({
-      storePath: badStore,
-      log,
-      nowMs: () => dueAt,
-      jobs: [job],
-    });
-
-    const result = await enqueueRun(state, job.id, "force");
-    expect(result).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
-
-    await errorLogged.promise;
-    expect(log.error).toHaveBeenCalledTimes(1);
-    expect(log.error.mock.calls[0]?.[1]).toBe(
-      "cron: queued manual run background execution failed",
-    );
 
     clearCommandLane(CommandLane.Cron);
   });

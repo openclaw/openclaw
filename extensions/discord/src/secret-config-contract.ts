@@ -1,3 +1,4 @@
+// Discord helper module supports secret config contract behavior.
 import {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
@@ -11,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectNestedChannelTtsAssignments } from "openclaw/plugin-sdk/channel-secret-tts-runtime";
 
-export const secretTargetRegistryEntries = [
+export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.accounts.*.pluralkit.token",
     targetType: "channels.discord.accounts.*.pluralkit.token",
@@ -80,7 +81,7 @@ export const secretTargetRegistryEntries = [
     includeInAudit: true,
     providerIdPathSegmentIndex: 4,
   },
-] satisfies SecretTargetRegistryEntry[];
+];
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };

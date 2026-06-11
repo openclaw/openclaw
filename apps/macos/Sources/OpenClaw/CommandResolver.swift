@@ -3,6 +3,12 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
+    static let strictHostKeyCheckingSSHOptions = [
+        "-o", "StrictHostKeyChecking=yes",
+    ]
+    static let updateHostKeysSSHOptions = [
+        "-o", "UpdateHostKeys=yes",
+    ]
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -397,9 +403,7 @@ enum CommandResolver {
         """
         let options: [String] = [
             "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UpdateHostKeys=yes",
-        ]
+        ] + self.strictHostKeyCheckingSSHOptions + self.updateHostKeysSSHOptions
         let args = self.sshArguments(
             target: parsed,
             identity: settings.identity,
@@ -422,10 +426,15 @@ enum CommandResolver {
     {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
-        let target = defaults.string(forKey: remoteTargetKey) ?? ""
-        let identity = defaults.string(forKey: remoteIdentityKey) ?? ""
-        let projectRoot = defaults.string(forKey: remoteProjectRootKey) ?? ""
-        let cliPath = defaults.string(forKey: remoteCliPathKey) ?? ""
+        let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let target = defaults.string(forKey: remoteTargetKey)?.nonEmpty
+            ?? remote?["sshTarget"] as? String
+            ?? ""
+        let identity = defaults.string(forKey: remoteIdentityKey)?.nonEmpty
+            ?? remote?["sshIdentity"] as? String
+            ?? ""
+        let projectRoot = defaults.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
+        let cliPath = defaults.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         return RemoteSettings(
             mode: mode,
             target: self.sanitizedTarget(target),

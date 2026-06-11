@@ -1,21 +1,10 @@
+// Tlon helper module supports utils behavior.
+import {
+  resolveStableChannelMessageIngress,
+  type StableChannelIngressIdentityParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asNullableObjectRecord, readStringField } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeShip } from "../targets.js";
-
-// Cite types for message references
-export interface ChanCite {
-  chan: { nest: string; where: string };
-}
-export interface GroupCite {
-  group: string;
-}
-export interface DeskCite {
-  desk: { flag: string; where: string };
-}
-export interface BaitCite {
-  bait: { group: string; graph: string; where: string };
-}
-export type Cite = ChanCite | GroupCite | DeskCite | BaitCite;
 
 export interface ParsedCite {
   type: "chan" | "group" | "desk" | "bait";
@@ -27,7 +16,6 @@ export interface ParsedCite {
   where?: string;
 }
 
-// Extract all cites from message content
 export function extractCites(content: unknown): ParsedCite[] {
   if (!content || !Array.isArray(content)) {
     return [];
@@ -102,12 +90,10 @@ export function isBotMentioned(
     return false;
   }
 
-  // Check for @all mention
   if (/@all\b/i.test(messageText)) {
     return true;
   }
 
-  // Check for ship mention
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = normalizedBotShip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
@@ -115,7 +101,6 @@ export function isBotMentioned(
     return true;
   }
 
-  // Check for nickname mention (case-insensitive, word boundary)
   if (nickname) {
     const escapedNickname = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
@@ -127,10 +112,6 @@ export function isBotMentioned(
   return false;
 }
 
-/**
- * Strip bot ship mention from message text for command detection.
- * "~bot-ship /status" → "/status"
- */
 export function stripBotMention(messageText: string, botShipName: string): string {
   if (!messageText || !botShipName) {
     return messageText;
@@ -138,26 +119,64 @@ export function stripBotMention(messageText: string, botShipName: string): strin
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 
-export function isDmAllowed(senderShip: string, allowlist: string[] | undefined): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return false;
-  }
-  const normalizedSender = normalizeShip(senderShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedSender);
+const tlonIngressIdentity = {
+  key: "sender-ship",
+  normalize: normalizeShip,
+  sensitivity: "pii",
+  isWildcardEntry: () => false,
+  entryIdPrefix: "tlon-entry",
+} satisfies StableChannelIngressIdentityParams;
+
+export async function isDmAllowedWithIngress(
+  senderShip: string,
+  allowlist: string[] | undefined,
+): Promise<boolean> {
+  const access = await resolveStableChannelMessageIngress({
+    channelId: "tlon",
+    accountId: "default",
+    identity: tlonIngressIdentity,
+    subject: { stableId: senderShip },
+    conversation: {
+      kind: "direct",
+      id: "direct",
+    },
+    dmPolicy: "allowlist",
+    allowFrom: allowlist ?? [],
+  });
+  return access.senderAccess.allowed;
 }
 
-/**
- * Check if a group invite from a ship should be auto-accepted.
- *
- * SECURITY: Fail-safe to deny. If allowlist is empty or undefined,
- * ALL invites are rejected - even if autoAcceptGroupInvites is enabled.
- * This prevents misconfigured bots from accepting malicious invites.
- */
+export async function resolveTlonCommandAuthorizationWithIngress(params: {
+  senderShip: string;
+  ownerShip: string | null | undefined;
+  useAccessGroups: boolean;
+}) {
+  const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
+  return await resolveStableChannelMessageIngress({
+    channelId: "tlon",
+    accountId: "default",
+    identity: tlonIngressIdentity,
+    useAccessGroups: params.useAccessGroups,
+    subject: { stableId: params.senderShip },
+    conversation: {
+      kind: "direct",
+      id: "command",
+    },
+    event: {
+      authMode: "none",
+      mayPair: false,
+    },
+    dmPolicy: "allowlist",
+    groupPolicy: "open",
+    allowFrom: normalizedOwner ? [normalizedOwner] : [],
+    command: {},
+  });
+}
+
 export function isGroupInviteAllowed(
   inviterShip: string,
   allowlist: string[] | undefined,
 ): boolean {
-  // SECURITY: Fail-safe to deny when no allowlist configured
   if (!allowlist || allowlist.length === 0) {
     return false;
   }
@@ -165,10 +184,6 @@ export function isGroupInviteAllowed(
   return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
 }
 
-/**
- * Resolve quoted/cited content only after the caller has passed authorization.
- * Unauthorized paths must keep raw text and must not trigger cross-channel cite fetches.
- */
 export async function resolveAuthorizedMessageText(params: {
   rawText: string;
   content: unknown;
@@ -186,6 +201,20 @@ export async function resolveAuthorizedMessageText(params: {
 export const asRecord = asNullableObjectRecord;
 export const formatErrorMessage = sharedFormatErrorMessage;
 export const readString = readStringField;
+
+function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readStringField(
+  record: Record<string, unknown> | null | undefined,
+  field: string,
+): string | undefined {
+  const value = record?.[field];
+  return typeof value === "string" ? value : undefined;
+}
 
 // Helper to recursively extract text from inline content
 function renderInlineItem(
@@ -371,13 +400,4 @@ export function isSummarizationRequest(messageText: string): boolean {
     /tldr/i,
   ];
   return patterns.some((pattern) => pattern.test(messageText));
-}
-
-export function formatChangesDate(daysAgo = 5): string {
-  const now = new Date();
-  const targetDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
-  const year = targetDate.getFullYear();
-  const month = targetDate.getMonth() + 1;
-  const day = targetDate.getDate();
-  return `~${year}.${month}.${day}..20.19.51..9b9d`;
 }

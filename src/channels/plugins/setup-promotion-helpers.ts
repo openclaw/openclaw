@@ -1,54 +1,20 @@
+/**
+ * Channel setup promotion helpers.
+ *
+ * Moves legacy single-account channel config into account-scoped config records.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getBundledChannelPlugin } from "./bundled.js";
-import { getChannelPlugin } from "./registry.js";
+import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
+import { getLoadedChannelPlugin } from "./registry.js";
+import {
+  collectSingleAccountPromotionEntries,
+  isCommonSingleAccountPromotionKey,
+} from "./setup-promotion-keys.js";
 
 type ChannelSectionBase = {
   defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
-};
-
-const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
-  "name",
-  "token",
-  "tokenFile",
-  "botToken",
-  "appToken",
-  "account",
-  "signalNumber",
-  "authDir",
-  "cliPath",
-  "dbPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "webhookPath",
-  "webhookUrl",
-  "webhookSecret",
-  "service",
-  "region",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceName",
-  "url",
-  "code",
-  "dmPolicy",
-  "allowFrom",
-  "groupPolicy",
-  "groupAllowFrom",
-  "defaultTo",
-]);
-
-const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Some setup/migration paths run before the channel setup surface has been loaded.
-  telegram: ["streaming"],
-};
-
-const BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Keep top-level Telegram policy fallback intact when only auth needs seeding.
-  telegram: ["botToken", "tokenFile"],
 };
 
 type ChannelSetupPromotionSurface = {
@@ -59,62 +25,102 @@ type ChannelSetupPromotionSurface = {
   }) => string | undefined;
 };
 
-function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  const setup = getChannelPlugin(channelKey)?.setup ?? getBundledChannelPlugin(channelKey)?.setup;
-  if (!setup || typeof setup !== "object") {
-    return null;
-  }
-  return setup as ChannelSetupPromotionSurface;
+function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null {
+  return setup && typeof setup === "object" ? (setup as ChannelSetupPromotionSurface) : null;
 }
 
+function getLoadedChannelSetupPromotionSurface(
+  channelKey: string,
+): ChannelSetupPromotionSurface | null {
+  return asPromotionSurface(getLoadedChannelPlugin(channelKey)?.setup);
+}
+
+function getBundledChannelSetupPromotionSurface(
+  channelKey: string,
+): ChannelSetupPromotionSurface | null {
+  if (!hasBundledChannelPackageSetupFeature(channelKey, "configPromotion")) {
+    return null;
+  }
+  return asPromotionSurface(getBundledChannelPlugin(channelKey)?.setup);
+}
+
+/**
+ * Returns whether one root-level channel key should move into account config.
+ */
 export function shouldMoveSingleAccountChannelKey(params: {
   channelKey: string;
   key: string;
 }): boolean {
-  if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(params.key)) {
+  // Common keys move for every channel; channel-owned setup surfaces can add
+  // plugin-specific keys without teaching core about that channel's schema.
+  if (isCommonSingleAccountPromotionKey(params.key)) {
     return true;
   }
-  const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
-  if (contractKeys?.includes(params.key)) {
+  const loadedContractKeys = getLoadedChannelSetupPromotionSurface(
+    params.channelKey,
+  )?.singleAccountKeysToMove;
+  if (loadedContractKeys?.includes(params.key)) {
     return true;
   }
-  const fallbackKeys = BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
-  if (fallbackKeys?.includes(params.key)) {
+  const bundledContractKeys = getBundledChannelSetupPromotionSurface(
+    params.channelKey,
+  )?.singleAccountKeysToMove;
+  if (bundledContractKeys?.includes(params.key)) {
     return true;
   }
   return false;
 }
 
+/**
+ * Resolves all root-level keys eligible for single-account promotion.
+ */
 export function resolveSingleAccountKeysToMove(params: {
   channelKey: string;
   channel: Record<string, unknown>;
 }): string[] {
-  const hasNamedAccounts =
-    Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
-    0;
-  const namedAccountPromotionKeys =
-    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
-    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
-  return Object.entries(params.channel)
-    .filter(([key, value]) => {
-      if (key === "accounts" || key === "enabled" || value === undefined) {
-        return false;
-      }
-      if (!shouldMoveSingleAccountChannelKey({ channelKey: params.channelKey, key })) {
-        return false;
-      }
-      if (
-        hasNamedAccounts &&
-        namedAccountPromotionKeys &&
-        !namedAccountPromotionKeys.includes(key)
-      ) {
-        return false;
-      }
+  const { entries, hasNamedAccounts } = collectSingleAccountPromotionEntries(params.channel);
+  if (entries.length === 0) {
+    return [];
+  }
+
+  let loadedSetupSurface: ChannelSetupPromotionSurface | null | undefined;
+  const resolveLoadedSetupSurface = () => {
+    loadedSetupSurface ??= getLoadedChannelSetupPromotionSurface(params.channelKey);
+    return loadedSetupSurface;
+  };
+  let bundledSetupSurface: ChannelSetupPromotionSurface | null | undefined;
+  const resolveBundledSetupSurface = () => {
+    bundledSetupSurface ??= getBundledChannelSetupPromotionSurface(params.channelKey);
+    return bundledSetupSurface;
+  };
+
+  const keysToMove = entries.filter((key) => {
+    if (isCommonSingleAccountPromotionKey(key)) {
       return true;
-    })
-    .map(([key]) => key);
+    }
+    return Boolean(
+      resolveLoadedSetupSurface()?.singleAccountKeysToMove?.includes(key) ||
+      resolveBundledSetupSurface()?.singleAccountKeysToMove?.includes(key),
+    );
+  });
+  if (!hasNamedAccounts || keysToMove.length === 0) {
+    return keysToMove;
+  }
+
+  // Once named accounts exist, only keys explicitly allowed for named-account
+  // promotion should move. This avoids flattening root-only channel settings.
+  const namedAccountPromotionKeys =
+    resolveLoadedSetupSurface()?.namedAccountPromotionKeys ??
+    resolveBundledSetupSurface()?.namedAccountPromotionKeys;
+  if (!namedAccountPromotionKeys) {
+    return keysToMove;
+  }
+  return keysToMove.filter((key) => namedAccountPromotionKeys.includes(key));
 }
 
+/**
+ * Resolves the account id that should receive promoted single-account config.
+ */
 export function resolveSingleAccountPromotionTarget(params: {
   channelKey: string;
   channel: ChannelSectionBase;
@@ -127,8 +133,16 @@ export function resolveSingleAccountPromotionTarget(params: {
     );
     return matchedAccountId ?? normalizedTargetAccountId;
   };
-  const surface = getChannelSetupPromotionSurface(params.channelKey);
-  const resolved = surface?.resolveSingleAccountPromotionTarget?.({
+  const loadedSurface = getLoadedChannelSetupPromotionSurface(params.channelKey);
+  // Prefer loaded plugin setup hooks. Only consult bundled setup metadata when
+  // no loaded plugin supplied a target resolver for this channel.
+  const bundledSurface = loadedSurface?.resolveSingleAccountPromotionTarget
+    ? undefined
+    : getBundledChannelSetupPromotionSurface(params.channelKey);
+  const resolvePromotionTarget =
+    loadedSurface?.resolveSingleAccountPromotionTarget ??
+    bundledSurface?.resolveSingleAccountPromotionTarget;
+  const resolved = resolvePromotionTarget?.({
     channel: params.channel,
   });
   const normalizedResolved = normalizeOptionalString(resolved);

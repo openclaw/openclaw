@@ -1,4 +1,9 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+/** Utilities for queued reply runtime config, auth, threading, and embedded run params. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -11,11 +16,12 @@ import {
   getScopedChannelsCommandSecretTargets,
 } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
-import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -23,17 +29,33 @@ import {
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
+import {
+  buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
+  resolveEnforceFinalTagWithResolver,
+} from "./agent-runner-run-params.js";
+export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
+/** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig =
+    typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
+  const runtimeSourceConfig =
+    typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
   return (
-    (typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null) ?? config
+    selectApplicableRuntimeConfig({
+      inputConfig: config,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) ?? config
   );
 }
 
+/** Resolves command secrets for queued reply execution, scoped to the origin route. */
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -82,13 +104,19 @@ export async function resolveQueuedReplyExecutionConfig(
 /**
  * Build provider-specific threading context for tool auto-injection.
  */
+/** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const isRestartSentinelContinuation =
+    sessionCtx.InputProvenance?.kind === "internal_system" &&
+    sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
+  const currentMessageId = isRestartSentinelContinuation
+    ? sessionCtx.ReplyToId
+    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
@@ -109,7 +137,7 @@ export function buildThreadingToolContext(params: {
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
-  // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
+  // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
@@ -130,22 +158,29 @@ export function buildThreadingToolContext(params: {
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
         ReplyToId: sessionCtx.ReplyToId,
+        ReplyToIdFull: sessionCtx.ReplyToIdFull,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
+        TransportThreadId: sessionCtx.TransportThreadId,
         NativeChannelId: sessionCtx.NativeChannelId,
       },
       hasRepliedRef,
     }) ?? {};
+  const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since threading exists
-    currentMessageId: context.currentMessageId ?? currentMessageId,
+    // Some providers expose only thread resources as reply targets; explicit
+    // `undefined` means the adapter rejected the generic message-id fallback.
+    currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
   };
 }
 
+/** Detects Bun socket-close errors that should be formatted more clearly. */
 export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
+/** Formats Bun socket-close errors for user-facing reply output. */
 export const formatBunFetchSocketError = (message: string) => {
   const trimmed = message.trim();
   return [
@@ -156,98 +191,67 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
+/** Resolves whether final-answer tags should be enforced for a queued run. */
 export const resolveEnforceFinalTag = (
   run: FollowupRun["run"],
   provider: string,
   model = run.model,
-) =>
-  (run.skipProviderRuntimeHints ? false : undefined) ??
-  (run.enforceFinalTag ||
-    isReasoningTagProvider(provider, {
-      config: run.config,
-      workspaceDir: run.workspaceDir,
-      modelId: model,
-    }));
+) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
 
-export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
-  const config = run.config;
-  return {
-    cfg: config,
-    provider: run.provider,
-    model: run.model,
-    agentDir: run.agentDir,
-    fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-    }),
-  };
+/** Builds base embedded run params with auth and provider runtime hints. */
+export function buildEmbeddedRunBaseParams(
+  params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
+) {
+  return buildEmbeddedRunBaseParamsCore({
+    ...params,
+    isReasoningTagProvider,
+  });
 }
 
-export function buildEmbeddedRunBaseParams(params: {
-  run: FollowupRun["run"];
-  provider: string;
-  model: string;
-  runId: string;
-  authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
-  allowTransientCooldownProbe?: boolean;
-}) {
-  const config = params.run.config;
-  return {
-    sessionFile: params.run.sessionFile,
-    workspaceDir: params.run.workspaceDir,
-    agentDir: params.run.agentDir,
-    config,
-    skillsSnapshot: params.run.skillsSnapshot,
-    ownerNumbers: params.run.ownerNumbers,
-    inputProvenance: params.run.inputProvenance,
-    senderIsOwner: params.run.senderIsOwner,
-    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider, params.model),
-    silentExpected: params.run.silentExpected,
-    provider: params.provider,
-    model: params.model,
-    ...params.authProfile,
-    thinkLevel: params.run.thinkLevel,
-    verboseLevel: params.run.verboseLevel,
-    reasoningLevel: params.run.reasoningLevel,
-    execOverrides: params.run.execOverrides,
-    bashElevated: params.run.bashElevated,
-    timeoutMs: params.run.timeoutMs,
-    runId: params.runId,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-  };
-}
-
-export function buildEmbeddedContextFromTemplate(params: {
+function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
   const config = params.run.config;
+  const chatType = normalizeChatType(params.sessionCtx.ChatType) ?? params.run.chatType;
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
+    sandboxSessionKey: params.run.runtimePolicySessionKey,
     agentId: params.run.agentId,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: params.sessionCtx.OriginatingChannel,
       provider: params.sessionCtx.Provider,
     }),
+    ...(chatType ? { chatType } : {}),
     agentAccountId: params.sessionCtx.AccountId,
     messageTo: resolveOriginMessageTo({
       originatingTo: params.sessionCtx.OriginatingTo,
       to: params.sessionCtx.To,
     }),
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+    memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
       config,
       hasRepliedRef: params.hasRepliedRef,
     }),
+    currentInboundAudio: hasInboundAudio(params.sessionCtx),
   };
 }
 
-export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
+function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
+  const roles = Array.isArray(value)
+    ? value
+        .map((roleId) => normalizeOptionalString(roleId))
+        .filter((roleId): roleId is string => Boolean(roleId))
+    : [];
+  return roles.length > 0 ? roles : undefined;
+}
+
+function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
     senderName: normalizeOptionalString(sessionCtx.SenderName),
@@ -256,6 +260,7 @@ export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
+/** Builds extra context payloads for embedded run execution. */
 export function buildEmbeddedRunContexts(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
@@ -273,6 +278,7 @@ export function buildEmbeddedRunContexts(params: {
   };
 }
 
+/** Builds execution-specific embedded run params for queued reply dispatch. */
 export function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
@@ -280,6 +286,7 @@ export function buildEmbeddedRunExecutionParams(params: {
   provider: string;
   model: string;
   runId: string;
+  promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
   const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
@@ -288,6 +295,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     provider: params.provider,
     model: params.model,
     runId: params.runId,
+    promptCacheKey: params.promptCacheKey,
     authProfile,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   });

@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Qa Lab plugin module implements reply failure behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FAILURE_REPLY_PREFIXES = [
   "⚠️ something went wrong while processing your request.",
@@ -21,6 +22,11 @@ const VISIBLE_REPLY_LEAK_PATTERNS = [
   /\bposting a coordination nudge\b/i,
   /\bposted a short coordination reply\b/i,
   /\bnot inventing status\b/i,
+];
+
+const TOOL_BACKED_FAILURE_PATTERNS = [
+  /\btool\s+[a-z0-9_.-]+\s+not found\b/i,
+  /^status:\s*blocked\b/im,
 ];
 
 export function extractQaVisibleReplyLeakText(text: string): string | undefined {
@@ -46,6 +52,9 @@ export function extractQaFailureReplyText(text: string): string | undefined {
   const visibleReplyLeak = extractQaVisibleReplyLeakText(trimmed);
   if (visibleReplyLeak) {
     return visibleReplyLeak;
+  }
+  if (TOOL_BACKED_FAILURE_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return trimmed;
   }
   return undefined;
 }

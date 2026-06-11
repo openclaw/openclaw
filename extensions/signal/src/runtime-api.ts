@@ -4,7 +4,7 @@
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 export { buildChannelConfigSchema, SignalConfigSchema } from "../config-api.js";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { RuntimeOpenClawConfig as OpenClawConfig };
 export type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -26,14 +26,14 @@ export { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-export { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+export { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 export {
   listEnabledSignalAccounts,

@@ -1,3 +1,4 @@
+// Venice setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -21,10 +22,6 @@ const venicePresetAppliers = createModelCatalogPresetAppliers({
     aliases: [{ modelRef: VENICE_DEFAULT_MODEL_REF, alias: "Kimi K2.5" }],
   }),
 });
-
-export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return venicePresetAppliers.applyProviderConfig(cfg);
-}
 
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   return venicePresetAppliers.applyConfig(cfg);

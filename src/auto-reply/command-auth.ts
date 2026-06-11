@@ -1,3 +1,9 @@
+/** Command authorization helpers for owner and allowlist checks. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getLoadedChannelPluginById,
   listLoadedChannelPlugins,
@@ -7,16 +13,12 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
+import { shouldUseFromAsSenderFallback } from "./sender-identity.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -289,7 +291,8 @@ function resolveOwnerAllowFromList(params: {
       const prefix = trimmed.slice(0, separatorIndex);
       const channel = normalizeAnyChannelId(prefix);
       if (channel) {
-        if (params.providerId && channel !== params.providerId) {
+        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
+        if (!params.providerId || channel !== params.providerId) {
           continue;
         }
         const remainder = trimmed.slice(separatorIndex + 1).trim();
@@ -429,12 +432,17 @@ function resolveOwnerAuthorizationState(params: {
 
 function resolveCommandSenderAuthorization(params: {
   commandAuthorized: boolean;
+  enforceOwnerForCommands: boolean;
+  nativeCommandAuthorized: boolean;
   isOwnerForCommands: boolean;
   senderCandidates: string[];
   commandsAllowFromList: string[] | null;
   providerResolutionError: boolean;
   commandsAllowFromConfigured: boolean;
 }): boolean {
+  if (params.enforceOwnerForCommands && !params.isOwnerForCommands) {
+    return false;
+  }
   if (
     params.commandsAllowFromList !== null ||
     (params.providerResolutionError && params.commandsAllowFromConfigured)
@@ -450,36 +458,7 @@ function resolveCommandSenderAuthorization(params: {
       !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
     );
   }
-  return params.commandAuthorized && params.isOwnerForCommands;
-}
-
-function isConversationLikeIdentity(value: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.includes("@g.us")) {
-    return true;
-  }
-  if (normalized.startsWith("chat_id:")) {
-    return true;
-  }
-  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
-}
-
-function shouldUseFromAsSenderFallback(params: {
-  from?: string | null;
-  chatType?: string | null;
-}): boolean {
-  const from = normalizeOptionalString(params.from) ?? "";
-  if (!from) {
-    return false;
-  }
-  const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
-  if (chatType && chatType !== "direct") {
-    return false;
-  }
-  return !isConversationLikeIdentity(from);
+  return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
 }
 
 function resolveSenderCandidates(params: {
@@ -696,9 +675,7 @@ export function resolveCommandAuthorization(params: {
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerState.ownerAllowAll || ownerState.explicitOwners.length > 0;
-  const senderIsOwner = ctx.ForceSenderIsOwnerFalse
-    ? false
-    : senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
+  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
@@ -706,11 +683,13 @@ export function resolveCommandAuthorization(params: {
       ? true
       : ownerAllowlistConfigured
         ? senderIsOwner
-        : ownerState.allowAll ||
-          ownerState.ownerCandidatesForCommands.length === 0 ||
-          Boolean(matchedCommandOwner);
+        : senderIsOwnerByScope || Boolean(matchedCommandOwner);
+  const nativeCommandAuthorized =
+    commandAuthorized && isNativeCommandTurn(resolveCommandTurnContext(ctx)) && !requireOwner;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
+    enforceOwnerForCommands: enforceOwner,
+    nativeCommandAuthorized,
     isOwnerForCommands,
     senderCandidates,
     commandsAllowFromList,

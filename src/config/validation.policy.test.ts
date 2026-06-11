@@ -1,3 +1,4 @@
+// Covers config validation policy decisions and warning behavior.
 import { describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
@@ -41,6 +42,14 @@ vi.mock("../secrets/unsupported-surface-policy.js", async () => {
   };
 });
 
+function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
+  const issue = issues.find((entry) => entry.path === path);
+  if (!issue) {
+    throw new Error(`expected validation issue at ${path}`);
+  }
+  return issue;
+}
+
 describe("config validation SecretRef policy guards", () => {
   it("surfaces a policy error for hooks.token SecretRef objects", () => {
     const result = validateConfigObjectRaw({
@@ -55,10 +64,9 @@ describe("config validation SecretRef policy guards", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "hooks.token");
-      expect(issue).toBeDefined();
-      expect(issue?.message).toContain("SecretRef objects are not supported at hooks.token");
-      expect(issue?.message).toContain(
+      const issue = requireIssue(result.issues, "hooks.token");
+      expect(issue.message).toContain("SecretRef objects are not supported at hooks.token");
+      expect(issue.message).toContain(
         "https://docs.openclaw.ai/reference/secretref-credential-surface",
       );
       expect(
@@ -82,9 +90,8 @@ describe("config validation SecretRef policy guards", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "hooks.token");
-      expect(issue).toBeDefined();
-      expect(issue?.message).toBe("Invalid input: expected string, received object");
+      const issue = requireIssue(result.issues, "hooks.token");
+      expect(issue.message).toBe("Invalid input: expected string, received object");
     }
   });
 
@@ -92,6 +99,35 @@ describe("config validation SecretRef policy guards", () => {
     const result = validateConfigObjectRaw({
       hooks: {
         token: "${HOOK_TOKEN}",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("leaves legacy secretref-env marker migration to doctor", () => {
+    const result = validateConfigObjectRaw({
+      secrets: {
+        defaults: {
+          env: "gateway-env",
+        },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:DISCORD_BOT_TOKEN",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not reject invalid legacy secretref-env markers during raw validation", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        discord: {
+          token: "secretref-env:not-valid",
+        },
       },
     });
 
@@ -115,11 +151,11 @@ describe("config validation SecretRef policy guards", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const policyIssue = result.issues.find(
-        (entry) => entry.path === "channels.discord.threadBindings.webhookToken",
+      const policyIssue = requireIssue(
+        result.issues,
+        "channels.discord.threadBindings.webhookToken",
       );
-      expect(policyIssue).toBeDefined();
-      expect(policyIssue?.message).toContain(
+      expect(policyIssue.message).toContain(
         "SecretRef objects are not supported at channels.discord.threadBindings.webhookToken",
       );
       expect(
@@ -164,6 +200,9 @@ describe("config validation SecretRef policy guards", () => {
             entry.message.includes("webhookTokne"),
         ),
       ).toBe(true);
+      const schemaIssue = requireIssue(result.issues, "channels.discord.threadBindings");
+      expect(schemaIssue.message).toContain("webhookTokne");
+      expect(schemaIssue.message).not.toContain("webhookToken");
     }
   });
 });

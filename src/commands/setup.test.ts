@@ -1,16 +1,19 @@
+// Setup command tests cover local setup initialization and next-step messaging.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import { setupCommand } from "./setup.js";
 
 function createSetupDeps(home: string) {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   return {
     createConfigIO: () => ({ configPath }),
-    ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
-      dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
-    })),
+    ensureAgentWorkspace: vi.fn(
+      async (params?: { dir?: string; skipOptionalBootstrapFiles?: string[] }) => ({
+        dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
+      }),
+    ),
     formatConfigPath: (value: string) => value,
     logConfigUpdated: vi.fn(
       (runtime: { log: (message: string) => void }, opts: { path?: string; suffix?: string }) => {
@@ -20,11 +23,25 @@ function createSetupDeps(home: string) {
     ),
     mkdir: vi.fn(async () => {}),
     resolveSessionTranscriptsDir: vi.fn(() => path.join(home, ".openclaw", "sessions")),
-    writeConfigFile: vi.fn(async (config: unknown) => {
+    replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: unknown }) => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+      await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2));
     }),
   };
+}
+
+function requireFirstWorkspaceParams(
+  ensureAgentWorkspace: ReturnType<typeof vi.fn>,
+): Record<string, unknown> {
+  const [call] = ensureAgentWorkspace.mock.calls;
+  if (!call) {
+    throw new Error("expected workspace setup call");
+  }
+  const [params] = call;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("expected workspace setup params");
+  }
+  return params as Record<string, unknown>;
 }
 
 describe("setupCommand", () => {
@@ -41,10 +58,39 @@ describe("setupCommand", () => {
       await setupCommand({ workspace }, runtime, deps);
 
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const raw = await fs.readFile(configPath, "utf-8");
+      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
 
-      expect(raw).toContain('"mode": "local"');
-      expect(raw).toContain('"workspace"');
+      expect(raw).toStrictEqual({
+        agents: {
+          defaults: {
+            workspace,
+          },
+        },
+        gateway: {
+          mode: "local",
+        },
+      });
+    });
+  });
+
+  it("explains that plain setup only initializes local files", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const deps = createSetupDeps(home);
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(runtime.log.mock.calls.map((call) => String(call[0])).slice(-5)).toStrictEqual([
+        "",
+        "Setup complete: config, workspace, and session directories are ready.",
+        "Next guided path: openclaw onboard.",
+        "Next targeted changes: openclaw configure for models, channels, Gateway, plugins, skills, and health checks.",
+        "Add a chat channel later: openclaw channels add.",
+      ]);
     });
   });
 
@@ -84,6 +130,40 @@ describe("setupCommand", () => {
     });
   });
 
+  it("threads skipOptionalBootstrapFiles into workspace creation", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const workspace = path.join(home, "custom-workspace");
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace,
+              skipOptionalBootstrapFiles: ["IDENTITY.md", "USER.md"],
+            },
+          },
+        }),
+      );
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(deps.ensureAgentWorkspace).toHaveBeenCalledOnce();
+      const workspaceParams = requireFirstWorkspaceParams(deps.ensureAgentWorkspace);
+      expect(workspaceParams.dir).toBe(workspace);
+      expect(workspaceParams.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
+    });
+  });
+
   it("treats non-object config roots as empty config", async () => {
     await withTempHome(async (home) => {
       const runtime = {
@@ -106,7 +186,7 @@ describe("setupCommand", () => {
         gateway?: { mode?: string };
       };
 
-      expect(raw.agents?.defaults?.workspace).toBeTruthy();
+      expect(raw.agents?.defaults?.workspace).toBe(workspace);
       expect(raw.gateway?.mode).toBe("local");
     });
   });

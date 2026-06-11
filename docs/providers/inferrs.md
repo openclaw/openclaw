@@ -4,17 +4,22 @@ read_when:
   - You want to run OpenClaw against a local inferrs server
   - You are serving Gemma or another model through inferrs
   - You need the exact OpenClaw compat flags for inferrs
-title: "inferrs"
+title: "Inferrs"
 ---
 
-# inferrs
+[inferrs](https://github.com/ericcurtin/inferrs) can serve local models behind an OpenAI-compatible `/v1` API. OpenClaw works with `inferrs` through the generic `openai-completions` path.
 
-[inferrs](https://github.com/ericcurtin/inferrs) can serve local models behind an
-OpenAI-compatible `/v1` API. OpenClaw works with `inferrs` through the generic
-`openai-completions` path.
+| Property           | Value                                                              |
+| ------------------ | ------------------------------------------------------------------ |
+| Provider id        | `inferrs` (custom; configure under `models.providers.inferrs`)     |
+| Plugin             | none — `inferrs` is not a bundled OpenClaw provider plugin         |
+| Auth env var       | Optional. Any value works if your inferrs server has no auth       |
+| API                | OpenAI-compatible (`openai-completions`)                           |
+| Suggested base URL | `http://127.0.0.1:8080/v1` (or wherever your inferrs server lives) |
 
-`inferrs` is currently best treated as a custom self-hosted OpenAI-compatible
-backend, not a dedicated OpenClaw provider plugin.
+<Note>
+  `inferrs` is currently best treated as a custom self-hosted OpenAI-compatible backend, not a dedicated OpenClaw provider plugin. You configure it through `models.providers.inferrs` rather than an onboarding choice flag. If you need a true bundled plugin with auto-discovery, see [SGLang](/providers/sglang) or [vLLM](/providers/vllm).
+</Note>
 
 ## Getting started
 
@@ -81,7 +86,61 @@ This example uses Gemma 4 on a local `inferrs` server.
 }
 ```
 
-## Advanced
+## On-demand startup
+
+Inferrs can also be started by OpenClaw only when an `inferrs/...` model is
+selected. Add `localService` to the same provider entry:
+
+```json5
+{
+  models: {
+    providers: {
+      inferrs: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        apiKey: "inferrs-local",
+        api: "openai-completions",
+        timeoutSeconds: 300,
+        localService: {
+          command: "/opt/homebrew/bin/inferrs",
+          args: [
+            "serve",
+            "google/gemma-4-E2B-it",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8080",
+            "--device",
+            "metal",
+          ],
+          healthUrl: "http://127.0.0.1:8080/v1/models",
+          readyTimeoutMs: 180000,
+          idleStopMs: 0,
+        },
+        models: [
+          {
+            id: "google/gemma-4-E2B-it",
+            name: "Gemma 4 E2B (inferrs)",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 131072,
+            maxTokens: 4096,
+            compat: {
+              requiresStringContent: true,
+            },
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+`command` must be absolute. Use `which inferrs` on the Gateway host and put that
+path in config. For the full field reference, see
+[Local model services](/gateway/local-model-services).
+
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Why requiresStringContent matters">
@@ -195,16 +254,19 @@ This example uses Gemma 4 on a local `inferrs` server.
 For general help, see [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
 </Tip>
 
-## See also
+## Related
 
 <CardGroup cols={2}>
   <Card title="Local models" href="/gateway/local-models" icon="server">
     Running OpenClaw against local model servers.
   </Card>
+  <Card title="Local model services" href="/gateway/local-model-services" icon="play">
+    Starting local model servers on demand for configured providers.
+  </Card>
   <Card title="Gateway troubleshooting" href="/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail" icon="wrench">
     Debugging local OpenAI-compatible backends that pass probes but fail agent runs.
   </Card>
-  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
 </CardGroup>

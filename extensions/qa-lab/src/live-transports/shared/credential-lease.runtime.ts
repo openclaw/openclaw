@@ -1,15 +1,25 @@
+// Qa Lab plugin module implements credential lease behavior.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
+import {
+  isQaCredentialTruthyOptIn,
+  joinQaCredentialEndpoint,
+  normalizeQaCredentialConvexSiteUrl,
+  normalizeQaCredentialEndpointPrefix,
+  parseQaCredentialPositiveIntegerEnv,
+  QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
+} from "../../qa-credentials-common.runtime.js";
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 90_000;
-const DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
+const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
-const ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
 const convexAcquireSuccessSchema = z.object({
   status: z.literal("ok"),
@@ -31,6 +41,11 @@ const convexOkSchema = z.object({
   status: z.literal("ok"),
 });
 
+const convexPayloadChunkSuccessSchema = z.object({
+  status: z.literal("ok"),
+  data: z.string(),
+});
+
 type ConvexCredentialBrokerConfig = {
   acquireTimeoutMs: number;
   acquireUrl: string;
@@ -40,11 +55,12 @@ type ConvexCredentialBrokerConfig = {
   httpTimeoutMs: number;
   leaseTtlMs: number;
   ownerId: string;
+  payloadChunkUrl: string;
   releaseUrl: string;
   role: QaCredentialRole;
 };
 
-export type QaCredentialLeaseHeartbeat = {
+type QaCredentialLeaseHeartbeat = {
   getFailure(): Error | null;
   stop(): Promise<void>;
   throwIfFailed(): void;
@@ -52,9 +68,9 @@ export type QaCredentialLeaseHeartbeat = {
 
 export type QaCredentialRole = "ci" | "maintainer";
 
-export type QaCredentialLeaseSource = "convex" | "env";
+type QaCredentialLeaseSource = "convex" | "env";
 
-export type QaCredentialLease<TPayload> = {
+type QaCredentialLease<TPayload> = {
   credentialId?: string;
   heartbeat(): Promise<void>;
   heartbeatIntervalMs: number;
@@ -68,7 +84,7 @@ export type QaCredentialLease<TPayload> = {
   source: QaCredentialLeaseSource;
 };
 
-export type AcquireQaCredentialLeaseOptions<TPayload> = {
+type AcquireQaCredentialLeaseOptions<TPayload> = {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   kind: string;
@@ -95,15 +111,7 @@ class QaCredentialBrokerError extends Error {
 }
 
 function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
-  const raw = env[key]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
-    throw new Error(`${key} must be a positive integer.`);
-  }
-  return value;
+  return parseQaCredentialPositiveIntegerEnv({ env, key, fallback });
 }
 
 function normalizeQaCredentialSource(value: string | undefined): QaCredentialLeaseSource {
@@ -114,65 +122,31 @@ function normalizeQaCredentialSource(value: string | undefined): QaCredentialLea
   throw new Error(`Credential source must be one of env or convex, got "${value}".`);
 }
 
-function normalizeQaCredentialRole(value: string | undefined): QaCredentialRole {
-  const normalized = value?.trim().toLowerCase() || "maintainer";
+function normalizeQaCredentialRole(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): QaCredentialRole {
+  const defaultRole = isQaCredentialTruthyOptIn(env.CI) ? "ci" : "maintainer";
+  const normalized = value?.trim().toLowerCase() || defaultRole;
   if (normalized === "maintainer" || normalized === "ci") {
     return normalized;
   }
   throw new Error(`Credential role must be one of maintainer or ci, got "${value}".`);
 }
 
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function isLoopbackHostname(hostname: string) {
-  return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
-}
-
 function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error(`OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${raw || "<empty>"}".`);
-  }
-  if (url.protocol === "https:") {
-    const text = url.toString();
-    return text.endsWith("/") ? text.slice(0, -1) : text;
-  }
-  if (url.protocol !== "http:") {
-    throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must use https://.");
-  }
-  const allowInsecureHttp = isTruthyOptIn(env[ALLOW_INSECURE_HTTP_ENV_KEY]);
-  if (!allowInsecureHttp || !isLoopbackHostname(url.hostname)) {
-    throw new Error(
-      `OPENCLAW_QA_CONVEX_SITE_URL must use https://. http:// is only allowed for loopback hosts when ${ALLOW_INSECURE_HTTP_ENV_KEY}=1.`,
-    );
-  }
-  const text = url.toString();
-  return text.endsWith("/") ? text.slice(0, -1) : text;
+  return normalizeQaCredentialConvexSiteUrl({ raw, env });
 }
 
 function normalizeEndpointPrefix(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return DEFAULT_ENDPOINT_PREFIX;
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  const normalized = prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
-    throw new Error(
+  return normalizeQaCredentialEndpointPrefix({
+    value,
+    fallback: DEFAULT_ENDPOINT_PREFIX,
+    invalidAbsoluteMessage:
       "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path like /qa-credentials/v1.",
-    );
-  }
-  if (normalized.includes("\\") || normalized.split("/").some((segment) => segment === "..")) {
-    throw new Error(
+    invalidSegmentsMessage:
       "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must not contain backslashes or .. path segments.",
-    );
-  }
-  return normalized;
+  });
 }
 
 function resolveConvexAuthToken(env: NodeJS.ProcessEnv, role: QaCredentialRole): string {
@@ -188,15 +162,6 @@ function resolveConvexAuthToken(env: NodeJS.ProcessEnv, role: QaCredentialRole):
     throw new Error("Missing OPENCLAW_QA_CONVEX_SECRET_CI for CI credential access.");
   }
   throw new Error("Missing OPENCLAW_QA_CONVEX_SECRET_MAINTAINER for maintainer credential access.");
-}
-
-function joinConvexEndpoint(baseUrl: string, prefix: string, suffix: string): string {
-  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
-  const url = new URL(baseUrl);
-  url.pathname = `${prefix}${normalizedSuffix}`.replace(/\/{2,}/gu, "/");
-  url.search = "";
-  url.hash = "";
-  return url.toString();
 }
 
 function resolveConvexCredentialBrokerConfig(params: {
@@ -238,9 +203,38 @@ function resolveConvexCredentialBrokerConfig(params: {
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     ),
-    acquireUrl: joinConvexEndpoint(baseUrl, endpointPrefix, "acquire"),
-    heartbeatUrl: joinConvexEndpoint(baseUrl, endpointPrefix, "heartbeat"),
-    releaseUrl: joinConvexEndpoint(baseUrl, endpointPrefix, "release"),
+    acquireUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "acquire"),
+    heartbeatUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "heartbeat"),
+    payloadChunkUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "payload-chunk"),
+    releaseUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "release"),
+  };
+}
+
+function parseChunkedPayloadMarker(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record[CHUNKED_PAYLOAD_MARKER] !== true) {
+    return null;
+  }
+  if (
+    typeof record.chunkCount !== "number" ||
+    !Number.isInteger(record.chunkCount) ||
+    record.chunkCount < 1
+  ) {
+    throw new Error("Chunked credential payload marker has an invalid chunkCount.");
+  }
+  if (
+    typeof record.byteLength !== "number" ||
+    !Number.isInteger(record.byteLength) ||
+    record.byteLength < 0
+  ) {
+    throw new Error("Chunked credential payload marker has an invalid byteLength.");
+  }
+  return {
+    chunkCount: record.chunkCount,
+    byteLength: record.byteLength,
   };
 }
 
@@ -266,6 +260,7 @@ async function postConvexBroker(params: {
   timeoutMs: number;
   url: string;
 }): Promise<unknown> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   const response = await params.fetchImpl(params.url, {
     method: "POST",
     headers: {
@@ -273,7 +268,7 @@ async function postConvexBroker(params: {
       "content-type": "application/json",
     },
     body: JSON.stringify(params.body),
-    signal: AbortSignal.timeout(params.timeoutMs),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   const text = await response.text();
@@ -301,6 +296,42 @@ async function postConvexBroker(params: {
     );
   }
   return payload;
+}
+
+async function resolveConvexCredentialPayload(params: {
+  acquired: z.infer<typeof convexAcquireSuccessSchema>;
+  config: ConvexCredentialBrokerConfig;
+  fetchImpl: typeof fetch;
+  kind: string;
+}) {
+  const marker = parseChunkedPayloadMarker(params.acquired.payload);
+  if (!marker) {
+    return params.acquired.payload;
+  }
+  const chunks: string[] = [];
+  for (let index = 0; index < marker.chunkCount; index += 1) {
+    const payload = await postConvexBroker({
+      fetchImpl: params.fetchImpl,
+      timeoutMs: params.config.httpTimeoutMs,
+      authToken: params.config.authToken,
+      url: params.config.payloadChunkUrl,
+      body: {
+        kind: params.kind,
+        ownerId: params.config.ownerId,
+        actorRole: params.config.role,
+        credentialId: params.acquired.credentialId,
+        leaseToken: params.acquired.leaseToken,
+        index,
+      },
+    });
+    const parsed = convexPayloadChunkSuccessSchema.parse(payload);
+    chunks.push(parsed.data);
+  }
+  const serialized = chunks.join("");
+  if (serialized.length !== marker.byteLength) {
+    throw new Error("Chunked credential payload length mismatch.");
+  }
+  return JSON.parse(serialized) as unknown;
 }
 
 function computeAcquireBackoffMs(params: {
@@ -350,7 +381,7 @@ export async function acquireQaCredentialLease<TPayload>(
     };
   }
 
-  const role = normalizeQaCredentialRole(opts.role ?? env.OPENCLAW_QA_CREDENTIAL_ROLE);
+  const role = normalizeQaCredentialRole(opts.role ?? env.OPENCLAW_QA_CREDENTIAL_ROLE, env);
   const config = resolveConvexCredentialBrokerConfig({
     env,
     role,
@@ -358,7 +389,11 @@ export async function acquireQaCredentialLease<TPayload>(
   });
   const fetchImpl = opts.fetchImpl ?? fetch;
   const sleepImpl =
-    opts.sleepImpl ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    opts.sleepImpl ??
+    ((ms: number) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
   const startedAt = timeImpl();
@@ -399,7 +434,13 @@ export async function acquireQaCredentialLease<TPayload>(
       };
       let parsedPayload: TPayload;
       try {
-        parsedPayload = opts.parsePayload(acquired.payload);
+        const resolvedPayload = await resolveConvexCredentialPayload({
+          acquired,
+          config,
+          fetchImpl,
+          kind: opts.kind,
+        });
+        parsedPayload = opts.parsePayload(resolvedPayload);
       } catch (error) {
         try {
           await releaseLease();
@@ -562,15 +603,3 @@ export function startQaCredentialLeaseHeartbeat(
     },
   };
 }
-
-export const __testing = {
-  DEFAULT_ACQUIRE_TIMEOUT_MS,
-  DEFAULT_ENDPOINT_PREFIX,
-  DEFAULT_HEARTBEAT_INTERVAL_MS,
-  DEFAULT_LEASE_TTL_MS,
-  computeAcquireBackoffMs,
-  normalizeQaCredentialRole,
-  normalizeQaCredentialSource,
-  parsePositiveIntegerEnv,
-  resolveConvexCredentialBrokerConfig,
-};

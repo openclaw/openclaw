@@ -1,15 +1,22 @@
+// Gateway HTTP session kill handler.
+// Allows local admins or owning parent sessions to stop subagent runs.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   killControlledSubagentRun,
   killSubagentRunAdmin,
   resolveSubagentController,
 } from "../agents/subagent-control.js";
 import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
-import { loadConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import {
+  sendInvalidRequest,
+  sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   resolveTrustedHttpOperatorScopes,
@@ -19,16 +26,24 @@ import { loadSessionEntry } from "./session-utils.js";
 
 const REQUESTER_SESSION_KEY_HEADER = "x-openclaw-requester-session-key";
 
-function resolveSessionKeyFromPath(pathname: string): string | null {
+type SessionKeyPathResolution =
+  | { matched: false }
+  | { matched: true; sessionKey: string }
+  | { error: "invalid-session-key"; matched: true };
+
+function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
   if (!match) {
-    return null;
+    return { matched: false };
   }
   try {
     const decoded = decodeURIComponent(match[1] ?? "").trim();
-    return decoded || null;
+    if (!decoded) {
+      return { error: "invalid-session-key", matched: true };
+    }
+    return { matched: true, sessionKey: decoded };
   } catch {
-    return null;
+    return { error: "invalid-session-key", matched: true };
   }
 }
 
@@ -42,12 +57,17 @@ export async function handleSessionKillHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const cfg = loadConfig();
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  const sessionKey = resolveSessionKeyFromPath(url.pathname);
-  if (!sessionKey) {
+  const cfg = getRuntimeConfig();
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
+  if (!sessionKeyResolution.matched) {
     return false;
   }
+  if ("error" in sessionKeyResolution) {
+    sendInvalidRequest(res, "invalid session key");
+    return true;
+  }
+  const { sessionKey } = sessionKeyResolution;
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res, "POST");
@@ -74,6 +94,8 @@ export async function handleSessionKillHttpRequest(
   const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
   const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
 
+  // Remote browser requests must prove parent-session ownership; local direct
+  // operator requests can perform the stronger admin kill path.
   if (!requesterSessionKey && !allowLocalAdminKill) {
     sendJson(res, 403, {
       ok: false,
@@ -89,13 +111,7 @@ export async function handleSessionKillHttpRequest(
     requesterSessionKey && !allowLocalAdminKill ? "sessions.abort" : "sessions.delete";
   const scopeAuth = authorizeOperatorScopesForMethod(requiredOperatorMethod, requestedScopes);
   if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return true;
   }
 

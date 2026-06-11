@@ -1,3 +1,4 @@
+// Verifies OSC8 hyperlink formatting for TUI terminal output.
 import { describe, expect, it } from "vitest";
 import { addOsc8Hyperlinks, extractUrls, wrapOsc8 } from "./osc8-hyperlinks.js";
 
@@ -51,7 +52,7 @@ describe("extractUrls", () => {
   });
 
   it("returns empty array for text without URLs", () => {
-    expect(extractUrls("No links here")).toEqual([]);
+    expect(extractUrls("No links here")).toStrictEqual([]);
   });
 
   it("handles URLs with query params and fragments", () => {

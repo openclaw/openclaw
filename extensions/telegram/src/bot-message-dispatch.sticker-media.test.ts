@@ -1,5 +1,6 @@
+// Telegram tests cover bot message dispatch.sticker media plugin behavior.
 import { describe, expect, it } from "vitest";
-import { pruneStickerMediaFromContext } from "./bot-message-dispatch.js";
+import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
 type MediaCtx = {
   MediaPath?: string;

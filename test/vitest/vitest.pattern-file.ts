@@ -1,5 +1,45 @@
+// Vitest pattern file helper reads include and exclude patterns from files.
 import fs from "node:fs";
 import path from "node:path";
+
+const VITEST_OPTION_VALUE_FLAGS = new Set([
+  "-c",
+  "-r",
+  "-t",
+  "--browser",
+  "--changed",
+  "--config",
+  "--coverage.all",
+  "--coverage.exclude",
+  "--coverage.extension",
+  "--coverage.include",
+  "--coverage.provider",
+  "--coverage.reporter",
+  "--coverage.reportsDirectory",
+  "--dir",
+  "--environment",
+  "--environmentOptions",
+  "--exclude",
+  "--hookTimeout",
+  "--inspect",
+  "--inspectBrk",
+  "--maxConcurrency",
+  "--maxWorkers",
+  "--minWorkers",
+  "--mode",
+  "--name",
+  "--outputFile",
+  "--pool",
+  "--project",
+  "--reporter",
+  "--retry",
+  "--root",
+  "--sequence",
+  "--shard",
+  "--testNamePattern",
+  "--testTimeout",
+  "--workspace",
+]);
 
 function normalizeCliPattern(value: string): string {
   let normalized = value
@@ -16,6 +56,39 @@ function normalizeCliPattern(value: string): string {
   return normalized;
 }
 
+function normalizeScopedDir(value: string | undefined): string {
+  return value?.trim().replaceAll("\\", "/").replace(/\/+$/u, "") ?? "";
+}
+
+function hasRepoRootPrefix(value: string): boolean {
+  return /^(?:src|test|extensions|ui|packages|apps)(?:\/|$)/u.test(value);
+}
+
+function looksLikeDirRelativePath(value: string): boolean {
+  return (
+    value.includes("/") ||
+    value.includes(".test.") ||
+    value.includes(".e2e.") ||
+    value.includes(".live.")
+  );
+}
+
+function applyScopedDir(value: string, scopedDir: string): string {
+  const normalizedValue = value
+    .trim()
+    .replace(/^\.\/+/u, "")
+    .replaceAll("\\", "/");
+  if (
+    !scopedDir ||
+    hasRepoRootPrefix(normalizedValue) ||
+    path.isAbsolute(value) ||
+    !looksLikeDirRelativePath(normalizedValue)
+  ) {
+    return normalizedValue;
+  }
+  return `${scopedDir}/${normalizedValue}`;
+}
+
 function looksLikeCliIncludePattern(value: string): boolean {
   const normalized = normalizeCliPattern(value);
   return (
@@ -23,6 +96,31 @@ function looksLikeCliIncludePattern(value: string): boolean {
     normalized.includes(".e2e.") ||
     normalized.includes(".live.") ||
     /^(?:src|test|extensions|ui|packages|apps)(?:\/|$)/u.test(normalized)
+  );
+}
+
+function literalPrefixForGlobPattern(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  const globIndex = normalized.search(/[?*[\]{}]/u);
+  if (globIndex === -1) {
+    return normalized;
+  }
+  const slashIndex = normalized.lastIndexOf("/", globIndex);
+  return slashIndex === -1 ? "" : normalized.slice(0, slashIndex + 1);
+}
+
+function patternsCouldOverlap(value: string, pattern: string): boolean {
+  if (path.matchesGlob(value, pattern) || path.matchesGlob(pattern, value)) {
+    return true;
+  }
+
+  const valuePrefix = literalPrefixForGlobPattern(value);
+  const patternPrefix = literalPrefixForGlobPattern(pattern);
+  return (
+    patternPrefix === "" ||
+    valuePrefix === "" ||
+    valuePrefix.startsWith(patternPrefix) ||
+    patternPrefix.startsWith(valuePrefix)
   );
 }
 
@@ -46,24 +144,13 @@ export function loadPatternListFromEnv(
 }
 
 export function loadPatternListFromArgv(argv: string[] = process.argv): string[] | null {
-  const optionValueFlags = new Set([
-    "-c",
-    "-r",
-    "-t",
-    "--config",
-    "--dir",
-    "--environment",
-    "--exclude",
-    "--maxWorkers",
-    "--mode",
-    "--outputFile",
-    "--pool",
-    "--project",
-    "--reporter",
-    "--root",
-    "--shard",
-    "--testNamePattern",
-  ]);
+  return loadPatternListFromArgvForScope(argv);
+}
+
+function loadPatternListFromArgvForScope(
+  argv: string[] = process.argv,
+  options: { scopedDir?: string } = {},
+): string[] | null {
   const values: string[] = [];
   let skipNext = false;
   for (const value of argv.slice(2)) {
@@ -74,7 +161,7 @@ export function loadPatternListFromArgv(argv: string[] = process.argv): string[]
     if (value === "run" || value === "watch" || value === "bench") {
       continue;
     }
-    if (optionValueFlags.has(value)) {
+    if (VITEST_OPTION_VALUE_FLAGS.has(value)) {
       skipNext = true;
       continue;
     }
@@ -84,7 +171,11 @@ export function loadPatternListFromArgv(argv: string[] = process.argv): string[]
     values.push(value);
   }
 
-  const patterns = values.filter(looksLikeCliIncludePattern).map(normalizeCliPattern);
+  const scopedDir = normalizeScopedDir(options.scopedDir);
+  const patterns = values
+    .map((value) => applyScopedDir(value, scopedDir))
+    .filter(looksLikeCliIncludePattern)
+    .map(normalizeCliPattern);
 
   return patterns.length > 0 ? [...new Set(patterns)] : null;
 }
@@ -92,16 +183,15 @@ export function loadPatternListFromArgv(argv: string[] = process.argv): string[]
 export function narrowIncludePatternsForCli(
   includePatterns: string[],
   argv: string[] = process.argv,
+  options: { scopedDir?: string } = {},
 ): string[] | null {
-  const cliPatterns = loadPatternListFromArgv(argv);
+  const cliPatterns = loadPatternListFromArgvForScope(argv, options);
   if (!cliPatterns) {
     return null;
   }
 
   const matched = cliPatterns.filter((value) =>
-    includePatterns.some(
-      (pattern) => path.matchesGlob(value, pattern) || path.matchesGlob(pattern, value),
-    ),
+    includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
   );
 
   return [...new Set(matched)];

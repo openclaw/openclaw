@@ -1,9 +1,10 @@
+// Agents provider tests cover provider status index construction for configured agents.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildProviderStatusIndex } from "./agents.providers.js";
 
 const mocks = vi.hoisted(() => ({
-  listChannelPlugins: vi.fn(),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
   getChannelPlugin: vi.fn(),
   normalizeChannelId: vi.fn((value: unknown) =>
     typeof value === "string" && value.trim().length > 0 ? value : null,
@@ -13,12 +14,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: (...args: Parameters<typeof mocks.listChannelPlugins>) =>
-    mocks.listChannelPlugins(...args),
   getChannelPlugin: (...args: Parameters<typeof mocks.getChannelPlugin>) =>
     mocks.getChannelPlugin(...args),
   normalizeChannelId: (...args: Parameters<typeof mocks.normalizeChannelId>) =>
     mocks.normalizeChannelId(...args),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: (
+    ...args: Parameters<typeof mocks.listReadOnlyChannelPluginsForConfig>
+  ) => mocks.listReadOnlyChannelPluginsForConfig(...args),
 }));
 
 vi.mock("../channels/plugins/helpers.js", () => ({
@@ -44,8 +49,8 @@ describe("buildProviderStatusIndex", () => {
       throw new Error("should not be used when inspectAccount exists");
     });
     const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
+      id: "workchat",
+      meta: { label: "WorkChat" },
       config: {
         listAccountIds: () => ["work"],
         inspectAccount,
@@ -55,27 +60,30 @@ describe("buildProviderStatusIndex", () => {
       status: {},
     } as never;
 
-    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
     const map = await buildProviderStatusIndex({} as OpenClawConfig);
 
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
+      {},
+      { includeSetupFallbackPlugins: false },
+    );
     expect(resolveAccount).not.toHaveBeenCalled();
     expect(inspectAccount).toHaveBeenCalledWith({}, "work");
-    expect(map.get("slack:work")).toMatchObject({
-      provider: "slack",
-      accountId: "work",
-      state: "linked",
-      configured: true,
-      enabled: true,
-      name: "Work",
-    });
+    const status = map.get("workchat:work");
+    expect(status?.provider).toBe("workchat");
+    expect(status?.accountId).toBe("work");
+    expect(status?.state).toBe("linked");
+    expect(status?.configured).toBe(true);
+    expect(status?.enabled).toBe(true);
+    expect(status?.name).toBe("Work");
   });
 
   it("records accounts that throw during read-only resolution as not configured", async () => {
     const plugin = {
-      id: "telegram",
-      meta: { label: "Telegram" },
+      id: "quietchat",
+      meta: { label: "QuietChat" },
       config: {
         listAccountIds: () => ["default"],
         resolveAccount: () => {
@@ -85,15 +93,15 @@ describe("buildProviderStatusIndex", () => {
       status: {},
     } as never;
 
-    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
     await expect(buildProviderStatusIndex({} as OpenClawConfig)).resolves.toEqual(
       new Map([
         [
-          "telegram:default",
+          "quietchat:default",
           {
-            provider: "telegram",
+            provider: "quietchat",
             accountId: "default",
             state: "not configured",
             configured: false,
@@ -105,8 +113,8 @@ describe("buildProviderStatusIndex", () => {
 
   it("rethrows unexpected read-only account resolution errors", async () => {
     const plugin = {
-      id: "telegram",
-      meta: { label: "Telegram" },
+      id: "quietchat",
+      meta: { label: "QuietChat" },
       config: {
         listAccountIds: () => ["default"],
         resolveAccount: () => {
@@ -116,7 +124,7 @@ describe("buildProviderStatusIndex", () => {
       status: {},
     } as never;
 
-    mocks.listChannelPlugins.mockReturnValue([plugin]);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
     await expect(buildProviderStatusIndex({} as OpenClawConfig)).rejects.toThrow("plugin crash");

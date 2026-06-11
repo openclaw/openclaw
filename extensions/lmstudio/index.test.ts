@@ -1,7 +1,8 @@
+// Lmstudio tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER } from "./src/defaults.js";
@@ -35,16 +36,19 @@ function createRemoteProviderConfig(overrides?: Partial<ModelProviderConfig>): M
 describe("lmstudio plugin", () => {
   it("canonicalizes base URLs during provider normalization", () => {
     const provider = registerProvider();
+    const providerConfig = createRemoteProviderConfig({
+      baseUrl: "http://localhost:1234/api/v1/",
+    });
 
     expect(
       provider?.normalizeConfig?.({
         provider: "lmstudio",
-        providerConfig: createRemoteProviderConfig({
-          baseUrl: "http://localhost:1234/api/v1/",
-        }),
+        providerConfig,
       }),
-    ).toMatchObject({
+    ).toEqual({
+      ...providerConfig,
       baseUrl: "http://localhost:1234/v1",
+      request: { allowPrivateNetwork: true },
     });
   });
 
@@ -147,6 +151,11 @@ describe("lmstudio plugin", () => {
                 contextTokens: 8192,
                 reasoning: true,
                 input: ["text", "image"],
+                compat: {
+                  supportsReasoningEffort: true,
+                  supportedReasoningEfforts: ["off", "on"],
+                  reasoningEffortMap: { off: "off", high: "on" },
+                },
               },
               {
                 id: "phi-4",
@@ -173,7 +182,12 @@ describe("lmstudio plugin", () => {
         provider: "lmstudio",
         id: "qwen3-8b-instruct",
         name: "Qwen 3 8B Instruct",
-        compat: { supportsUsageInStreaming: true },
+        compat: {
+          supportsUsageInStreaming: true,
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+        },
         contextWindow: 32768,
         contextTokens: 8192,
         reasoning: true,

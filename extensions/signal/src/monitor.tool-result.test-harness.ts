@@ -1,4 +1,5 @@
-import type { MockFn } from "openclaw/plugin-sdk/testing";
+// Signal plugin module implements monitor.tool result harness behavior.
+import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
 import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
 
@@ -74,11 +75,6 @@ export function createSignalToolResultConfig(
   };
 }
 
-export async function flush() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 export function createMockSignalDaemonHandle(
   overrides: {
     stop?: MockFn;
@@ -98,13 +94,22 @@ export function createMockSignalDaemonHandle(
 
 // Use importActual so shared-worker mocks from earlier test files do not leak
 // into this harness's partial overrides.
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
+  return {
+    ...actual,
+    getRuntimeConfig: () => config,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
   );
   return {
     ...actual,
-    loadConfig: () => config,
     resolveStorePath: vi.fn(() => signalToolResultSessionStorePath),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
@@ -179,17 +184,23 @@ vi.mock("./client.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
-vi.mock("./daemon.js", async () => {
-  const actual = await vi.importActual<typeof import("./daemon.js")>("./daemon.js");
+vi.mock("./client-adapter.js", () => ({
+  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
+  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
+  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+}));
+
+vi.mock("./daemon.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./daemon.js")>();
   return {
     ...actual,
     spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/system-event-runtime")>(
+    "openclaw/plugin-sdk/system-event-runtime",
   );
   return {
     ...actual,
@@ -197,15 +208,18 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
       enqueueSystemEventMock(...args);
       return actual.enqueueSystemEvent(...args);
     },
-    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
+  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+}));
 
 export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
       import("openclaw/plugin-sdk/reply-runtime"),
-      import("openclaw/plugin-sdk/infra-runtime"),
+      import("openclaw/plugin-sdk/system-event-runtime"),
     ]);
     resetInboundDedupe();
     config = {

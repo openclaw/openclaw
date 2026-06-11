@@ -1,3 +1,4 @@
+// Browser tests cover bridge server.auth plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
 import type { ResolvedBrowserConfig } from "./config.js";
@@ -18,6 +19,8 @@ function buildResolvedConfig(): ResolvedBrowserConfig {
     cdpIsLoopback: true,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
+    localLaunchTimeoutMs: 15_000,
+    localCdpReadyTimeoutMs: 8_000,
     extraArgs: [],
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
@@ -44,6 +47,7 @@ describe("startBrowserBridgeServer auth", () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       ...authConfig,
+      skipRouteRegistrationForTest: true,
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
@@ -87,6 +91,7 @@ describe("startBrowserBridgeServer auth", () => {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       authToken: "secret-token",
+      skipRouteRegistrationForTest: true,
       resolveSandboxNoVncToken: (token) => {
         resolveCalls += 1;
         if (token !== "valid-token") {

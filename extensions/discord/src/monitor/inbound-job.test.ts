@@ -1,11 +1,18 @@
-import { Message } from "@buape/carbon";
+// Discord tests cover inbound job plugin behavior.
 import { describe, expect, it } from "vitest";
+import { Message } from "../internal/discord.js";
+import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import {
   buildDiscordInboundJob,
   materializeDiscordInboundJob,
   resolveDiscordInboundJobQueueKey,
 } from "./inbound-job.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
 
 describe("buildDiscordInboundJob", () => {
   it("prefers route session key, then base session key, then channel id for queueing", async () => {
@@ -87,7 +94,47 @@ describe("buildDiscordInboundJob", () => {
       },
       ownerId: "user-1",
     });
-    expect(() => JSON.stringify(job.payload)).not.toThrow();
+    const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+      name: "codex",
+      parentId: "forum-1",
+      parent: {
+        id: "forum-1",
+        name: "Forum",
+      },
+      ownerId: "user-1",
+    });
+  });
+
+  it("normalizes partial thread channels without reading throwing getters", async () => {
+    const threadChannel = createPartialDiscordChannelWithThrowingGetters(
+      {
+        id: "thread-1",
+        name: "codex",
+        parentId: "forum-1",
+        parent: { id: "forum-1", name: "Forum" },
+        ownerId: "user-1",
+      },
+      ["name", "parentId", "parent", "ownerId"],
+    );
+    const ctx = await createBaseDiscordMessageContext({
+      threadChannel,
+    });
+
+    const job = buildDiscordInboundJob(ctx);
+
+    expect(job.payload.threadChannel).toEqual({
+      id: "thread-1",
+      name: undefined,
+      parentId: undefined,
+      parent: undefined,
+      ownerId: undefined,
+    });
+    const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+    });
   });
 
   it("re-materializes the process context with an overridden abort signal", async () => {
@@ -106,7 +153,7 @@ describe("buildDiscordInboundJob", () => {
     expect(job.replayKeys).toEqual(["default:ch-1:m-1"]);
   });
 
-  it("preserves Carbon message getters across queued jobs", async () => {
+  it("preserves Discord message getters across queued jobs", async () => {
     const ctx = await createBaseDiscordMessageContext();
     const message = new Message(
       ctx.client as never,

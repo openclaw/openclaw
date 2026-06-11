@@ -2,7 +2,7 @@
  * Shared fuzzy filtering utilities for select list components.
  */
 
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Word boundary characters for matching.
@@ -12,7 +12,7 @@ const WORD_BOUNDARY_CHARS = /[\s\-_./:#@]/;
 /**
  * Check if position is at a word boundary.
  */
-export function isWordBoundary(text: string, index: number): boolean {
+function isWordBoundary(text: string, index: number): boolean {
   return index === 0 || WORD_BOUNDARY_CHARS.test(text[index - 1] ?? "");
 }
 
@@ -42,7 +42,7 @@ export function findWordBoundaryIndex(text: string, query: string): number | nul
  * Fuzzy match with pre-lowercased inputs (avoids toLowerCase on every keystroke).
  * Returns score (lower = better) or null if no match.
  */
-export function fuzzyMatchLower(queryLower: string, textLower: string): number | null {
+function fuzzyMatchLower(queryLower: string, textLower: string): number | null {
   if (queryLower.length === 0) {
     return 0;
   }

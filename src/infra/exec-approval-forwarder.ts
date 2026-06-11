@@ -1,9 +1,12 @@
+// Forwards exec approval requests between runtime sessions and approval handlers.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   getLoadedChannelPlugin,
   resolveChannelApprovalAdapter,
 } from "../channels/plugins/index.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
@@ -16,14 +19,17 @@ import {
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
-import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
+import {
+  resolveExecApprovalCommandDisplay,
+  sanitizeExecApprovalWarningText,
+} from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -34,14 +40,16 @@ import {
   approvalDecisionLabel,
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,
+  resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
 
+// Approval forwarding mirrors foreground exec/plugin approvals into configured
+// chat targets, then sends resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
-export type { ExecApprovalRequest, ExecApprovalResolved };
-
-type DeliverOutboundPayloads = typeof import("./outbound/deliver.js").deliverOutboundPayloads;
+type DeliverApprovalPayloads =
+  typeof import("../channels/message/runtime.js").sendDurableMessageBatch;
 type MaybePromise<T> = T | Promise<T>;
 type ResolveSessionTargetFn = (params: {
   cfg: OpenClawConfig;
@@ -125,9 +133,9 @@ export type ExecApprovalForwarder = {
   stop: () => void;
 };
 
-export type ExecApprovalForwarderDeps = {
+type ExecApprovalForwarderDeps = {
   getConfig?: () => OpenClawConfig;
-  deliver?: DeliverOutboundPayloads;
+  deliver?: DeliverApprovalPayloads;
   nowMs?: () => number;
   resolveSessionTarget?: ResolveSessionTargetFn;
 };
@@ -169,9 +177,12 @@ function shouldForwardRoute(params: {
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-  const accountId = target.accountId ?? "";
-  const threadId = target.threadId ?? "";
-  return [channel, target.to, accountId, threadId].join(":");
+  return channelRouteDedupeKey({
+    channel,
+    to: target.to,
+    accountId: target.accountId,
+    threadId: target.threadId,
+  });
 }
 
 function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): ExecApprovalRequest {
@@ -201,6 +212,8 @@ function shouldSkipForwardingFallback(params: {
   if (!channel) {
     return false;
   }
+  // Channel adapters can suppress generic fallback delivery when they already
+  // own native approval UX for the same target.
   const adapter = resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel));
   return (
     adapter?.delivery?.shouldSuppressForwardingFallback?.({
@@ -224,10 +237,23 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
   return { inline: false, text: `${fence}\n${command}\n${fence}` };
 }
 
-function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
+  const warningText = request.request.warningText?.trim();
+  if (warningText) {
+    lines.push("", warningText);
+  }
+  const analysisWarningLines = normalizeStringEntries(
+    request.request.commandAnalysis?.warningLines.map(sanitizeExecApprovalWarningText),
+  ).slice(0, 5);
+  if (analysisWarningLines && analysisWarningLines.length > 0) {
+    lines.push("", "Command analysis:");
+    for (const line of analysisWarningLines) {
+      lines.push(`- ${line}`);
+    }
+  }
   const command = formatApprovalCommand(
     resolveExecApprovalCommandDisplay(request.request).commandText,
   );
@@ -265,7 +291,7 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
       : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
-  lines.push(`Reply with: /approve <id> ${decisionText}`);
+  lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
       "Allow Always is unavailable because the effective policy requires approval every time.",
@@ -340,7 +366,7 @@ async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
-  deliver: DeliverOutboundPayloads;
+  deliver: DeliverApprovalPayloads;
   beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
 }) {
@@ -355,7 +381,7 @@ async function deliverToTargets(params: {
     try {
       const payload = params.buildPayload(target);
       await params.beforeDeliver?.(target, payload);
-      await params.deliver({
+      const send = await params.deliver({
         cfg: params.cfg,
         channel,
         to: target.to,
@@ -363,6 +389,9 @@ async function deliverToTargets(params: {
         threadId: target.threadId,
         payloads: [payload],
       });
+      if (send.status === "failed" || send.status === "partial_failed") {
+        throw send.error;
+      }
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
     }
@@ -401,7 +430,7 @@ function buildExecPendingPayload(params: {
       buildApprovalPendingReplyPayload({
         approvalId: params.request.id,
         approvalSlug: params.request.id.slice(0, 8),
-        text: buildRequestMessage(params.request, params.nowMs),
+        text: buildExecApprovalRequestMessage(params.request, params.nowMs),
         agentId: params.request.request.agentId ?? null,
         allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
         sessionKey: params.request.request.sessionKey ?? null,
@@ -442,6 +471,7 @@ function buildPluginPendingPayload(params: {
         request: params.request,
         nowMs: params.nowMs,
         text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
+        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(params.request.request),
       }),
   });
 }
@@ -508,7 +538,7 @@ function createApprovalHandlers<
 >(params: {
   strategy: ApprovalStrategy<TRequest, TResolved, TRouteRequest>;
   getConfig: () => OpenClawConfig;
-  deliver: DeliverOutboundPayloads;
+  deliver: DeliverApprovalPayloads;
   nowMs: () => number;
   resolveSessionTarget: ResolveSessionTargetFn;
 }) {
@@ -555,7 +585,11 @@ function createApprovalHandlers<
           buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
           deliver: params.deliver,
         });
-      })();
+      })().catch((err: unknown) => {
+        log.error(
+          `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+        );
+      });
     }, expiresInMs);
     timeoutId.unref?.();
 
@@ -598,7 +632,7 @@ function createApprovalHandlers<
       },
       deliver: params.deliver,
       shouldSend: () => pending.get(requestId) === pendingEntry,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       log.error(
         `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
       );
@@ -747,12 +781,12 @@ const pluginApprovalStrategy = createApprovalStrategy<
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
-  const getConfig = deps.getConfig ?? loadConfig;
+  const getConfig = deps.getConfig ?? getRuntimeConfig;
   const deliver =
     deps.deliver ??
     (async (params) => {
-      const { deliverOutboundPayloads } = await loadExecApprovalForwarderRuntime();
-      return deliverOutboundPayloads(params);
+      const { sendDurableMessageBatch } = await loadExecApprovalForwarderRuntime();
+      return sendDurableMessageBatch(params);
     });
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
@@ -782,14 +816,4 @@ export function createExecApprovalForwarder(
       pluginHandlers.stop();
     },
   };
-}
-
-export function shouldForwardExecApproval(params: {
-  config?: ExecApprovalForwardingConfig;
-  request: ExecApprovalRequest;
-}): boolean {
-  return shouldForwardRoute({
-    config: params.config,
-    routeRequest: execApprovalStrategy.getRouteRequestFromRequest(params.request),
-  });
 }

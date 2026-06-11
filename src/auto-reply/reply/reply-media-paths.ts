@@ -1,33 +1,28 @@
+// Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolvePathFromInput, toRelativeWorkspacePath } from "../../agents/path-policy.js";
-import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
+import {
+  assertMediaNotDataUrl,
+  resolveAllowedManagedMediaPath,
+  resolveSandboxedMediaSource,
+} from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
+import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
-import { resolveConfigDir } from "../../utils.js";
+import { appendReplyMediaFailureWarning, copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
-const MANAGED_GLOBAL_MEDIA_SUBDIRS = new Set(["outbound"]);
-
-function isManagedGlobalReplyMediaPath(candidate: string): boolean {
-  const globalMediaRoot = path.join(resolveConfigDir(), "media");
-  const relative = path.relative(path.resolve(globalMediaRoot), path.resolve(candidate));
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return false;
-  }
-  const firstSegment = relative.split(path.sep)[0] ?? "";
-  return MANAGED_GLOBAL_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
-}
 
 function isLikelyLocalMediaSource(media: string): boolean {
   return (
@@ -52,28 +47,8 @@ function resolveReplyMediaMaxBytes(params: {
   channel?: string;
   accountId?: string;
 }): number {
-  const channelId = params.channel?.trim();
-  const accountId = params.accountId?.trim();
-  const channelCfg = channelId ? params.cfg.channels?.[channelId] : undefined;
-  const channelObj =
-    channelCfg && typeof channelCfg === "object"
-      ? (channelCfg as Record<string, unknown>)
-      : undefined;
-  const channelMediaMax =
-    typeof channelObj?.mediaMaxMb === "number" ? channelObj.mediaMaxMb : undefined;
-  const accountsObj =
-    channelObj?.accounts && typeof channelObj.accounts === "object"
-      ? (channelObj.accounts as Record<string, unknown>)
-      : undefined;
-  const accountCfg = accountId && accountsObj ? accountsObj[accountId] : undefined;
-  const accountMediaMax =
-    accountCfg && typeof accountCfg === "object"
-      ? (accountCfg as Record<string, unknown>).mediaMaxMb
-      : undefined;
   const limitMb =
-    (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ??
-    channelMediaMax ??
-    params.cfg.agents?.defaults?.mediaMaxMb;
+    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
   return typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0
     ? Math.floor(limitMb * 1024 * 1024)
     : MEDIA_MAX_BYTES;
@@ -82,6 +57,7 @@ function resolveReplyMediaMaxBytes(params: {
 export function createReplyMediaPathNormalizer(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   messageProvider?: string;
   accountId?: string;
@@ -93,9 +69,14 @@ export function createReplyMediaPathNormalizer(params: {
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
 }): (payload: ReplyPayload) => Promise<ReplyPayload> {
-  const agentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : undefined;
+  // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
+  // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
+  // the stricter agent-scoped file-read policy applied during staging.
+  const agentId =
+    params.agentId ??
+    (params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : undefined);
   const maxBytes = resolveReplyMediaMaxBytes({
     cfg: params.cfg,
     channel: params.messageProvider,
@@ -137,8 +118,9 @@ export function createReplyMediaPathNormalizer(params: {
     if (!isLikelyLocalMediaSource(media)) {
       return media;
     }
-    if (path.isAbsolute(media) && isManagedGlobalReplyMediaPath(media)) {
-      return media;
+    const managedMediaPath = await resolveAllowedManagedMediaPath(media);
+    if (managedMediaPath) {
+      return managedMediaPath;
     }
     const cached = persistedMediaBySource.get(media);
     if (cached) {
@@ -148,7 +130,7 @@ export function createReplyMediaPathNormalizer(params: {
       mediaAccess: resolveMediaAccessForSource(media),
     })
       .then((saved) => saved.path)
-      .catch((err) => {
+      .catch((err: unknown) => {
         persistedMediaBySource.delete(media);
         throw err;
       });
@@ -163,6 +145,17 @@ export function createReplyMediaPathNormalizer(params: {
     return resolvePathFromInput(relativeWorkspacePath, params.workspaceDir);
   };
 
+  const resolveAbsoluteWorkspaceMedia = (media: string): string | undefined => {
+    if (FILE_URL_RE.test(media) || (!path.isAbsolute(media) && !WINDOWS_DRIVE_RE.test(media))) {
+      return undefined;
+    }
+    try {
+      return resolveWorkspaceRelativeMedia(media);
+    } catch {
+      return undefined;
+    }
+  };
+
   const normalizeMediaSource = async (raw: string): Promise<string> => {
     const media = raw.trim();
     if (!media) {
@@ -171,6 +164,10 @@ export function createReplyMediaPathNormalizer(params: {
     assertMediaNotDataUrl(media);
     if (isPassThroughRemoteMediaSource(media)) {
       return media;
+    }
+    const absoluteWorkspaceMedia = resolveAbsoluteWorkspaceMedia(media);
+    if (absoluteWorkspaceMedia) {
+      return await persistLocalReplyMedia(absoluteWorkspaceMedia);
     }
     const isRelativeLocalMedia =
       isLikelyLocalMediaSource(media) &&
@@ -219,11 +216,13 @@ export function createReplyMediaPathNormalizer(params: {
 
     const normalizedMedia: string[] = [];
     const seen = new Set<string>();
+    let firstMediaDropError: unknown;
     for (const media of mediaList) {
       let normalized: string;
       try {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
+        firstMediaDropError ??= err;
         logVerbose(`dropping blocked reply media ${media}: ${String(err)}`);
         continue;
       }
@@ -234,18 +233,37 @@ export function createReplyMediaPathNormalizer(params: {
       normalizedMedia.push(normalized);
     }
 
+    const text =
+      firstMediaDropError === undefined
+        ? payload.text
+        : appendReplyMediaFailureWarning(payload.text);
+
     if (normalizedMedia.length === 0) {
-      return {
+      return copyReplyPayloadMetadata(payload, {
         ...payload,
+        text,
         mediaUrl: undefined,
         mediaUrls: undefined,
-      };
+      });
     }
 
-    return {
+    return copyReplyPayloadMetadata(payload, {
       ...payload,
+      text,
       mediaUrl: normalizedMedia[0],
       mediaUrls: normalizedMedia,
-    };
+    });
+  };
+}
+
+export type ReplyMediaContext = {
+  normalizePayload: (payload: ReplyPayload) => Promise<ReplyPayload>;
+};
+
+export function createReplyMediaContext(
+  params: Parameters<typeof createReplyMediaPathNormalizer>[0],
+): ReplyMediaContext {
+  return {
+    normalizePayload: createReplyMediaPathNormalizer(params),
   };
 }

@@ -1,9 +1,11 @@
+// Control UI module implements format behavior.
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
 import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
-import { stripAssistantInternalScaffolding } from "../../../src/shared/text/assistant-visible-text.js";
 import { t } from "../i18n/index.ts";
 
 export { formatRelativeTimestamp, formatDurationHuman };
+export { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 export function formatUnknownText(
   value: unknown,
@@ -37,10 +39,42 @@ export function formatUnknownText(
 }
 
 export function formatMs(ms?: number | null): string {
-  if (!ms && ms !== 0) {
+  const timestampMs = asDateTimestampMs(ms);
+  if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(ms).toLocaleString();
+  return new Date(timestampMs).toLocaleString();
+}
+
+export function formatDateMs(
+  ms?: number | null,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = t("common.na"),
+): string {
+  const timestampMs = asDateTimestampMs(ms);
+  return timestampMs === undefined
+    ? fallback
+    : new Date(timestampMs).toLocaleDateString([], options);
+}
+
+export function formatTimeMs(
+  ms?: number | null,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = t("common.na"),
+): string {
+  const timestampMs = asDateTimestampMs(ms);
+  return timestampMs === undefined
+    ? fallback
+    : new Date(timestampMs).toLocaleTimeString([], options);
+}
+
+export function formatDateTimeMs(
+  ms?: number | null,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = t("common.na"),
+): string {
+  const timestampMs = asDateTimestampMs(ms);
+  return timestampMs === undefined ? fallback : new Date(timestampMs).toLocaleString([], options);
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {
@@ -80,10 +114,6 @@ export function toNumber(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function stripThinkingTags(value: string): string {
-  return stripAssistantInternalScaffolding(value);
-}
-
 export function formatCost(cost: number | null | undefined, fallback = "$0.00"): string {
   if (cost == null || !Number.isFinite(cost)) {
     return fallback;
@@ -113,4 +143,29 @@ export function formatTokens(tokens: number | null | undefined, fallback = "0"):
   }
   const m = tokens / 1_000_000;
   return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
+}
+
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  if (!key.startsWith("agent:")) {
+    return null;
+  }
+  const rest = key.slice("agent:".length);
+  const firstColon = rest.indexOf(":");
+  if (firstColon < 1) {
+    return null;
+  }
+  const agentId = rest.slice(0, firstColon);
+  const afterAgent = rest.slice(firstColon + 1);
+  const secondColon = afterAgent.indexOf(":");
+  if (secondColon < 1) {
+    return null;
+  }
+  const channel = afterAgent.slice(0, secondColon);
+  const accountId = afterAgent.slice(secondColon + 1);
+  if (!accountId) {
+    return null;
+  }
+  return { agentId, channel, accountId };
 }

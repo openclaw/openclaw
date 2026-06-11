@@ -1,8 +1,16 @@
+// Plugin list format tests cover installed plugin table and JSON formatting.
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { formatPluginLine } from "./plugins-list-format.js";
 
 describe("formatPluginLine", () => {
+  it("labels active registry entries as enabled rather than loaded", () => {
+    const output = formatPluginLine(createPluginRecord({ id: "demo", enabled: true }));
+
+    expect(output).toContain("enabled");
+    expect(output).not.toContain("loaded");
+  });
+
   it("shows imported state in verbose output", () => {
     const output = formatPluginLine(
       createPluginRecord({

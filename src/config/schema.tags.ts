@@ -1,6 +1,8 @@
+// Normalizes config tag metadata for schema and docs surfaces.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
+/** Stable config UI tag vocabulary used for filtering and grouping schema hints. */
 export const CONFIG_TAGS = [
   "security",
   "auth",
@@ -45,6 +47,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
   "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
   "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
+  "gateway.controlUi.chatMessageMaxWidth": ["advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
     "access",
@@ -53,7 +56,10 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   ],
   "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
   "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
+  "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
+  "tools.exec.mode": ["tools", "security", "access"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
@@ -143,6 +149,7 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
   }
 }
 
+/** Derive known config UI tags from a schema path and optional hint metadata. */
 export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
   const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const override = resolveOverride(path);
@@ -190,11 +197,13 @@ export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[
   return normalizeTags([...tags]);
 }
 
+/** Return hints with derived known tags merged ahead of any existing custom tags. */
 export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
   const next: ConfigUiHints = {};
   for (const [path, hint] of Object.entries(hints)) {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
     const derivedTags = deriveTagsForPath(path, hint);
+    // Preserve unknown tags after known tags so external/custom UI tags survive normalization.
     const tags = [
       ...normalizeTags([...derivedTags, ...existingTags]),
       ...collectUnknownTags(existingTags),

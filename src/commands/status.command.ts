@@ -1,5 +1,17 @@
+// Main `openclaw status` command orchestrator.
+// It routes all/json/deep modes, collects scan/runtime state, and delegates formatting to report builders.
+
+import {
+  normalizePairingConnectRequestId,
+  readConnectPairingRequiredMessage,
+  readPairingConnectErrorDetails,
+  type ConnectPairingRequiredReason,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { withProgress } from "../cli/progress.js";
-import { type RuntimeEnv } from "../runtime.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
@@ -9,80 +21,77 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
-let statusScanModulePromise: Promise<typeof import("./status.scan.js")> | undefined;
-let statusScanFastJsonModulePromise:
-  | Promise<typeof import("./status.scan.fast-json.js")>
-  | undefined;
-let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefined;
-let statusCommandTextRuntimePromise:
-  | Promise<typeof import("./status.command.text-runtime.js")>
-  | undefined;
-let statusGatewayConnectionRuntimePromise:
-  | Promise<typeof import("./status.gateway-connection.runtime.js")>
-  | undefined;
-let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
+const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
+const statusScanFastJsonModuleLoader = createLazyImportLoader(
+  () => import("./status.scan.fast-json.js"),
+);
+const statusAllModuleLoader = createLazyImportLoader(() => import("./status-all.js"));
+const statusCommandTextRuntimeLoader = createLazyImportLoader(
+  () => import("./status.command.text-runtime.js"),
+);
+const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
 function loadStatusScanModule() {
-  statusScanModulePromise ??= import("./status.scan.js");
-  return statusScanModulePromise;
+  return statusScanModuleLoader.load();
 }
 
 function loadStatusScanFastJsonModule() {
-  statusScanFastJsonModulePromise ??= import("./status.scan.fast-json.js");
-  return statusScanFastJsonModulePromise;
+  return statusScanFastJsonModuleLoader.load();
 }
 
 function loadStatusAllModule() {
-  statusAllModulePromise ??= import("./status-all.js");
-  return statusAllModulePromise;
+  return statusAllModuleLoader.load();
 }
 
 function loadStatusCommandTextRuntime() {
-  statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
-  return statusCommandTextRuntimePromise;
-}
-
-function loadStatusGatewayConnectionRuntime() {
-  statusGatewayConnectionRuntimePromise ??= import("./status.gateway-connection.runtime.js");
-  return statusGatewayConnectionRuntimePromise;
+  return statusCommandTextRuntimeLoader.load();
 }
 
 function loadStatusNodeModeModule() {
-  statusNodeModeModulePromise ??= import("./status.node-mode.js");
-  return statusNodeModeModulePromise;
+  return statusNodeModeModuleLoader.load();
 }
 
-function resolvePairingRecoveryContext(params: {
+/** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
+export function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
-}): { requestId: string | null } | null {
-  const sanitizeRequestId = (value: string): string | null => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    // Keep CLI guidance injection-safe: allow only compact id characters.
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(trimmed)) {
-      return null;
-    }
-    return trimmed;
-  };
+  details?: unknown;
+}): {
+  requestId: string | null;
+  reason: ConnectPairingRequiredReason | null;
+  remediationHint: string | null;
+} | null {
+  const structured = readPairingConnectErrorDetails(params.details);
+  if (structured) {
+    return {
+      requestId: normalizePairingConnectRequestId(structured.requestId) ?? null,
+      reason: structured.reason ?? null,
+      remediationHint: structured.remediationHint
+        ? sanitizeTerminalText(structured.remediationHint)
+        : null,
+    };
+  }
+  // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ");
-  if (!source || !/pairing required/i.test(source)) {
+  const pairing = readConnectPairingRequiredMessage(source);
+  if (!pairing) {
     return null;
   }
-  const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
-  const requestId =
-    requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
-  return { requestId: requestId || null };
+  return {
+    requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
+    reason: pairing.reason ?? null,
+    remediationHint: null,
+  };
 }
 
+/** Runs `openclaw status`, including JSON/all routing and optional deep probes. */
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -95,6 +104,7 @@ export async function statusCommand(
   runtime: RuntimeEnv,
 ) {
   if (opts.all && !opts.json) {
+    // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await loadStatusAllModule().then(({ statusAllCommand }) =>
       statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
     );
@@ -117,7 +127,7 @@ export async function statusCommand(
   }
 
   const scan = await loadStatusScanModule().then(({ scanStatus }) =>
-    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep }, runtime),
   );
 
   const {
@@ -159,7 +169,7 @@ export async function statusCommand(
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
-    includeSecurityAudit: true,
+    includeSecurityAudit: opts.all === true || opts.deep === true,
     resolveSecurityAudit: async (input) =>
       await withProgress(
         {
@@ -169,14 +179,14 @@ export async function statusCommand(
         },
         async () => await resolveStatusSecurityAudit(input),
       ),
-    resolveUsage: async (timeoutMs) =>
+    resolveUsage: async (input) =>
       await withProgress(
         {
           label: "Fetching usage snapshot…",
           indeterminate: true,
           enabled: opts.json !== true,
         },
-        async () => await resolveStatusUsageSummary(timeoutMs),
+        async () => await resolveStatusUsageSummary(input),
       ),
     resolveHealth: async (input) =>
       await withProgress(
@@ -218,7 +228,8 @@ export async function statusCommand(
   });
 
   if (opts.verbose) {
-    const { buildGatewayConnectionDetails } = await loadStatusGatewayConnectionRuntime();
+    // Verbose status prints the raw gateway target resolution before the report tables.
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: scan.cfg });
     logGatewayConnectionDetails({
       runtime,
@@ -231,6 +242,7 @@ export async function statusCommand(
   const tableWidth = getTerminalTableWidth();
 
   if (secretDiagnostics.length > 0) {
+    // Secret diagnostics are already redacted by the scanner; show them before the main report.
     runtime.log(theme.warn("Secret diagnostics:"));
     for (const entry of secretDiagnostics) {
       runtime.log(`- ${entry}`);
@@ -247,6 +259,7 @@ export async function statusCommand(
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
+    details: gatewayProbe?.connectErrorDetails,
   });
 
   const usageLines = usage
@@ -274,6 +287,15 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
+  const updateRestartValue = formatUpdateRestartStatusValue(
+    (await readRestartSentinel().catch(() => null))?.payload,
+    {
+      ok,
+      warn,
+      muted,
+      formatTimeAgo,
+    },
+  );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       opts,
@@ -313,6 +335,7 @@ export async function statusCommand(
       updateValue: updateSurface.updateAvailable
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
+      updateRestartValue,
     }),
   );
   for (const line of lines) {

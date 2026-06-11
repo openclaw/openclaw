@@ -1,9 +1,10 @@
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
+// Memory Host SDK module implements qmd query parser behavior.
+import { formatErrorMessage } from "./error-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
-const log = createSubsystemLogger("memory");
+// Parser for qmd query JSON output, including noisy CLI wrapper output.
 
+/** Normalized qmd query result consumed by memory search. */
 export type QmdQueryResult = {
   docid?: string;
   score?: number;
@@ -15,6 +16,7 @@ export type QmdQueryResult = {
   endLine?: number;
 };
 
+/** Parse qmd stdout/stderr into normalized results, accepting known no-result markers. */
 export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResult[] {
   const trimmedStdout = stdout.trim();
   const trimmedStderr = stderr.trim();
@@ -26,7 +28,7 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
   if (!trimmedStdout) {
     const context = trimmedStderr ? ` (stderr: ${summarizeQmdStderr(trimmedStderr)})` : "";
     const message = `stdout empty${context}`;
-    log.warn(`qmd query returned invalid JSON: ${message}`);
+    warnQmdQueryParseError(message);
     throw new Error(`qmd query returned invalid JSON: ${message}`);
   }
   try {
@@ -45,11 +47,20 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     throw new Error("qmd query JSON response was not an array");
   } catch (err) {
     const message = formatErrorMessage(err);
-    log.warn(`qmd query returned invalid JSON: ${message}`);
+    warnQmdQueryParseError(message);
     throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
   }
 }
 
+/** Emit parse warnings outside tests so broken qmd output is visible to operators. */
+function warnQmdQueryParseError(message: string): void {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return;
+  }
+  process.stderr.write(`qmd query returned invalid JSON: ${message}\n`);
+}
+
+/** Detect qmd no-result marker output on stdout or stderr. */
 function isQmdNoResultsOutput(raw: string): boolean {
   const lines = raw
     .split(/\r?\n/)
@@ -58,6 +69,7 @@ function isQmdNoResultsOutput(raw: string): boolean {
   return lines.some((line) => isQmdNoResultsLine(line));
 }
 
+/** Match qmd no-result lines with optional warning/info prefixes. */
 function isQmdNoResultsLine(line: string): boolean {
   if (line === "no results found" || line === "no results found.") {
     return true;
@@ -67,10 +79,12 @@ function isQmdNoResultsLine(line: string): boolean {
   );
 }
 
+/** Bound stderr context included in parse errors. */
 function summarizeQmdStderr(raw: string): string {
   return raw.length <= 120 ? raw : `${raw.slice(0, 117)}...`;
 }
 
+/** Parse and normalize a strict qmd JSON array payload. */
 function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -107,10 +121,12 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
   }
 }
 
+/** Normalize qmd line numbers, rejecting zero, negative, and non-integer values. */
 function parseQmdLineNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
+/** Extract the first complete JSON array from noisy stdout. */
 function extractFirstJsonArray(raw: string): string | null {
   const start = raw.indexOf("[");
   if (start < 0) {

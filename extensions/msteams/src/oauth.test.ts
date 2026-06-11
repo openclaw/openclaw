@@ -1,5 +1,23 @@
+// Msteams tests cover oauth plugin behavior.
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: async (params: {
+    url: string;
+    init?: RequestInit;
+    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  },
+}));
+
 import {
   generatePkce,
   generateOAuthState,
@@ -19,6 +37,14 @@ function responseJson(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function firstFetchCall(fetchSpy: ReturnType<typeof vi.fn>): [string, RequestInit] {
+  const [call] = fetchSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call as [string, RequestInit];
 }
 
 describe("generatePkce", () => {
@@ -174,7 +200,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
 
     // Verify the request was well-formed
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const [url, init] = firstFetchCall(fetchSpy);
     expect(url).toBe(buildMSTeamsTokenEndpoint("tenant-1"));
     const body = new URLSearchParams(init.body as string);
     expect(body.get("client_id")).toBe("client-1");
@@ -202,6 +228,44 @@ describe("exchangeMSTeamsCodeForTokens", () => {
         verifier: "v",
       }),
     ).rejects.toThrow(/MSTeams token exchange failed \(400\)/);
+  });
+
+  it("reports malformed token exchange JSON with a stable OAuth error", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response("{ nope", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "bad-json",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: malformed JSON response");
+  });
+
+  it("rejects unsafe token exchange expiry values", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response('{"access_token":"at-unsafe","refresh_token":"rt-unsafe","expires_in":1e309}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "unsafe-expiry",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
   });
 });
 
@@ -242,7 +306,7 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     expect(tokens.expiresAt).toBeGreaterThanOrEqual(now + 3300 * 1000 - 1000);
 
     // Verify the request body includes refresh_token grant type
-    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const [, init] = firstFetchCall(fetchSpy);
     const body = new URLSearchParams(init.body as string);
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("original-rt");
@@ -284,5 +348,23 @@ describe("refreshMSTeamsDelegatedTokens", () => {
         refreshToken: "expired-rt",
       }),
     ).rejects.toThrow(/MSTeams token refresh failed \(401\)/);
+  });
+
+  it("reports malformed token refresh JSON with a stable OAuth error", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response("{ nope", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      refreshMSTeamsDelegatedTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        refreshToken: "bad-json",
+      }),
+    ).rejects.toThrow("MSTeams token refresh failed: malformed JSON response");
   });
 });

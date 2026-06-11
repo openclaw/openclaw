@@ -1,3 +1,4 @@
+// Control UI module implements app polling behavior.
 import type { DebugState } from "./controllers/debug.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import type { LogsState } from "./controllers/logs.ts";
@@ -12,14 +13,18 @@ type PollingHost = {
   tab: string;
 };
 
+export const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
+
 export function startNodesPolling(host: PollingHost) {
   if (host.nodesPollInterval != null) {
     return;
   }
-  host.nodesPollInterval = window.setInterval(
-    () => void loadNodes(host as unknown as NodesState, { quiet: true }),
-    5000,
-  );
+  host.nodesPollInterval = window.setInterval(() => {
+    if (host.tab !== "nodes") {
+      return;
+    }
+    void loadNodes(host as unknown as NodesState, { quiet: true });
+  }, NODES_ACTIVE_POLL_INTERVAL_MS);
 }
 
 export function stopNodesPolling(host: PollingHost) {

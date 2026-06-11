@@ -1,4 +1,6 @@
+// Startup policy helpers for config guards, plugin loading, banners, and CLI path checks.
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
 export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): boolean {
@@ -17,10 +19,33 @@ export function shouldSkipRouteConfigGuardForCommandPath(params: {
 }
 
 export function shouldLoadPluginsForCommandPath(params: {
+  argv?: string[];
   commandPath: string[];
   jsonOutputMode: boolean;
 }): boolean {
-  const loadPlugins = resolveCliCommandPathPolicy(params.commandPath).loadPlugins;
+  return shouldLoadPlugins({
+    loadPlugins: resolveCliCommandPathPolicy(params.commandPath).loadPlugins,
+    argv: params.argv,
+    commandPath: params.commandPath,
+    jsonOutputMode: params.jsonOutputMode,
+  });
+}
+
+function shouldLoadPlugins(params: {
+  argv?: string[];
+  commandPath: string[];
+  jsonOutputMode: boolean;
+  loadPlugins: CliCommandPluginLoadPolicy;
+}): boolean {
+  // Some commands need plugin text/help in human output but not in JSON mode.
+  const loadPlugins = params.loadPlugins;
+  if (typeof loadPlugins === "function") {
+    return loadPlugins({
+      argv: params.argv ?? [],
+      commandPath: params.commandPath,
+      jsonOutputMode: params.jsonOutputMode,
+    });
+  }
   return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
 }
 
@@ -39,24 +64,28 @@ export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolea
 }
 
 export function resolveCliStartupPolicy(params: {
+  argv?: string[];
   commandPath: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
   const suppressDoctorStdout = params.jsonOutputMode;
+  const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
+  const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,
-    hideBanner: shouldHideCliBannerForCommandPath(params.commandPath, params.env),
+    hideBanner: isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
     skipConfigGuard: params.routeMode
-      ? shouldSkipRouteConfigGuardForCommandPath({
-          commandPath: params.commandPath,
-          suppressDoctorStdout,
-        })
+      ? commandPolicy.routeConfigGuard === "always" ||
+        (commandPolicy.routeConfigGuard === "when-suppressed" && suppressDoctorStdout)
       : false,
-    loadPlugins: shouldLoadPluginsForCommandPath({
+    loadPlugins: shouldLoadPlugins({
+      argv: params.argv,
       commandPath: params.commandPath,
       jsonOutputMode: params.jsonOutputMode,
+      loadPlugins: commandPolicy.loadPlugins,
     }),
+    pluginRegistry: commandPolicy.pluginRegistry,
   };
 }

@@ -1,9 +1,10 @@
+/** Shared Vitest harness mocks and helpers for doctor command e2e-style tests. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
   readEmbeddedGatewayTokenForTest,
@@ -15,10 +16,6 @@ let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
 let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
-
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
 
 function setStdinTty(value: boolean | undefined) {
   try {
@@ -109,6 +106,7 @@ export const createConfigIO = vi.fn(() => ({
 export const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 export const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 export const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+export const findSystemGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 export const renderGatewayServiceCleanupHints = vi
   .fn()
   .mockReturnValue(["cleanup"]) as unknown as MockFn;
@@ -139,6 +137,18 @@ export const callGateway = vi
   .mockRejectedValue(new Error("gateway closed")) as unknown as MockFn;
 
 export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+export const autoMigrateLegacyState = vi.fn().mockResolvedValue({
+  migrated: false,
+  skipped: false,
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+export const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
@@ -209,6 +219,33 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetDir: "/tmp/state/agents/main/agent",
       hasLegacy: false,
     },
+    pluginStateSidecar: {
+      sourcePath: "/tmp/state/plugin-state/state.sqlite",
+      hasLegacy: false,
+    },
+    pluginInstallIndex: {
+      sourcePath: "/tmp/state/plugins/installs.json",
+      hasLegacy: false,
+    },
+    stateSchema: {
+      hasLegacy: false,
+      preview: [],
+    },
+    taskStateSidecars: {
+      taskRunsPath: "/tmp/state/tasks/runs.sqlite",
+      flowRunsPath: "/tmp/state/flows/registry.sqlite",
+      hasLegacy: false,
+    },
+    deliveryQueues: {
+      outboundPath: "/tmp/state/delivery-queue",
+      sessionPath: "/tmp/state/session-delivery-queue",
+      hasLegacy: false,
+    },
+    execApprovals: {
+      sourcePath: "/tmp/state/exec-approvals.legacy.json",
+      targetPath: "/tmp/state/exec-approvals.json",
+      hasLegacy: false,
+    },
     channelPlans: {
       hasLegacy: false,
       plans: [],
@@ -245,13 +282,15 @@ vi.mock("@clack/prompts", () => ({
   select,
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
 vi.mock("../plugins/loader.js", () => ({
+  getRuntimePluginRegistryForLoadOptions: () => null,
   isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  resolveCompatibleRuntimePluginRegistry: () => null,
   resolveRuntimePluginRegistry: () => null,
 }));
 
@@ -284,6 +323,7 @@ vi.mock("../daemon/legacy.js", () => ({
 
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices,
+  findSystemGatewayServices,
   renderGatewayServiceCleanupHints,
 }));
 
@@ -364,17 +404,35 @@ vi.mock("./doctor-memory-search.js", () => ({
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
+    config,
+    changes: [],
+  }),
   collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
 }));
 
-vi.mock("./doctor-bundled-plugin-runtime-deps.js", () => ({
-  maybeRepairBundledPluginRuntimeDeps: vi.fn(async () => {}),
+vi.mock("../channels/plugins/doctor-contract-api.js", () => ({
+  loadBundledChannelDoctorContractApi: vi.fn(() => undefined),
+}));
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: vi.fn(() => undefined),
 }));
 
 vi.mock("../agents/auth-profiles.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
     "../agents/auth-profiles.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore,
+  };
+});
+
+vi.mock("../agents/auth-profiles/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
+    "../agents/auth-profiles/store.js",
   );
   return {
     ...actual,
@@ -400,10 +458,6 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
-}));
-
-vi.mock(buildBundledPluginModuleId("telegram", "api.js"), () => ({
-  resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -438,7 +492,9 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
+  autoMigrateLegacyTaskStateSidecars,
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 }));
@@ -447,6 +503,7 @@ vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
   runChannelPluginStartupMaintenance,
 }));
 
+/** Configures the mocked doctor config snapshot with a partial snapshot override. */
 export function mockDoctorConfigSnapshot(
   params: {
     config?: Record<string, unknown>;
@@ -466,6 +523,7 @@ export function mockDoctorConfigSnapshot(
   });
 }
 
+/** Creates a runtime mock that captures doctor command output and exits. */
 export function createDoctorRuntime() {
   return {
     log: vi.fn() as unknown as MockFn,
@@ -474,6 +532,7 @@ export function createDoctorRuntime() {
   };
 }
 
+/** Sets up temporary legacy state paths and mocked config for migration tests. */
 export async function arrangeLegacyStateMigrationTest(): Promise<{
   doctorCommand: unknown;
   runtime: { log: MockFn; error: MockFn; exit: MockFn };
@@ -487,7 +546,7 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
 
   detectLegacyStateMigrations.mockClear();
   runLegacyStateMigrations.mockClear();
-  detectLegacyStateMigrations.mockResolvedValueOnce(
+  detectLegacyStateMigrations.mockResolvedValue(
     createLegacyStateMigrationDetectionResult({
       hasLegacySessions: true,
       preview: ["- Legacy sessions detected"],
@@ -554,6 +613,14 @@ beforeEach(() => {
   serviceUninstall.mockReset().mockResolvedValue(undefined);
   serviceReadCommand.mockReset().mockResolvedValue(null);
   callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
+  autoMigrateLegacyStateDir.mockReset().mockResolvedValue({
+    migrated: false,
+    skipped: false,
+    changes: [],
+    warnings: [],
+  });
+  autoMigrateLegacyState.mockReset().mockResolvedValue({ changes: [], warnings: [] });
+  autoMigrateLegacyTaskStateSidecars.mockReset().mockResolvedValue({ changes: [], warnings: [] });
   runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;

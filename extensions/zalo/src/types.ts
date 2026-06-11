@@ -1,3 +1,4 @@
+// Zalo type declarations define plugin contracts.
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type ZaloAccountConfig = {
@@ -38,7 +39,7 @@ export type ZaloConfig = {
   defaultAccount?: string;
 } & ZaloAccountConfig;
 
-export type ZaloTokenSource = "env" | "config" | "configFile" | "none";
+type ZaloTokenSource = "env" | "config" | "configFile" | "none";
 
 export type ResolvedZaloAccount = {
   accountId: string;

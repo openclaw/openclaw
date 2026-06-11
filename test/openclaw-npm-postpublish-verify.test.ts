@@ -1,30 +1,20 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+// OpenClaw npm postpublish tests validate postpublish verification behavior.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
-  collectInstalledMirroredRootDependencyManifestErrors,
+  collectInstalledPluginSdkZodArtifactErrors,
+  collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
-
-const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
-  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
-);
-const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-] as const;
-const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
-  ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
-  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
-] as const;
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -71,7 +61,11 @@ describe("buildPublishedInstallCommandArgs", () => {
 });
 
 describe("collectInstalledPackageErrors", () => {
-  it("flags version mismatches and missing runtime sidecars", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-package-"));
+  }
+
+  it("flags version mismatches", () => {
     const errors = collectInstalledPackageErrors({
       expectedVersion: "2026.3.23-2",
       installedVersion: "2026.3.23",
@@ -81,17 +75,35 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
     );
-    expect(errors).toEqual(
-      expect.arrayContaining(
-        REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS.map(
-          (relativePath) =>
-            `installed package is missing required bundled runtime sidecar: ${relativePath}`,
-        ),
-      ),
-    );
-    expect(errors.length).toBeGreaterThanOrEqual(
-      1 + REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS.length,
-    );
+  });
+
+  it("requires runtime sidecars for bundled extensions included in the package", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "package.json"),
+        "{}\n",
+        "utf8",
+      );
+
+      expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toContain(
+        "dist/extensions/telegram/runtime-api.js",
+      );
+      expect(
+        collectInstalledPackageErrors({
+          expectedVersion: "2026.3.23",
+          installedVersion: "2026.3.23",
+          packageRoot,
+        }),
+      ).toContain(
+        "installed package is missing required bundled runtime sidecar: dist/extensions/telegram/runtime-api.js",
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -130,10 +142,81 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectInstalledPluginSdkZodArtifactErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-zod-sdk-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
+    const filePath = join(packageRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, contents, "utf8");
+  }
+
+  it("requires the plugin-sdk zod artifact", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
+      ]);
+    });
+  });
+
+  it("rejects plugin-sdk zod artifacts with a bare zod export", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'import "../zod-D2c0iocA.js";\nexport * from "zod";\n',
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package plugin SDK zod artifact must be self-contained but dist/plugin-sdk/zod.js imports zod.",
+      ]);
+    });
+  });
+
+  it("rejects plugin-sdk zod artifacts when a reachable local chunk imports zod", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'export { z } from "../zod-D2c0iocA.js";\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/zod-D2c0iocA.js",
+        'import * as zodCore from "zod/v4/core";\nexport const z = zodCore;\n',
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package plugin SDK zod artifact must be self-contained but dist/zod-D2c0iocA.js imports zod/v4/core.",
+      ]);
+    });
+  });
+
+  it("accepts plugin-sdk zod artifacts that only import package-local chunks", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'export { z } from "../zod-D2c0iocA.js";\n',
+      );
+      writeInstalledFile(packageRoot, "dist/zod-D2c0iocA.js", "export const z = {};\n");
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([]);
+    });
   });
 });
 
@@ -142,6 +225,9 @@ describe("normalizeInstalledBinaryVersion", () => {
     expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8 (9ece252)")).toBe("2026.4.8");
     expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8-beta.1 (9ece252)")).toBe(
       "2026.4.8-beta.1",
+    );
+    expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8-alpha.1 (9ece252)")).toBe(
+      "2026.4.8-alpha.1",
     );
   });
 });
@@ -155,14 +241,49 @@ describe("resolveInstalledBinaryPath", () => {
 
   it("uses the Windows npm shim path on win32", () => {
     expect(resolveInstalledBinaryPath("C:/openclaw-prefix", "win32")).toBe(
-      "C:/openclaw-prefix/openclaw.cmd",
+      "C:\\openclaw-prefix\\openclaw.cmd",
     );
   });
 });
 
-describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
+describe("resolveInstalledBinaryCommandInvocation", () => {
+  it("runs the Unix installed binary directly", () => {
+    expect(
+      resolveInstalledBinaryCommandInvocation("/tmp/openclaw-prefix", ["--version"], {
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/tmp/openclaw-prefix/bin/openclaw",
+      args: ["--version"],
+    });
+  });
+
+  it("wraps the Windows installed npm shim without Node shell argv", () => {
+    expect(
+      resolveInstalledBinaryCommandInvocation(
+        "C:/openclaw prefix",
+        ["agent", "--message", "hello world"],
+        {
+          comSpec: "C:\\Windows\\System32\\cmd.exe",
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\openclaw prefix\\openclaw.cmd" agent --message "hello world""',
+      ],
+      windowsVerbatimArguments: true,
+    });
+  });
+});
+
+describe("collectInstalledRootDependencyManifestErrors", () => {
   function makeInstalledPackageRoot(): string {
-    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-installed-"));
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-root-deps-"));
   }
 
   function writePackageFile(root: string, relativePath: string, value: unknown): void {
@@ -171,210 +292,205 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
-  it("flags missing root mirrors for bundled plugin deps imported by root dist", () => {
+  it("flags root dist imports whose declared runtime package name is missing", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
+        version: "2026.4.22",
         dependencies: {},
       });
-      writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts root dist imports when the runtime package name is declared", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
         dependencies: {
-          "@slack/web-api": "^7.15.0",
+          typebox: "1.1.28",
         },
       });
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
-        'import("@slack/web-api");\n',
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; mirror '@slack/web-api: ^7.15.0' in root package.json (declared by slack).",
-      ]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 
-  it("accepts mirrored root dependencies declared in package optionalDependencies", () => {
+  it("accepts optional or externalized runtime imports", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        optionalDependencies: {
-          "@discordjs/opus": "^0.10.0",
-        },
-      });
-      writePackageFile(packageRoot, "dist/extensions/discord/package.json", {
-        optionalDependencies: {
-          "@discordjs/opus": "^0.10.0",
-        },
+        version: "2026.4.22",
+        dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
-        'require("@discordjs/opus");\n',
+        join(packageRoot, "dist", "optional-runtime.js"),
+        ['await import("@a2ui/markdown-it");', 'await import("@lancedb/lancedb");', ""].join("\n"),
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "externalized-plugin-runtime.js"),
+        [
+          'import * as lark from "@larksuiteoapi/node-sdk";',
+          'import prism from "prism-media";',
+          "export { lark, prism };",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "plugin-sdk/channel-test-helpers.js"),
+        'import { expect, it } from "vitest";\nexport { expect, it };\n',
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 
-  it("flags root mirror dependency version mismatches", () => {
+  it("flags undeclared imports from mjs and cjs root dist files", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {
-          "@slack/web-api": "^7.16.0",
-        },
-      });
-      writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
-        dependencies: {
-          "@slack/web-api": "^7.15.0",
-        },
+        version: "2026.4.22",
+        dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
-        'import("@slack/web-api");\n',
-        "utf8",
-      );
-
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; root package.json has '^7.16.0' but plugin manifest declares '^7.15.0' (slack).",
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("flags malformed bundled extension manifests instead of silently skipping them", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist/extensions/slack/package.json"),
-        '{\n  "openclaw": { invalid json\n',
-        "utf8",
-      );
-
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        expect.stringContaining("installed bundled extension manifest invalid: failed to parse"),
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("flags bundled extension directories that are missing package.json", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
-
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/slack/package.json")}.`,
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("skips manifest-only sidecar directories without package.json", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {},
-      });
-      writePackageFile(packageRoot, "dist/extensions/device-pair/openclaw.plugin.json", {
-        id: "device-pair",
-      });
-
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects private qa sidecar directories that are missing package.json", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist/extensions/qa-channel"), { recursive: true });
-      mkdirSync(join(packageRoot, "dist/extensions/qa-lab"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist/extensions/qa-channel/runtime-api.js"),
-        "export {};\n",
+        join(packageRoot, "dist", "esm-entry.mjs"),
+        'export { value } from "mjs-only";\n',
         "utf8",
       );
       writeFileSync(
-        join(packageRoot, "dist/extensions/qa-lab/runtime-api.js"),
-        "export {};\n",
+        join(packageRoot, "dist", "cjs-entry.cjs"),
+        'const cjsOnly = require("cjs-only");\nmodule.exports = cjsOnly;\n',
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-channel/package.json")}.`,
-        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions/qa-lab/package.json")}.`,
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 
-  it("rejects bundled extension manifests that are not regular files", () => {
+  it("ignores import-like text inside comments", () => {
     const packageRoot = makeInstalledPackageRoot();
-    const outsideManifestRoot = makeInstalledPackageRoot();
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
+        version: "2026.4.22",
         dependencies: {},
       });
-      writePackageFile(outsideManifestRoot, "package.json", {
-        dependencies: {
-          "@slack/web-api": "^7.15.0",
-        },
-      });
-      mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
-      symlinkSync(
-        join(outsideManifestRoot, "package.json"),
-        join(packageRoot, "dist/extensions/slack/package.json"),
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "comment-only.js"),
+        [
+          '// import "fake-package";',
+          '/* require("fake-package-two"); */',
+          "export const ok = true;",
+          "",
+        ].join("\n"),
+        "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        expect.stringContaining("installed bundled extension manifest invalid: failed to parse"),
-      ]);
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)[0]).toContain(
-        "manifest must be a regular file",
-      );
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
-      rmSync(outsideManifestRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside string literals", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "string-only.js"),
+        [
+          "export const help = \"run import('fake-package') after setup\";",
+          'export const note = "from \\"fake-package-two\\"";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a structured error when installed package.json is invalid", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
+
+      const errors = collectInstalledRootDependencyManifestErrors(packageRoot);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.startsWith("installed package.json could not be parsed:")).toBe(true);
+      expect(errors[0]?.endsWith(".")).toBe(true);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses oversized root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "oversized.js"),
+        "x".repeat(6 * 1024 * 1024 + 1),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 });

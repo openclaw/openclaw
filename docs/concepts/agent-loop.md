@@ -2,13 +2,12 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
-title: "Agent Loop"
+  - You are changing session queueing, transcript writes, or session write lock behavior
+title: "Agent loop"
 ---
 
-# Agent Loop (OpenClaw)
-
-An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
-tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
+An agentic loop is the full "real" run of an agent: intake → context assembly → model inference →
+tool execution → streaming replies → persistence. It's the authoritative path that turns a message
 into actions and a final reply, while keeping session state consistent.
 
 In OpenClaw, a loop is a single, serialized run per session that emits lifecycle and stream events
@@ -26,15 +25,16 @@ wired end-to-end.
 2. `agentCommand` runs the agent:
    - resolves model + thinking/verbose/trace defaults
    - loads skills snapshot
-   - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
+   - calls `runEmbeddedAgent` (OpenClaw agent runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one
-3. `runEmbeddedPiAgent`:
+3. `runEmbeddedAgent`:
    - serializes runs via per-session + global queues
-   - resolves model + auth profile and builds the pi session
-   - subscribes to pi events and streams assistant/tool deltas
+   - resolves model + auth profile and builds the OpenClaw session
+   - subscribes to runtime events and streams assistant/tool deltas
    - enforces timeout -> aborts run if exceeded
+   - for Codex app-server turns, aborts an accepted turn that stops producing app-server progress before a terminal event
    - returns payloads + usage metadata
-4. `subscribeEmbeddedPiSession` bridges pi-agent-core events to OpenClaw `agent` stream:
+4. `subscribeEmbeddedAgentSession` bridges agent runtime events to OpenClaw `agent` stream:
    - tool events => `stream: "tool"`
    - assistant deltas => `stream: "assistant"`
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
@@ -46,19 +46,28 @@ wired end-to-end.
 
 - Runs are serialized per session key (session lane) and optionally through a global lane.
 - This prevents tool/session races and keeps session history consistent.
-- Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
+- Messaging channels can choose queue modes (steer/followup/collect/interrupt) that feed this lane system.
   See [Command Queue](/concepts/queue).
+- Transcript writes are also protected by a session write lock on the session file. The lock is
+  process-aware and file-based, so it catches writers that bypass the in-process queue or come from
+  another process. Session transcript writers wait up to `session.writeLock.acquireTimeoutMs`
+  before reporting the session as busy; the default is `60000` ms.
+- Session write locks are non-reentrant by default. If a helper intentionally nests acquisition of
+  the same lock while preserving one logical writer, it must opt in explicitly with
+  `allowReentrant: true`.
 
 ## Session + workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt report.
-- A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
+- A session write lock is acquired; `SessionManager` is opened and prepared before streaming. Any
+  later transcript rewrite, compaction, or truncation path must take the same lock before opening or
+  mutating the transcript file.
 
 ## Prompt assembly + system prompt
 
-- System prompt is built from OpenClaw’s base prompt, skills prompt, bootstrap context, and per-run overrides.
+- System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap context, and per-run overrides.
 - Model-specific limits and compaction reserve tokens are enforced.
 - See [System prompt](/concepts/system-prompt) for what the model sees.
 
@@ -88,8 +97,8 @@ These run inside the agent loop or gateway pipeline:
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
-- **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
-- **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
+- **`before_install`**: inspect install context and optionally block skill or plugin installs after operator install policy runs.
+- **`tool_result_persist`**: synchronously transform tool results before they are written to an OpenClaw-owned session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
@@ -103,11 +112,15 @@ Hook decision rules for outbound/tool guards:
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
-See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook API and registration details.
+See [Plugin hooks](/plugins/hooks) for the hook API and registration details.
+
+Harnesses may adapt these hooks differently. The Codex app-server harness keeps
+OpenClaw plugin hooks as the compatibility contract for documented mirrored
+surfaces, while Codex native hooks remain a separate lower-level Codex mechanism.
 
 ## Streaming + partial replies
 
-- Assistant deltas are streamed from pi-agent-core and emitted as `assistant` events.
+- Assistant deltas are streamed from the agent runtime and emitted as `assistant` events.
 - Block streaming can emit partial replies either on `text_end` or `message_end`.
 - Reasoning streaming can be emitted as a separate stream or as block replies.
 - See [Streaming](/concepts/streaming) for chunking and block reply behavior.
@@ -138,9 +151,9 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 
 ## Event streams (today)
 
-- `lifecycle`: emitted by `subscribeEmbeddedPiSession` (and as a fallback by `agentCommand`)
-- `assistant`: streamed deltas from pi-agent-core
-- `tool`: streamed tool events from pi-agent-core
+- `lifecycle`: emitted by `subscribeEmbeddedAgentSession` (and as a fallback by `agentCommand`)
+- `assistant`: streamed deltas from the agent runtime
+- `tool`: streamed tool events from the agent runtime
 
 ## Chat channel handling
 
@@ -150,8 +163,11 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 ## Timeouts
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
-- Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
-- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 120s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
+- Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedAgent` abort timer.
+- Cron runtime: isolated agent-turn `timeoutSeconds` is owned by cron. The scheduler starts that timer when execution begins, aborts the underlying run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.
+- Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; active work with no recent progress reports as `session.stalled`; `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after `diagnostics.stuckSessionAbortMs` (default: at least 5 minutes and 3x the warning threshold) so queued work can resume without cutting off merely slow runs. Recovery emits structured requested/completed outcomes, and diagnostic state is marked idle only if the same processing generation is still current. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- Model idle timeout: OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but it is still bounded by any lower `agents.defaults.timeoutSeconds` or run-specific timeout because those control the whole agent run. Otherwise OpenClaw uses `agents.defaults.timeoutSeconds` when configured, capped at 120s by default. Cron-triggered runs with no explicit model or agent timeout disable the idle watchdog and rely on the cron outer timeout.
+- Provider HTTP request timeout: `models.providers.<id>.timeoutSeconds` applies to that provider's model HTTP fetches, including connect, headers, body, SDK request timeout, total guarded-fetch abort handling, and model stream idle watchdog. Use this for slow local/self-hosted providers such as Ollama before raising the whole agent runtime timeout, and keep the agent/runtime timeout at least as high when the model request needs to run longer.
 
 ## Where things can end early
 

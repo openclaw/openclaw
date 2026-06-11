@@ -2,6 +2,7 @@
  * Message normalization utilities for chat rendering.
  */
 
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
@@ -9,10 +10,10 @@ import {
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import { mediaKindFromMime } from "../../../../src/media/constants.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
+export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 
 function coerceCanvasPreview(
   value: unknown,
@@ -144,6 +145,58 @@ function inferAttachmentKind(url: string): {
   return { kind, mimeType, label };
 }
 
+function coerceAudioContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "attachment" }> | null {
+  if (item.type !== "audio") {
+    return null;
+  }
+  const source = item.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return null;
+  }
+  const sourceRecord = source as Record<string, unknown>;
+  const mediaType =
+    typeof sourceRecord.media_type === "string" &&
+    sourceRecord.media_type.trim().toLowerCase().startsWith("audio/")
+      ? sourceRecord.media_type.trim()
+      : "audio/mpeg";
+  if (sourceRecord.type === "base64" && typeof sourceRecord.data === "string") {
+    const data = sourceRecord.data.trim();
+    if (!data) {
+      return null;
+    }
+    const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+    return {
+      type: "attachment",
+      attachment: {
+        url,
+        kind: "audio",
+        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : "Audio",
+        mimeType: mediaType,
+        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+      },
+    };
+  }
+  if (sourceRecord.type === "url" && typeof sourceRecord.url === "string") {
+    const url = sourceRecord.url.trim();
+    if (!url) {
+      return null;
+    }
+    return {
+      type: "attachment",
+      attachment: {
+        url,
+        kind: "audio",
+        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : "Audio",
+        mimeType: mediaType,
+        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+      },
+    };
+  }
+  return null;
+}
+
 function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem[] {
   const merged: MessageContentItem[] = [];
   for (const item of items) {
@@ -155,6 +208,21 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
     merged.push(item);
   }
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
+}
+
+export function stripMessageDisplayMetadataText(text: string): string {
+  return stripInboundMetadata(text);
+}
+
+function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
+  return items
+    .map((item) => {
+      if (item.type !== "text" || typeof item.text !== "string") {
+        return item;
+      }
+      return { ...item, text: stripMessageDisplayMetadataText(item.text) };
+    })
+    .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
 function expandTextContent(text: string): {
@@ -211,13 +279,7 @@ function expandTextContent(text: string): {
   const content = mergeAdjacentTextItems(
     parts.map((item) => {
       if (item.type === "attachment" && item.attachment.kind === "audio" && audioAsVoice) {
-        return {
-          ...item,
-          attachment: {
-            ...item.attachment,
-            isVoiceNote: true,
-          },
-        };
+        return Object.assign({}, item, { attachment: { ...item.attachment, isVoiceNote: true } });
       }
       return item;
     }),
@@ -282,6 +344,14 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
   } else if (Array.isArray(m.content)) {
     content = m.content.flatMap((item: Record<string, unknown>) => {
+      if (isAssistantMessage) {
+        const audioAttachment = coerceAudioContentBlock(item);
+        if (audioAttachment) {
+          return [audioAttachment];
+        }
+      } else if (item.type === "audio") {
+        return [];
+      }
       if (
         item.type === "attachment" &&
         item.attachment &&
@@ -375,15 +445,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
-  // Strip AI-injected metadata prefix blocks from user messages before display.
-  if (role === "user" || role === "User") {
-    content = content.map((item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        return { ...item, text: stripInboundMetadata(item.text) };
-      }
-      return item;
-    });
-  }
+  content = stripMessageDisplayMetadata(content);
 
   return {
     role,
@@ -394,40 +456,4 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
-}
-
-/**
- * Normalize role for grouping purposes.
- */
-export function normalizeRoleForGrouping(role: string): string {
-  const lower = role.toLowerCase();
-  // Preserve original casing when it's already a core role.
-  if (role === "user" || role === "User") {
-    return role;
-  }
-  if (role === "assistant") {
-    return "assistant";
-  }
-  if (role === "system") {
-    return "system";
-  }
-  // Keep tool-related roles distinct so the UI can style/toggle them.
-  if (
-    lower === "toolresult" ||
-    lower === "tool_result" ||
-    lower === "tool" ||
-    lower === "function"
-  ) {
-    return "tool";
-  }
-  return role;
-}
-
-/**
- * Check if a message is a tool result message based on its role.
- */
-export function isToolResultMessage(message: unknown): boolean {
-  const m = message as Record<string, unknown>;
-  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
-  return role === "toolresult" || role === "tool_result";
 }

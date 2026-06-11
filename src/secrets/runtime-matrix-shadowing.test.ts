@@ -1,3 +1,4 @@
+/** Tests shadowing precedence in secrets runtime matrix scenarios. */
 import { describe, expect, it } from "vitest";
 import "./runtime-matrix.test-support.ts";
 import {
@@ -7,6 +8,25 @@ import {
 } from "./runtime.test-support.ts";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+
+function requireMatrixConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
+  const config = snapshot.config.channels?.matrix;
+  if (!config) {
+    throw new Error("expected Matrix runtime config");
+  }
+  return config;
+}
+
+function expectInactiveSurfaceWarning(
+  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
+  path: string,
+): void {
+  const warning = snapshot.warnings.find(
+    (entry) => entry.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" && entry.path === path,
+  );
+  expect(warning?.code).toBe("SECRETS_REF_IGNORED_INACTIVE_SURFACE");
+  expect(warning?.path).toBe(path);
+}
 
 describe("secrets runtime snapshot matrix shadowing", () => {
   it("ignores Matrix password refs that are shadowed by scoped env access tokens", async () => {
@@ -41,12 +61,7 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       provider: "default",
       id: "MATRIX_OPS_PASSWORD",
     });
-    expect(snapshot.warnings).toContainEqual(
-      expect.objectContaining({
-        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.matrix.accounts.ops.password",
-      }),
-    );
+    expectInactiveSurfaceWarning(snapshot, "channels.matrix.accounts.ops.password");
   });
 
   it.each([
@@ -121,17 +136,12 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.matrix?.password).toEqual({
+    expect(requireMatrixConfig(snapshot).password).toEqual({
       source: "env",
       provider: "default",
       id: "MATRIX_PASSWORD",
     });
-    expect(snapshot.warnings).toContainEqual(
-      expect.objectContaining({
-        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.matrix.password",
-      }),
-    );
+    expectInactiveSurfaceWarning(snapshot, "channels.matrix.password");
   });
 
   it.each([
@@ -218,11 +228,6 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       provider: "default",
       id: "MATRIX_DEFAULT_PASSWORD",
     });
-    expect(snapshot.warnings).toContainEqual(
-      expect.objectContaining({
-        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.matrix.accounts.default.password",
-      }),
-    );
+    expectInactiveSurfaceWarning(snapshot, "channels.matrix.accounts.default.password");
   });
 });
