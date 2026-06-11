@@ -29,6 +29,7 @@ export type ReleaseVerifyBetaArgs = {
     openclawNpm?: string;
     pluginNpm?: string;
     pluginClawHub?: string;
+    pluginClawHubBootstrap?: string;
     npmTelegram?: string;
   };
 };
@@ -119,7 +120,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
+      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
     );
   }
 
@@ -186,6 +187,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
         break;
       case "--plugin-clawhub-run":
         parsed.workflowRuns.pluginClawHub = next();
+        break;
+      case "--plugin-clawhub-bootstrap-run":
+        parsed.workflowRuns.pluginClawHubBootstrap = next();
         break;
       case "--npm-telegram-run":
         parsed.workflowRuns.npmTelegram = next();
@@ -575,6 +579,18 @@ export async function verifyBetaRelease(
         expectedWorkflowName: "Plugin ClawHub Release",
         expectedHeadBranch: args.workflowRef,
         rerunFailed: args.rerunFailedClawHub,
+      }),
+    );
+  }
+  if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
+    workflowRuns.push(
+      verifyWorkflowRun({
+        id: args.workflowRuns.pluginClawHubBootstrap,
+        label: "Plugin ClawHub New",
+        repo: args.repo,
+        expectedWorkflowName: "Plugin ClawHub New",
+        expectedHeadBranch: args.workflowRef,
+        rerunFailed: false,
       }),
     );
   }

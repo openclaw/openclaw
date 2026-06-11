@@ -42,6 +42,8 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "22",
         "--plugin-clawhub-run",
         "33",
+        "--plugin-clawhub-bootstrap-run",
+        "34",
         "--npm-telegram-run",
         "44",
         "--evidence-out",
@@ -69,6 +71,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
         openclawNpm: "11",
         pluginNpm: "22",
         pluginClawHub: "33",
+        pluginClawHubBootstrap: "34",
         npmTelegram: "44",
       },
     });

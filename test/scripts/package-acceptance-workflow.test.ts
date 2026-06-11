@@ -1544,6 +1544,7 @@ describe("package artifact reuse", () => {
     };
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
+    const clawHubNewWorkflow = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
@@ -1574,18 +1575,24 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("Upload ClawHub package artifact");
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
-    expect(clawHubWorkflow).toContain("approve_plugin_clawhub_release:");
+    expect(clawHubWorkflow).not.toContain("approve_plugin_clawhub_release:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
-    expect(clawHubWorkflow).toContain("Approve ClawHub package publish");
     expect(clawHubWorkflow).toContain(
-      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugin_clawhub_release.result == 'success')",
+      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success'",
     );
-    expect(clawHubWorkflow).toContain(
-      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@c9bb13023598dcc547fdf4a93b9d42512b8c8854",
-    );
-    expect(clawHubWorkflow).toContain("dry_run: ${{ inputs.dry_run }}");
-    expect(clawHubWorkflow).toContain("package_artifact_name: ${{ matrix.plugin.artifactName }}");
-    expect(clawHubWorkflow).toContain("clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}");
+    expect(clawHubWorkflow).toContain("Download ClawHub package artifact");
+    expect(clawHubWorkflow).toContain("Publish ClawHub package artifact");
+    expect(clawHubWorkflow).toContain("clawhub\n            package\n            publish");
+    expect(clawHubWorkflow).toContain("DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}");
+    expect(clawHubWorkflow).toContain("name: ${{ matrix.plugin.artifactName }}");
+    expect(clawHubWorkflow).not.toContain("secrets.CLAWHUB_TOKEN");
+    expect(clawHubWorkflow).not.toContain("clawhub_token");
+    expect(clawHubWorkflow).toContain("bootstrapCandidates");
+    expect(clawHubWorkflow).toContain("missingTrustedPublisher");
+    expect(clawHubWorkflow).toContain("bootstrap_candidate_count");
+    expect(clawHubWorkflow).toContain("missing_trusted_publisher_count");
+    expect(clawHubWorkflow).toContain("Bootstrap candidates requiring token bootstrap:");
+    expect(clawHubWorkflow).toContain("Missing trusted publisher candidates:");
     expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
@@ -1599,6 +1606,13 @@ describe("package artifact reuse", () => {
     expect(clawHubMetadataIndex).toBeGreaterThan(clawHubSetupIndex);
     expect(releaseWorkflow).toContain("Plugin npm run ID");
     expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
+    expect(releaseWorkflow).toContain("plugin-clawhub-new.yml");
+    expect(releaseWorkflow).toContain("Plugin ClawHub bootstrap run ID");
+    expect(releaseWorkflow).toContain("bootstrap_plugins");
+    expect(releaseWorkflow).toContain("missing_trusted_plugins");
+    expect(releaseWorkflow).toContain(
+      "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish.",
+    );
     expect(releaseWorkflow).toContain("OpenClaw npm run ID");
     expect(releaseWorkflow).toContain("npm_telegram_run_id");
     expect(releaseWorkflow).toContain('release_publish_run_id="${GITHUB_RUN_ID}"');
@@ -1618,6 +1632,9 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("release:verify-beta");
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain("--skip-github-release");
+    expect(releaseWorkflow).toContain(
+      '--plugin-clawhub-bootstrap-run "${plugin_clawhub_bootstrap_run_id}"',
+    );
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
     expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
     expect(releaseWorkflow).toContain("Failed child job summary");
@@ -1648,7 +1665,17 @@ describe("package artifact reuse", () => {
     expect(approvalScript).toContain("must still be in_progress");
     expect(approvalScript).toContain("completed with success/failure");
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
-    expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
+    expect(clawHubWorkflow.match(/environment: clawhub-plugin-release/g)?.length).toBe(1);
+    expect(clawHubNewWorkflow).toContain("name: Plugin ClawHub New");
+    expect(clawHubNewWorkflow).toContain("environment: clawhub-plugin-bootstrap");
+    expect(clawHubNewWorkflow).toContain("secrets.CLAWHUB_TOKEN");
+    expect(clawHubNewWorkflow).toContain("trusted-publisher set");
+    expect(clawHubNewWorkflow).toContain("--workflow-filename plugin-clawhub-release.yml");
+    expect(clawHubNewWorkflow).toContain("--environment clawhub-plugin-release");
+    expect(clawHubNewWorkflow).toContain("verify_bootstrap_clawhub_package:");
+    expect(clawHubNewWorkflow).toContain("Verify bootstrap ClawHub package and trusted publisher");
+    expect(clawHubNewWorkflow).toContain("/trusted-publisher");
+    expect(clawHubNewWorkflow).toContain('trustedPublisher?.repository !== "openclaw/openclaw"');
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
     expect(releaseWorkflow).toContain(

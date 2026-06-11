@@ -50,9 +50,15 @@ jobs:
     outputs:
       ref_revision: ${{ steps.ref.outputs.sha }}
       has_candidates: ${{ steps.plan.outputs.has_candidates }}
+      has_bootstrap_candidates: ${{ steps.plan.outputs.has_bootstrap_candidates }}
+      has_missing_trusted_publisher: ${{ steps.plan.outputs.has_missing_trusted_publisher }}
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
+      bootstrap_candidate_count: ${{ steps.plan.outputs.bootstrap_candidate_count }}
+      missing_trusted_publisher_count: ${{ steps.plan.outputs.missing_trusted_publisher_count }}
       skipped_published_count: ${{ steps.plan.outputs.skipped_published_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      bootstrap_matrix: ${{ steps.plan.outputs.bootstrap_matrix }}
+      missing_trusted_publisher_matrix: ${{ steps.plan.outputs.missing_trusted_publisher_matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -158,25 +164,63 @@ jobs:
           cat .local/plugin-clawhub-release-plan.json
 
           candidate_count="$(jq -r '.candidates | length' .local/plugin-clawhub-release-plan.json)"
+          bootstrap_candidate_count="$(jq -r '.bootstrapCandidates | length' .local/plugin-clawhub-release-plan.json)"
+          missing_trusted_publisher_count="$(jq -r '.missingTrustedPublisher | length' .local/plugin-clawhub-release-plan.json)"
           skipped_published_count="$(jq -r '.skippedPublished | length' .local/plugin-clawhub-release-plan.json)"
           has_candidates="false"
           if [[ "${candidate_count}" != "0" ]]; then
             has_candidates="true"
           fi
+          has_bootstrap_candidates="false"
+          if [[ "${bootstrap_candidate_count}" != "0" ]]; then
+            has_bootstrap_candidates="true"
+          fi
+          has_missing_trusted_publisher="false"
+          if [[ "${missing_trusted_publisher_count}" != "0" ]]; then
+            has_missing_trusted_publisher="true"
+          fi
           matrix_json="$(jq -c '.candidates' .local/plugin-clawhub-release-plan.json)"
+          bootstrap_matrix_json="$(jq -c '.bootstrapCandidates' .local/plugin-clawhub-release-plan.json)"
+          missing_trusted_publisher_matrix_json="$(jq -c '.missingTrustedPublisher' .local/plugin-clawhub-release-plan.json)"
 
           {
             echo "candidate_count=${candidate_count}"
+            echo "bootstrap_candidate_count=${bootstrap_candidate_count}"
+            echo "missing_trusted_publisher_count=${missing_trusted_publisher_count}"
             echo "skipped_published_count=${skipped_published_count}"
             echo "has_candidates=${has_candidates}"
+            echo "has_bootstrap_candidates=${has_bootstrap_candidates}"
+            echo "has_missing_trusted_publisher=${has_missing_trusted_publisher}"
             echo "matrix=${matrix_json}"
+            echo "bootstrap_matrix=${bootstrap_matrix_json}"
+            echo "missing_trusted_publisher_matrix=${missing_trusted_publisher_matrix_json}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Plugin release candidates:"
           jq -r '.candidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-clawhub-release-plan.json
 
+          echo "Bootstrap candidates requiring token bootstrap:"
+          jq -r '.bootstrapCandidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-clawhub-release-plan.json
+
+          echo "Missing trusted publisher candidates:"
+          jq -r '.missingTrustedPublisher[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-clawhub-release-plan.json
+
           echo "Already published / skipped:"
           jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-clawhub-release-plan.json
+
+      - name: Fail when trusted publisher is missing
+        if: steps.plan.outputs.missing_trusted_publisher_count != '0'
+        run: |
+          echo "::error::One or more ClawHub packages exist but do not have trusted publishing configured. Configure trusted publishing before running the normal OIDC publish workflow."
+          jq -r '.missingTrustedPublisher[]? | "::error::Missing trusted publisher: \(.packageName)@\(.version). Configure trusted publishing for openclaw/openclaw, workflow plugin-clawhub-release.yml, environment clawhub-plugin-release."' .local/plugin-clawhub-release-plan.json
+          exit 1
+
+      - name: Fail normal publish when bootstrap is required
+        if: steps.plan.outputs.bootstrap_candidate_count != '0'
+        run: |
+          echo "::error::One or more ClawHub packages do not exist yet and require the token-gated Plugin ClawHub New bootstrap workflow before normal OIDC publish can run."
+          jq -r '.bootstrapCandidates[]? | "::error::Bootstrap required: \(.packageName)@\(.version). Dispatch plugin-clawhub-new.yml for this package, then rerun the normal release."' .local/plugin-clawhub-release-plan.json
+          exit 1
 
       - name: Fail manual publish when target versions already exist
         if: github.event_name == 'workflow_dispatch' && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'
@@ -422,19 +466,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  approve_plugin_clawhub_release:
+  publish_plugins_clawhub:
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
-    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
-    permissions: {}
-    steps:
-      - name: Approve ClawHub package publish
-        run: echo "ClawHub package publish approved."
-
-  publish_plugins_clawhub:
-    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugin_clawhub_release]
-    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugin_clawhub_release.result == 'success')
     permissions:
       actions: read
       contents: read
@@ -444,19 +480,111 @@ jobs:
       max-parallel: 32
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@c9bb13023598dcc547fdf4a93b9d42512b8c8854
-    with:
-      dry_run: ${{ inputs.dry_run }}
-      json: true
-      package_artifact_name: ${{ matrix.plugin.artifactName }}
-      registry: https://clawhub.ai
-      site: https://clawhub.ai
-      source_repo: ${{ github.repository }}
-      source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-      source_ref: ${{ github.ref }}
-      tags: ${{ matrix.plugin.publishTag }}
-    secrets:
-      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "false"
+
+      - name: Checkout ClawHub CLI source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          repository: ${{ env.CLAWHUB_REPOSITORY }}
+          ref: main
+          path: clawhub-source
+          fetch-depth: 0
+
+      - name: Checkout pinned ClawHub CLI revision
+        working-directory: clawhub-source
+        env:
+          CLAWHUB_REF: ${{ env.CLAWHUB_REF }}
+        run: git checkout --detach "${CLAWHUB_REF}"
+
+      - name: Install ClawHub CLI dependencies
+        working-directory: clawhub-source
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if bun install --frozen-lockfile; then
+              exit 0
+            fi
+            status="$?"
+            if [[ "${attempt}" == "3" ]]; then
+              exit "${status}"
+            fi
+            echo "bun install failed while preparing ClawHub CLI; retrying (${attempt}/3)."
+            rm -rf node_modules "${RUNNER_TEMP}/bun-install-cache" || true
+            sleep $((attempt * 15))
+          done
+
+      - name: Bootstrap ClawHub CLI
+        run: |
+          cat > "$RUNNER_TEMP/clawhub" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawhub/src/cli.ts" "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/clawhub"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Download ClawHub package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.plugin.artifactName }}
+          path: ${{ runner.temp }}/clawhub-package-artifact
+
+      - name: Publish ClawHub package artifact
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          SOURCE_REF: ${{ github.ref }}
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          ARTIFACT_DIR: ${{ runner.temp }}/clawhub-package-artifact
+        run: |
+          set -euo pipefail
+          artifact_path="$(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          if [[ -z "${artifact_path}" ]]; then
+            echo "Downloaded ClawHub package artifact is missing." >&2
+            find "${ARTIFACT_DIR}" -maxdepth 2 -type f -print >&2 || true
+            exit 1
+          fi
+
+          publish_cmd=(
+            clawhub
+            package
+            publish
+            "${artifact_path}"
+            --tags
+            "${PACKAGE_TAG}"
+            --source-repo
+            "${SOURCE_REPO}"
+            --source-commit
+            "${SOURCE_COMMIT}"
+            --source-path
+            "${PACKAGE_DIR}"
+          )
+          if [[ -n "${SOURCE_REF}" ]]; then
+            publish_cmd+=(--source-ref "${SOURCE_REF}")
+          fi
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            publish_cmd+=(--dry-run)
+          fi
+
+          printf 'Publish command:'
+          printf ' %q' "${publish_cmd[@]}"
+          printf '\n'
+          "${publish_cmd[@]}"
 
   verify_published_clawhub_package:
     needs: [preview_plugins_clawhub, publish_plugins_clawhub]
