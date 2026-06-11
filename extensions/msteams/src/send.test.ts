@@ -20,6 +20,7 @@ const mockState = vi.hoisted(() => ({
   deleteMSTeamsActivityWithReference: vi.fn(async () => {}),
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
+  uploadAndShareOneDrive: vi.fn(),
   buildTeamsFileInfoCard: vi.fn(),
   createMSTeamsTokenProvider: vi.fn(),
 }));
@@ -86,7 +87,7 @@ vi.mock("./runtime.js", () => ({
 vi.mock("./graph-upload.js", () => ({
   uploadAndShareSharePoint: mockState.uploadAndShareSharePoint,
   getDriveItemProperties: mockState.getDriveItemProperties,
-  uploadAndShareOneDrive: vi.fn(),
+  uploadAndShareOneDrive: mockState.uploadAndShareOneDrive,
 }));
 
 vi.mock("./graph-chat.js", () => ({
@@ -237,6 +238,7 @@ describe("sendMessageMSTeams", () => {
     mockState.deleteMSTeamsActivityWithReference.mockReset();
     mockState.uploadAndShareSharePoint.mockReset();
     mockState.getDriveItemProperties.mockReset();
+    mockState.uploadAndShareOneDrive.mockReset();
     mockState.buildTeamsFileInfoCard.mockReset();
 
     mockState.extractFilename.mockResolvedValue("fallback.bin");
@@ -384,8 +386,9 @@ describe("sendMessageMSTeams", () => {
 
   it("routes SharePoint file card sends to the channel thread when replyStyle is thread", async () => {
     const threadRootId = "thread-root-message-1";
+    const app = createMockApp();
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {},
+      app,
       appId: "app-id",
       conversationId: "19:channel@thread.tacv2",
       ref: {
@@ -417,7 +420,7 @@ describe("sendMessageMSTeams", () => {
 
     // The SharePoint file card send must include threadActivityId for thread routing.
     expect(mockState.sendMSTeamsActivityWithReference).toHaveBeenCalledWith(
-      expect.any(Object),
+      app,
       expect.any(Object),
       expect.any(Object),
       expect.objectContaining({
@@ -428,8 +431,9 @@ describe("sendMessageMSTeams", () => {
 
   it("routes OneDrive fallback file sends to the channel thread when replyStyle is thread", async () => {
     const threadRootId = "thread-root-message-2";
+    const app = createMockApp();
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {},
+      app,
       appId: "app-id",
       conversationId: "19:channel@thread.tacv2",
       ref: {
@@ -452,6 +456,11 @@ describe("sendMessageMSTeams", () => {
       kind: "file",
     });
     mockState.requiresFileConsent.mockReturnValue(false);
+    mockState.uploadAndShareOneDrive.mockResolvedValueOnce({
+      itemId: "od-item-1",
+      shareUrl: "https://1drv.example.com/share/doc.pdf",
+      name: "doc.pdf",
+    });
 
     await sendMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -462,7 +471,7 @@ describe("sendMessageMSTeams", () => {
 
     // The OneDrive fallback send must include threadActivityId for thread routing.
     expect(mockState.sendMSTeamsActivityWithReference).toHaveBeenCalledWith(
-      expect.any(Object),
+      app,
       expect.any(Object),
       expect.any(Object),
       expect.objectContaining({
