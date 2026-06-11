@@ -250,10 +250,6 @@ describe("matchSystemRunApprovalBinding", () => {
       actual: { ...expected, argv: ["bash", "-lc", "echo bye"] },
     },
     {
-      name: "cwd mismatch",
-      actual: { ...expected, cwd: "/var/tmp" },
-    },
-    {
       name: "agent mismatch",
       actual: { ...expected, agentId: "other" },
     },
@@ -273,6 +269,24 @@ describe("matchSystemRunApprovalBinding", () => {
       code: "APPROVAL_REQUEST_MISMATCH",
       message: "approval id does not match request",
       details: undefined,
+    });
+  });
+
+  it("rejects cwd mismatch with diagnostic details", () => {
+    const actual = { ...expected, cwd: "/var/tmp" };
+    const result = matchSystemRunApprovalBinding({
+      expected,
+      actual,
+      actualEnvKeys: ["ALPHA"],
+    });
+    expect(result).toEqual({
+      ok: false,
+      code: "APPROVAL_REQUEST_MISMATCH",
+      message: "approval id does not match request",
+      details: {
+        expectedCwd: expected.cwd,
+        actualCwd: "/var/tmp",
+      },
     });
   });
 });

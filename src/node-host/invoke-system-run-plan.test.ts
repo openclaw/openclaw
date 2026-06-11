@@ -7,6 +7,7 @@ import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
+  revalidateApprovedCwdSnapshot,
   revalidateApprovedMutableFileOperand,
   resolveMutableFileOperandSnapshotSync,
 } from "./invoke-system-run-plan.js";
@@ -1087,5 +1088,119 @@ describe("hardenApprovedExecutionPaths", () => {
         ).toBe(false);
       });
     }
+  });
+});
+
+describe("symlink cwd approval", () => {
+  function createFixtureDirForSymlink(prefix: string): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  }
+
+  // On macOS, /tmp is a root-owned symlink to /private/tmp.
+  // Use it to test non-mutable symlink cwd resolution.
+  const systemSymlinkCwd = process.platform === "darwin" ? "/tmp" : null;
+
+  it.runIf(process.platform === "darwin")(
+    "allows system symlink cwd (macOS /tmp -> /private/tmp)",
+    () => {
+      const result = buildSystemRunApprovalPlan({
+        command: ["/bin/echo", "hello"],
+        cwd: systemSymlinkCwd!,
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.plan.cwd).toBe(fs.realpathSync(systemSymlinkCwd!));
+      }
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "resolves system symlink cwd to canonical path in hardening",
+    () => {
+      const result = hardenApprovedExecutionPaths({
+        approvedByAsk: true,
+        argv: ["/bin/echo", "test"],
+        shellCommand: null,
+        cwd: systemSymlinkCwd!,
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.cwd).toBe(fs.realpathSync(systemSymlinkCwd!));
+        expect(result.approvedCwdSnapshot).toBeDefined();
+        expect(result.approvedCwdSnapshot!.cwd).toBe(fs.realpathSync(systemSymlinkCwd!));
+      }
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "revalidates system symlink cwd snapshot correctly",
+    () => {
+      const result = hardenApprovedExecutionPaths({
+        approvedByAsk: true,
+        argv: ["/bin/echo", "test"],
+        shellCommand: null,
+        cwd: systemSymlinkCwd!,
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok && result.approvedCwdSnapshot) {
+        expect(revalidateApprovedCwdSnapshot({ snapshot: result.approvedCwdSnapshot })).toBe(true);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("rejects symlink cwd in mutable parent directory", () => {
+    const tmp = createFixtureDirForSymlink("openclaw-symlink-mutable-");
+    const realDir = path.join(tmp, "real-dir");
+    const symlinkDir = path.join(tmp, "mutable-link");
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.symlinkSync(realDir, symlinkDir);
+
+    const result = buildSystemRunApprovalPlan({
+      command: ["/bin/echo", "hello"],
+      cwd: symlinkDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("mutable symlink");
+      expect(result.message).toContain("requested:");
+      expect(result.message).toContain("resolved:");
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "includes original and resolved cwd in error messages",
+    () => {
+      const result = buildSystemRunApprovalPlan({
+        command: ["/bin/echo", "hello"],
+        cwd: "/nonexistent-path-for-test",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.message).toContain("requested:");
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("rejects dangling symlink cwd", () => {
+    const tmp = createFixtureDirForSymlink("openclaw-symlink-dangling-");
+    const symlinkDir = path.join(tmp, "dangling-link");
+    fs.symlinkSync("/nonexistent-target-for-test", symlinkDir);
+
+    const result = buildSystemRunApprovalPlan({
+      command: ["/bin/echo", "hello"],
+      cwd: symlinkDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("requested:");
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

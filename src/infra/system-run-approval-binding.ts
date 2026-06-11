@@ -207,7 +207,10 @@ export function matchSystemRunApprovalBinding(params: {
     return requestMismatch();
   }
   if (params.expected.cwd !== params.actual.cwd) {
-    return requestMismatch();
+    return requestMismatch({
+      expectedCwd: params.expected.cwd,
+      actualCwd: params.actual.cwd,
+    });
   }
   if (params.expected.agentId !== params.actual.agentId) {
     return requestMismatch();

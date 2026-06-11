@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
@@ -168,4 +171,43 @@ describe("evaluateSystemRunApprovalMatch", () => {
       commandArgv: ["echo STALE"],
     });
   });
+});
+
+describe("symlink cwd canonicalization", () => {
+  test.runIf(process.platform !== "win32")(
+    "matches approval when cwd is a symlink to the approved canonical path",
+    () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-match-symlink-"));
+      const realDir = path.join(tmp, "real-workspace");
+      const symlinkDir = path.join(tmp, "workspace-link");
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.symlinkSync(realDir, symlinkDir);
+
+      const canonicalCwd = fs.realpathSync(symlinkDir);
+
+      const bindingWithCanonical = buildSystemRunApprovalBinding({
+        argv: ["/bin/echo", "hello"],
+        cwd: canonicalCwd,
+        agentId: null,
+        sessionKey: null,
+      });
+
+      const result = evaluateSystemRunApprovalMatch({
+        argv: ["/bin/echo", "hello"],
+        request: {
+          host: "node",
+          command: "/bin/echo hello",
+          systemRunBinding: bindingWithCanonical.binding,
+        },
+        binding: {
+          cwd: symlinkDir,
+          agentId: null,
+          sessionKey: null,
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    },
+  );
 });

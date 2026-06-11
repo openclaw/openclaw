@@ -1133,42 +1133,47 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
   } catch {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+      message: `SYSTEM_RUN_DENIED: approval requires an existing canonical cwd (requested: ${requestedCwd})`,
     };
   }
   if (!cwdStat.isDirectory()) {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires cwd to be a directory",
+      message: `SYSTEM_RUN_DENIED: approval requires cwd to be a directory (requested: ${requestedCwd})`,
     };
   }
   if (hasMutableSymlinkPathComponentSync(requestedCwd)) {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
+      message: `SYSTEM_RUN_DENIED: approval requires canonical cwd (mutable symlink in path) (requested: ${requestedCwd}, resolved: ${cwdReal})`,
     };
   }
   if (cwdLstat.isSymbolicLink()) {
-    return {
-      ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink cwd)",
-    };
-  }
-  if (
-    !sameFileIdentity(cwdStat, cwdLstat) ||
-    !sameFileIdentity(cwdStat, cwdRealStat) ||
-    !sameFileIdentity(cwdLstat, cwdRealStat)
-  ) {
-    return {
-      ok: false,
-      message: "SYSTEM_RUN_DENIED: approval cwd identity mismatch",
-    };
+    // Symlink cwd allowed when not mutable — hasMutableSymlinkPathComponentSync
+    // already verified the symlink parent is not writable by this process.
+    if (!sameFileIdentity(cwdStat, cwdRealStat)) {
+      return {
+        ok: false,
+        message: `SYSTEM_RUN_DENIED: approval cwd identity mismatch (requested: ${requestedCwd}, resolved: ${cwdReal})`,
+      };
+    }
+  } else {
+    if (
+      !sameFileIdentity(cwdStat, cwdLstat) ||
+      !sameFileIdentity(cwdStat, cwdRealStat) ||
+      !sameFileIdentity(cwdLstat, cwdRealStat)
+    ) {
+      return {
+        ok: false,
+        message: `SYSTEM_RUN_DENIED: approval cwd identity mismatch (requested: ${requestedCwd})`,
+      };
+    }
   }
   return {
     ok: true,
     snapshot: {
       cwd: cwdReal,
-      stat: cwdStat,
+      stat: cwdRealStat,
     },
   };
 }

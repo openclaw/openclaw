@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
@@ -23,6 +25,17 @@ function requestMismatch(): SystemRunApprovalMatchResult {
 
 export { toSystemRunApprovalMismatchError } from "../infra/system-run-approval-binding.js";
 
+function canonicalizeCwdForApproval(cwd: string | null): string | null {
+  if (cwd === null) {
+    return null;
+  }
+  try {
+    return fs.realpathSync(path.resolve(cwd));
+  } catch {
+    return cwd;
+  }
+}
+
 export function evaluateSystemRunApprovalMatch(params: {
   argv: string[];
   request: ExecApprovalRequestPayload;
@@ -34,7 +47,7 @@ export function evaluateSystemRunApprovalMatch(params: {
 
   const actualBinding = buildSystemRunApprovalBinding({
     argv: params.argv,
-    cwd: params.binding.cwd,
+    cwd: canonicalizeCwdForApproval(params.binding.cwd),
     agentId: params.binding.agentId,
     sessionKey: params.binding.sessionKey,
     env: params.binding.env,
