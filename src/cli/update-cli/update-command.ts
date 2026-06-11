@@ -926,7 +926,8 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 
   if (
     params.updateInstallKind === "git" &&
-    !(await gatewayServiceCommandUsesRoot({ root: params.root, command: serviceState.command }))
+    (await gatewayServiceCommandUsesRoot({ root: params.root, command: serviceState.command })) ===
+      false
   ) {
     if (!params.jsonMode) {
       defaultRuntime.log(
@@ -1459,10 +1460,10 @@ async function gatewayServiceCommandUsesRoot(params: {
   root: string | undefined;
   env?: NodeJS.ProcessEnv;
   command?: GatewayServiceCommandConfig | null;
-}): Promise<boolean> {
+}): Promise<boolean | null> {
   const expectedRoot = normalizeOptionalString(params.root);
   if (!expectedRoot) {
-    return false;
+    return null;
   }
   const command =
     params.command === undefined
@@ -1473,7 +1474,7 @@ async function gatewayServiceCommandUsesRoot(params: {
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceRoot = layout?.packageRoot;
   if (!serviceRoot) {
-    return false;
+    return null;
   }
   const [expectedRootReal, serviceRootReal] = await Promise.all([
     tryRealpathOrResolve(expectedRoot),
@@ -2242,10 +2243,10 @@ async function maybeRestartService(params: {
         });
         if (
           updatedInstallRestartNeedsServiceRootProof &&
-          !(await gatewayServiceCommandUsesRoot({
+          (await gatewayServiceCommandUsesRoot({
             root: params.result.root,
             env: params.serviceEnv,
-          }))
+          })) !== true
         ) {
           if (!params.opts.json) {
             defaultRuntime.log(
@@ -3820,7 +3821,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         serviceState.installed &&
         serviceState.loaded &&
         preManagedServiceStop?.stopped !== true &&
-        serviceMatchesUpdateRoot !== true;
+        serviceMatchesUpdateRoot === false;
       if (
         shouldPrepareUpdatedInstallRestart({
           updateMode: resultWithPostUpdate.mode,
