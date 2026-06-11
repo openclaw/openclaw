@@ -110,6 +110,34 @@ describe("defineToolPlugin", () => {
     });
   });
 
+  it("preserves text-only agent tool results with structured details", async () => {
+    const entry = defineToolPlugin({
+      id: "text-result",
+      name: "Text Result",
+      description: "Text result tool.",
+      tools: (tool) => [
+        tool({
+          name: "text_result",
+          description: "Return a text result.",
+          parameters: Type.Object({}),
+          execute: () => ({
+            content: [{ type: "text", text: "ready" }],
+            details: { status: "ok" },
+          }),
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "text-result" });
+
+    entry.register(captured.api);
+
+    const result = await captured.tools[0].execute("call-1", {});
+    expect(result).toEqual({
+      content: [{ type: "text", text: "ready" }],
+      details: { status: "ok" },
+    });
+  });
+
   it("wraps plain JSON objects with content fields instead of treating them as tool results", async () => {
     const entry = defineToolPlugin({
       id: "content-json",

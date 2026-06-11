@@ -140,30 +140,29 @@ function isAgentToolContentBlock(value: unknown): boolean {
   return false;
 }
 
+function hasOnlyAgentToolResultKeys(record: Record<string, unknown>): boolean {
+  return Object.keys(record).every(
+    (key) =>
+      key === "content" ||
+      key === "details" ||
+      key === "terminalSummary" ||
+      key === "progress" ||
+      key === "terminate",
+  );
+}
+
 function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  const record = value as {
-    content?: unknown;
-    details?: unknown;
-    progress?: unknown;
-    terminalSummary?: unknown;
-    terminate?: unknown;
-  };
-  if (
-    !("details" in record) ||
-    !Array.isArray(record.content) ||
-    !record.content.every(isAgentToolContentBlock)
-  ) {
+  const record = value as Record<string, unknown>;
+  if (!hasOnlyAgentToolResultKeys(record)) {
     return false;
   }
-  return (
-    "terminalSummary" in record ||
-    "progress" in record ||
-    "terminate" in record ||
-    record.content.some((block) => (block as { type?: unknown }).type !== "text")
-  );
+  if (!("details" in record) || !Array.isArray(record.content)) {
+    return false;
+  }
+  return record.content.every(isAgentToolContentBlock);
 }
 
 function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> {
