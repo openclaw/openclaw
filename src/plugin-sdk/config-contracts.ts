@@ -55,4 +55,5 @@ export type {
   TtsConfig,
   TtsModelOverrideConfig,
   TtsProvider,
+  TypingMode,
 } from "../config/types.js";
