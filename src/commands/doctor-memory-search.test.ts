@@ -207,6 +207,82 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
+  it("reports gateway dreaming status when embedding memory search is disabled", async () => {
+    const nextRunAtMs = Date.parse("2026-04-06T03:00:00.000Z");
+    resolveMemorySearchConfig.mockReturnValue(null);
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        skipped: true,
+        dreaming: {
+          enabled: true,
+          verboseLogging: false,
+          storageMode: "inline",
+          separateReports: false,
+          shortTermCount: 2,
+          recallSignalCount: 3,
+          dailySignalCount: 1,
+          groundedSignalCount: 0,
+          totalSignalCount: 4,
+          phaseSignalCount: 2,
+          lightPhaseHitCount: 1,
+          remPhaseHitCount: 1,
+          promotedTotal: 1,
+          promotedToday: 1,
+          lastPromotedAt: "2026-04-05T03:00:00.000Z",
+          shortTermEntries: [],
+          signalEntries: [],
+          promotedEntries: [],
+          phases: {
+            light: {
+              enabled: true,
+              cron: "0 3 * * *",
+              lookbackDays: 7,
+              limit: 20,
+              managedCronPresent: true,
+              nextRunAtMs,
+            },
+            deep: {
+              enabled: true,
+              cron: "0 3 * * *",
+              minScore: 0.72,
+              minRecallCount: 2,
+              minUniqueQueries: 2,
+              recencyHalfLifeDays: 14,
+              limit: 20,
+              managedCronPresent: true,
+              nextRunAtMs,
+            },
+            rem: {
+              enabled: false,
+              cron: "0 3 * * *",
+              lookbackDays: 7,
+              limit: 20,
+              minPatternStrength: 0.4,
+              managedCronPresent: true,
+              nextRunAtMs,
+            },
+          },
+        },
+      },
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      "Memory search is explicitly disabled (enabled: false).",
+      "Memory search",
+    );
+    const dreamingNote = note.mock.calls.find(([, title]) => title === "Memory dreaming");
+    expect(dreamingNote?.[0]).toContain(
+      "Memory-core dreaming is enabled independently of embedding memory search.",
+    );
+    expect(dreamingNote?.[0]).toContain("Enabled phases: light, deep.");
+    expect(dreamingNote?.[0]).toContain("Managed cron: present.");
+    expect(dreamingNote?.[0]).toContain("Next run: 2026-04-06T03:00:00.000Z.");
+    expect(dreamingNote?.[0]).toContain("Last promotion: 2026-04-05T03:00:00.000Z.");
+  });
+
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",

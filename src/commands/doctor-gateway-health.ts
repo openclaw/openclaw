@@ -21,6 +21,8 @@ import {
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
+type GatewayMemoryDreamingProbe = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
+
 export type GatewayMemoryProbe = {
   checked: boolean;
   ready: boolean;
@@ -32,6 +34,7 @@ export type GatewayMemoryProbe = {
    * probes, not for transport failures.
    */
   skipped: boolean;
+  dreaming?: GatewayMemoryDreamingProbe;
 };
 
 function isGatewayCallTimeout(message: string): boolean {
@@ -161,6 +164,7 @@ export async function probeGatewayMemoryStatus(params: {
       ready: payload.embedding.ok,
       error: payload.embedding.error,
       skipped: !gatewayChecked,
+      ...(payload.dreaming ? { dreaming: payload.dreaming } : {}),
     };
   } catch (err) {
     const message = formatErrorMessage(err);
