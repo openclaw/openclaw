@@ -84,13 +84,17 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    // Gate the Graph/Bot Framework media fallback on the presence of real
-    // `<attachment id="...">` tags inside any `text/html` attachment. Teams
-    // delivers @mention cards and other chrome as `text/html` attachments
-    // too, so keying off contentType alone produces spurious 404 diagnostics
-    // for every mention-only message and masks real file attachments (#58617).
+    // `<attachment id="...">` markers inside `text/html` attachments identify
+    // real file attachments in personal chats and gate the Bot Framework path.
     const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
     const hasHtmlFileAttachment = attachmentIds.length > 0;
+    // Channel/group @mention activities carry only a `text/html` stub without
+    // `<attachment id>` markers even when a file is attached (#89594), so the
+    // Graph fallback keys off the stub itself — and stays skipped for messages
+    // with no `text/html` attachment at all (#58617).
+    const hasTextHtmlAttachment =
+      hasHtmlFileAttachment ||
+      attachments.some((attachment) => attachment.contentType === "text/html");
 
     // Personal DMs with the bot use Bot Framework conversation IDs (`a:...`
     // or `8:orgid:...`) which Graph's `/chats/{id}` endpoint rejects with
@@ -123,7 +127,11 @@ export async function resolveMSTeamsInboundMedia(params: {
       }
     }
 
-    if (mediaList.length === 0 && !isBotFrameworkPersonalChatId(conversationId)) {
+    if (
+      hasTextHtmlAttachment &&
+      mediaList.length === 0 &&
+      !isBotFrameworkPersonalChatId(conversationId)
+    ) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
