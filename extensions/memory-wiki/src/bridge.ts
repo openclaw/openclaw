@@ -236,7 +236,7 @@ export async function syncMemoryWikiBridgeSources(params: {
   });
   const agentIdsByWorkspace = new Map<string, string[]>();
   for (const artifact of publicArtifacts) {
-    agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);
+    agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds ?? []);
   }
   const artifactCount = artifacts.length;
   for (const artifact of artifacts) {
