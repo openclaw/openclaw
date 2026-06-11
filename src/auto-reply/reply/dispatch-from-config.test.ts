@@ -5227,6 +5227,40 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookContext?.conversationId).toBe("telegram:999");
   });
 
+  it("does not emit shared message_received hooks when the channel emitted them itself", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "message_received") as () => boolean,
+    );
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550123",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+      MessageSid: "wa-msg-1",
+      SessionKey: "agent:main:whatsapp:+15555550123",
+      SuppressMessageReceivedHooks: true,
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
+    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalledWith(
+      "message",
+      "received",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
   it("does not broadcast inbound claims without a core-owned plugin binding", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(

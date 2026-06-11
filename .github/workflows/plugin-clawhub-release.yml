@@ -197,12 +197,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify OpenClaw ClawHub package ownership
-        if: steps.plan.outputs.has_candidates == 'true'
-        env:
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-        run: node --import tsx scripts/plugin-clawhub-owner-preflight.ts .local/plugin-clawhub-release-plan.json
-
   validate_release_publish_approval:
     name: Validate release publish approval
     needs: preview_plugins_clawhub

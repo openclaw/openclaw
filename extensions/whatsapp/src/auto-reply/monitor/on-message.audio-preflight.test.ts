@@ -93,33 +93,22 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
   }),
 }));
 
-import type { WebInboundMsg } from "../types.js";
+import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
-function makeAudioMsg(): WebInboundMsg {
-  return {
-    id: "msg-1",
-    from: "+15550000002",
-    to: "+15550000001",
-    accessControlPassed: true,
-    body: "<media:audio>",
-    chatType: "direct",
-    mediaType: "audio/ogg; codecs=opus",
-    mediaPath: "/tmp/voice.ogg",
-    timestamp: 1700000000,
-    accountId: "default",
-  } as WebInboundMsg;
+function makeAudioMsg(): WebInboundMessage {
+  return createTestWebAudioInboundMessage();
 }
 
-function makeGroupAudioMsg(): WebInboundMsg {
-  return {
-    ...makeAudioMsg(),
+function makeGroupAudioMsg(): WebInboundMessage {
+  return createTestWebAudioInboundMessage({
+    platform: { chatJid: "1203630@g.us" },
     from: "1203630@g.us",
-    chatId: "1203630@g.us",
-    chatType: "group",
     conversationId: "1203630@g.us",
+    chatType: "group",
     wasMentioned: false,
-  } as WebInboundMsg;
+  });
 }
 
 function makeEchoTracker() {
@@ -141,6 +130,36 @@ function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callInde
     throw new Error(`Expected ${label} call ${callIndex} object argument`);
   }
   return arg as Record<string, unknown>;
+}
+
+function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHandler>[0]> = {}) {
+  return createWebOnMessageHandler({
+    cfg: {
+      channels: {
+        whatsapp: {
+          ackReaction: { enabled: true },
+        },
+      },
+    } as never,
+    verbose: false,
+    connectionId: "conn-1",
+    maxMediaBytes: 1024 * 1024,
+    groupHistoryLimit: 20,
+    groupHistories: new Map(),
+    groupMemberNames: new Map(),
+    echoTracker: makeEchoTracker() as never,
+    backgroundTasks: new Set(),
+    replyResolver: vi.fn() as never,
+    replyLogger: {
+      info: () => {},
+      warn: () => {},
+      debug: () => {},
+      error: () => {},
+    } as never,
+    baseMentionConfig: {} as never,
+    account: { authDir: "/tmp/auth", accountId: "default" },
+    ...overrides,
+  });
 }
 
 describe("createWebOnMessageHandler audio preflight", () => {
@@ -168,32 +187,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
   });
 
   it("sends ack reaction before audio preflight for voice notes", async () => {
-    const handler = createWebOnMessageHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-      } as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
-      groupHistoryLimit: 20,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: makeEchoTracker() as never,
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        debug: () => {},
-        error: () => {},
-      } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/auth", accountId: "default" },
-    });
+    const handler = makeHandler();
 
     await handler(makeAudioMsg());
 
@@ -206,7 +200,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
   });
 
   it("sends queued status reaction before audio preflight when status reactions are enabled", async () => {
-    const handler = createWebOnMessageHandler({
+    const handler = makeHandler({
       cfg: {
         messages: { statusReactions: { enabled: true } },
         channels: {
@@ -215,23 +209,6 @@ describe("createWebOnMessageHandler audio preflight", () => {
           },
         },
       } as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
-      groupHistoryLimit: 20,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: makeEchoTracker() as never,
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        debug: () => {},
-        error: () => {},
-      } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/auth", accountId: "default" },
     });
 
     await handler(makeAudioMsg());
@@ -247,32 +224,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
   });
 
   it("skips early DM ack/preflight when access-control was not explicitly passed through", async () => {
-    const handler = createWebOnMessageHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-      } as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
-      groupHistoryLimit: 20,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: makeEchoTracker() as never,
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        debug: () => {},
-        error: () => {},
-      } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/auth", accountId: "default" },
-    });
+    const handler = makeHandler();
 
     await handler({ ...makeAudioMsg(), accessControlPassed: undefined });
 
@@ -299,7 +251,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
         return true;
       },
     );
-    const handler = createWebOnMessageHandler({
+    const handler = makeHandler({
       cfg: {
         channels: {
           whatsapp: {
@@ -310,23 +262,6 @@ describe("createWebOnMessageHandler audio preflight", () => {
           "1203630@g.us": ["main", "backup"],
         },
       } as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
-      groupHistoryLimit: 20,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: makeEchoTracker() as never,
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        debug: () => {},
-        error: () => {},
-      } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/auth", accountId: "default" },
     });
 
     await handler(makeGroupAudioMsg());
@@ -339,32 +274,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
     applyGroupGatingMock
       .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
       .mockResolvedValueOnce({ shouldProcess: true });
-    const handler = createWebOnMessageHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-      } as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
-      groupHistoryLimit: 20,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: makeEchoTracker() as never,
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        debug: () => {},
-        error: () => {},
-      } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/auth", accountId: "default" },
-    });
+    const handler = makeHandler();
 
     await handler(makeGroupAudioMsg());
 
@@ -389,32 +299,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
       capturedCtx = ctx;
       return "transcribed voice note";
     });
-    const handler = createWebOnMessageHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-      } as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
-      groupHistoryLimit: 20,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: makeEchoTracker() as never,
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        debug: () => {},
-        error: () => {},
-      } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/auth", accountId: "default" },
-    });
+    const handler = makeHandler();
 
     await handler(makeAudioMsg());
 
@@ -433,32 +318,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
 
   it("does not transcribe group voice when policy gating rejects before mention", async () => {
     applyGroupGatingMock.mockResolvedValueOnce({ shouldProcess: false });
-    const handler = createWebOnMessageHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-      } as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
-      groupHistoryLimit: 20,
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      echoTracker: makeEchoTracker() as never,
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        debug: () => {},
-        error: () => {},
-      } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/auth", accountId: "default" },
-    });
+    const handler = makeHandler();
 
     await handler(makeGroupAudioMsg());
 

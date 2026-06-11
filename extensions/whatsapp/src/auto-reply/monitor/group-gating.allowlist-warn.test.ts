@@ -5,34 +5,44 @@ vi.mock("./group-activation.js", () => ({
   resolveGroupActivationFor: vi.fn(async () => "mention"),
 }));
 
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
-import type { WebInboundMsg } from "../types.js";
 import {
   resetGroupDropWarningsForTests,
   applyGroupGating,
   type GroupHistoryEntry,
 } from "./group-gating.js";
 
-function makeUnregisteredGroupMsg(conversationId: string, accountId = "default"): WebInboundMsg {
-  return {
-    id: `msg-${conversationId}`,
+function makeUnregisteredGroupMsg(
+  conversationId: string,
+  accountId = "default",
+): WebInboundMessage {
+  return createTestWebInboundMessage({
+    event: {
+      id: `msg-${conversationId}`,
+      timestamp: 1700000000,
+    },
+    payload: {
+      body: "@openclaw hello",
+    },
+    platform: {
+      chatJid: conversationId,
+      recipientJid: "+15550000001",
+      sender: { e164: "+15550000002", name: "Alice" },
+    },
     from: conversationId,
-    to: "+15550000001",
-    body: "@openclaw hello",
-    chatId: conversationId,
     chatType: "group",
     conversationId,
-    timestamp: 1700000000,
     accountId,
-    sender: { e164: "+15550000002", name: "Alice" },
-  } as WebInboundMsg;
+  });
 }
 
 type WarnLogger = (obj: unknown, msg: string) => void;
 type ApplyGroupGatingParams = Parameters<typeof applyGroupGating>[0];
 
 function makeParams(
-  msg: WebInboundMsg,
+  msg: WebInboundMessage,
   warn: WarnLogger,
   cfg: ApplyGroupGatingParams["cfg"] = {
     channels: {
