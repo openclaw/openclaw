@@ -619,7 +619,10 @@ async function notifyRecoveredAnthropicThinking(
 }
 
 function isSuccessfulRecoveryRetryResult(message: AssistantMessage | undefined): boolean {
-  return Boolean(message) && message.stopReason !== "error" && message.stopReason !== "aborted";
+  if (!message) {
+    return false;
+  }
+  return message.stopReason !== "error" && message.stopReason !== "aborted";
 }
 
 function wrapRetryStreamWithRecoveryNotification(
