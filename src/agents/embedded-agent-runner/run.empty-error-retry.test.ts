@@ -13,21 +13,27 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
+type AssistantContent = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>["content"];
+
 function emptyErrorAttempt(
   provider: string,
   model: string,
   outputTokens = 0,
+  content: AssistantContent = [],
+  errorMessage?: string,
 ): EmbeddedRunAttemptResult {
   // Models can report stopReason=error with no output after tool activity; that
   // is replay-safe only when the attempt metadata records no side effects.
   return makeAttemptResult({
     assistantTexts: [],
     lastAssistant: {
+      role: "assistant",
       stopReason: "error",
       provider,
       model,
-      content: [],
+      content,
       usage: { input: 100, output: outputTokens, totalTokens: 100 + outputTokens },
+      ...(errorMessage ? { errorMessage } : {}),
     } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
   });
 }
@@ -36,6 +42,7 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
   return makeAttemptResult({
     assistantTexts: ["Done."],
     lastAssistant: {
+      role: "assistant",
       stopReason: "stop",
       provider,
       model,
@@ -65,6 +72,58 @@ describe("runEmbeddedAgent silent-error retry", () => {
       provider: "ollama",
       model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-basic",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("retries when stopReason=error emitted only thinking blocks and output tokens", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt("anthropic", "claude-opus-4-8", 1120, [
+        {
+          type: "thinking",
+          thinking: "internal reasoning before provider error",
+          thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+        },
+      ]),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-thinking-only",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("retries thinking-only unknown provider errors before assistant failover", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "claude-opus-4-8",
+        1120,
+        [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+          },
+        ],
+        "An unknown error occurred",
+      ),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-before-assistant-failover",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
@@ -113,6 +172,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
+          role: "assistant",
           stopReason: "stop",
           provider: "plain-provider",
           model: "plain-model",
@@ -156,6 +216,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
+          role: "assistant",
           stopReason: "error",
           provider: "ollama",
           model: "glm-5.1:cloud",

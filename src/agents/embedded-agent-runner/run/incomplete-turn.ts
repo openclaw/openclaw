@@ -281,16 +281,16 @@ export function resolveIncompleteTurnPayloadText(params: {
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  // Unsigned thinking payloads count toward payloadCount but carry no user-visible
-  // content; bypass the visible-text guard when unsigned thinking was the only output
-  // so that incomplete-turn stall detection fires below. (#89787)
-  const unsignedThinkingOnlyTerminal =
+  // Thinking payloads can count toward payloadCount but carry no user-visible
+  // content; bypass the visible-text guard when thinking was the only output
+  // so that incomplete-turn stall detection fires below. (#89787, #91953)
+  const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
     !joinAssistantTexts(params.attempt.assistantTexts).length &&
-    isUnsignedThinkingOnlyAssistantTurn(assistant);
+    (isReasoningOnlyAssistantTurn(assistant) || isUnsignedThinkingOnlyAssistantTurn(assistant));
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal && !unsignedThinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 && !toolUseTerminal && !thinkingOnlyTerminal) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -330,7 +330,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
-    !unsignedThinkingOnlyTerminal &&
+    !thinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -553,6 +553,35 @@ function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
     return false;
   }
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
+}
+
+export function shouldRetrySilentErrorAssistantTurn(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant" | "replayMetadata"
+  >;
+}): boolean {
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return false;
+  }
+  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+    return false;
+  }
+
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant || assistant.stopReason !== "error") {
+    return false;
+  }
+
+  const content = (assistant as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return !hasPositiveOutputTokenUsage(assistant);
+  }
+
+  return isReasoningOnlyAssistantTurn(assistant) || isUnsignedThinkingOnlyAssistantTurn(assistant);
 }
 
 function isEmptyResponseAssistantTurn(params: {
