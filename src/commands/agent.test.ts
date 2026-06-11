@@ -545,7 +545,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
       const sessionKey = "agent:main:subagent:tools-policy";
-      await writeSessionStoreSeed(store, {
+      writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "tools-policy-session",
           updatedAt: Date.now(),
