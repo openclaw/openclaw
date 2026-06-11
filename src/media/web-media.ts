@@ -344,18 +344,30 @@ const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
 type OutboundProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">;
 
 async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<boolean> {
-  const { db } = openOpenClawStateDatabase();
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
-      .selectFrom("outbound_media_provenance")
-      .select(["kind", "version"])
-      .where("realpath", "=", resolvedFilePath),
-  );
-  return (
-    row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
-    row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION
-  );
+  try {
+    const { db } = openOpenClawStateDatabase();
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .selectFrom("outbound_media_provenance")
+        .select(["kind", "version"])
+        .where("realpath", "=", resolvedFilePath),
+    );
+    const matched =
+      row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
+      row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION;
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `trusted-html marker: ${matched ? "hit" : "miss"} (${resolvedFilePath})`,
+      );
+    }
+    return matched;
+  } catch (err) {
+    logVerbose(
+      `trusted-html marker: lookup failed (${resolvedFilePath}): ${formatErrorMessage(err)}`,
+    );
+    return false;
+  }
 }
 
 /**
@@ -370,6 +382,12 @@ async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<
  */
 export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<void> {
   const resolvedFilePath = await realpath(filePath);
+  const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
+  if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    throw new Error(
+      `markTrustedGeneratedHtmlPath: refusing to mark path outside outbound staging dir: ${resolvedFilePath}`,
+    );
+  }
   const now = Date.now();
   runOpenClawStateWriteTransaction(({ db }) => {
     executeSqliteQuerySync(
@@ -389,22 +407,6 @@ export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<vo
             created_at_ms: now,
           }),
         ),
-    );
-  });
-}
-
-/**
- * Deletes the trusted-generated-html provenance row for `resolvedFilePath`, if
- * present. Best-effort: a missing row is not an error. Callers should pass the
- * realpath that was used to write the row (i.e. resolved before any unlink).
- */
-export function clearTrustedGeneratedHtmlMarker(resolvedFilePath: string): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
-        .deleteFrom("outbound_media_provenance")
-        .where("realpath", "=", resolvedFilePath),
     );
   });
 }
@@ -433,6 +435,7 @@ export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
   if (stale.length === 0) {
     return;
   }
+  logVerbose(`trusted-html prune: removed ${stale.length} stale marker(s)`);
   runOpenClawStateWriteTransaction(({ db: writeDb }) => {
     executeSqliteQuerySync(
       writeDb,
