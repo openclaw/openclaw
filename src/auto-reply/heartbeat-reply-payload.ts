@@ -1,18 +1,18 @@
 // Heartbeat reply payload selector for multi-payload auto-reply results.
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  isReasoningReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "./types.js";
 
-const HEARTBEAT_REASONING_PREFIX_PATTERN = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u;
-
 export function hasHeartbeatReasoningPrefix(text: string): boolean {
-  return HEARTBEAT_REASONING_PREFIX_PATTERN.test(text.trimStart());
+  return isReasoningReplyPayload({ text });
 }
 
 export function isHeartbeatReasoningPayload(
   payload: Pick<ReplyPayload, "isReasoning" | "text">,
 ): boolean {
-  const text = typeof payload.text === "string" ? payload.text : "";
-  return payload.isReasoning === true || hasHeartbeatReasoningPrefix(text);
+  return isReasoningReplyPayload(payload);
 }
 
 /** Pick the last non-reasoning outbound-capable reply payload for heartbeat delivery. */

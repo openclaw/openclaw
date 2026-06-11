@@ -21,6 +21,7 @@ describe("resolveHeartbeatReplyPayload", () => {
         finalPayload,
         { text: "Reasoning:\n_private details_" },
         { text: "Thinking\n\n_private details_" },
+        { text: "> reasoning:\n> _private details_" },
       ]),
     ).toBe(finalPayload);
   });
@@ -34,6 +35,9 @@ describe("resolveHeartbeatReplyPayload", () => {
     expect(resolveHeartbeatReplyPayload(reasoningPayload)).toBeUndefined();
     expect(resolveHeartbeatReplyPayload([reasoningPayload])).toBeUndefined();
     expect(resolveHeartbeatReplyPayload({ text: "Reasoning:\n_private details_" })).toBeUndefined();
+    expect(
+      resolveHeartbeatReplyPayload({ text: "> thinking\n> _private details_" }),
+    ).toBeUndefined();
   });
 
   it("continues scanning past empty and reasoning payloads", () => {

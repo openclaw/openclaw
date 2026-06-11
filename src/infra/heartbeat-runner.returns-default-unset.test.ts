@@ -1363,6 +1363,10 @@ describe("runHeartbeatOnce", () => {
         name: "legacy-prefixed reasoning after HEARTBEAT_OK",
         replies: [{ text: "HEARTBEAT_OK" }, { text: "Reasoning:\n_Because it helps_" }],
       },
+      {
+        name: "blockquoted reasoning after HEARTBEAT_OK",
+        replies: [{ text: "HEARTBEAT_OK" }, { text: "> reasoning:\n> _Because it helps_" }],
+      },
     ]),
   )(
     "does not deliver late reasoning payloads when includeReasoning is unset: $name",
