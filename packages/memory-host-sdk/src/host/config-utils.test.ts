@@ -1,6 +1,29 @@
 // Memory Host SDK tests cover config utils behavior.
 import { describe, expect, it } from "vitest";
-import { parseDurationMs } from "./config-utils.js";
+import { parseDurationMs, resolveAgentWorkspaceDir } from "./config-utils.js";
+import type { OpenClawConfig } from "./config-utils.js";
+
+describe("resolveAgentWorkspaceDir", () => {
+  it("non-default agent uses hyphenated fallback under agents.defaults.workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "work", default: true }],
+      },
+    };
+    expect(resolveAgentWorkspaceDir(cfg, "main")).toBe("/shared-ws-main");
+  });
+
+  it("default agent uses agents.defaults.workspace directly", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "work", default: true }],
+      },
+    };
+    expect(resolveAgentWorkspaceDir(cfg, "work")).toBe("/shared-ws");
+  });
+});
 
 describe("parseDurationMs", () => {
   it("parses decimal durations into milliseconds", () => {

@@ -342,7 +342,7 @@ export function resolveAgentWorkspaceDir(
     );
   }
   if (fallback) {
-    return stripNullBytes(path.join(resolveUserPath(fallback, env), id));
+    return stripNullBytes(`${resolveUserPath(fallback, env)}-${id}`);
   }
   return stripNullBytes(path.join(resolveStateDir(env), `workspace-${id}`));
 }
