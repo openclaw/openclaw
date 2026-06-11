@@ -339,7 +339,7 @@ describe("createAgentSession thinking level defaults", () => {
       provider: "ollama",
       reasoning: true,
       params: { canonicalModelId: "qwen3:8b" },
-      compat: { thinkingFormat: "ollama" },
+      compat: { thinkingFormat: "qwen" },
     } satisfies Model;
     const { session } = await createAgentSession({
       model: ollamaModel,
@@ -353,7 +353,16 @@ describe("createAgentSession thinking level defaults", () => {
     expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
       provider: "ollama",
       model: testModel.id,
-      catalog: [ollamaModel],
+      catalog: [
+        {
+          provider: "ollama",
+          id: testModel.id,
+          api: ollamaModel.api,
+          reasoning: true,
+          params: { canonicalModelId: "qwen3:8b" },
+          compat: { thinkingFormat: "qwen" },
+        },
+      ],
     });
   });
 
@@ -393,7 +402,14 @@ describe("createAgentSession thinking level defaults", () => {
     expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
       provider: "ollama",
       model: testModel.id,
-      catalog: [customOllamaModel],
+      catalog: [
+        {
+          provider: "ollama",
+          id: testModel.id,
+          api: "ollama",
+          reasoning: true,
+        },
+      ],
     });
   });
 
