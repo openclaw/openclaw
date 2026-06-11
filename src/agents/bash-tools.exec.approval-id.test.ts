@@ -1086,6 +1086,49 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("preserves multiline approved gateway exec output in async follow-ups", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+    const outputLines = Array.from(
+      { length: 60 },
+      (_, index) => `approval-output-line-${String(index).padStart(2, "0")}`,
+    );
+    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+      `process.stdout.write(${JSON.stringify(outputLines.join("\n"))})`,
+    )}`;
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:discord:channel:123",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "discord",
+      currentChannelId: "123",
+      accountId: "default",
+      currentThreadTs: "456",
+    });
+
+    const result = await tool.execute("call-gw-followup-multiline-output", {
+      command,
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
+    const message = String(agentCalls[0]?.message);
+    expect(message).toContain(outputLines[0]);
+    expect(message).toContain(outputLines[outputLines.length - 1]);
+    expect(message).toContain(`${outputLines[0]}\n${outputLines[1]}`);
+    expect(message).not.toContain("Output truncated by exec capture limit");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("waits for native webchat approval and returns approved gateway output as a foreground result", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
