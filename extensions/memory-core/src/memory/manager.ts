@@ -575,6 +575,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
     });
+    if (
+      state.status === "mismatched" &&
+      state.reason === "index provider settings changed" &&
+      this.providerInitialized &&
+      this.providerKey
+    ) {
+      const meta = this.readMeta();
+      if (meta && meta.providerKey !== this.providerKey) {
+        meta.providerKey = this.providerKey;
+        this.writeMeta(meta);
+        const repaired = this.resolveCurrentIndexIdentityState({
+          ...(provider !== undefined ? { provider } : {}),
+          providerKeyKnown: params?.providerKeyKnown,
+        });
+        this.indexIdentityState = repaired;
+        this.indexIdentityDirty =
+          repaired.status === "mismatched" ||
+          (repaired.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+        return repaired;
+      }
+    }
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||
