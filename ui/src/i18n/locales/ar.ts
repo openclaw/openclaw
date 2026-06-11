@@ -227,6 +227,7 @@ export const ar: TranslationMap = {
     statusFailed: "فشل",
     statusKilled: "تم الإنهاء",
     statusTimeout: "انتهت المهلة",
+    statusPaused: "Paused",
     model: "النموذج",
     provider: "المزود",
     runtime: "وقت التشغيل",

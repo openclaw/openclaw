@@ -230,6 +230,7 @@ export const nl: TranslationMap = {
     statusFailed: "Mislukt",
     statusKilled: "Afgebroken",
     statusTimeout: "Time-out",
+    statusPaused: "Paused",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",

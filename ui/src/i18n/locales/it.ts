@@ -228,6 +228,7 @@ export const it: TranslationMap = {
     statusFailed: "Non riuscito",
     statusKilled: "Terminato",
     statusTimeout: "Tempo scaduto",
+    statusPaused: "Paused",
     model: "Modello",
     provider: "Provider",
     runtime: "Runtime",

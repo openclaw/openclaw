@@ -278,7 +278,13 @@ export type SessionEntry = {
   /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
   runtimeMs?: number;
   /** Final persisted subagent run status, used after in-memory run archival. */
-  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  status?: "running" | "done" | "failed" | "killed" | "timeout" | "paused";
+  /**
+   * Set when the latest run ended via a `sessions_yield` tool call. The session
+   * is awaiting a queued continuation rather than fully complete; consumers
+   * such as restart-recovery should leave it alone until a fresh run starts.
+   */
+  pauseReason?: "sessions_yield";
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
@@ -420,7 +426,7 @@ export type SessionEntry = {
 
 export function isTerminalSessionStatus(
   status: unknown,
-): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+): status is Exclude<NonNullable<SessionEntry["status"]>, "running" | "paused"> {
   return status === "done" || status === "failed" || status === "killed" || status === "timeout";
 }
 

@@ -226,6 +226,7 @@ export const zh_TW: TranslationMap = {
     statusFailed: "失敗",
     statusKilled: "已終止",
     statusTimeout: "逾時",
+    statusPaused: "Paused",
     model: "模型",
     provider: "提供者",
     runtime: "執行階段",

@@ -41,7 +41,7 @@ export type SessionListDeliveryContext = {
 };
 
 /** Compact run status shown by session tools. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout" | "paused";
 
 /** Normalized session row returned by session list-style tools. */
 export type SessionListRow = {
