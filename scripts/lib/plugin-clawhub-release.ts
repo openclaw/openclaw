@@ -65,16 +65,14 @@ type PluginReleasePlan = {
   skippedPublished: PluginReleasePlanItem[];
 };
 
-type ClawHubPackageDetail = {
+type ClawHubTrustedPublisherDetail = {
   trustedPublisher?: unknown;
 };
 
-type ClawHubPackageReleaseState = {
+type PluginReleasePlanItemWithPackageState = PluginReleasePlanItem & {
   packageExists: boolean;
   hasTrustedPublisher: boolean;
 };
-
-type PluginReleasePlanItemWithPackageState = PluginReleasePlanItem & ClawHubPackageReleaseState;
 
 type ClawHubPublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
@@ -370,13 +368,13 @@ async function isPluginVersionPublishedOnClawHub(
   );
 }
 
-async function queryClawHubPackageReleaseState(
+async function doesClawHubPackageExist(
   packageName: string,
   options: {
     fetchImpl?: typeof fetch;
     registryBaseUrl?: string;
   } = {},
-): Promise<ClawHubPackageReleaseState> {
+): Promise<boolean> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const url = new URL(
     `/api/v1/packages/${encodeURIComponent(packageName)}`,
@@ -390,10 +388,7 @@ async function queryClawHubPackageReleaseState(
   });
 
   if (response.status === 404) {
-    return {
-      packageExists: false,
-      hasTrustedPublisher: false,
-    };
+    return false;
   }
   if (!response.ok) {
     throw new Error(
@@ -401,19 +396,44 @@ async function queryClawHubPackageReleaseState(
     );
   }
 
-  let packageDetail: ClawHubPackageDetail;
+  return true;
+}
+
+async function hasClawHubTrustedPublisher(
+  packageName: string,
+  options: {
+    fetchImpl?: typeof fetch;
+    registryBaseUrl?: string;
+  } = {},
+): Promise<boolean> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const url = new URL(
+    `/api/v1/packages/${encodeURIComponent(packageName)}/trusted-publisher`,
+    getRegistryBaseUrl(options.registryBaseUrl),
+  );
+  const response = await fetchImpl(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to query ClawHub trusted publisher for ${packageName}: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  let trustedPublisherDetail: ClawHubTrustedPublisherDetail;
   try {
-    packageDetail = (await response.json()) as ClawHubPackageDetail;
+    trustedPublisherDetail = (await response.json()) as ClawHubTrustedPublisherDetail;
   } catch (error) {
-    throw new Error(`Failed to parse ClawHub package ${packageName} detail response.`, {
+    throw new Error(`Failed to parse ClawHub trusted publisher ${packageName} response.`, {
       cause: error,
     });
   }
 
-  return {
-    packageExists: true,
-    hasTrustedPublisher: Boolean(packageDetail.trustedPublisher),
-  };
+  return Boolean(trustedPublisherDetail.trustedPublisher);
 }
 
 function stripPackageReleaseState(
@@ -467,11 +487,17 @@ export async function collectPluginClawHubReleasePlan(params?: {
 
   const planned = await Promise.all(
     selectedPublishable.map(async (plugin): Promise<PluginReleasePlanItemWithPackageState> => {
-      const packageState = await queryClawHubPackageReleaseState(plugin.packageName, {
+      const packageExists = await doesClawHubPackageExist(plugin.packageName, {
         registryBaseUrl: params?.registryBaseUrl,
         fetchImpl: params?.fetchImpl,
       });
-      const alreadyPublished = packageState.packageExists
+      const hasTrustedPublisher = packageExists
+        ? await hasClawHubTrustedPublisher(plugin.packageName, {
+            registryBaseUrl: params?.registryBaseUrl,
+            fetchImpl: params?.fetchImpl,
+          })
+        : false;
+      const alreadyPublished = packageExists
         ? await isPluginVersionPublishedOnClawHub(plugin.packageName, plugin.version, {
             registryBaseUrl: params?.registryBaseUrl,
             fetchImpl: params?.fetchImpl,
@@ -480,7 +506,8 @@ export async function collectPluginClawHubReleasePlan(params?: {
 
       return {
         ...plugin,
-        ...packageState,
+        packageExists,
+        hasTrustedPublisher,
         alreadyPublished,
         artifactName: formatClawHubPackageArtifactName(plugin),
       };

@@ -327,6 +327,15 @@ describe("collectPluginClawHubReleasePlan", () => {
         "@openclaw/demo-plugin": {
           status: 200,
           body: {
+            package: {},
+            owner: {},
+          },
+        },
+      },
+      trustedPublishers: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
             trustedPublisher: {
               repository: "openclaw/openclaw",
             },
@@ -350,6 +359,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(plan.missingTrustedPublisher).toStrictEqual([]);
     expect(requests).toEqual([
       "/api/v1/packages/%40openclaw%2Fdemo-plugin",
+      "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher",
       "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1",
     ]);
   });
@@ -391,6 +401,15 @@ describe("collectPluginClawHubReleasePlan", () => {
         "@openclaw/demo-plugin": {
           status: 200,
           body: {
+            package: {},
+            owner: {},
+          },
+        },
+      },
+      trustedPublishers: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
             trustedPublisher: null,
           },
         },
@@ -424,6 +443,15 @@ describe("collectPluginClawHubReleasePlan", () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl } = createClawHubPlanFetch({
       packages: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            package: {},
+            owner: {},
+          },
+        },
+      },
+      trustedPublishers: {
         "@openclaw/demo-plugin": {
           status: 200,
           body: {
@@ -486,6 +514,15 @@ describe("collectPluginClawHubReleasePlan", () => {
       selection: ["@openclaw/demo-plugin"],
       fetchImpl: createClawHubPlanFetch({
         packages: {
+          "@openclaw/demo-plugin": {
+            status: 200,
+            body: {
+              package: {},
+              owner: {},
+            },
+          },
+        },
+        trustedPublishers: {
           "@openclaw/demo-plugin": {
             status: 200,
             body: {
@@ -762,6 +799,13 @@ function createClawHubPlanFetch(config: {
       body?: unknown;
     }
   >;
+  trustedPublishers?: Record<
+    string,
+    {
+      status: number;
+      body?: unknown;
+    }
+  >;
   versions?: Record<string, number>;
 }) {
   const requests: string[] = [];
@@ -778,6 +822,20 @@ function createClawHubPlanFetch(config: {
       }
       return new Response(JSON.stringify(packageResponse.body ?? {}), {
         status: packageResponse.status,
+      });
+    }
+
+    const trustedPublisherMatch = url.pathname.match(
+      /^\/api\/v1\/packages\/([^/]+)\/trusted-publisher$/u,
+    );
+    if (trustedPublisherMatch) {
+      const packageName = decodeURIComponent(trustedPublisherMatch[1]);
+      const trustedPublisherResponse = config.trustedPublishers?.[packageName];
+      if (!trustedPublisherResponse) {
+        throw new Error(`Unexpected trusted-publisher request for ${packageName}`);
+      }
+      return new Response(JSON.stringify(trustedPublisherResponse.body ?? {}), {
+        status: trustedPublisherResponse.status,
       });
     }
 
