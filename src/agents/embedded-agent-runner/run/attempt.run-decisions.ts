@@ -20,7 +20,7 @@ export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   env?: NodeJS.ProcessEnv;
 }): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
   // Bound embedded-attempt lock holds to the compaction window, not the full run timeout.
-  // With defaults this permits roughly 900s compaction time plus the shared 120s
+  // With defaults this permits roughly 180s compaction time plus the shared 120s
   // timeout grace before the watchdog releases a stuck live-process lock.
   return resolveSessionWriteLockOptions(params.config, {
     env: params.env,

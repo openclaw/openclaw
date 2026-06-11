@@ -166,6 +166,21 @@ function readFalQueueResponse(payload: unknown): FalQueueResponse {
   };
 }
 
+function readFalCompletedQueueResult(payload: unknown): FalQueueResponse {
+  if (!isRecord(payload)) {
+    throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+  }
+  if (
+    payload.response !== undefined ||
+    (payload.video === undefined && payload.videos === undefined)
+  ) {
+    return readFalQueueResponse(payload);
+  }
+  return {
+    response: readFalVideoPayload(payload),
+  };
+}
+
 function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
@@ -509,7 +524,7 @@ async function waitForFalQueueResult(params: {
     }
     lastStatus = status;
     if (status === "COMPLETED") {
-      return readFalQueueResponse(
+      return readFalCompletedQueueResult(
         await fetchFalJson({
           url: params.responseUrl,
           init: {
