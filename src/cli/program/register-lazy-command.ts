@@ -45,6 +45,24 @@ export function registerLazyCommand({
       removeCommandByName(program, commandName);
     }
     await register();
-    await reparseProgramFromActionArgs(program, actionArgs);
+    try {
+      await reparseProgramFromActionArgs(program, actionArgs);
+    } catch (err) {
+      // Commander's exitOverride (in build-program.ts) sets process.exitCode and
+      // throws. When the reparse error propagates through the lazy-command promise
+      // chain, ensure the exit code survives so run-main.ts can also record it.
+      if (
+        err &&
+        typeof err === "object" &&
+        "exitCode" in err &&
+        typeof (err as { exitCode: unknown }).exitCode === "number" &&
+        "code" in err &&
+        typeof (err as { code: unknown }).code === "string" &&
+        (err as { code: string }).code.startsWith("commander.")
+      ) {
+        process.exitCode = (err as { exitCode: number }).exitCode;
+      }
+      throw err;
+    }
   });
 }
