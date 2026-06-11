@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Ensures Playwright Chromium is installed or a usable system browser is available.
 import { spawnSync as spawnSyncImpl } from "node:child_process";
 import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -7,14 +8,7 @@ import { chromium } from "playwright";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const playwrightInstallArgs = [
-  "--dir",
-  "ui",
-  "exec",
-  "playwright",
-  "install",
-  "chromium",
-];
+const playwrightInstallArgs = ["--dir", "ui", "exec", "playwright", "install", "chromium"];
 const playwrightInstallWithDepsArgs = [
   "--dir",
   "ui",
@@ -25,6 +19,9 @@ const playwrightInstallWithDepsArgs = [
   "chromium",
 ];
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+/**
+ * System Chromium executable paths used before downloading Playwright browsers.
+ */
 export const systemChromiumExecutableCandidates = [
   "/snap/bin/chromium",
   "/usr/bin/chromium-browser",
@@ -33,6 +30,9 @@ export const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ];
 
+/**
+ * Checks whether a Chromium executable can start enough to print its version.
+ */
 export function canRunChromiumExecutable(executablePath, spawnSync = spawnSyncImpl) {
   const result = spawnSync(executablePath, ["--version"], {
     stdio: "ignore",
@@ -40,6 +40,9 @@ export function canRunChromiumExecutable(executablePath, spawnSync = spawnSyncIm
   return result.status === 0;
 }
 
+/**
+ * Resolves the first runnable system Chromium executable path.
+ */
 export function resolveSystemChromiumExecutablePath(
   existsSync = existsSyncImpl,
   spawnSync = spawnSyncImpl,
@@ -51,10 +54,14 @@ export function resolveSystemChromiumExecutablePath(
   );
 }
 
+/**
+ * Builds the pnpm runner invocation for Playwright browser install.
+ */
 export function resolvePlaywrightInstallRunner(options = {}) {
   const env = options.env ?? process.env;
   return resolvePnpmRunner({
     comSpec: options.comSpec ?? env.ComSpec ?? env.COMSPEC,
+    env,
     npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
     platform: options.platform,
     pnpmArgs: options.withDeps ? playwrightInstallWithDepsArgs : playwrightInstallArgs,
@@ -66,6 +73,9 @@ function isTruthyEnvFlag(value) {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+/**
+ * Reports whether Linux system dependencies should be installed with Chromium.
+ */
 export function shouldInstallPlaywrightSystemDependencies(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -83,6 +93,9 @@ export function shouldInstallPlaywrightSystemDependencies(options = {}) {
   );
 }
 
+/**
+ * Checks whether this module is the direct script entrypoint.
+ */
 export function isDirectScriptExecution(
   argvEntry = process.argv[1],
   modulePath = fileURLToPath(import.meta.url),
@@ -98,6 +111,9 @@ export function isDirectScriptExecution(
   }
 }
 
+/**
+ * Ensures a runnable Chromium exists for Playwright-based UI tests.
+ */
 export function ensurePlaywrightChromium(options = {}) {
   const env = options.env ?? process.env;
   const executableOverride =
@@ -123,10 +139,7 @@ export function ensurePlaywrightChromium(options = {}) {
 
   const systemExecutablePath =
     options.systemExecutablePath ?? resolveSystemChromiumExecutablePath(existsSync, spawnSync);
-  if (
-    systemExecutablePath &&
-    canRunChromiumExecutable(systemExecutablePath, spawnSync)
-  ) {
+  if (systemExecutablePath && canRunChromiumExecutable(systemExecutablePath, spawnSync)) {
     log(`[ui-e2e] Using system Chromium at ${systemExecutablePath}.`);
     return 0;
   }
@@ -139,46 +152,55 @@ export function ensurePlaywrightChromium(options = {}) {
   }
 
   log(`[ui-e2e] Playwright Chromium is not runnable at ${executablePath}; installing chromium.`);
-  const runner = resolvePlaywrightInstallRunner({
-    comSpec: options.comSpec,
+  const canInstallSystemDependencies = shouldInstallPlaywrightSystemDependencies({
     env,
+    getuid: options.getuid,
     platform: options.platform,
   });
-  const result = spawnSync(runner.command, runner.args, {
-    cwd: options.cwd ?? repoRoot,
-    env,
-    shell: runner.shell,
-    stdio: options.stdio ?? "inherit",
-    windowsVerbatimArguments: runner.windowsVerbatimArguments,
-  });
-  const status = result.status ?? 1;
+  const runPlaywrightInstall = (withDeps = false) => {
+    const runner = resolvePlaywrightInstallRunner({
+      comSpec: options.comSpec,
+      env,
+      platform: options.platform,
+      withDeps,
+    });
+    const result = spawnSync(runner.command, runner.args, {
+      cwd: options.cwd ?? repoRoot,
+      env,
+      shell: runner.shell,
+      stdio: options.stdio ?? "inherit",
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    });
+    return result.status ?? 1;
+  };
+
+  const status = runPlaywrightInstall();
   if (status !== 0) {
+    if (canInstallSystemDependencies) {
+      log(
+        `[ui-e2e] Chromium install failed in a Linux CI/root lane; installing Linux system dependencies.`,
+      );
+      const depsStatus = runPlaywrightInstall(true);
+      if (depsStatus !== 0) {
+        return depsStatus;
+      }
+      if (existsSync(executablePath) && canRunChromiumExecutable(executablePath, spawnSync)) {
+        return 0;
+      }
+      log(
+        `[ui-e2e] Playwright install completed but Chromium is still not runnable at ${executablePath}.`,
+      );
+      return 1;
+    }
     return status;
   }
 
   if (!existsSync(executablePath) || !canRunChromiumExecutable(executablePath, spawnSync)) {
-    if (shouldInstallPlaywrightSystemDependencies({
-      env,
-      getuid: options.getuid,
-      platform: options.platform,
-    })) {
+    if (canInstallSystemDependencies) {
       log(
         `[ui-e2e] Chromium is installed but still cannot start; installing Linux system dependencies.`,
       );
-      const depsRunner = resolvePlaywrightInstallRunner({
-        comSpec: options.comSpec,
-        env,
-        platform: options.platform,
-        withDeps: true,
-      });
-      const depsResult = spawnSync(depsRunner.command, depsRunner.args, {
-        cwd: options.cwd ?? repoRoot,
-        env,
-        shell: depsRunner.shell,
-        stdio: options.stdio ?? "inherit",
-        windowsVerbatimArguments: depsRunner.windowsVerbatimArguments,
-      });
-      const depsStatus = depsResult.status ?? 1;
+      const depsStatus = runPlaywrightInstall(true);
       if (depsStatus !== 0) {
         return depsStatus;
       }

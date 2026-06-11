@@ -1,10 +1,14 @@
+// Session utility tests cover key parsing, store migration, agent/default rows,
+// model identity resolution, title derivation, and byte-capped row payloads.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -824,6 +828,108 @@ describe("gateway session utils", () => {
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "unknown")).toBeNull();
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "main")).toBeNull();
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey ignores confirmed ACP runtime session keys", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const acpEntry = (agent: string, runtimeSessionName: string) =>
+      ({
+        acp: {
+          backend: "acpx",
+          agent,
+          runtimeSessionName,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      }) as SessionEntry;
+    const claudeKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
+    const cursorKey = "agent:cursor:acp:22222222-2222-4222-8222-222222222222";
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, claudeKey, acpEntry("claude", claudeKey)),
+    ).toBeNull();
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, cursorKey, acpEntry("cursor", cursorKey)),
+    ).toBeNull();
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey rejects ACP-shaped bridge keys without ACP metadata", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:acp:configured-bridge-without-meta", {
+        acp: undefined,
+        sessionId: "sess-configured-bridge",
+        updatedAt: 1,
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveDeletedAgentIdFromSessionKey(
+        cfg,
+        "agent:deleted-agent:acp:bridge-session-without-runtime-meta",
+        { acp: undefined, sessionId: "sess-deleted-bridge", updatedAt: 1 },
+      ),
+    ).toBe("deleted-agent");
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey repairs canonical ACP metadata aliases", async () => {
+    await withStateDirEnv("session-utils-acp-deleted-agent-repair-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
+      const acpKey = "agent:claude:acp:55555555-5555-4555-8555-555555555555";
+      const legacyAcpKey = "agent:CLAUDE:acp:55555555-5555-4555-8555-555555555555";
+      const entry = {
+        sessionId: "sess-acp-repair",
+        updatedAt: 1,
+      } satisfies SessionEntry;
+      writeSessionStoreForTest(storePath, {
+        [acpKey]: entry,
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: legacyAcpKey,
+        sessionId: "sess-acp-repair",
+        meta: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: legacyAcpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      });
+      const cfg = {
+        session: {
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      expect(
+        resolveDeletedAgentIdFromSessionKey(cfg, acpKey, entry, {
+          acpMetadataSessionKey: acpKey,
+        }),
+      ).toBeNull();
+    });
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey rejects deleted configured ACP binding owners", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    expect(
+      resolveDeletedAgentIdFromSessionKey(
+        cfg,
+        "agent:deleted-agent:acp:binding:discord:default:feedface",
+      ),
+    ).toBe("deleted-agent");
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:acp:binding:discord:default:feedface"),
+    ).toBeNull();
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {

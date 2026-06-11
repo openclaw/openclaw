@@ -1,3 +1,4 @@
+// Msteams plugin module implements polls behavior.
 import crypto from "node:crypto";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {

@@ -1,7 +1,9 @@
+// Covers context-window cache application and session-manager runtime registry.
 import { describe, expect, it, vi } from "vitest";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
+  ANTHROPIC_FABLE_CONTEXT_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
@@ -40,6 +42,8 @@ describe("applyDiscoveredContextWindows", () => {
   });
 
   it("stores provider-qualified entries independently", () => {
+    // Provider-qualified keys retain their exact discovered value; only bare
+    // keys collapse to the conservative cross-provider minimum.
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -90,6 +94,8 @@ describe("applyDiscoveredContextWindows", () => {
   });
 
   it("does not upgrade provider-qualified anthropic GA 1M discovery ids without verified ownership", () => {
+    // A slash-prefixed id alone is not proof that Anthropic owns the metadata;
+    // discovery must report provider ownership before applying the 1M override.
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -129,8 +135,7 @@ describe("applyDiscoveredContextWindows", () => {
 describe("applyConfiguredContextWindows", () => {
   it("writes bare model id to cache; does not touch raw provider-qualified discovery entries", () => {
     // Discovery stored a provider-qualified entry; config override goes into the
-    // bare key only. resolveContextTokensForModel now scans config directly, so
-    // there is no need (and no benefit) to also write a synthetic qualified key.
+    // bare key only. Direct config scans handle explicit providers.
     const cache = new Map<string, number>([["openrouter/anthropic/claude-opus-4-6", 1_000_000]]);
     applyConfiguredContextWindows({
       cache,
@@ -383,26 +388,33 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("returns 1M context for Anthropic sonnet 4 even when config reports 200k", () => {
-    const result = resolveContextTokensForModel({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              models: [testModelContextWindow("claude-sonnet-4-6", 200_000)],
+  it.each([
+    ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
+  ])(
+    "returns the fixed context for %s model %s even when config reports 200k",
+    (provider, modelId, expectedContextTokens) => {
+      const result = resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://api.anthropic.com",
+                models: [testModelContextWindow(modelId, 200_000)],
+              },
             },
           },
         },
-      },
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackContextTokens: 200_000,
-      allowAsyncLoad: false,
-    });
+        provider,
+        model: modelId,
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      });
 
-    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
-  });
+      expect(result).toBe(expectedContextTokens);
+    },
+  );
 
   it("keeps older Anthropic Sonnet 4.x models at the configured window when context1m is set", () => {
     const result = resolveContextTokensForModel({

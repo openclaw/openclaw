@@ -1,3 +1,4 @@
+// Verifies sessions list/history/send behavior across gateway and channel targets.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -78,6 +79,7 @@ const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSess
 }) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
 
 function installMessagingTestRegistry() {
+  // Registry stubs expose enough channel target resolution for session-send tests.
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -137,6 +139,7 @@ function createOpenClawTools(options?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
+  // Sessions tests exercise the three related tools as a small local bundle.
   const config = options?.config ?? TEST_CONFIG;
   const gatewayCall = (opts: unknown) => callGatewayMock(opts);
   return [
@@ -213,6 +216,7 @@ function agentParams(call: { params?: unknown }): AgentCallParams {
 }
 
 function expectInterSessionAgentCall(call: { params?: unknown }): void {
+  // Inter-session sends should be marked as nested non-user agent calls.
   const params = agentParams(call);
   expect(params.message).toContain("[Inter-session message");
   expect(params.message).toContain("isUser=false");
@@ -708,6 +712,18 @@ describe("sessions tools", () => {
         return {
           messages: [
             { role: "toolResult", content: [] },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: "mirrored" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-injected",
+              content: [{ type: "text", text: "injected" }],
+            },
             { role: "assistant", content: [{ type: "text", text: "ok" }] },
           ],
         };
@@ -721,16 +737,27 @@ describe("sessions tools", () => {
     }
 
     const result = await tool.execute("call3", { sessionKey: "main" });
-    const details = result.details as { messages?: Array<{ role?: string }> };
-    expect(details.messages).toHaveLength(1);
-    expect(details.messages?.[0]?.role).toBe("assistant");
+    const details = result.details as { messages?: unknown[] };
+    expect(details.messages).toHaveLength(3);
+    expect(details.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
+    );
+    expect(details.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
 
     const withTools = await tool.execute("call4", {
       sessionKey: "main",
       includeTools: true,
     });
     const withToolsDetails = withTools.details as { messages?: unknown[] };
-    expect(withToolsDetails.messages).toHaveLength(2);
+    expect(withToolsDetails.messages).toHaveLength(4);
+    expect(withToolsDetails.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+    expect(withToolsDetails.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
+    );
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {

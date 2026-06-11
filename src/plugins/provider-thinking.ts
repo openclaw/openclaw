@@ -83,7 +83,7 @@ export function resolveProviderThinkingProfile(
   const activeProfile = resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(
     params.context,
   );
-  if (activeProfile) {
+  if (activeProfile !== undefined) {
     return activeProfile;
   }
   return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(

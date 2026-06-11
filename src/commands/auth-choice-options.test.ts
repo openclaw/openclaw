@@ -1,3 +1,4 @@
+// Auth-choice option tests cover provider wizard options, grouping, and onboarding scope filters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
@@ -509,6 +510,15 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "byteplus",
         groupLabel: "BytePlus",
       },
+      {
+        pluginId: "openrouter",
+        providerId: "openrouter",
+        methodId: "oauth",
+        choiceId: "openrouter-oauth",
+        choiceLabel: "OpenRouter OAuth",
+        groupId: "openrouter",
+        groupLabel: "OpenRouter",
+      },
     ]);
 
     const { groups } = buildAuthChoiceGroups({
@@ -521,6 +531,7 @@ describe("buildAuthChoiceOptions", () => {
       "Anthropic",
       "xAI (Grok)",
       "Google",
+      "OpenRouter",
       "BytePlus",
       "Custom Provider",
       "LiteLLM",

@@ -1,9 +1,11 @@
+// Codex tests cover thread lifecycle plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
@@ -17,7 +19,6 @@ import {
   startOrResumeThread,
   type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
-import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
 
@@ -797,6 +798,36 @@ describe("Codex app-server model provider selection", () => {
     });
 
     expect(request.modelProvider).toBe("openai");
+  });
+
+  it("splits provider-qualified model refs for app-server thread/start", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.model).toBe("local-model");
+    expect(request.modelProvider).toBe("lmstudio");
+  });
+
+  it("normalizes provider-qualified model refs for turn/start metadata", () => {
+    const request = buildTurnStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions() as never,
+      },
+    );
+
+    const collaborationMode = request.collaborationMode as { settings?: Record<string, unknown> };
+    expect(request.model).toBe("local-model");
+    expect(collaborationMode.settings?.model).toBe("local-model");
   });
 });
 

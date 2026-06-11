@@ -1,3 +1,4 @@
+// Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
@@ -218,7 +219,9 @@ export function createScopedVitestConfig(
   const resolvedScopedDir = scopedDir ? path.join(repoRoot, scopedDir) : undefined;
   const env = options?.env;
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const cliInclude = narrowIncludePatternsForCli(include, options?.argv);
+  const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
+    scopedDir,
+  });
   const unitFastExcludePatterns =
     options?.excludeUnitFastTests === false ? [] : getUnitFastTestFiles();
   const exclude = relativizeScopedPatterns(
