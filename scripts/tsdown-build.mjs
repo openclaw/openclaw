@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Runs the tsdown build with output cleanup, stale chunk pruning, and bounded
+// child-process diagnostics.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -68,6 +70,9 @@ function pruneStaleRuntimeSymlinks() {
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
 
+/**
+ * Removes build output roots while preserving explicitly protected artifacts.
+ */
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -567,6 +572,7 @@ export function resolveTsdownBuildInvocation(params = {}) {
     };
   }
   const runner = resolvePnpmRunner({
+    env,
     pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
@@ -595,10 +601,8 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
     "OPENCLAW_TSDOWN_TIMEOUT_MS",
   );
   const heartbeatMs =
-    parseNonNegativeIntegerEnv(
-      env.OPENCLAW_TSDOWN_HEARTBEAT_MS,
-      "OPENCLAW_TSDOWN_HEARTBEAT_MS",
-    ) ?? DEFAULT_HEARTBEAT_MS;
+    parseNonNegativeIntegerEnv(env.OPENCLAW_TSDOWN_HEARTBEAT_MS, "OPENCLAW_TSDOWN_HEARTBEAT_MS") ??
+    DEFAULT_HEARTBEAT_MS;
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();

@@ -1,3 +1,4 @@
+/** Shared Vitest module mocks for isolated-agent cron tests. */
 import { vi } from "vitest";
 import {
   makeIsolatedAgentJobFixture,

@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler.process behavior.
 import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
@@ -556,6 +557,10 @@ async function processDiscordMessageInner(
     chunkMode,
     log: logVerbose,
   });
+  // While the durable verbose commentary lane is active (dispatch reports it
+  // via onVerboseProgressVisibility), the ephemeral draft yields its commentary
+  // lines so commentary is not rendered in both lanes.
+  let verboseProgressActive: () => boolean = () => false;
   const finalPreviewFlags =
     (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
@@ -999,6 +1004,12 @@ async function processDiscordMessageInner(
         suppressDefaultToolProgressMessages: draftPreview.suppressDefaultToolProgressMessages
           ? true
           : undefined,
+        commentaryProgressEnabled: draftPreview.isProgressMode
+          ? draftPreview.commentaryProgressEnabled
+          : undefined,
+        onVerboseProgressVisibility: (isActive) => {
+          verboseProgressActive = isActive;
+        },
         onReasoningStream: async (payload) => {
           await statusReactions.setThinking();
           await draftPreview.pushReasoningProgress(payload?.text, {
@@ -1027,6 +1038,9 @@ async function processDiscordMessageInner(
         },
         onItemEvent: async (payload) => {
           if (payload.kind === "preamble") {
+            if (verboseProgressActive()) {
+              return;
+            }
             if (draftPreview.commentaryProgressEnabled && payload.progressText) {
               await draftPreview.pushCommentaryProgress(payload.progressText, {
                 itemId: payload.itemId,

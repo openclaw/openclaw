@@ -1,3 +1,6 @@
+/**
+ * Resolves embedded-agent provider/model selections from config, registry, and catalogs.
+ */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -666,6 +669,7 @@ function applyConfiguredProviderOverrides(params: {
       ...(resolvedParams ? { params: resolvedParams } : {}),
       ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: passthroughRequestConfig.headers,
+      ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
     };
   }
   const resolvedParams = mergeModelParams(
@@ -757,6 +761,9 @@ function applyConfiguredProviderOverrides(params: {
         ...(resolvedParams ? { params: resolvedParams } : {}),
         ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
+        ...(providerConfig.authHeader !== undefined
+          ? { authHeader: providerConfig.authHeader }
+          : {}),
         compat: resolvedCompat,
         mediaInput: mergeModelMediaInput(
           discoveredModel.mediaInput,
@@ -1140,6 +1147,9 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
+          ...(providerConfig?.authHeader !== undefined
+            ? { authHeader: providerConfig.authHeader }
+            : {}),
           compat: fallbackCompat,
           mediaInput: fallbackMediaInput,
         } as Model,

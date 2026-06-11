@@ -1,9 +1,11 @@
+// Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 
+// Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
   sessionId: string;
   updatedAt: number;
@@ -81,7 +83,7 @@ const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
 export const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
-const deriveSessionTotalTokensMock = createMock();
+export const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();
 const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();

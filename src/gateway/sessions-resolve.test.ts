@@ -1,3 +1,5 @@
+// Session resolve tests cover canonical/legacy key lookup, store migration,
+// agent scoping, listed-session selection, and protocol error mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -172,6 +174,41 @@ describe("resolveSessionKeyFromResolveParams", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message: 'Agent "deleted-agent" no longer exists in configuration',
       },
+    });
+  });
+
+  it("resolves ACP harness session keys even when harness id is not in agents.list", async () => {
+    const acpKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
+    hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
+      canonicalKey: acpKey,
+      storeKeys: [acpKey],
+      storePath,
+    });
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [acpKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 1,
+        label: "claude-delegate-test",
+        acp: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: acpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      },
+    });
+    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { key: acpKey },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: acpKey,
     });
   });
 

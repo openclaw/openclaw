@@ -1,9 +1,11 @@
+// Resolves effective exec approval policy from config and policy files.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalsDisplayPath,
   type ExecApprovalDecision,
   maxAsk,
   minSecurity,
@@ -19,7 +21,6 @@ import {
 
 const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
 const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
-const DEFAULT_HOST_PATH = "~/.openclaw/exec-approvals.json";
 const REQUESTED_DEFAULT_LABEL = {
   security: DEFAULT_REQUESTED_SECURITY,
   ask: DEFAULT_REQUESTED_ASK,
@@ -366,7 +367,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
       ask: requestedPolicy.ask,
     },
   });
-  const hostPath = params.hostPath ?? DEFAULT_HOST_PATH;
+  const hostPath = params.hostPath ?? resolveExecApprovalsDisplayPath();
   const effectiveSecurity = minSecurity(requestedPolicy.security, resolved.agent.security);
   const effectiveAsk = maxAsk(requestedPolicy.ask, resolved.agent.ask);
   const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);

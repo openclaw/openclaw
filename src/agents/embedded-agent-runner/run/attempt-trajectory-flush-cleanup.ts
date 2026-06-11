@@ -1,10 +1,19 @@
+/**
+ * Flushes attempt trajectory recorders during cleanup.
+ */
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 
+/** Minimal recorder surface needed to flush trajectory data during run cleanup. */
 export type EmbeddedAttemptTrajectoryRecorder = {
   describeFlushState: () => string | undefined;
   flush: () => Promise<void>;
 };
 
+/**
+ * Flushes attempt trajectory data through the shared cleanup timeout wrapper so
+ * stuck recorder writes warn with run/session context instead of blocking run
+ * teardown indefinitely.
+ */
 export async function flushEmbeddedAttemptTrajectoryRecorder(params: {
   runId: string;
   sessionId: string;

@@ -1,3 +1,4 @@
+// Doctor OAuth sidecar tests cover encrypted sidecar detection and auth repair guidance.
 import { createCipheriv } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -42,6 +43,14 @@ async function makeTestState(seed = "legacy-oauth-seed"): Promise<OpenClawTestSt
   });
   states.push(state);
   return state;
+}
+
+function writeLegacyAuthProfiles(
+  state: OpenClawTestState,
+  store: unknown,
+  agentId = "main",
+): Promise<string> {
+  return state.writeJson(path.join("agents", agentId, "agent", "auth-profiles.json"), store);
 }
 
 function encryptLegacySidecarMaterial(params: {
@@ -109,7 +118,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         "openai-codex": profileId,
       },
     };
-    const authPath = await state.writeAuthProfiles(auth);
+    const authPath = await writeLegacyAuthProfiles(state, auth);
     const sidecarPath = await state.writeJson(
       path.join("credentials", "auth-profiles", `${ref.id}.json`),
       {
@@ -183,7 +192,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(auth);
+    const authPath = await writeLegacyAuthProfiles(state, auth);
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
       cfg: {},
@@ -214,7 +223,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(auth);
+    const authPath = await writeLegacyAuthProfiles(state, auth);
     const sidecarPath = await state.writeJson(
       path.join("credentials", "auth-profiles", `${ref.id}.json`),
       {
@@ -432,8 +441,8 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         },
       },
     };
-    const mainAuthPath = await state.writeAuthProfiles(auth, "main");
-    const workerAuthPath = await state.writeAuthProfiles(auth, "worker");
+    const mainAuthPath = await writeLegacyAuthProfiles(state, auth, "main");
+    const workerAuthPath = await writeLegacyAuthProfiles(state, auth, "worker");
     const sidecarPath = await state.writeJson(
       path.join("credentials", "auth-profiles", `${ref.id}.json`),
       {

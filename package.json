@@ -91,6 +91,7 @@
     "!dist/extensions/google-meet/**",
     "!dist/extensions/googlechat/**",
     "!dist/extensions/line/**",
+    "!dist/extensions/llama-cpp/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
     "!dist/extensions/matrix/**",
@@ -584,6 +585,10 @@
     "./plugin-sdk/agent-harness": {
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
       "default": "./dist/plugin-sdk/agent-harness.js"
+    },
+    "./plugin-sdk/agent-harness-exec-review-runtime": {
+      "types": "./dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
     },
     "./plugin-sdk/agent-harness-runtime": {
       "types": "./dist/plugin-sdk/agent-harness-runtime.d.ts",
@@ -1213,6 +1218,10 @@
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
     },
+    "./plugin-sdk/provider-catalog-live-runtime": {
+      "types": "./dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog-live-runtime.js"
+    },
     "./plugin-sdk/provider-catalog-runtime": {
       "types": "./dist/plugin-sdk/provider-catalog-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-runtime.js"
@@ -1417,19 +1426,19 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
-    "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
-    "android:assemble:third-party": "cd apps/android && ./gradlew :app:assembleThirdPartyDebug",
+    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug",
+    "android:assemble:third-party": "node scripts/run-android-gradle.mjs :app:assembleThirdPartyDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",
-    "android:install": "cd apps/android && ./gradlew :app:installPlayDebug",
-    "android:install:third-party": "cd apps/android && ./gradlew :app:installThirdPartyDebug",
+    "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
+    "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
     "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck",
-    "android:lint:android": "cd apps/android && ./gradlew :app:lintDebug",
-    "android:run": "cd apps/android && ./gradlew :app:installPlayDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
-    "android:run:third-party": "cd apps/android && ./gradlew :app:installThirdPartyDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
-    "android:test": "cd apps/android && ./gradlew :app:testPlayDebugUnitTest",
+    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintDebug",
+    "android:run": "node scripts/run-android-gradle.mjs :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:run:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest",
     "android:test:integration": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
-    "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
+    "android:test:third-party": "node scripts/run-android-gradle.mjs :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
@@ -1757,6 +1766,7 @@
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:env-mutations:report": "node --import tsx scripts/test-env-mutation-report.ts",
     "test:e2e": "pnpm test:e2e:gateway && pnpm test:ui:e2e",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "node scripts/run-with-env.mjs OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
@@ -1818,7 +1828,7 @@
     "test:startup:gateway": "node --import tsx scripts/bench-gateway-startup.ts",
     "test:restart:gateway": "node --import tsx scripts/bench-gateway-restart.ts",
     "test:startup:memory": "node scripts/ensure-cli-startup-build.mjs && node scripts/check-cli-startup-memory.mjs",
-    "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
+    "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && node scripts/ensure-playwright-chromium.mjs && pnpm --dir ui test",
     "test:ui:e2e": "node scripts/ensure-playwright-chromium.mjs && node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner",
     "test:unit": "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     "test:unit:fast": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts",
@@ -1950,14 +1960,6 @@
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
-  },
-  "overrides": {
-    "axios": "1.16.0",
-    "fast-uri": "3.1.2",
-    "follow-redirects": "1.16.0",
-    "ip-address": "10.2.0",
-    "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    "uuid": "14.0.0"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -1,3 +1,4 @@
+/** Base Vitest mocks for Windows schtasks daemon tests. */
 import { vi } from "vitest";
 import {
   inspectPortUsage,
@@ -6,6 +7,7 @@ import {
   schtasksResponses,
 } from "./schtasks-fixtures.js";
 
+// Shared Windows schtasks mocks for daemon tests.
 vi.mock("../schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
     schtasksCalls.push(argv);

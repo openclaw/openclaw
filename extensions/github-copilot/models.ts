@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements models behavior.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -5,7 +6,10 @@ import type {
 import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeModelCompat,
+  supportsClaudeAdaptiveThinking,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asPositiveSafeInteger,
   normalizeOptionalLowercaseString,
@@ -172,15 +176,18 @@ function mergeCopilotCompat(
 
 function resolveCopilotThinkingLevelMap(
   api: ModelDefinitionConfig["api"],
+  modelId: string,
   compat: ModelDefinitionConfig["compat"] | undefined,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
-  if (
-    api === "anthropic-messages" &&
-    compat?.supportedReasoningEfforts?.some((effort) => effort === "xhigh")
-  ) {
-    return { xhigh: "xhigh" };
+  const efforts = compat?.supportedReasoningEfforts;
+  if (api !== "anthropic-messages" || !Array.isArray(efforts)) {
+    return undefined;
   }
-  return undefined;
+  const supportsAdaptiveEffort = supportsClaudeAdaptiveThinking({ id: modelId });
+  return {
+    xhigh: supportsAdaptiveEffort && efforts.includes("xhigh") ? "xhigh" : null,
+    max: supportsAdaptiveEffort && efforts.includes("max") ? "max" : null,
+  };
 }
 
 function mapCopilotApiModelToDefinition(
@@ -214,7 +221,7 @@ function mapCopilotApiModelToDefinition(
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
   const api = resolveCopilotApiForVendor(entry.vendor, id);
-  const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, compat);
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
 
   const definition: ModelDefinitionConfig = {
     id,

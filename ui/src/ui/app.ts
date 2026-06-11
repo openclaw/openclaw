@@ -1,3 +1,4 @@
+// Control UI module implements app behavior.
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
@@ -42,7 +43,11 @@ import {
 } from "./app-lifecycle.ts";
 import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
-import { loadSkillWorkshopMode, renderApp } from "./app-render.ts";
+import {
+  loadSkillWorkshopMode,
+  loadSkillWorkshopUseCurrentChatForRevisions,
+  renderApp,
+} from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
   handleActivityScroll as handleActivityScrollInternal,
@@ -233,7 +238,7 @@ export class OpenClawApp extends LitElement {
   @state() userName = bootLocalUserIdentity.name;
   @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
-  @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
+  @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "strict";
   @state() allowExternalEmbedUrls = false;
   @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;
@@ -399,6 +404,7 @@ export class OpenClawApp extends LitElement {
   @state() configActiveSection: string | null = null;
   @state() configActiveSubsection: string | null = null;
   @state() pendingUpdateExpectedVersion: string | null = null;
+  @state() pendingUpdateHandoff = false;
   @state() updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null = null;
   @state() communicationsFormMode: "form" | "raw" = "form";
   @state() communicationsSearchQuery = "";
@@ -644,6 +650,7 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopFilePreviewQuery = "";
   @state() skillWorkshopQueueWidth = 360;
   @state() skillWorkshopMode: SkillWorkshopState["skillWorkshopMode"] = loadSkillWorkshopMode();
+  @state() skillWorkshopUseCurrentChatForRevisions = loadSkillWorkshopUseCurrentChatForRevisions();
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -798,7 +805,7 @@ export class OpenClawApp extends LitElement {
     this.onSlashAction = async (action: string) => {
       switch (action) {
         case "new-session":
-          await createChatSessionInternal(this as unknown as AppViewState);
+          await createChatSessionInternal(this as unknown as AppViewState, { source: "user" });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);

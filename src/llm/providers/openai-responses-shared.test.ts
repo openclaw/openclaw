@@ -1,10 +1,39 @@
+// OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
-import type { Context, Model, Tool } from "../types.js";
-import { convertResponsesMessages } from "./openai-responses-shared.js";
+import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import {
+  createResponsesAssistantOutput,
+  convertResponsesMessages,
+  type OpenAIResponsesStreamEvent,
+  processResponsesStream,
+} from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
 type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
+
+async function* streamResponsesEvents(
+  events: readonly OpenAIResponsesStreamEvent[],
+): AsyncGenerator<OpenAIResponsesStreamEvent> {
+  for (const event of events) {
+    yield event;
+  }
+}
+
+function createCapturedAssistantMessageEventStream(): {
+  stream: AssistantMessageEventStream;
+  events: AssistantMessageEvent[];
+} {
+  const stream = new AssistantMessageEventStream();
+  const events: AssistantMessageEvent[] = [];
+  const push = stream.push.bind(stream);
+  stream.push = (event) => {
+    events.push(event);
+    push(event);
+  };
+  return { stream, events };
+}
 
 function expectResponsesFunctionTool(tool: OpenAIResponsesTool | undefined): ResponsesFunctionTool {
   expect(tool).toHaveProperty("type", "function");
@@ -30,6 +59,32 @@ const proxyOpenAIModel = {
   name: "Custom Model",
   baseUrl: "https://proxy.example.com/v1",
 } satisfies Model<"openai-responses">;
+
+function createAssistantOutput(): AssistantMessage {
+  return {
+    role: "assistant",
+    api: nativeOpenAIModel.api,
+    provider: nativeOpenAIModel.provider,
+    model: nativeOpenAIModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+    content: [],
+  };
+}
+
+async function* responseEvents(events: Array<Record<string, unknown>>) {
+  for (const event of events) {
+    yield event as never;
+  }
+}
 
 describe("convertResponsesTools", () => {
   it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
@@ -126,6 +181,28 @@ describe("convertResponsesTools", () => {
 
 describe("convertResponsesMessages", () => {
   const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+
+  it("adds explicit message item types for system and user input items", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      } satisfies Context,
+      allowedToolCallProviders,
+    );
+
+    expect(input[0]).toMatchObject({
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "system" }],
+    });
+    expect(input[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "hello" }],
+    });
+  });
 
   it("omits phase-tagged assistant replay ids without reasoning", () => {
     const input = convertResponsesMessages(
@@ -325,5 +402,427 @@ describe("convertResponsesMessages", () => {
       call_id: "call_abc",
     });
     expect(functionCall).not.toHaveProperty("id");
+  });
+
+  it("keeps encrypted reasoning replay item ids when requested", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need continuity.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_foundry_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: true },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(input.find((item) => item.type === "reasoning")).toMatchObject({
+      type: "reasoning",
+      id: "rs_foundry_prior",
+      encrypted_content: "ciphertext",
+      summary: [],
+    });
+  });
+});
+
+describe("processResponsesStream", () => {
+  it.each([
+    ["omits arguments", undefined],
+    ["sends empty arguments", ""],
+  ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const events: Array<Record<string, unknown>> = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          delta: '{"path":"docs/gateway/local-models.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          ...(doneArguments === undefined ? {} : { arguments: doneArguments }),
+          item_id: "fc_read",
+          name: "read",
+          output_index: 0,
+          sequence_number: 3,
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_1",
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+    stream.end();
+    await collect;
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "docs/gateway/local-models.md" },
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+    ]);
+  });
+});
+
+describe("Azure OpenAI Responses content type support", () => {
+  const azureModel = {
+    id: "gpt-5.5",
+    name: "GPT-5.5 (Azure)",
+    api: "azure-openai-responses",
+    provider: "azure",
+    baseUrl: "https://test.openai.azure.com/openai/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 8192,
+  } satisfies Model<"azure-openai-responses">;
+
+  it("supports Azure 'text' content type in addition to 'output_text'", () => {
+    const input = convertResponsesMessages(
+      azureModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: azureModel.api,
+            provider: azureModel.provider,
+            model: azureModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "text",
+                text: "Azure response with text content type",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_azure_text",
+                }),
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      new Set(["azure", "azure-openai-responses"]),
+      { includeSystemPrompt: false },
+    );
+
+    const assistantMessage = input.find(
+      (item) => item && typeof item === "object" && "role" in item && item.role === "assistant",
+    );
+
+    expect(assistantMessage).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: "Azure response with text content type",
+          annotations: [],
+        },
+      ],
+    });
+  });
+
+  it("processResponsesStream handles Azure 'text' content type with output_text deltas", async () => {
+    const azureEvents: OpenAIResponsesStreamEvent[] = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        sequence_number: 1,
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_1",
+          content: [],
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.content_part.added",
+        content_index: 0,
+        item_id: "msg_azure_1",
+        output_index: 0,
+        sequence_number: 2,
+        part: {
+          type: "text",
+          text: "",
+        },
+      },
+      {
+        type: "response.output_text.delta",
+        content_index: 0,
+        delta: "Hello",
+        item_id: "msg_azure_1",
+        logprobs: [],
+        output_index: 0,
+        sequence_number: 3,
+      },
+      {
+        type: "response.output_text.delta",
+        content_index: 0,
+        delta: " from",
+        item_id: "msg_azure_1",
+        logprobs: [],
+        output_index: 0,
+        sequence_number: 4,
+      },
+      {
+        type: "response.output_text.delta",
+        content_index: 0,
+        delta: " Azure!",
+        item_id: "msg_azure_1",
+        logprobs: [],
+        output_index: 0,
+        sequence_number: 5,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 6,
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_1",
+          content: [
+            {
+              type: "text",
+              text: "Hello from Azure!",
+            },
+          ],
+          status: "completed",
+        },
+      },
+      {
+        type: "response.completed",
+        sequence_number: 7,
+        response: {
+          id: "resp_azure_123",
+          created_at: 1,
+          output_text: "Hello from Azure!",
+          error: null,
+          incomplete_details: null,
+          instructions: null,
+          metadata: null,
+          model: azureModel.id,
+          object: "response",
+          output: [],
+          parallel_tool_calls: false,
+          temperature: null,
+          tool_choice: "auto",
+          tools: [],
+          top_p: null,
+          status: "completed",
+          usage: {
+            input_tokens: 10,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 5,
+            output_tokens_details: { reasoning_tokens: 0 },
+            total_tokens: 15,
+          },
+        },
+      },
+    ];
+
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
+    await processResponsesStream(streamResponsesEvents(azureEvents), output, stream, azureModel);
+
+    expect(
+      events.map((event) =>
+        event.type === "text_delta"
+          ? { type: event.type, delta: event.delta }
+          : event.type === "text_end"
+            ? { type: event.type, content: event.content }
+            : { type: event.type },
+      ),
+    ).toEqual([
+      { type: "text_start" },
+      { type: "text_delta", delta: "Hello" },
+      { type: "text_delta", delta: " from" },
+      { type: "text_delta", delta: " Azure!" },
+      { type: "text_end", content: "Hello from Azure!" },
+    ]);
+
+    expect(output.content).toHaveLength(1);
+    expect(output.content[0]).toMatchObject({
+      type: "text",
+      text: "Hello from Azure!",
+    });
+
+    expect(output.usage).toMatchObject({
+      input: 10,
+      output: 5,
+      totalTokens: 15,
+    });
+
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("processResponsesStream handles Azure text deltas without a content_part.added event", async () => {
+    const azureEvents: OpenAIResponsesStreamEvent[] = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        sequence_number: 1,
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_without_part",
+          content: [],
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.text.delta",
+        delta: "No explicit",
+      },
+      {
+        type: "response.text.delta",
+        delta: " part",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 4,
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_without_part",
+          content: [
+            {
+              type: "text",
+              text: "No explicit part",
+            },
+          ],
+          status: "completed",
+        },
+      },
+      {
+        type: "response.completed",
+        sequence_number: 5,
+        response: {
+          id: "resp_azure_without_part",
+          created_at: 1,
+          output_text: "No explicit part",
+          error: null,
+          incomplete_details: null,
+          instructions: null,
+          metadata: null,
+          model: azureModel.id,
+          object: "response",
+          output: [],
+          parallel_tool_calls: false,
+          temperature: null,
+          tool_choice: "auto",
+          tools: [],
+          top_p: null,
+          status: "completed",
+          usage: {
+            input_tokens: 3,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 3,
+            output_tokens_details: { reasoning_tokens: 0 },
+            total_tokens: 6,
+          },
+        },
+      },
+    ];
+
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
+
+    await processResponsesStream(streamResponsesEvents(azureEvents), output, stream, azureModel);
+
+    expect(
+      events.map((event) =>
+        event.type === "text_delta"
+          ? event.delta
+          : event.type === "text_end"
+            ? `[END:${event.content}]`
+            : event.type,
+      ),
+    ).toEqual(["text_start", "No explicit", " part", "[END:No explicit part]"]);
+
+    expect(output.content[0]).toMatchObject({
+      type: "text",
+      text: "No explicit part",
+    });
   });
 });

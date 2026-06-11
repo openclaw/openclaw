@@ -1,3 +1,6 @@
+/**
+ * Sanitizes and validates replayed session history before model calls.
+ */
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,6 +18,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -52,6 +56,7 @@ import {
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
+  stripStaleThinkingSignaturesForCompactionReplay,
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -231,15 +236,6 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
-// `provider:"openclaw"` assistant entries written by the channel-delivery
-// transcript mirror (`model:"delivery-mirror"`, see config/sessions/transcript.ts)
-// and by the Gateway transcript-inject helper (`model:"gateway-injected"`, see
-// gateway/server-methods/chat-transcript-inject.ts) are user-visible transcript
-// records, not model output. Replaying them to the actual provider duplicates
-// content and, on Bedrock or strict OpenAI-compatible providers, can also
-// trigger turn-ordering rejections.
-const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
-
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
     return message;
@@ -271,19 +267,6 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
     return null;
   }
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
-}
-
-function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const provider = (message as { provider?: unknown }).provider;
-  const model = (message as { model?: unknown }).model;
-  return (
-    provider === "openclaw" &&
-    typeof model === "string" &&
-    TRANSCRIPT_ONLY_OPENCLAW_MODELS.has(model)
-  );
 }
 
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
@@ -353,7 +336,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       out.push(message);
       continue;
     }
-    if (isTranscriptOnlyOpenclawAssistant(message)) {
+    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
       // Drop from the in-memory replay copy; the persisted JSONL keeps the
       // entry so user-facing transcript surfaces are unchanged.
       touched = true;
@@ -731,16 +714,25 @@ export async function sanitizeSessionHistory(params: {
   const preserveLatestAssistantThinking =
     params.preserveLatestAssistantThinking ??
     shouldPreserveLatestAssistantThinking(sanitizedImages);
+  // Strip thinking signatures that are stale due to compaction context changes before
+  // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
+  // bound to the original prefix; after compaction the prefix changes and Anthropic
+  // rejects them. Timestamp comparison with the latest compaction summary identifies
+  // the affected messages regardless of path (standard or truncateAfterCompaction).
+  const compactionStaleStripped =
+    signedThinkingProvider || policy.preserveSignatures
+      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
+      : sanitizedImages;
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound
   // request.
   const validatedThinkingSignatures =
     signedThinkingProvider || policy.preserveSignatures
-      ? stripInvalidThinkingSignatures(sanitizedImages, {
+      ? stripInvalidThinkingSignatures(compactionStaleStripped, {
           preserveLatestAssistant: preserveLatestAssistantThinking,
         })
-      : sanitizedImages;
+      : compactionStaleStripped;
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;

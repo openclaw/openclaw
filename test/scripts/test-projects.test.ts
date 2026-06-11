@@ -1,3 +1,4 @@
+// Test Projects tests cover test projects script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +19,7 @@ import {
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
+  resolveChangedTestTargetPlanForArgs,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
@@ -157,6 +159,21 @@ function withTinyGitRepo(files: Record<string, string>, test: (cwd: string) => v
   }
 }
 
+function commitTinyGitRepo(cwd: string): void {
+  const commit = spawnSync("git", ["commit", "-m", "initial"], {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_AUTHOR_NAME: "OpenClaw Test",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "OpenClaw Test",
+    },
+    stdio: "ignore",
+  });
+  expect(commit.status).toBe(0);
+}
+
 function withTinyFileTree(files: Record<string, string>, test: (cwd: string) => void): void {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-"));
   try {
@@ -196,6 +213,27 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/utils/provider-utils.ts",
       ]),
     ).toEqual(["src/utils/provider-utils.test.ts"]);
+  });
+
+  it("skips deleted direct test files in changed mode", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/deleted-changed-target.test.ts",
+      ]),
+    ).toStrictEqual([]);
+  });
+
+  it("records broad fallback paths skipped by focused changed mode", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "test/vitest/vitest.shared.config.ts",
+        "src/utils/provider-utils.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      skippedBroadFallbackPaths: ["test/vitest/vitest.shared.config.ts"],
+      targets: ["src/utils/provider-utils.test.ts"],
+    });
   });
 
   it("keeps the broad changed run available for Vitest wiring edits", () => {
@@ -460,6 +498,15 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       });
     }
+  });
+
+  it("keeps release-check workflow edits on release workflow regression tests", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-release-checks.yml"])).toEqual(
+      {
+        mode: "targets",
+        targets: ["test/scripts/package-acceptance-workflow.test.ts"],
+      },
+    );
   });
 
   it("keeps workflow sanity script edits on workflow guard tests", () => {
@@ -1136,6 +1183,41 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps unknown root surface skip reasons available to changed-mode callers", () => {
+    expect(
+      resolveChangedTestTargetPlanForArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "unknown/file.txt",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      skippedBroadFallbackPaths: ["unknown/file.txt"],
+      targets: [],
+    });
+  });
+
+  it("explains changed paths that need explicit broad fallback before skipping", () => {
+    withTinyGitRepo({ "package.json": '{"scripts":{}}\n' }, (cwd) => {
+      commitTinyGitRepo(cwd);
+      fs.writeFileSync(path.join(cwd, "package.json"), '{"scripts":{"test":"node"}}\n');
+
+      const result = spawnSync(
+        process.execPath,
+        [path.resolve(process.cwd(), "scripts/test-projects.mjs"), "--changed", "HEAD"],
+        {
+          cwd,
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("[test] no precise changed test targets; skipping Vitest.");
+      expect(result.stderr).toContain("[test]   package.json");
+      expect(result.stderr).toContain(
+        "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
+      );
+    });
+  });
+
   it("keeps the broad changed run available for unknown root surfaces", () => {
     expect(
       resolveChangedTargetArgs(
@@ -1356,6 +1438,28 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.unit-ui.config.ts",
         forwardedArgs: [],
         includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("keeps explicit non-renderer ui test targets scoped", () => {
+    expect(
+      buildVitestRunPlans([
+        "ui/src/i18n/test/translate.test.ts",
+        "test/scripts/control-ui-i18n.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/control-ui-i18n.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/i18n/test/translate.test.ts"],
         watchMode: false,
       },
     ]);
@@ -1668,6 +1772,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps changed mode to precise targets by default", () => {
     expect(resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"])).toEqual({
       mode: "targets",
+      skippedBroadFallbackPaths: ["package.json"],
       targets: ["src/commands/channels.add.test.ts"],
     });
   });
@@ -1687,6 +1792,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plan).toEqual({
       mode: "targets",
+      skippedBroadFallbackPaths: ["src/gateway/server.impl.ts"],
       targets: ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/check.test.ts"],
     });
     expect(repoSourceReads).toEqual([]);
@@ -2035,6 +2141,7 @@ describe("scripts/test-projects full-suite sharding", () => {
         "test/vitest/vitest.full-core-unit-ui.config.ts",
         "test/vitest/vitest.full-core-unit-support.config.ts",
         "test/vitest/vitest.full-core-support-boundary.config.ts",
+        "test/vitest/vitest.full-core-tooling.config.ts",
         "test/vitest/vitest.full-core-contracts.config.ts",
         "test/vitest/vitest.full-core-bundled.config.ts",
         "test/vitest/vitest.full-core-runtime.config.ts",
