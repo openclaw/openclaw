@@ -275,6 +275,37 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   });
 
+  it.each(["--rcfile", "--init-file", "--startup-file"])(
+    "does not persist POSIX shell script paths when %s is present",
+    (flag) => {
+      if (process.platform === "win32") {
+        return;
+      }
+
+      const dir = makeTempDir();
+      const bash = makeExecutable(dir, "bash");
+      const scriptsDir = path.join(dir, "scripts");
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      fs.writeFileSync(path.join(scriptsDir, "evilrc"), "echo blocked\n");
+      fs.writeFileSync(path.join(scriptsDir, "save_crystal.sh"), "echo ok\n");
+
+      const analysis = analyzeArgvCommand({
+        argv: [bash, flag, "scripts/evilrc", "scripts/save_crystal.sh"],
+        cwd: dir,
+        env: makePathEnv(dir),
+      });
+
+      const patterns = resolveAllowAlwaysPatterns({
+        segments: analysis.segments,
+        cwd: dir,
+        env: makePathEnv(dir),
+        platform: process.platform,
+      });
+
+      expect(patterns).toStrictEqual([]);
+    },
+  );
+
   it("keeps Windows strict inline-eval interpreter approvals argv-bound", () => {
     const awk = "C:\\temp\\awk.exe";
     const resolution = makeMockCommandResolution({

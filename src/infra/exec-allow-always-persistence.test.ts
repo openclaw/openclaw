@@ -61,6 +61,22 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     expect(decision).toEqual({ kind: "exact-command", commandText: command });
   });
 
+  it.each(["bash --login -c 'echo ok'", "bash -i -c 'echo ok'"])(
+    "uses exact-command fallback for startup shell wrappers: %s",
+    async (command) => {
+      const plan = await planShellAuthorization({ command });
+
+      const decision = resolveAllowAlwaysPersistenceDecision({
+        segments: plannedSegments(plan),
+        commandText: command,
+        platform: process.platform,
+        authorizationPlan: plan,
+      });
+
+      expect(decision).toEqual({ kind: "exact-command", commandText: command });
+    },
+  );
+
   it.each([
     { command: 'eval "$CMD"', reason: "prompt-only" },
     { command: 'sh -c "$SCRIPT"', reason: "runtime-payload" },

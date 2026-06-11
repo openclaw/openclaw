@@ -43,7 +43,6 @@ type SystemRunAllowlistAnalysis = {
   authorizationPlan?: ExecAuthorizationPlan;
 };
 
-/** Evaluate system.run argv or shell command against the exec allowlist policy. */
 /** Evaluates analyzed command segments against allowlist and trusted safe-bin policy. */
 export async function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
