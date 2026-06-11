@@ -671,6 +671,28 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("does not treat ctime-only changes as session takeover (#92109)", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalBtrfs = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalBtrfs,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    // Simulate Btrfs background maintenance: chmod changes ctimeNs without
+    // changing mtimeNs, size, or file content. This must not trigger takeover.
+    await fs.chmod(sessionFile, 0o644);
+
+    await expect(controller.withSessionWriteLock(() => "ok")).resolves.toBe("ok");
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
   it("allows delivery mirror appends while the prompt lock is released", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
