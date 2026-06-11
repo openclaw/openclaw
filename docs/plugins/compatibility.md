@@ -128,6 +128,10 @@ Current compatibility records include:
 - legacy runtime aliases such as `api.runtime.taskFlow`,
   `api.runtime.subagent.getSession`, `api.runtime.stt`, and deprecated
   `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
+- WhatsApp `WebInboundMessage` flat callback fields such as `body`, `chatId`,
+  `reply(...)`, and `mediaPath` while callback consumers migrate to the nested
+  `WebInboundCallbackMessage` `event`, `payload`, `quote`, `group`, and
+  `platform` contexts
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
 - legacy memory-specific embedding provider registration while embedding
@@ -159,6 +163,33 @@ Current compatibility records include:
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path
 until the docs, diagnostics, and release notes announce a removal window.
+
+### WhatsApp Inbound Callback Flat Aliases
+
+WhatsApp runtime callbacks deliver `WebInboundMessage`: the canonical nested
+`event`, `payload`, `quote`, `group`, and `platform` contexts plus deprecated
+flat aliases for the shipped callback fields. New callback code should read the
+nested contexts. Code that constructs clean nested callback messages can use
+`WebInboundCallbackMessage`; compatibility listeners that still inject old flat
+test or plugin messages should use `LegacyFlatWebInboundMessage` or
+`WebInboundMessageInput`.
+
+The flat aliases remain available until **2026-08-30**. That removal window
+applies only to flat alias access; the nested callback shape is the canonical
+runtime contract. The TypeScript `@deprecated` annotations on each flat alias
+name its exact nested replacement. Common examples:
+
+- `id`, `timestamp`, and `isBatched` move under `event`.
+- `body`, `mediaPath`, `mediaType`, `mediaFileName`, `mediaUrl`, `location`, and
+  `untrustedStructuredContext` move under `payload`.
+- `to`, `chatId`, sender/self fields, `sendComposing`, `reply(...)`, and
+  `sendMedia(...)` move under `platform`.
+- `replyTo*` fields move under `quote`, and group subject/participant/mention
+  fields move under `group`.
+
+`payload.untrustedStructuredContext` is extracted from inbound provider payloads.
+Plugins should inspect the `label`, `source`, and `type` before treating its
+`payload` as authoritative.
 
 ## Release notes
 

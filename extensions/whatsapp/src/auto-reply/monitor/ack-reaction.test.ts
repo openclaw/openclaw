@@ -1,7 +1,7 @@
 // Whatsapp tests cover ack reaction plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import type { WebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 
@@ -13,30 +13,18 @@ vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
 
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
-
 function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMessage {
-  return {
-    id: "msg-1",
+  return createTestWebInboundMessage({
+    event: { id: "msg-1" },
+    platform: {
+      chatJid: "15551234567@s.whatsapp.net",
+      recipientJid: "15559876543",
+    },
     from: "15551234567",
     conversationId: "15551234567",
-    to: "15559876543",
     accountId: "default",
-    body: "hello",
-    chatType: "direct",
-    chatId: "15551234567@s.whatsapp.net",
-    sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
-  };
+  });
 }
 
 function createConfig(

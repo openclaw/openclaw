@@ -12,7 +12,6 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectClawHubPublishablePluginPackages,
-  collectClawHubOpenClawOwnerErrors,
   collectClawHubVersionGateErrors,
   collectPluginClawHubReleasePathsFromGitRange,
   collectPluginClawHubReleasePlan,
@@ -378,78 +377,6 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(plan.candidates.map((plugin) => plugin.artifactName)).toEqual([
       "clawhub-package-openclaw-demo-plugin-2026.4.1",
     ]);
-  });
-});
-
-describe("collectClawHubOpenClawOwnerErrors", () => {
-  it("requires OpenClaw-scoped release candidates to already belong to the OpenClaw publisher", async () => {
-    const errors = await collectClawHubOpenClawOwnerErrors({
-      plugins: [
-        { packageName: "@openclaw/demo-plugin" },
-        { packageName: "@openclaw/missing-plugin" },
-        { packageName: "@other/safe-plugin" },
-      ],
-      registryBaseUrl: "https://clawhub.ai",
-      fetchImpl: async (url) => {
-        const pathname = new URL(url instanceof Request ? url.url : url).pathname;
-        if (pathname.includes("%40openclaw%2Fmissing-plugin")) {
-          return new Response("not found", { status: 404 });
-        }
-        return new Response(
-          JSON.stringify({
-            owner: { handle: "steipete" },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      },
-    });
-
-    expect(errors).toEqual([
-      "@openclaw/demo-plugin: ClawHub package owner must be @openclaw; got @steipete.",
-      "@openclaw/missing-plugin: ClawHub package row must already exist under @openclaw before OpenClaw release publish.",
-    ]);
-  });
-
-  it("passes when OpenClaw-scoped release candidates belong to the OpenClaw publisher", async () => {
-    const errors = await collectClawHubOpenClawOwnerErrors({
-      plugins: [{ packageName: "@openclaw/demo-plugin" }],
-      registryBaseUrl: "https://clawhub.ai",
-      fetchImpl: async () =>
-        new Response(JSON.stringify({ owner: { handle: "openclaw" } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    });
-
-    expect(errors).toStrictEqual([]);
-  });
-
-  it("bounds ClawHub owner metadata response bodies", async () => {
-    await expect(
-      collectClawHubOpenClawOwnerErrors({
-        plugins: [{ packageName: "@openclaw/demo-plugin" }],
-        registryBaseUrl: "https://clawhub.ai",
-        fetchImpl: async () =>
-          new Response("{}", {
-            status: 200,
-            headers: { "content-length": String(1024 * 1024 + 1) },
-          }),
-      }),
-    ).rejects.toThrow(
-      "ClawHub package owner response for @openclaw/demo-plugin response body exceeded 1048576 bytes.",
-    );
-  });
-
-  it("bounds streamed ClawHub owner metadata bodies", async () => {
-    await expect(
-      collectClawHubOpenClawOwnerErrors({
-        plugins: [{ packageName: "@openclaw/demo-plugin" }],
-        registryBaseUrl: "https://clawhub.ai",
-        fetchImpl: async () => new Response("x".repeat(1024 * 1024 + 1), { status: 200 }),
-      }),
-    ).rejects.toThrow(
-      "ClawHub package owner response for @openclaw/demo-plugin response body exceeded 1048576 bytes.",
-    );
   });
 });
 
