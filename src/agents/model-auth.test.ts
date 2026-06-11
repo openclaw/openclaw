@@ -493,6 +493,44 @@ describe("resolveUsableCustomProviderApiKey", () => {
     expect(resolved).toBeNull();
   });
 
+  it("resolves secretref-managed from the runtime config snapshot (regression for #92097)", () => {
+    // The gateway secrets runtime resolves file-backed SecretRefs at startup
+    // and stores the actual API key in the runtime config snapshot.  Before
+    // the fix, resolveUsableCustomProviderApiKey returned null for
+    // secretref-managed without consulting the snapshot.
+    const runtimeConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-resolved-by-secrets-runtime", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig);
+
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKey: NON_ENV_SECRETREF_MARKER,
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+    expect(resolved).toEqual({
+      apiKey: "sk-resolved-by-secrets-runtime",
+      source: "models.json (runtime snapshot)",
+    });
+  });
+
   it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
