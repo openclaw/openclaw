@@ -1698,15 +1698,16 @@ describe("doctor config flow", () => {
     expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
   });
 
-  it("warns when internal hook entries include unsupported loader keys", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
+  it("repairs misplaced internal hook extraDirs and warns about ambiguous loader keys", async () => {
+    const config = {
       hooks: {
         internal: {
+          load: { extraDirs: ["./existing-hooks"] },
           entries: {
             "custom-hook": {
               enabled: true,
               handler: "./hooks/custom.ts",
-              extraDirs: ["./hooks"],
+              extraDirs: ["./hooks", "./existing-hooks"],
               env: { OPENCLAW_CUSTOM_HOOK: "1" },
             },
             "valid-hook": {
@@ -1717,12 +1718,48 @@ describe("doctor config flow", () => {
           },
         },
       },
+    };
+
+    const previewNotes = terminalNoteMock;
+    previewNotes.mockClear();
+    const preview = await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    const warning = doctorWarnings.join("\n");
+    expect(preview.shouldWriteConfig).toBe(false);
+    expect(previewNotes.mock.calls).toContainEqual([
+      expect.stringContaining("Moved 2 misplaced"),
+      "Doctor changes preview",
+    ]);
+    expect(previewNotes.mock.calls).toContainEqual([
+      expect.stringContaining("hooks.internal.entries.custom-hook"),
+      "Doctor warnings",
+    ]);
+
+    const repair = await runDoctorConfigWithInput({
+      config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(repair.shouldWriteConfig).toBe(true);
+    expect(repair.cfg.hooks?.internal?.load?.extraDirs).toEqual([
+      "./existing-hooks",
+      "./hooks",
+    ]);
+    expect(repair.cfg.hooks?.internal?.entries?.["custom-hook"]).toEqual({
+      enabled: true,
+      handler: "./hooks/custom.ts",
+      env: { OPENCLAW_CUSTOM_HOOK: "1" },
+    });
+
+    const warning = previewNotes.mock.calls
+      .filter(([, title]) => title === "Doctor warnings")
+      .map(([message]) => message)
+      .join("\n");
     expect(warning).toContain("hooks.internal.entries.custom-hook:");
-    expect(warning).toContain("unsupported loader keys handler, extraDirs will not load hook modules");
-    expect(warning).toContain("hooks.internal.load.extraDirs for extra roots");
+    expect(warning).toContain("unsupported loader key handler will not load hook modules");
     expect(warning).not.toContain("hooks.internal.entries.valid-hook");
     expect(warning).not.toContain("hooks.internal.entries.null-hook");
   });

@@ -63,7 +63,7 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
   const unsupportedKeysByEntry = Object.entries(entries)
     .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
     .map(([hookKey, entry]) => {
-      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+      const unsupportedKeys = ["handler", "module", "installs"].filter((key) =>
         Object.hasOwn(entry, key),
       );
       return { hookKey, unsupportedKeys };
@@ -78,6 +78,61 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
     ({ hookKey, unsupportedKeys }) =>
       `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use a managed or workspace hook directory with HOOK.md + handler.js, hooks.internal.load.extraDirs for extra roots, or legacy hooks.internal.handlers for module handlers.`,
   );
+}
+
+function repairInternalHookEntryExtraDirs(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const entries = cfg.hooks?.internal?.entries;
+  if (!entries) {
+    return { config: cfg, changes: [] };
+  }
+
+  const movedExtraDirs: string[] = [];
+  const nextEntries = Object.fromEntries(
+    Object.entries(entries).map(([hookKey, entry]) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [hookKey, entry];
+      }
+      const extraDirs = Array.isArray(entry.extraDirs)
+        ? entry.extraDirs.filter((value): value is string => typeof value === "string")
+        : [];
+      if (extraDirs.length === 0) {
+        return [hookKey, entry];
+      }
+      movedExtraDirs.push(...extraDirs);
+      const { extraDirs: _extraDirs, ...nextEntry } = entry;
+      return [hookKey, nextEntry];
+    }),
+  );
+  if (movedExtraDirs.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const extraDirs = [
+    ...(cfg.hooks?.internal?.load?.extraDirs ?? []),
+    ...movedExtraDirs,
+  ].filter((value, index, values) => values.indexOf(value) === index);
+  return {
+    config: {
+      ...cfg,
+      hooks: {
+        ...cfg.hooks,
+        internal: {
+          ...cfg.hooks?.internal,
+          entries: nextEntries,
+          load: {
+            ...cfg.hooks?.internal?.load,
+            extraDirs,
+          },
+        },
+      },
+    },
+    changes: [
+      `Moved ${movedExtraDirs.length} misplaced hooks.internal.entries.*.extraDirs value${movedExtraDirs.length === 1 ? "" : "s"} to hooks.internal.load.extraDirs.`,
+    ],
+  };
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
@@ -210,6 +265,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ].join("\n"),
       "Legacy config keys detected",
     );
+  }
+  const internalHookExtraDirsRepair = repairInternalHookEntryExtraDirs(candidate);
+  emitDoctorChangesPanel(internalHookExtraDirsRepair.changes, shouldRepair);
+  if (internalHookExtraDirsRepair.changes.length > 0) {
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: internalHookExtraDirsRepair,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to move misplaced internal hook loader directories.`,
+    }));
   }
   const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, snapshot.path);
   if (hookTransformsDirWarnings.length > 0) {
