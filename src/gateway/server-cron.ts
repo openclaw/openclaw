@@ -48,6 +48,7 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -313,6 +314,7 @@ export function buildGatewayCronService(params: {
 
   const cron = new CronService({
     storePath,
+    statusStorePath: resolveOpenClawStateSqlitePath(process.env),
     cronEnabled,
     cronConfig: params.cfg.cron,
     defaultAgentId,
