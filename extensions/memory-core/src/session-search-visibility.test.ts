@@ -257,6 +257,59 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
+  it("keeps same-agent live transcript hits using owner metadata when the store entry is missing", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/main/live-orphan.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("does not keep cross-agent live orphan transcript hits", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/peer/live-orphan.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
   it("denies cross-agent session hits when agent-to-agent is disabled", async () => {
     const hit: MemorySearchResult = {
       path: "sessions/w1.jsonl",
