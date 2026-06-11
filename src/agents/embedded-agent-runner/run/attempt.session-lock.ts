@@ -812,6 +812,33 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
 
+    // #91236 — close a record-after-write race between concurrent *same-process*
+    // lanes (e.g. a `cron-nested`/`main` wrapper lane and the session lane that
+    // both drive one session). The peer lane may have written the session file
+    // but not yet called recordOwnedSessionFileWrite() when we first sampled the
+    // owned-writes map above, so its own append looks foreign. Yield once and
+    // re-sample before declaring a takeover. A foreign / cross-instance writer
+    // never populates this in-process map, so this cannot mask a real takeover —
+    // it only recognises a write made by our own concurrent lane.
+    {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (takeoverDetected) {
+        return;
+      }
+      const recheckCurrent = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      const recheckOwned = ownedSessionFileWrites.get(sessionFileFenceKey);
+      if (
+        recheckOwned &&
+        recheckOwned.generation > fenceGeneration &&
+        sameSessionFileFingerprint(recheckOwned.fingerprint, recheckCurrent)
+      ) {
+        fenceFingerprint = recheckCurrent;
+        fenceSnapshot = { fingerprint: recheckCurrent };
+        fenceGeneration = recheckOwned.generation;
+        return;
+      }
+    }
+
     if (
       await sessionFenceCtimeDriftIsBenign({
         sessionFile: params.lockOptions.sessionFile,

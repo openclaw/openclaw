@@ -596,6 +596,43 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  // #91236 — a concurrent same-process lane (e.g. a cron-nested/main wrapper
+  // lane driving the same session as the session lane) appends to the session
+  // file through the owned-write publication path. That write must NOT be
+  // treated as a foreign session takeover, even when its owned-write record
+  // lands just after the fence first samples the owned-writes map.
+  // NOTE (needs-validation): authored against the harness conventions but not
+  // executed in the author's environment — see PR description.
+  it("does not declare a takeover for a concurrent same-process owned write (#91236)", async () => {
+    const sessionFile = await createTempSessionFile();
+    const releaseA = vi.fn(async () => {});
+    const acquireA = vi.fn(async () => ({ release: releaseA }));
+    const controllerA = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireA,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    // A releases its coarse lock for the prompt/model window.
+    await controllerA.releaseHeldLockForAbort();
+
+    // A same-process peer lane writes the same session file under its own
+    // owned-write lock, recording an owned write in the shared in-process map.
+    const releaseB = vi.fn(async () => {});
+    const acquireB = vi.fn(async () => ({ release: releaseB }));
+    const controllerB = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireB,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    await controllerB.withSessionWriteLock(async () => {
+      await fs.appendFile(sessionFile, '{"type":"tool_call","id":"peer-lane"}\n', "utf8");
+    });
+
+    // A reacquires for cleanup: the peer's append is our own process's write and
+    // must be recognised as benign, not a foreign takeover.
+    await expect(controllerA.withSessionWriteLock(() => "ok")).resolves.toBe("ok");
+    expect(controllerA.hasSessionTakeover()).toBe(false);
+  });
+
   it("runs post-prompt transcript writes under a short reacquired lock", async () => {
     const events: string[] = [];
     const acquireSessionWriteLockLocal14 = vi
