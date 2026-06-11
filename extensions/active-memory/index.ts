@@ -40,6 +40,7 @@ import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-s
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAX_SUMMARY_CHARS = 220;
+const DEFAULT_MESSAGE_MAX_CHARS = 1200;
 const DEFAULT_RECENT_USER_TURNS = 2;
 const DEFAULT_RECENT_ASSISTANT_TURNS = 1;
 const DEFAULT_RECENT_USER_CHARS = 220;
@@ -47,12 +48,14 @@ const DEFAULT_RECENT_ASSISTANT_CHARS = 180;
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const CACHE_SWEEP_INTERVAL_MS = 1000;
+
 const DEFAULT_MIN_TIMEOUT_MS = 250;
 const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
+
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -155,6 +158,7 @@ type ActiveRecallPluginConfig = {
   timeoutMs?: number;
   setupGraceTimeoutMs?: number;
   queryMode?: "message" | "recent" | "full";
+  messageMaxChars?: number;
   maxSummaryChars?: number;
   recentUserTurns?: number;
   recentAssistantTurns?: number;
@@ -196,6 +200,7 @@ type ResolvedActiveRecallPluginConfig = {
   timeoutMs: number;
   setupGraceTimeoutMs: number;
   queryMode: "message" | "recent" | "full";
+  messageMaxChars?: number;
   maxSummaryChars: number;
   recentUserTurns: number;
   recentAssistantTurns: number;
@@ -846,6 +851,10 @@ function normalizePluginConfig(
       raw.queryMode === "message" || raw.queryMode === "recent" || raw.queryMode === "full"
         ? raw.queryMode
         : DEFAULT_QUERY_MODE,
+    messageMaxChars:
+      raw.messageMaxChars !== undefined
+        ? clampInt(raw.messageMaxChars, DEFAULT_MESSAGE_MAX_CHARS, 100, 10000)
+        : undefined,
     maxSummaryChars: clampInt(raw.maxSummaryChars, DEFAULT_MAX_SUMMARY_CHARS, 40, 1000),
     recentUserTurns: clampInt(raw.recentUserTurns, DEFAULT_RECENT_USER_TURNS, 0, 4),
     recentAssistantTurns: clampInt(raw.recentAssistantTurns, DEFAULT_RECENT_ASSISTANT_TURNS, 0, 3),
@@ -2116,6 +2125,15 @@ function buildQuery(params: {
 }): string {
   const latest = params.latestUserMessage.trim();
   if (params.config.queryMode === "message") {
+    if (
+      params.config.messageMaxChars !== undefined &&
+      latest.length > params.config.messageMaxChars
+    ) {
+      const truncated = latest.slice(0, params.config.messageMaxChars);
+      const truncationPoint = truncated.lastIndexOf(" ");
+      const capped = truncationPoint > 100 ? truncated.slice(0, truncationPoint) : truncated;
+      return capped + "…";
+    }
     return latest;
   }
   if (params.config.queryMode === "full") {
@@ -2341,6 +2359,25 @@ function stripInjectedActiveMemoryPrefixOnly(text: string): string {
   }
 
   return cleanedLines.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function extractLatestUserMessage(messages: unknown[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const typed = message as { role?: unknown; content?: unknown };
+    if (typed.role !== "user") {
+      continue;
+    }
+    const rawText = extractTextContent(typed.content);
+    if (!rawText) {
+      continue;
+    }
+    return rawText;
+  }
+  return "";
 }
 
 function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
@@ -3070,13 +3107,24 @@ export default definePluginEntry({
             return undefined;
           }
           const recentTurns = extractRecentTurns(event.messages);
+          const latestUserMessage = extractLatestUserMessage(event.messages);
           const query = buildQuery({
-            latestUserMessage: event.prompt,
+            latestUserMessage,
             recentTurns,
             config,
           });
+          if (
+            config.logging &&
+            config.queryMode === "message" &&
+            config.messageMaxChars !== undefined &&
+            latestUserMessage.length > config.messageMaxChars
+          ) {
+            api.logger.info?.(
+              `[active-memory] message-mode query truncated: originalChars=${latestUserMessage.length} cappedChars=${config.messageMaxChars} effectiveChars=${query.length}`,
+            );
+          }
           const searchQuery = buildSearchQuery({
-            latestUserMessage: event.prompt,
+            latestUserMessage,
             recentTurns,
           });
           const result = await maybeResolveActiveRecall({

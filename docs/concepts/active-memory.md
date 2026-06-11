@@ -366,6 +366,8 @@ timeout budgets should grow with context size (`message` < `recent` < `full`).
 
     Start around `3000` to `5000` ms for `config.timeoutMs`.
 
+    **Note:** When `config.messageMaxChars` is configured, the latest user message will be truncated at a word boundary if it exceeds the specified character limit. This prevents large assembled request envelopes from being forwarded to the memory sub-agent, which can cause timeouts or excessive costs on long sessions.
+
   </Tab>
 
   <Tab title="recent">
@@ -678,6 +680,7 @@ The most important fields are:
 | `config.allowedChatIds`      | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed                                                                                                                                                        |
 | `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                                                                                                                                                                  |
 | `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                                                                                                                                                                        |
+| `config.messageMaxChars`     | `number`                                                                                             | Optional maximum characters for the latest user message in message query mode. When exceeded, the message is truncated at a word boundary. Prevents large assembled request envelopes from being forwarded unchanged.                                    |
 | `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory                                                                                                                                                     |
 | `config.toolsAllow`          | `string[]`                                                                                           | Concrete memory tool names the blocking memory sub-agent may call; defaults to `["memory_search", "memory_get"]`, or `["memory_recall"]` when `plugins.slots.memory` is `memory-lancedb`; wildcards, `group:*` entries, and core agent tools are ignored |
 | `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                                                                                                                                                                    |

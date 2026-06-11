@@ -137,4 +137,47 @@ describe("active-memory manifest config schema", () => {
 
     expect(result.ok).toBe(false);
   });
+
+  it("accepts messageMaxChars configuration", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.message-max-chars",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        queryMode: "message",
+        messageMaxChars: 1200,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects messageMaxChars below minimum", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.message-max-chars.min",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        messageMaxChars: 50,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects messageMaxChars above maximum", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.message-max-chars.max",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        messageMaxChars: 15000,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
 });
