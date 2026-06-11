@@ -196,11 +196,10 @@ describe("OpenRouter OAuth", () => {
 
     expect(openUrl).not.toHaveBeenCalled();
     expect(log.mock.calls[0]?.[0]).toContain("https://openrouter.ai/auth?");
-    expect(text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Paste the OpenRouter redirect URL",
-      }),
-    );
+    const prompt = text.mock.calls[0]?.[0];
+    expect(prompt?.message).toContain("Open this URL in your LOCAL browser:");
+    expect(prompt?.message).toContain("https://openrouter.ai/auth?");
+    expect(prompt?.message).toContain("After signing in, paste the OpenRouter redirect URL here:");
     expect(result.defaultModel).toBe("openrouter/auto");
     expect(result.profiles).toEqual([
       {

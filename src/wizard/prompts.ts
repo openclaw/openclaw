@@ -40,6 +40,12 @@ export type WizardProgress = {
 };
 
 export type WizardPrompter = {
+  // True when the client renders auth challenges (OAuth URLs, device codes)
+  // in-band itself — e.g. an RPC wizard client like the Windows companion that
+  // receives wizard steps rather than the gateway's stdout/browser. Providers
+  // use this to surface the authorization URL inside the prompt instead of
+  // relying on a browser opened on the gateway host or terminal-only logging.
+  presentsAuthChallenge?: boolean;
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;

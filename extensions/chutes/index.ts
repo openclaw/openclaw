@@ -38,24 +38,28 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       })
     ).trim();
   const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
+  const presentsAuthChallenge = ctx.prompter.presentsAuthChallenge === true;
+  const collapseManualIntro = isRemote && presentsAuthChallenge;
 
-  await ctx.prompter.note(
-    isRemote
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
-          "",
-          `Redirect URI: ${redirectUri}`,
-        ].join("\n")
-      : [
-          "Browser will open for Chutes authentication.",
-          "If the callback doesn't auto-complete, paste the redirect URL.",
-          "",
-          `Redirect URI: ${redirectUri}`,
-        ].join("\n"),
-    "Chutes OAuth",
-  );
+  if (!collapseManualIntro) {
+    await ctx.prompter.note(
+      isRemote
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, paste the redirect URL back here.",
+            "",
+            `Redirect URI: ${redirectUri}`,
+          ].join("\n")
+        : [
+            "Browser will open for Chutes authentication.",
+            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "",
+            `Redirect URI: ${redirectUri}`,
+          ].join("\n"),
+      "Chutes OAuth",
+    );
+  }
 
   const progress = ctx.prompter.progress("Starting Chutes OAuth…");
   try {
@@ -66,6 +70,13 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       spin: progress,
       openUrl: ctx.openUrl,
       localBrowserMessage: "Complete sign-in in browser…",
+      manualPromptMessage: collapseManualIntro
+        ? [
+            "After signing in, paste the redirect URL back here.",
+            "",
+            `Redirect URI: ${redirectUri}`,
+          ].join("\n")
+        : undefined,
     });
 
     const creds = await loginChutes({
