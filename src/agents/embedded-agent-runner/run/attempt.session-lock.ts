@@ -2,7 +2,8 @@
  * Coordinates embedded-attempt session ownership, takeover, and prompt locks.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -61,6 +62,7 @@ const MAX_SAFE_FILE_OFFSET = BigInt(Number.MAX_SAFE_INTEGER);
 
 type SessionFileFenceSnapshot = {
   fingerprint: SessionFileFingerprint;
+  digest?: string;
   text?: string;
 };
 
@@ -232,21 +234,42 @@ async function readSessionFileFenceSnapshot(
   sessionFile: string,
 ): Promise<SessionFileFenceSnapshot> {
   const fingerprint = await readSessionFileFingerprint(sessionFile);
+  if (!fingerprint.exists) {
+    return { fingerprint };
+  }
   if (
-    !fingerprint.exists ||
-    fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES) ||
-    fingerprint.size > MAX_SAFE_FILE_OFFSET
+    fingerprint.size <= BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES) &&
+    fingerprint.size <= MAX_SAFE_FILE_OFFSET
   ) {
-    return { fingerprint };
+    try {
+      return {
+        fingerprint,
+        text: await fs.readFile(sessionFile, "utf8"),
+      };
+    } catch {
+      return { fingerprint };
+    }
   }
-  try {
-    return {
-      fingerprint,
-      text: await fs.readFile(sessionFile, "utf8"),
-    };
-  } catch {
-    return { fingerprint };
-  }
+  return {
+    fingerprint,
+    digest: await readSessionFileDigest(sessionFile),
+  };
+}
+
+async function readSessionFileDigest(sessionFile: string): Promise<string | undefined> {
+  const hash = createHash("sha256");
+  return await new Promise<string | undefined>((resolve) => {
+    const stream = createReadStream(sessionFile);
+    stream.on("data", (chunk) => {
+      hash.update(chunk);
+    });
+    stream.on("error", () => {
+      resolve(undefined);
+    });
+    stream.on("end", () => {
+      resolve(hash.digest("hex"));
+    });
+  });
 }
 
 async function sessionFenceAdvanceIsBenign(params: {
@@ -282,10 +305,13 @@ async function sessionFenceCtimeDriftIsBenign(params: {
     !sameSessionFileContentMetadata(params.previous?.fingerprint, params.current) ||
     params.previous?.fingerprint.exists !== true ||
     !params.current.exists ||
-    params.previous.fingerprint.ctimeNs === params.current.ctimeNs ||
-    params.previous.text === undefined
+    params.previous.fingerprint.ctimeNs === params.current.ctimeNs
   ) {
     return false;
+  }
+  if (params.previous.text === undefined) {
+    const currentDigest = await readSessionFileDigest(params.sessionFile);
+    return currentDigest !== undefined && currentDigest === params.previous.digest;
   }
   try {
     return (await fs.readFile(params.sessionFile, "utf8")) === params.previous.text;
@@ -535,6 +561,19 @@ function recordOwnedSessionFileWrite(
   return ownedSessionFileWriteGeneration;
 }
 
+function recordTrustedSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): number {
+  ownedSessionFileWriteGeneration += 1;
+  const state = {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+  };
+  trustedSessionFileStates.set(sessionFileKey, state);
+  return ownedSessionFileWriteGeneration;
+}
+
 function trustSessionFileState(
   sessionFileKey: string,
   fingerprint: SessionFileFingerprint,
@@ -767,11 +806,19 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     if (
-      (await sessionFenceCtimeDriftIsBenign({
+      await sessionFenceCtimeDriftIsBenign({
         sessionFile: params.lockOptions.sessionFile,
         previous: fenceSnapshot,
         current,
-      })) ||
+      })
+    ) {
+      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceFingerprint = fenceSnapshot.fingerprint;
+      fenceGeneration = recordTrustedSessionFileState(sessionFileFenceKey, current);
+      return;
+    }
+
+    if (
       (await sessionFenceAdvanceIsBenign({
         sessionFile: params.lockOptions.sessionFile,
         previous: fenceSnapshot,
