@@ -4968,4 +4968,32 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       bestEffortDeliver: true,
     });
   });
+
+  it("does not retry when embedded prompt lock file changed error occurs (permanent, fixes #91527)", async () => {
+    // The session file changed error is a concurrent-session race: the parent
+    // transcript is being modified while the subagent completion tries to
+    // inject. Each retry independently triggers a duplicate outbound send.
+    // Classifying it as permanent prevents the 3x duplicate announce pattern.
+    const callGateway = vi.fn(async () => {
+      throw new Error(
+        "session file changed while embedded prompt lock was released",
+      );
+    }) as unknown as typeof runtimeCallGateway;
+    const queueEmbeddedAgentMessageWithOutcome =
+      createQueueOutcomeSequenceMock(["no_active_run"]);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-lock-race",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-permanent-lock-error",
+    });
+
+    // Should fail immediately without retries (permanent error, not transient).
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    // Only one call — no retry attempts.
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
 });

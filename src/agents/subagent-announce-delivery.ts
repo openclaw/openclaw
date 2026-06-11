@@ -390,6 +390,12 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  // Embedded prompt lock errors are a concurrent-session race: the parent
+  // session transcript is being modified while the subagent completion tries
+  // to inject. Retrying does not help because the parent turn-maintenance
+  // lane continues writing; each retry independently triggers a duplicate
+  // outbound send (see #91527).
+  /session file changed while embedded prompt lock was released/i,
 ];
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
