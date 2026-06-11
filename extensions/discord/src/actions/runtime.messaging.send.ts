@@ -24,7 +24,7 @@ function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, 
   );
 }
 
-function readDiscordThreadArchiveCursor(thread: unknown): string | undefined {
+function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined {
   if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
     return undefined;
   }
@@ -36,8 +36,7 @@ function readDiscordThreadArchiveCursor(thread: unknown): string | undefined {
       return archiveTimestamp;
     }
   }
-  const id = record.id;
-  return typeof id === "string" && id.trim() ? id : undefined;
+  return undefined;
 }
 
 type DiscordThreadListActionResult = {
@@ -73,7 +72,7 @@ function normalizeDiscordThreadListActionResult(params: {
   const hasMore = record?.has_more === true;
   const nextBefore =
     params.includeArchived && hasMore
-      ? readDiscordThreadArchiveCursor(threadItems[threadItems.length - 1])
+      ? readDiscordThreadArchiveTimestamp(threadItems[threadItems.length - 1])
       : undefined;
 
   return {

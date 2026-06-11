@@ -327,6 +327,39 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
+  it("omits archived thread pagination cursors when Discord omits archive timestamps", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [
+        {
+          id: "thread-without-archive-timestamp",
+          name: "Legacy project",
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        limit: 1,
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: false,
+      hasMore: true,
+      returnedCount: 1,
+      source: "discord.threadList.archived",
+    });
+    expect(result.details).not.toHaveProperty("nextBefore");
+  });
+
   it("resolves Discord DM targets for reaction adds", async () => {
     const resolveReactionTarget = vi.fn(async () => "DM1");
     discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
