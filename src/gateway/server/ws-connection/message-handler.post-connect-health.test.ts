@@ -658,3 +658,37 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 });
+
+describe("formatAuditList", () => {
+  it("returns <none> for empty or undefined arrays", () => {
+    expect(testing.formatAuditList(undefined)).toBe("<none>");
+    expect(testing.formatAuditList([])).toBe("<none>");
+  });
+
+  it("trims, deduplicates, and sorts valid strings", () => {
+    expect(testing.formatAuditList(["  b  ", "a", "  b", "c ", ""])).toBe("a,b,c");
+  });
+
+  it("skips non-string items without crashing (regression for #90654)", () => {
+    expect(
+      testing.formatAuditList([
+        "valid",
+        undefined as unknown as string,
+        null as unknown as string,
+        42 as unknown as string,
+        "also-valid",
+      ]),
+    ).toBe("also-valid,valid");
+  });
+
+  it("returns <none> when all items are non-strings or empty", () => {
+    expect(
+      testing.formatAuditList([
+        undefined as unknown as string,
+        null as unknown as string,
+        "   ",
+        "",
+      ]),
+    ).toBe("<none>");
+  });
+});
