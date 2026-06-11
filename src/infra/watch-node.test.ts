@@ -535,7 +535,7 @@ describe("watch-node script", () => {
     expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
-  it("prints recovery guidance when chokidar fails with invalid package config", async () => {
+  it("prints recovery guidance when the watcher fails with invalid package config", async () => {
     const error = Object.assign(
       new Error(
         'Invalid package config /tmp/openclaw/.pnpm/chokidar/package.json while importing "chokidar" from /tmp/openclaw/scripts/watch-node.mjs.',
@@ -581,7 +581,7 @@ describe("watch-node script", () => {
     }
   });
 
-  it("does not log non-package-config chokidar import errors before rethrowing", async () => {
+  it("does not log non-package-config watcher import errors before rethrowing", async () => {
     const error = Object.assign(new Error("Cannot find package 'chokidar'"), {
       code: "ERR_MODULE_NOT_FOUND",
     });

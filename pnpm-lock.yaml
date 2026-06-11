@@ -90,9 +90,6 @@ importers:
       chalk:
         specifier: 5.6.2
         version: 5.6.2
-      chokidar:
-        specifier: 5.0.0
-        version: 5.0.0
       clawpdf:
         specifier: 0.3.0
         version: 0.3.0
@@ -262,6 +259,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.7
         version: 4.1.7(@vitest/browser@4.1.7)(vitest@4.1.7)
+      chokidar:
+        specifier: workspace:*
+        version: link:packages/chokidar-slim
       esbuild:
         specifier: 0.28.0
         version: 0.28.0
@@ -462,8 +462,8 @@ importers:
         specifier: 1.1.6
         version: 1.1.6
       chokidar:
-        specifier: 5.0.0
-        version: 5.0.0
+        specifier: workspace:*
+        version: link:../../packages/chokidar-slim
       lit:
         specifier: 3.3.3
         version: 3.3.3
@@ -1018,8 +1018,8 @@ importers:
   extensions/memory-core:
     dependencies:
       chokidar:
-        specifier: 5.0.0
-        version: 5.0.0
+        specifier: workspace:*
+        version: link:../../packages/chokidar-slim
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -1807,6 +1807,8 @@ importers:
       yaml:
         specifier: 2.9.0
         version: 2.9.0
+
+  packages/chokidar-slim: {}
 
   packages/gateway-client:
     dependencies:

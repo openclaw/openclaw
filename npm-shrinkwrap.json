@@ -26,7 +26,6 @@
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
         "chalk": "5.6.2",
-        "chokidar": "5.0.0",
         "clawpdf": "0.3.0",
         "commander": "14.0.3",
         "croner": "10.0.1",
@@ -747,21 +746,6 @@
       },
       "funding": {
         "url": "https://github.com/chalk/chalk?sponsor=1"
-      }
-    },
-    "node_modules/chokidar": {
-      "version": "5.0.0",
-      "resolved": "https://registry.npmjs.org/chokidar/-/chokidar-5.0.0.tgz",
-      "integrity": "sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw==",
-      "license": "MIT",
-      "dependencies": {
-        "readdirp": "^5.0.0"
-      },
-      "engines": {
-        "node": ">= 20.19.0"
-      },
-      "funding": {
-        "url": "https://paulmillr.com/funding/"
       }
     },
     "node_modules/chownr": {
@@ -2664,19 +2648,6 @@
       "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz",
       "integrity": "sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==",
       "license": "MIT"
-    },
-    "node_modules/readdirp": {
-      "version": "5.0.0",
-      "resolved": "https://registry.npmjs.org/readdirp/-/readdirp-5.0.0.tgz",
-      "integrity": "sha512-9u/XQ1pvrQtYyMpZe7DXKv2p5CNvyVwzUB6uhLAnQwHMSgKMBR62lc7AHljaeteeHXn11XTAaLLUVZYVZyuRBQ==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 20.19.0"
-      },
-      "funding": {
-        "type": "individual",
-        "url": "https://paulmillr.com/funding/"
-      }
     },
     "node_modules/require-directory": {
       "version": "2.1.1",

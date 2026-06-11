@@ -23,6 +23,9 @@ const { watchMock } = vi.hoisted(() => ({
     return Object.assign(watcher, {
       close: vi.fn(async () => undefined),
       getWatched: vi.fn(() => watcher.watchedEntries),
+      whenReady: vi.fn(
+        () => new Promise((resolve) => watcher.once("ready", () => resolve(watcher))),
+      ),
     });
   }),
 }));
@@ -566,6 +569,7 @@ describe("QmdMemoryManager", () => {
       [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
     };
     watcher.emit("ready");
+    await Promise.resolve();
     expectMockMessageContains(logWarnMock, "Memory file watching is tracking 2002 paths.");
 
     const notesPath = path.join(workspaceDir, "notes.md");

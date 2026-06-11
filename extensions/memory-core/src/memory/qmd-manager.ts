@@ -1704,7 +1704,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     watcher.on("add", markDirty);
     watcher.on("change", markDirty);
     watcher.on("unlink", markDirty);
-    watcher.once("ready", () => {
+    void watcher.whenReady().then(() => {
       this.warnIfWatchPressure(countChokidarWatchedEntries(watcher));
       log.info(
         `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} durationMs=${Date.now() - startTime}`,

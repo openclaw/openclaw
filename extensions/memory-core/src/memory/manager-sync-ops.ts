@@ -127,7 +127,6 @@ const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
-const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -262,7 +261,6 @@ export abstract class MemoryManagerSyncOps {
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
   protected intervalTimer: NodeJS.Timeout | null = null;
-  protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
@@ -722,7 +720,7 @@ export abstract class MemoryManagerSyncOps {
     if (fileWatchPaths.size > 0) {
       const existingWatcher = this.currentMemoryChokidarWatcher();
       if (existingWatcher) {
-        existingWatcher.add(Array.from(fileWatchPaths));
+        this.warnAfterMemoryChokidarAdd(existingWatcher.addAsync(Array.from(fileWatchPaths)));
       } else {
         const watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
           ignoreInitial: true,
@@ -740,40 +738,35 @@ export abstract class MemoryManagerSyncOps {
           const message = err instanceof Error ? err.message : String(err);
           log.warn(`memory watcher error: ${message}`);
         });
-        watcher.once("ready", () => {
+        void watcher.whenReady().then(() => {
+          if (this.closed) return;
           this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
         });
       }
     }
-    this.scheduleMemoryWatchPressureStartupCheck();
+    this.warnIfNativeMemoryWatchPressure();
   }
 
-  private scheduleMemoryWatchPressureStartupCheck(): void {
-    if (
-      this.memoryWatchPressureStartupTimer ||
-      this.memoryWatchPressureWarning.shown ||
-      this.closed ||
-      (this.nativeMemoryWatchPairs.length === 0 && !this.watcher)
-    ) {
+  private warnIfNativeMemoryWatchPressure(): void {
+    if (this.closed || this.memoryWatchPressureWarning.shown) {
       return;
     }
-    this.memoryWatchPressureStartupTimer = setTimeout(() => {
-      this.memoryWatchPressureStartupTimer = null;
-      if (this.closed || this.memoryWatchPressureWarning.shown) {
-        return;
-      }
-      if (this.watcher) {
-        this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(this.watcher), "paths");
-      }
-      if (this.memoryWatchPressureWarning.shown) {
-        return;
-      }
-      let directoryCount = 0;
-      for (const pair of this.nativeMemoryWatchPairs) {
-        directoryCount += pair.treeWatchers?.size ?? 0;
-      }
-      this.warnIfMemoryWatchPressure(directoryCount, "directories");
-    }, MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS);
+    let directoryCount = 0;
+    for (const pair of this.nativeMemoryWatchPairs) {
+      directoryCount += pair.treeWatchers?.size ?? 0;
+    }
+    this.warnIfMemoryWatchPressure(directoryCount, "directories");
+  }
+
+  private warnAfterMemoryChokidarAdd(result: Promise<{ watchedEntryCount: number }>): void {
+    void result.then(
+      ({ watchedEntryCount }) => {
+        if (!this.closed) this.warnIfMemoryWatchPressure(watchedEntryCount, "paths");
+      },
+      (err: unknown) => {
+        if (!this.closed) log.warn(`memory watcher add failed: ${formatErrorMessage(err)}`);
+      },
+    );
   }
 
   private warnIfMemoryWatchPressure(count: number, unit: MemoryWatchPressureUnit): void {
@@ -1241,7 +1234,7 @@ export abstract class MemoryManagerSyncOps {
       if (this.watcher) {
         // Existing chokidar watcher (handling MEMORY.md and/or other file
         // paths) — extend it to cover this directory too.
-        this.watcher.add(dir);
+        this.warnAfterMemoryChokidarAdd(this.watcher.addAsync(dir));
         return;
       }
       // No chokidar watcher exists yet. Spin one up just for this directory
@@ -1260,7 +1253,8 @@ export abstract class MemoryManagerSyncOps {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`memory watcher error: ${message}`);
       });
-      watcher.once("ready", () => {
+      void watcher.whenReady().then(() => {
+        if (this.closed) return;
         this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
       });
     } catch (err) {

@@ -218,6 +218,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
+    id === "chokidar" ||
+    id.startsWith("chokidar/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/media-core" ||
@@ -431,6 +433,12 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
     "render-aware-chunking": "packages/markdown-core/src/render-aware-chunking.ts",
     tables: "packages/markdown-core/src/tables.ts",
     types: "packages/markdown-core/src/types.ts",
+  };
+}
+
+function buildChokidarSlimDistEntries(): Record<string, string> {
+  return {
+    index: "packages/chokidar-slim/src/index.ts",
   };
 }
 
@@ -728,6 +736,12 @@ export default defineConfig([
     deps: {
       neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildChokidarSlimDistEntries(),
+    outDir: tsdownPackageOutputRoot("chokidar-slim"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

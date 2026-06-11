@@ -212,6 +212,7 @@
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
     "node_modules/",
+    "packages/chokidar-slim/src/index.ts",
     "patches/",
     "pnpm-lock.yaml",
     "skills/**",

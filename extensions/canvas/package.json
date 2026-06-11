@@ -10,7 +10,7 @@
   "dependencies": {
     "@a2ui/lit": "0.10.0",
     "@lit/context": "1.1.6",
-    "chokidar": "5.0.0",
+    "chokidar": "workspace:*",
     "lit": "3.3.3",
     "typebox": "1.1.39",
     "ws": "8.21.0"
