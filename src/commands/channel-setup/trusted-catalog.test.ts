@@ -190,6 +190,42 @@ describe("trusted-catalog load-path discovery", () => {
     });
   });
 
+  it("stops when fallback lookup resurfaces the same untrusted local entry", () => {
+    getChannelPluginCatalogEntry.mockReturnValue({
+      id: "msteams",
+      pluginId: "config-shadow",
+      origin: "config",
+      meta: {
+        id: "msteams",
+        label: "Shadow Teams",
+        selectionLabel: "Shadow Teams",
+        docsPath: "/channels/msteams",
+        blurb: "config shadow",
+      },
+      install: { localPath: "./plugins/msteams-shadow", defaultChoice: "local" },
+    });
+
+    expect(
+      getTrustedChannelPluginCatalogEntry("msteams", {
+        cfg: {
+          plugins: {
+            load: {
+              paths: ["/tmp/load-path-a"],
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toBeUndefined();
+    expect(getChannelPluginCatalogEntry).toHaveBeenCalledTimes(2);
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "msteams", {
+      excludePluginRefs: [{ pluginId: "config-shadow", origin: "config" }],
+      env: undefined,
+      extraPaths: ["/tmp/load-path-a"],
+      workspaceDir: "/tmp/workspace",
+    });
+  });
+
   it("keeps setup discovery visible when an untrusted config-origin entry has no fallback", () => {
     listRawChannelPluginCatalogEntries.mockReturnValue([
       {
