@@ -606,21 +606,29 @@ export class CodexNativeSubagentMonitor {
     const delayMs = noFinalCompletionFallbackDelayMs(this.transcriptPollDelaysMs);
     childState.noFinalCompletionFallbackTimer = setTimeout(() => {
       childState.noFinalCompletionFallbackTimer = undefined;
-      void this.reconcileChildTranscript(childState.childThreadId)
-        .catch((error: unknown) => {
-          embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
-            childThreadId: childState.childThreadId,
-            error: formatErrorMessage(error),
-          });
-          return false;
-        })
-        .then((reconciled) => {
-          if (!reconciled && !childState.transcriptTerminal) {
-            void this.processCompletion(state, completion, eventAt);
-          }
-        });
+      void this.deliverNoFinalCompletionFallback(state, childState, completion, eventAt);
     }, delayMs);
     unrefTimer(childState.noFinalCompletionFallbackTimer);
+  }
+
+  private async deliverNoFinalCompletionFallback(
+    state: ParentState,
+    childState: ChildState,
+    completion: CodexNativeSubagentCompletion,
+    eventAt: number,
+  ): Promise<void> {
+    const reconciled = await this.reconcileChildTranscript(childState.childThreadId).catch(
+      (error: unknown): false => {
+        embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
+          childThreadId: childState.childThreadId,
+          error: formatErrorMessage(error),
+        });
+        return false;
+      },
+    );
+    if (!reconciled && !childState.transcriptTerminal) {
+      await this.processCompletion(state, completion, eventAt);
+    }
   }
 
   private clearTimers(): void {

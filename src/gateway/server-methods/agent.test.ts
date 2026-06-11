@@ -3005,6 +3005,63 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("drops a stale exec approval followup at preflight without touching the rebound session (#59349)", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-rebound-followup",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    // Session was rebound by /new or /reset: current sessionId differs from the
+    // approval-time sessionId carried on the request.
+    mockMainSessionEntry({
+      sessionId: "current-session-after-reset",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const context = makeContext();
+    const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const respond = await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+        execApprovalFollowupExpectedSessionId: "approval-time-session-id",
+      },
+      {
+        reqId: "exec-followup-rebound-drop",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      runId: registration.idempotencyKey,
+      status: "ok",
+      summary: expect.stringContaining("exec approval followup dropped"),
+    });
+    expect(mocks.updateSessionStore.mock.calls.length).toBe(updateSessionStoreCallsBefore);
+    expect(mocks.agentCommand.mock.calls.length).toBe(agentCommandCallsBefore);
+    const dedupeEntry = context.dedupe.get("agent:exec-approval-followup:req-rebound-followup");
+    expect(dedupeEntry?.ok).toBe(true);
+    expect(dedupeEntry?.payload).toMatchObject({
+      status: "ok",
+      summary: expect.stringContaining("exec approval followup dropped"),
+    });
+  });
+
   it("does not honor caller-supplied exec approval runtime handoff ids without registry state", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",
@@ -4410,6 +4467,54 @@ describe("gateway agent handler", () => {
         status: "succeeded",
         terminalSummary: "completed",
       });
+    });
+  });
+
+  it("logs a swallowed finalize error without blocking the background run", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-finalize-throw-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      const defaultRuntime = getDetachedTaskLifecycleRuntime();
+      const finalizeError = new Error("finalize boom");
+      const finalizeTaskRunByRunIdSpy = vi.fn(() => {
+        throw finalizeError;
+      });
+      setDetachedTaskLifecycleRuntime({
+        ...defaultRuntime,
+        finalizeTaskRunByRunId: finalizeTaskRunByRunIdSpy,
+      });
+
+      const context = makeContext();
+      const respond = vi.fn();
+
+      await invokeAgent(
+        {
+          message: "finalize throw seam task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-finalize-throw",
+        },
+        { context, respond, reqId: "task-registry-finalize-throw" },
+      );
+
+      // Finalize threw, but the run must still complete (second res frame with ok status).
+      expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
+      const completed = respond.mock.calls.some(([ok, payload]) => {
+        return ok === true && (payload as { status?: string } | undefined)?.status === "ok";
+      });
+      expect(completed).toBe(true);
+
+      // The swallowed finalize error stays observable via a warn log.
+      const warnMock = context.logGateway.warn as ReturnType<typeof vi.fn>;
+      const loggedFinalizeError = warnMock.mock.calls.some(([message]) => {
+        return (
+          typeof message === "string" &&
+          message.includes("failed to finalize tracked agent task") &&
+          message.includes("finalize boom")
+        );
+      });
+      expect(loggedFinalizeError).toBe(true);
     });
   });
 

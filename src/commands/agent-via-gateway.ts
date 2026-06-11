@@ -131,15 +131,6 @@ function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCo
   return embeddedAgentCommandPromise;
 }
 
-async function loadMigratedEmbeddedAgentCommand(): Promise<
-  EmbeddedAgentCommandModule["agentCommand"]
-> {
-  const cfg = await loadRuntimeConfig();
-  const { ensureSessionStateMigratedForCommand } = await import("./session-state-migration.js");
-  await ensureSessionStateMigratedForCommand(cfg);
-  return await loadEmbeddedAgentCommand();
-}
-
 function loadAgentSessionModule(): Promise<AgentSessionModule> {
   agentSessionModulePromise ??= agentSessionModuleLoader();
   return agentSessionModulePromise;
@@ -855,7 +846,7 @@ export async function agentCliCommand(
   };
   try {
     if (dispatchOpts.local === true) {
-      const agentCommand = await loadMigratedEmbeddedAgentCommand();
+      const agentCommand = await loadEmbeddedAgentCommand();
       const result = await agentCommand(localOpts, runtime, deps);
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }
@@ -883,7 +874,7 @@ export async function agentCliCommand(
         runtime.error?.(
           `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
         );
-        const agentCommand = await loadMigratedEmbeddedAgentCommand();
+        const agentCommand = await loadEmbeddedAgentCommand();
         const result = await agentCommand(
           {
             ...localOpts,
@@ -910,7 +901,7 @@ export async function agentCliCommand(
       runtime.error?.(
         `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
       );
-      const agentCommand = await loadMigratedEmbeddedAgentCommand();
+      const agentCommand = await loadEmbeddedAgentCommand();
       const result = await agentCommand(
         {
           ...localOpts,

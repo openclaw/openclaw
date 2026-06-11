@@ -19,6 +19,7 @@ import {
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
@@ -633,7 +634,10 @@ export function registerBrowserAgentActRoutes(
                       profileName,
                       profile: profileCtx.profile,
                       targetId: tab.targetId,
-                      fn: action.fn,
+                      fn: normalizeBrowserEvaluateFunctionSource(
+                        action.fn,
+                        action.ref ? { argumentName: "el" } : undefined,
+                      ),
                       args: action.ref ? [action.ref] : undefined,
                     }),
                   guard: existingSessionNavigationGuard,

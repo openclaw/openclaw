@@ -90,6 +90,25 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(result.stdout).toContain("samples=1");
   });
 
+  it("ignores terminal zero-capacity Docker stats samples", () => {
+    const result = runAssert(
+      writeStats(
+        '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n',
+      ),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("memory=128.0MiB");
+    expect(result.stdout).toContain("samples=1");
+  });
+
+  it("still fails when only terminal zero-capacity samples were captured", () => {
+    const result = runAssert(writeStats('{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n'));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no docker stats samples captured");
+  });
+
   it("rejects zero-memory Docker stats samples as invalid proof", () => {
     const result = runAssert(writeStats('{"MemUsage":"0B / 2GiB","CPUPerc":"0.0%"}\n'));
 

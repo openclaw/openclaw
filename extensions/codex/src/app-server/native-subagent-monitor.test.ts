@@ -380,7 +380,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const runtime = createRuntime();
       const monitor = new CodexNativeSubagentMonitor(client, runtime, {
         codexHome,
-        transcriptPollDelaysMs: [10],
+        transcriptPollDelaysMs: [10, 1],
       });
       monitor.registerParent({
         parentThreadId: "parent-thread",
@@ -400,15 +400,20 @@ describe("CodexNativeSubagentMonitor", () => {
 
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
 
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
-        expect.objectContaining({
-          childSessionId: "child-thread",
-          status: "succeeded",
-          statusLabel: "completed_without_final_message",
-          result: "Codex native subagent completed without a final assistant message.",
-        }),
+      await vi.advanceTimersByTimeAsync(1);
+
+      await vi.waitFor(() =>
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+          expect.objectContaining({
+            childSessionId: "child-thread",
+            status: "succeeded",
+            statusLabel: "completed_without_final_message",
+            result: "Codex native subagent completed without a final assistant message.",
+          }),
+        ),
       );
 
       client.close();

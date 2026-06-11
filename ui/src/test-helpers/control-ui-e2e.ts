@@ -454,6 +454,9 @@ function installControlUiMockGateway(input: {
             scope: "agent",
           },
           messages: scenario.historyMessages,
+          metadata: {
+            models: scenario.models,
+          },
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
         };

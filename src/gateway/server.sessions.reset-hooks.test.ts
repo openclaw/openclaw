@@ -3,8 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
-import { embeddedRunMock, readSessionStore, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -134,9 +133,12 @@ async function withGlobalAgentSessionStore<T>(
 }
 
 async function writeGlobalSessionFile(storePath: string, sessionId: string) {
-  await writeSessionStoreForTestAsync(storePath, {
-    global: sessionStoreEntry(sessionId),
-  });
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({ global: sessionStoreEntry(sessionId) }, null, 2),
+    "utf-8",
+  );
 }
 
 async function writeMessageTranscript(params: {
@@ -396,8 +398,12 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
       agentId: "work",
     });
     expect(resetTarget.storePath).toBe(globalConfig.workStorePath);
-    const mainStore = readSessionStore(globalConfig.mainStorePath);
-    const workStore = readSessionStore(resetTarget.storePath);
+    const mainStore = JSON.parse(await fs.readFile(globalConfig.mainStorePath, "utf-8")) as {
+      global?: { sessionId?: string };
+    };
+    const workStore = JSON.parse(await fs.readFile(resetTarget.storePath, "utf-8")) as {
+      global?: { sessionId?: string };
+    };
     expect(mainStore.global?.sessionId).toBe("sess-main-global");
     expect(workStore.global?.sessionId).toBe(reset.entry.sessionId);
     expect(workStore.global?.sessionId).not.toBe("sess-work-global");
@@ -517,7 +523,10 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
   const filesAfterResetAttempt = await fs.readdir(dir);
   expect(

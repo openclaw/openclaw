@@ -653,6 +653,63 @@ jobs:
             done
           }
 
+          guard_existing_public_release() {
+            local release_version asset_name release_json is_draft has_sha has_proof has_asset release_url
+
+            if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
+              return 0
+            fi
+
+            if ! release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,assets,body,url 2>/dev/null)"; then
+              return 0
+            fi
+
+            is_draft="$(printf '%s' "${release_json}" | jq -r '.isDraft')"
+            if [[ "${is_draft}" == "true" ]]; then
+              return 0
+            fi
+
+            release_version="${RELEASE_TAG#v}"
+            asset_name="openclaw-${release_version}-dependency-evidence.zip"
+            has_sha="$(printf '%s' "${release_json}" | jq --arg sha "${TARGET_SHA}" -r '.body | contains($sha)')"
+            has_proof="$(printf '%s' "${release_json}" | jq -r '.body | contains("### Release verification")')"
+            has_asset="$(printf '%s' "${release_json}" | jq --arg name "${asset_name}" -r 'any(.assets[]?; .name == $name)')"
+            release_url="$(printf '%s' "${release_json}" | jq -r '.url')"
+
+            if [[ "${has_sha}" == "true" && "${has_proof}" == "true" && "${has_asset}" == "true" ]]; then
+              return 0
+            fi
+
+            {
+              echo "Release ${RELEASE_TAG} already has a public GitHub release page without complete postpublish evidence for ${TARGET_SHA}."
+              echo "Refusing to reuse a public prerelease tag after publication started: ${release_url}"
+              echo "Create a new beta tag or delete/draft the incomplete public release before retrying."
+            } >&2
+            exit 1
+          }
+
+          guard_openclaw_npm_not_already_published() {
+            local release_version release_url
+
+            if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
+              return 0
+            fi
+
+            release_version="${RELEASE_TAG#v}"
+            if ! npm view "openclaw@${release_version}" version >/dev/null 2>&1; then
+              return 0
+            fi
+
+            release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
+            {
+              echo "openclaw@${release_version} is already published on npm."
+              echo "Refusing to dispatch publish child workflows for an already-published version."
+              echo "If this is recovery from a failed postpublish evidence or draft-release step, repair/finalize the existing draft or create a correction tag; do not rerun the publish workflow for the same npm version."
+              echo "Release page, if present: ${release_url}"
+            } >&2
+            exit 1
+          }
+
           create_or_update_github_release() {
             local release_version notes_version title notes_file changelog_file latest_arg prerelease_args
             release_version="${RELEASE_TAG#v}"
@@ -698,11 +755,17 @@ jobs:
             else
               gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
                 --verify-tag \
+                --draft \
                 --title "${title}" \
                 --notes-file "${notes_file}" \
                 "${prerelease_args[@]}" \
                 "${latest_arg}"
             fi
+            echo "- GitHub release draft: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          publish_github_release() {
+            gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
             echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
@@ -735,8 +798,10 @@ jobs:
           }
 
           verify_published_release() {
-            local release_version evidence_path
+            local release_version evidence_path skip_clawhub
             local -a verify_args
+
+            skip_clawhub="${1:-false}"
 
             release_version="${RELEASE_TAG#v}"
             evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
@@ -754,11 +819,12 @@ jobs:
               --plugin-npm-run "${plugin_npm_run_id}"
               --openclaw-npm-run "${openclaw_npm_run_id}"
               --evidence-out "${evidence_path}"
+              --skip-github-release
             )
-            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
-              verify_args+=(--plugin-clawhub-run "${plugin_clawhub_run_id}")
-            else
+            if [[ "${skip_clawhub}" == "true" || "${WAIT_FOR_CLAWHUB}" != "true" ]]; then
               verify_args+=(--skip-clawhub)
+            else
+              verify_args+=(--plugin-clawhub-run "${plugin_clawhub_run_id}")
             fi
             if [[ -n "${PLUGINS// }" ]]; then
               verify_args+=(--plugins "${PLUGINS}")
@@ -799,6 +865,7 @@ jobs:
               RELEASE_NOTES_FILE="${notes_file}" \
               RELEASE_VERSION="${release_version}" \
               RELEASE_TAG="${RELEASE_TAG}" \
+              RELEASE_SHA="${TARGET_SHA}" \
               RELEASE_REPO="${GITHUB_REPOSITORY}" \
               RELEASE_TARBALL="${tarball}" \
               RELEASE_INTEGRITY="${integrity}" \
@@ -825,6 +892,7 @@ jobs:
             `- npm package: https://www.npmjs.com/package/openclaw/v/${process.env.RELEASE_VERSION}`,
             `- registry tarball: ${process.env.RELEASE_TARBALL}`,
             `- integrity: \`${process.env.RELEASE_INTEGRITY}\``,
+            `- release SHA: \`${process.env.RELEASE_SHA}\``,
             `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
             `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
             `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
@@ -862,6 +930,9 @@ jobs:
               echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          guard_existing_public_release
+          guard_openclaw_npm_not_already_published
 
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
           clawhub_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
@@ -934,11 +1005,6 @@ jobs:
             openclaw_failed=1
           fi
 
-          if [[ -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ]]; then
-            create_or_update_github_release
-            upload_dependency_evidence_release_asset
-          fi
-
           if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"; then
             failed=1
           fi
@@ -946,9 +1012,20 @@ jobs:
             failed=1
           fi
 
-          if [[ "${failed}" == "0" && -n "${openclaw_npm_run_id}" ]]; then
-            verify_published_release
+          if [[ -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ]]; then
+            if [[ "${failed}" == "0" ]]; then
+              verify_published_release
+            else
+              verify_published_release true
+            fi
+            create_or_update_github_release
+            upload_dependency_evidence_release_asset
             append_release_proof_to_github_release
+            if [[ "${failed}" == "0" ]]; then
+              publish_github_release
+            else
+              echo "- GitHub release: left as draft because a required publish child failed" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           if [[ "${failed}" != "0" ]]; then
             exit 1

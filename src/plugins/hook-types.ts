@@ -1,4 +1,3 @@
-// Defines plugin hook payload and message contracts.
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -245,6 +244,12 @@ export type PluginHookAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
+  /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
+  channel?: string;
+  /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
+  chatId?: string;
+  /** Sender identity for channel-originated runs when available. */
+  senderId?: string;
   trigger?: string;
   channelId?: string;
   /** Resolved effective context-token budget after model/config/agent caps. */
@@ -420,8 +425,10 @@ export type PluginHookBeforeDispatchEvent = {
   sessionKey?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  replyToIsQuote?: boolean;
   isGroup?: boolean;
   timestamp?: number;
 };
@@ -433,8 +440,10 @@ export type PluginHookBeforeDispatchContext = {
   sessionKey?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  replyToIsQuote?: boolean;
 };
 
 export type PluginHookBeforeDispatchResult = {

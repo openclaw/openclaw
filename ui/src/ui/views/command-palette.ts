@@ -101,6 +101,7 @@ export type CommandPaletteProps = {
   open: boolean;
   query: string;
   activeIndex: number;
+  onOpen?: () => void | Promise<void>;
   onToggle: () => void;
   onQueryChange: (query: string) => void;
   onActiveIndexChange: (index: number) => void;
@@ -137,6 +138,7 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
 
 let previouslyFocused: Element | null = null;
 let activeDialog: HTMLDialogElement | null = null;
+let activeProps: CommandPaletteProps | null = null;
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -288,6 +290,7 @@ function syncDialog(el: Element | undefined) {
   if (activeDialog !== el) {
     saveFocus();
     activeDialog = el;
+    void activeProps?.onOpen?.();
   }
   if (el.open) {
     return;
@@ -319,6 +322,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
+  activeProps = props;
 
   const items = filteredItems(props.query);
   const grouped = groupItems(items);

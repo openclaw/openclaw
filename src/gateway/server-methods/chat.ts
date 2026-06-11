@@ -39,12 +39,18 @@ import {
 } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -132,6 +138,7 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
@@ -161,7 +168,10 @@ import {
   buildWebchatAssistantMessageFromReplyPayloads,
   buildWebchatAudioContentBlocksFromReplyPayloads,
 } from "./chat-webchat-media.js";
-import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
+import {
+  loadOptionalServerMethodModelCatalog,
+  startOptionalServerMethodModelCatalogLoad,
+} from "./optional-model-catalog.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
@@ -213,6 +223,11 @@ type PreRegisteredAgentRun = {
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
 
+type ChatMetadataResult = {
+  commands?: unknown[];
+  models?: unknown[];
+};
+
 type ChatSendAckServerTiming = {
   receivedToAckMs: number;
   loadSessionMs: number;
@@ -223,6 +238,7 @@ type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
   | "agent-run-started"
+  | "first-assistant-event"
   | "dispatch-completed"
   | "post-dispatch-completed";
 
@@ -324,28 +340,73 @@ async function handleChatMetadataRequest({
     return;
   }
   try {
-    const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
-      import("./models-list-result.js"),
-      import("./commands-list-result.js"),
-    ]);
-    const [models, commands] = await Promise.all([
-      buildModelsListResult({
+    respond(
+      true,
+      await buildChatMetadataResult({
+        cfg,
         context,
         agentId: requestedAgentId,
-        params: { view: "configured" },
       }),
-      Promise.resolve(
-        buildCommandsListResult({
-          cfg,
-          agentId: requestedAgentId,
-          includeArgs: true,
-          scope: "text",
-        }),
-      ),
-    ]);
-    respond(true, { ...models, ...commands });
+    );
   } catch (err) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+  }
+}
+
+async function buildChatMetadataResult(params: {
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  agentId: string;
+  preloadedModelCatalog?: ModelCatalogEntry[];
+}): Promise<ChatMetadataResult> {
+  const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
+    import("./models-list-result.js"),
+    import("./commands-list-result.js"),
+  ]);
+  const [models, commands] = await Promise.all([
+    buildModelsListResult({
+      context: params.context,
+      agentId: params.agentId,
+      params: { view: "configured" },
+      preloadedCatalog: params.preloadedModelCatalog,
+    }),
+    Promise.resolve(
+      buildCommandsListResult({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        includeArgs: true,
+        scope: "text",
+      }),
+    ),
+  ]);
+  return { ...models, ...commands };
+}
+
+async function buildChatStartupMetadataResult(params: {
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  agentId: string;
+  modelCatalog: ModelCatalogEntry[] | undefined;
+}): Promise<ChatMetadataResult | undefined> {
+  if (!params.modelCatalog) {
+    return undefined;
+  }
+  if (modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view: "configured" })) {
+    return undefined;
+  }
+  try {
+    const { buildModelsListResult } = await import("./models-list-result.js");
+    return await buildModelsListResult({
+      context: params.context,
+      agentId: params.agentId,
+      params: { view: "configured" },
+      preloadedCatalog: params.modelCatalog,
+    });
+  } catch (err) {
+    params.context.logGateway.debug(
+      `chat.startup continuing without metadata: ${formatErrorMessage(err)}`,
+    );
+    return undefined;
   }
 }
 
@@ -462,6 +523,7 @@ export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
@@ -907,6 +969,26 @@ function hasAssistantDisplayMediaContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
   return Boolean(content?.some((block) => block?.type !== "text"));
+}
+
+function hasVisibleAssistantFinalMessage(message: Record<string, unknown> | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  if (typeof message.text === "string" && message.text.trim()) {
+    return true;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "text") {
+      return typeof record.text === "string" && record.text.trim().length > 0;
+    }
+    return true;
+  });
 }
 
 function hasManagedOutgoingAssistantContent(
@@ -2380,9 +2462,11 @@ async function handleChatHistoryRequest({
   context,
   method,
   includeAgentsList,
+  includeMetadata,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
   includeAgentsList?: boolean;
+  includeMetadata?: boolean;
 }) {
   if (!validateChatHistoryParams(params)) {
     respond(
@@ -2421,14 +2505,26 @@ async function handleChatHistoryRequest({
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
     return;
   }
+  const startupModelCatalogLoad =
+    method === "chat.startup" ? startOptionalServerMethodModelCatalogLoad(context) : undefined;
   const modelCatalogPromise = measureDiagnosticsTimelineSpan(
     `gateway.${method}.model_catalog`,
-    () => loadOptionalServerMethodModelCatalog(context, method),
+    () =>
+      startupModelCatalogLoad
+        ? loadOptionalServerMethodModelCatalog(context, method, {
+            logOnceKey: "chat.startup",
+            startedLoad: startupModelCatalogLoad,
+            timeoutMs: CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS,
+          })
+        : loadOptionalServerMethodModelCatalog(context, method),
     {
       config: cfg,
       phase: method,
     },
   );
+  if (startupModelCatalogLoad) {
+    void modelCatalogPromise.catch(() => undefined);
+  }
   const sessionId = entry?.sessionId;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey,
@@ -2510,6 +2606,15 @@ async function handleChatHistoryRequest({
     );
   }
   const modelCatalog = await modelCatalogPromise;
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const startupMetadata = includeMetadata
+    ? await buildChatStartupMetadataResult({
+        cfg,
+        context,
+        agentId: sessionAgentId,
+        modelCatalog,
+      })
+    : undefined;
   const sessionInfo = buildGatewaySessionInfo({
     cfg,
     storePath,
@@ -2519,7 +2624,6 @@ async function handleChatHistoryRequest({
     agentId: selectedAgent.agentId,
     modelCatalog,
   });
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
   sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
@@ -2560,6 +2664,7 @@ async function handleChatHistoryRequest({
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     ...(includeAgentsList ? { agentsList: listAgentsForGateway(cfg, modelCatalog) } : {}),
+    ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
   respond(true, payload);
 }
@@ -2569,7 +2674,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     await handleChatHistoryRequest({ ...opts, method: "chat.history" });
   },
   "chat.startup": async (opts) => {
-    await handleChatHistoryRequest({ ...opts, method: "chat.startup", includeAgentsList: true });
+    await handleChatHistoryRequest({
+      ...opts,
+      method: "chat.startup",
+      includeAgentsList: true,
+      includeMetadata: true,
+    });
   },
   "chat.metadata": handleChatMetadataRequest,
   "chat.message.get": async ({ params, respond, context }) => {
@@ -2958,7 +3068,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       },
     );
     const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
-    const { cfg, entry, canonicalKey: sessionKey } = sessionLoadResult;
+    const { cfg, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
@@ -2970,7 +3080,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const requestedSessionId = normalizeOptionalText(p.sessionId);
     const backingSessionId = entry?.sessionId ?? requestedSessionId;
-    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
+    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry, {
+      acpMetadataSessionKey: legacyKey ?? sessionKey,
+    });
     if (deletedAgentId !== null) {
       respond(
         false,
@@ -3264,11 +3376,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      context.addChatRun(clientRunId, {
-        sessionKey,
-        agentId: selectedAgent.agentId,
-        clientRunId,
-      });
       const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
         ? {
             receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
@@ -3276,6 +3383,20 @@ export const chatHandlers: GatewayRequestHandlers = {
             ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
           }
         : undefined;
+      const chatSendTiming: ChatRunTiming | undefined =
+        serverTiming && typeof client?.connId === "string" && client.connId.trim()
+          ? {
+              ackedAtMs: performance.now(),
+              connId: client.connId.trim(),
+              receivedAtMs: chatSendReceivedAtMs,
+            }
+          : undefined;
+      context.addChatRun(clientRunId, {
+        sessionKey,
+        agentId: selectedAgent.agentId,
+        clientRunId,
+        ...(chatSendTiming ? { chatSendTiming } : {}),
+      });
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -3295,7 +3416,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         { config: cfg },
       );
       respond(true, ackPayload, undefined, { runId: clientRunId });
-      const chatSendAckedAtMs = performance.now();
+      const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
@@ -3619,7 +3740,21 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
       };
       const dispatchStartedAtMs = performance.now();
+      if (chatSendTiming) {
+        chatSendTiming.dispatchStartedAtMs = dispatchStartedAtMs;
+      }
       emitServerTiming("dispatch-started");
+      let firstAssistantServerTimingEmitted = false;
+      const emitFirstAssistantServerTiming = () => {
+        if (firstAssistantServerTimingEmitted || chatSendTiming?.firstAssistantEventSent) {
+          return;
+        }
+        firstAssistantServerTimingEmitted = true;
+        if (chatSendTiming) {
+          chatSendTiming.firstAssistantEventSent = true;
+        }
+        emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
+      };
       void measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
@@ -3950,6 +4085,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                       };
                     }
                   }
+                  if (hasVisibleAssistantFinalMessage(message)) {
+                    emitFirstAssistantServerTiming();
+                  }
                   broadcastChatFinal({
                     context,
                     runId: clientRunId,
@@ -3959,17 +4097,25 @@ export const chatHandlers: GatewayRequestHandlers = {
                   });
                 }
               } else {
-                const sourceReplyPayloads = deliveredReplies
+                const hasReturnedAgentErrorPayloads = returnedAgentErrorPayloads.length > 0;
+                const agentRunReplyPayloads = deliveredReplies
                   .filter((entryEntry) => entryEntry.kind === "final")
                   .map((entryResult) => entryResult.payload)
-                  .filter(isSourceReplyTranscriptMirrorPayload);
-                if (sourceReplyPayloads.length > 0) {
+                  .filter(
+                    (payload) =>
+                      isSourceReplyTranscriptMirrorPayload(payload) ||
+                      (!hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload)),
+                  );
+                if (agentRunReplyPayloads.length > 0) {
+                  const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
+                    isSourceReplyTranscriptMirrorPayload,
+                  );
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
                     agentId,
                     accountId,
-                    payloads: sourceReplyPayloads,
+                    payloads: agentRunReplyPayloads,
                   });
                   const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
                     sessionKey,
@@ -4016,11 +4162,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                       },
                     });
                   const combinedAssistantContent =
-                    sourceReplyPayloads.length === 1
+                    agentRunReplyPayloads.length === 1
                       ? await buildReplyAssistantContent(finalPayloads)
                       : undefined;
                   const combinedMediaMessage =
-                    sourceReplyPayloads.length === 1
+                    agentRunReplyPayloads.length === 1
                       ? await buildReplyMediaMessage(finalPayloads)
                       : undefined;
                   type SourceReplyContentState = {
@@ -4031,17 +4177,17 @@ export const chatHandlers: GatewayRequestHandlers = {
                   };
                   const sourceReplyContentStates: SourceReplyContentState[] = [];
                   const sourceReplyBroadcastContent: AssistantDisplayContentBlock[] = [];
-                  for (const [replyIndex] of sourceReplyPayloads.entries()) {
+                  for (const [replyIndex] of agentRunReplyPayloads.entries()) {
                     const finalPayload = finalPayloads[replyIndex];
                     if (!finalPayload) {
                       continue;
                     }
                     const replyAssistantContent =
-                      sourceReplyPayloads.length === 1
+                      agentRunReplyPayloads.length === 1
                         ? combinedAssistantContent
                         : await buildReplyAssistantContent([finalPayload]);
                     const replyMediaMessage =
-                      sourceReplyPayloads.length === 1
+                      agentRunReplyPayloads.length === 1
                         ? combinedMediaMessage
                         : await buildReplyMediaMessage([finalPayload]);
                     const replyBroadcastContent = hasAssistantDisplayMediaContent(
@@ -4079,7 +4225,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                       >["sourceReplyTranscriptMirror"];
                       state: SourceReplyContentState;
                     }> = [];
-                    for (const [replyIndex, sourceReplyPayload] of sourceReplyPayloads.entries()) {
+                    for (const [
+                      replyIndex,
+                      sourceReplyPayload,
+                    ] of agentRunReplyPayloads.entries()) {
                       const state = sourceReplyContentStates[replyIndex];
                       if (!state || !hasAssistantDisplayMediaContent(state.persistedContent)) {
                         continue;
@@ -4126,7 +4275,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       for (const [
                         replyIndex,
                         sourceReplyPayload,
-                      ] of sourceReplyPayloads.entries()) {
+                      ] of agentRunReplyPayloads.entries()) {
                         if (!sourceReplyContentStates[replyIndex]) {
                           continue;
                         }
@@ -4261,6 +4410,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                       stopReason: "stop",
                       usage: { input: 0, output: 0, totalTokens: 0 },
                     };
+                    if (hasVisibleAssistantFinalMessage(message)) {
+                      emitFirstAssistantServerTiming();
+                    }
                     broadcastChatFinal({
                       context,
                       runId: clientRunId,
@@ -4268,7 +4420,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       agentId,
                       message,
                     });
-                    broadcastedSourceReplyFinal = true;
+                    broadcastedSourceReplyFinal = hasSourceReplyTranscriptMirror;
                   }
                 }
               }

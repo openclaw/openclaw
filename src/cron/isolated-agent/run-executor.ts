@@ -141,6 +141,7 @@ export function createCronPromptExecutor(params: {
     to?: string;
     threadId?: string | number;
   };
+  deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
@@ -378,6 +379,7 @@ export async function executeCronRun(params: {
     to?: string;
     threadId?: string | number;
   };
+  deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
@@ -429,6 +431,7 @@ export async function executeCronRun(params: {
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
+    deliveryRequested: params.deliveryRequested,
     sourceDelivery: params.sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
@@ -501,7 +504,9 @@ export async function executeCronRun(params: {
       failureSignal: runResult.meta?.failureSignal,
       finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
       preferFinalAssistantVisibleText: (
-        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
+        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel, {
+          deliveryRequested: params.deliveryRequested,
+        })
       ).preferFinalAssistantVisibleText,
     });
     const interimText = interimOutputText?.trim() ?? "";

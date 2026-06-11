@@ -188,6 +188,8 @@ type AgentCallParams = {
   inputProvenance?: {
     kind?: string;
     sourceSessionKey?: string;
+    sourceChannel?: string;
+    sourceTool?: string;
   };
 };
 
@@ -1145,6 +1147,24 @@ describe("sessions tools", () => {
           ),
       ),
     ).toBe(true);
+    const initialAgentCall = agentCalls.find((call) =>
+      agentParams(call).extraSystemPrompt?.includes("Agent-to-agent message context"),
+    );
+    const initialAgentParams = agentParams(initialAgentCall ?? {});
+    expect(initialAgentParams.extraSystemPrompt).toContain(
+      "Agent 1 (requester) session: <REQUESTER_SESSION>.",
+    );
+    expect(initialAgentParams.extraSystemPrompt).toContain("Agent 1 (requester) channel: discord.");
+    expect(initialAgentParams.extraSystemPrompt).toContain(
+      "Agent 2 (target) session: <TARGET_SESSION>.",
+    );
+    expect(initialAgentParams.extraSystemPrompt).not.toContain(requesterKey);
+    expect(initialAgentParams.inputProvenance).toMatchObject({
+      kind: "inter_session",
+      sourceSessionKey: requesterKey,
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    });
     expect(
       agentCalls.some(
         (call) =>

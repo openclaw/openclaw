@@ -143,9 +143,39 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
+  // GET notification streams are intentionally long-lived; shutdown must end
+  // them itself before waiting for httpServer.close() to drain active responses.
+  const activeSseResponses = new Set<ServerResponse>();
+
+  const trackSseResponse = (res: ServerResponse): void => {
+    activeSseResponses.add(res);
+    const cleanup = () => {
+      activeSseResponses.delete(res);
+      res.off("close", cleanup);
+      res.off("finish", cleanup);
+    };
+    res.once("close", cleanup);
+    res.once("finish", cleanup);
+  };
+
+  const closeActiveSseResponses = (): void => {
+    for (const res of activeSseResponses) {
+      if (!res.destroyed && !res.writableEnded) {
+        const socket = res.socket;
+        res.end();
+        socket?.end();
+      }
+    }
+  };
 
   const httpServer = createHttpServer((req, res) => {
-    const auth = validateMcpLoopbackRequest({ req, res, ownerToken, nonOwnerToken });
+    const auth = validateMcpLoopbackRequest({
+      req,
+      res,
+      ownerToken,
+      nonOwnerToken,
+      onSseResponse: trackSseResponse,
+    });
     if (!auth) {
       return;
     }
@@ -292,6 +322,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           }
           resolve();
         });
+        closeActiveSseResponses();
       }),
   };
   return server;

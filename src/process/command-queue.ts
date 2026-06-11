@@ -484,6 +484,15 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
   return createCommandLaneSnapshot(state);
 }
 
+/**
+ * Active task ids for a lane. Ids are process-monotonic, so recovery can
+ * detect a turn that started after a point in time it captured earlier.
+ */
+export function getCommandLaneActiveTaskIds(lane: string = CommandLane.Main): number[] {
+  const state = getQueueState().lanes.get(normalizeLane(lane));
+  return state ? [...state.activeTaskIds] : [];
+}
+
 export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
   return Array.from(getQueueState().lanes.values(), createCommandLaneSnapshot).toSorted((a, b) =>
     a.lane.localeCompare(b.lane),
