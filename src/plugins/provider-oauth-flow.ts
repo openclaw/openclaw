@@ -7,6 +7,10 @@ export type OAuthPrompt = { message: string; placeholder?: string };
 
 const validateRequiredInput = (value: string) => (value.trim().length > 0 ? undefined : "Required");
 
+function withOAuthUrl(message: string, url: string): string {
+  return ["Open this URL in your LOCAL browser:", "", url, "", message].join("\n");
+}
+
 /** Creates OAuth callbacks that use local browser auth locally and manual code entry on VPS hosts. */
 export function createVpsAwareOAuthHandlers(params: {
   isRemote: boolean;
@@ -20,17 +24,20 @@ export function createVpsAwareOAuthHandlers(params: {
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
 } {
-  const manualPromptMessage = params.manualPromptMessage ?? "Paste the redirect URL";
+  const manualPromptMessage =
+    params.manualPromptMessage ?? "After signing in, paste the redirect URL here.";
   // Remote hosts cannot open the user's browser, so auth starts in onAuth and finishes in onPrompt.
   let manualCodePromise: Promise<string> | undefined;
+  let lastAuthUrl: string | undefined;
 
   return {
     onAuth: async ({ url }) => {
+      lastAuthUrl = url;
       if (params.isRemote) {
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
         manualCodePromise = params.prompter.text({
-          message: manualPromptMessage,
+          message: withOAuthUrl(manualPromptMessage, url),
           validate: validateRequiredInput,
         });
         return;
@@ -45,7 +52,7 @@ export function createVpsAwareOAuthHandlers(params: {
         return manualCodePromise;
       }
       const code = await params.prompter.text({
-        message: prompt.message,
+        message: lastAuthUrl ? withOAuthUrl(prompt.message, lastAuthUrl) : prompt.message,
         placeholder: prompt.placeholder,
         validate: validateRequiredInput,
       });

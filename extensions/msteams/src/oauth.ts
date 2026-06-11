@@ -111,7 +111,15 @@ async function manualFlow(
   ctx.progress.update("OAuth URL ready");
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
   ctx.progress.update("Waiting for you to paste the callback URL...");
-  const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
+  const callbackInput = await ctx.prompt(
+    [
+      "Open this URL in your LOCAL browser:",
+      "",
+      authUrl,
+      "",
+      "After signing in, copy the redirect URL and paste it here:",
+    ].join("\n"),
+  );
   const parsed = parseCallbackInput(callbackInput, state);
   if ("error" in parsed) {
     throw new Error(parsed.error, cause ? { cause } : undefined);

@@ -267,6 +267,8 @@ export async function loginOpenAICodexOAuth(params: {
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
+  const presentsAuthChallenge = prompter.presentsAuthChallenge === true;
+  const collapseManualIntro = isRemote && presentsAuthChallenge;
 
   ensureGlobalUndiciEnvProxyDispatcher();
 
@@ -278,21 +280,23 @@ export async function loginOpenAICodexOAuth(params: {
     throw new Error(`OpenAI Codex OAuth prerequisites failed: ${preflight.message}`);
   }
 
-  await prompter.note(
-    isRemote
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "Open it, sign in, then paste the redirect URL here.",
-          "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
-        ].join("\n")
-      : [
-          "Browser will open for OpenAI authentication.",
-          "If the callback doesn't auto-complete, paste the redirect URL.",
-          "OpenAI OAuth uses localhost:1455 for the callback.",
-        ].join("\n"),
-    "OpenAI Codex OAuth",
-  );
+  if (!collapseManualIntro) {
+    await prompter.note(
+      isRemote
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "Open it, sign in, then paste the redirect URL here.",
+            "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
+          ].join("\n")
+        : [
+            "Browser will open for OpenAI authentication.",
+            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "OpenAI OAuth uses localhost:1455 for the callback.",
+          ].join("\n"),
+      "OpenAI Codex OAuth",
+    );
+  }
 
   const spin = prompter.progress("Starting OAuth flow...");
   let progressActive = true;
@@ -320,7 +324,12 @@ export async function loginOpenAICodexOAuth(params: {
       spin,
       openUrl,
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser...",
-      manualPromptMessage: manualInputPromptMessage,
+      manualPromptMessage: collapseManualIntro
+        ? [
+            "After signing in, paste the authorization code or full redirect URL here.",
+            "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
+          ].join("\n")
+        : manualInputPromptMessage,
     });
     const onAuth = (event: Parameters<typeof baseOnAuth>[0]) => {
       browserAuthStarted = true;

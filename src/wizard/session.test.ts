@@ -131,4 +131,14 @@ describe("WizardSession", () => {
     }
     await session.answer(plainStep.id, "alice");
   });
+
+  test("marks RPC prompters as auth-presenting clients", async () => {
+    const session = new WizardSession(async (prompter) => {
+      expect(prompter.presentsAuthChallenge).toBe(true);
+      await prompter.note("ready");
+    });
+
+    const step = await session.next();
+    expect(step.step?.type).toBe("note");
+  });
 });

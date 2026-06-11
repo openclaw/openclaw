@@ -40,6 +40,7 @@ export type WizardProgress = {
 };
 
 export type WizardPrompter = {
+  presentsAuthChallenge?: boolean;
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;

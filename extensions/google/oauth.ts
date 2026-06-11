@@ -19,20 +19,24 @@ export async function loginGeminiCliOAuth(
   ctx: GeminiCliOAuthContext,
 ): Promise<GeminiCliOAuthCredentials> {
   const needsManual = shouldUseManualOAuthFlow(ctx.isRemote);
-  await ctx.note(
-    needsManual
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, copy the redirect URL and paste it back here.",
-        ].join("\n")
-      : [
-          "Browser will open for Google authentication.",
-          "Sign in with your Google account for Gemini CLI access.",
-          "The callback will be captured automatically on localhost:8085.",
-        ].join("\n"),
-    "Gemini CLI OAuth",
-  );
+  const presentsAuthChallenge = ctx.presentsAuthChallenge === true;
+  const collapseManualIntro = needsManual && presentsAuthChallenge;
+  if (!collapseManualIntro) {
+    await ctx.note(
+      needsManual
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, copy the redirect URL and paste it back here.",
+          ].join("\n")
+        : [
+            "Browser will open for Google authentication.",
+            "Sign in with your Google account for Gemini CLI access.",
+            "The callback will be captured automatically on localhost:8085.",
+          ].join("\n"),
+      "Gemini CLI OAuth",
+    );
+  }
 
   const { verifier, challenge } = generatePkce();
   const state = generateOAuthState();
@@ -82,7 +86,15 @@ async function manualFlow(
   ctx.progress.update("OAuth URL ready");
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
   ctx.progress.update("Waiting for you to paste the callback URL...");
-  const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
+  const callbackInput = await ctx.prompt(
+    [
+      "Open this URL in your LOCAL browser:",
+      "",
+      authUrl,
+      "",
+      "After signing in, copy the redirect URL and paste it here:",
+    ].join("\n"),
+  );
   const parsed = parseCallbackInput(callbackInput);
   if ("error" in parsed) {
     throw new Error(parsed.error, cause ? { cause } : undefined);
