@@ -281,7 +281,15 @@ export async function captureLocalPackageOverrides(params: {
         change.dependencies = referencedAdded.dependenciesByChangePath.get(change.path) ?? [];
       }
     }
-    for (const relativePath of referencedAdded.addedPaths) {
+    const addedOverridePaths = new Set(referencedAdded.addedPaths);
+    for (const relativePath of actualFiles) {
+      if (!baselineSet.has(relativePath)) {
+        addedOverridePaths.add(relativePath);
+      }
+    }
+    for (const relativePath of [...addedOverridePaths].toSorted((left, right) =>
+      left.localeCompare(right),
+    )) {
       const payload = await copyOverridePayload({
         packageRoot: params.packageRoot,
         recoveryDir: await ensureRecoveryDir(),

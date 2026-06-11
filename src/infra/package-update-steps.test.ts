@@ -288,6 +288,72 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("preserves standalone local added dist files without requiring importer changes", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-standalone-added-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "local-data.json"),
+          '{"local":true}\n',
+          "utf8",
+        );
+
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+            expect(timeoutMs).toBe(1000);
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const prefixIndex = argv.indexOf("--prefix");
+            expect(prefixIndex).toBeGreaterThan(0);
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+        );
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.localOverrides?.status).toBe("preserved");
+        expect(result.localOverrides?.added).toBe(1);
+        expect(result.localOverrides?.modified).toBe(0);
+        expect(result.localOverrides?.applied).toBe(0);
+        await expectPathMissing(path.join(packageRoot, "dist", "local-data.json"));
+        await expect(
+          fs.readFile(
+            path.join(result.localOverrides?.recoveryDir ?? "", "files", "dist", "local-data.json"),
+            "utf8",
+          ),
+        ).resolves.toBe('{"local":true}\n');
+      },
+    );
+  });
+
   it("does not abort staged updates when local override capture is unsupported", async () => {
     await withTempDir(
       { prefix: "openclaw-package-update-staged-unsupported-overrides-" },
@@ -1429,7 +1495,10 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.steps.map((step) => step.name)).toEqual([
         "global update",
         "global install swap",
+        "local overrides",
       ]);
+      expect(result.localOverrides?.status).toBe("preserved");
+      expect(result.localOverrides?.added).toBe(1);
       await expectPathMissing(staleChunk);
     });
   });
