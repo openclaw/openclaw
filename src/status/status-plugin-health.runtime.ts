@@ -151,7 +151,7 @@ function filterRuntimeToolQuarantinesForRegistry(params: {
 }
 
 export function collectRuntimePluginHealthSnapshot(
-  params: {
+  _params: {
     config?: OpenClawConfig;
     workspaceDir?: string;
   } = {},
@@ -168,9 +168,7 @@ export function collectRuntimePluginHealthSnapshot(
       plugins,
     }),
     channelPluginFailures: collectChannelPluginFailures({
-      ...params,
       diagnostics,
-      includeSetupFallbackPlugins: true,
     }),
   };
 }

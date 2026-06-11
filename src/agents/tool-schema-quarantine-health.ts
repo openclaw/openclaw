@@ -2,6 +2,7 @@
 // plugin-state store so health surfaces can see failures from any live
 // runtime process.
 import {
+  createRuntimeHealthRecordEnvelope,
   createRuntimeHealthStore,
   type RuntimeHealthRecordEnvelope,
 } from "../plugin-state/runtime-health-store.js";
@@ -39,6 +40,7 @@ const quarantineStore = createRuntimeHealthStore<PersistedRuntimeToolSchemaQuara
       reason: value.reason,
       failedAtMs: value.failedAtMs,
       processId: value.processId,
+      processStartTime: value.processStartTime,
       ...(isNonEmptyString(value.owner) ? { owner: value.owner } : {}),
     };
   },
@@ -59,11 +61,22 @@ export function recordPersistedRuntimeToolSchemaQuarantine(
   const record: PersistedRuntimeToolSchemaQuarantineRecord = {
     toolName: quarantine.toolName,
     reason: quarantine.reason,
-    failedAtMs: quarantine.failedAt.getTime(),
-    processId: process.pid,
+    ...createRuntimeHealthRecordEnvelope(quarantine.failedAt),
     ...(quarantine.owner ? { owner: quarantine.owner } : {}),
   };
   quarantineStore.register(recordKey(record), record);
+}
+
+export function clearPersistedRuntimeToolSchemaQuarantine(params: {
+  toolName: string;
+  owner?: string;
+}): void {
+  quarantineStore.clearForProcess(
+    process.pid,
+    (record) =>
+      record.toolName === params.toolName &&
+      (record.owner ?? undefined) === (params.owner ?? undefined),
+  );
 }
 
 export function listPersistedRuntimeToolSchemaQuarantines(): RuntimeToolSchemaQuarantine[] {

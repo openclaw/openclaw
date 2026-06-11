@@ -8,7 +8,10 @@ import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
-import { recordPersistedRuntimeToolSchemaQuarantine } from "./tool-schema-quarantine-health.js";
+import {
+  clearPersistedRuntimeToolSchemaQuarantine,
+  recordPersistedRuntimeToolSchemaQuarantine,
+} from "./tool-schema-quarantine-health.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const log = createSubsystemLogger("agents/tools");
@@ -25,6 +28,47 @@ function readDiagnosticPluginId(params: {
   }
 }
 
+function pluginOwner(pluginId: string | undefined): string | undefined {
+  return pluginId ? `plugin:${pluginId}` : undefined;
+}
+
+function toolQuarantineKey(params: { owner?: string; toolName: string }): string {
+  return JSON.stringify([params.owner ?? "", params.toolName]);
+}
+
+function readToolIdentity(tool: AnyAgentTool): { owner?: string; toolName: string } | undefined {
+  try {
+    if (typeof tool.name !== "string" || tool.name.length === 0) {
+      return undefined;
+    }
+    const owner = pluginOwner(getPluginToolMeta(tool)?.pluginId);
+    return owner ? { owner, toolName: tool.name } : { toolName: tool.name };
+  } catch {
+    return undefined;
+  }
+}
+
+function clearRecoveredRuntimeToolSchemaQuarantines(params: {
+  diagnostics: readonly RuntimeToolSchemaDiagnostic[];
+  tools: readonly AnyAgentTool[];
+}): void {
+  const failingKeys = new Set(
+    params.diagnostics.map((diagnostic) =>
+      toolQuarantineKey({
+        owner: pluginOwner(readDiagnosticPluginId({ tools: params.tools, diagnostic })),
+        toolName: diagnostic.toolName,
+      }),
+    ),
+  );
+  for (const tool of params.tools) {
+    const identity = readToolIdentity(tool);
+    if (!identity || failingKeys.has(toolQuarantineKey(identity))) {
+      continue;
+    }
+    clearPersistedRuntimeToolSchemaQuarantine(identity);
+  }
+}
+
 /** Emits diagnostics and logs for tools removed from runtime schema projection. */
 export function logRuntimeToolSchemaQuarantine(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
@@ -33,6 +77,10 @@ export function logRuntimeToolSchemaQuarantine(params: {
   sessionKey?: string;
   sessionId?: string;
 }): void {
+  clearRecoveredRuntimeToolSchemaQuarantines({
+    diagnostics: params.diagnostics,
+    tools: params.tools,
+  });
   if (params.diagnostics.length === 0) {
     return;
   }
@@ -54,9 +102,10 @@ export function logRuntimeToolSchemaQuarantine(params: {
         reason: diagnostic.violations.join(", "),
       });
       try {
+        const persistedOwner = pluginOwner(pluginId);
         recordPersistedRuntimeToolSchemaQuarantine({
           toolName: diagnostic.toolName,
-          ...(pluginId ? { owner: `plugin:${pluginId}` } : {}),
+          ...(persistedOwner ? { owner: persistedOwner } : {}),
           reason: diagnostic.violations.join(", "),
           failedAt: new Date(),
         });

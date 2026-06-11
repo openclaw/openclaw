@@ -11,6 +11,7 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getProcessStartTime } from "../shared/pid-alive.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { collectRuntimePluginHealthSnapshot } from "./status-plugin-health.runtime.js";
 
@@ -46,6 +47,7 @@ function seedPersistedToolQuarantineForTest(record: {
   reason: string;
   failedAtMs: number;
   processId: number;
+  processStartTime: number | null;
 }): void {
   createCorePluginStateSyncKeyedStore<typeof record>({
     ownerId: "core:runtime-tool-quarantine-health",
@@ -133,12 +135,14 @@ describe("runtime plugin health snapshot", () => {
         reason: "unsupported schema",
         failedAtMs: 123,
         processId: await deadProcessId(),
+        processStartTime: null,
       });
       seedPersistedToolQuarantineForTest({
         toolName: "live_tool",
         reason: "unsupported schema",
         failedAtMs: 456,
         processId: process.pid,
+        processStartTime: getProcessStartTime(process.pid),
       });
 
       expect(collectRuntimePluginHealthSnapshot().runtimeToolQuarantines).toEqual([
@@ -148,6 +152,25 @@ describe("runtime plugin health snapshot", () => {
           failedAt: new Date(456),
         },
       ]);
+    });
+  });
+
+  it("drops runtime tool quarantines recorded by a reused PID", async () => {
+    const currentStartTime = getProcessStartTime(process.pid);
+    if (currentStartTime === null) {
+      return;
+    }
+    await withStateDirEnv("openclaw-status-tool-quarantine-pid-reuse-", async () => {
+      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
+      seedPersistedToolQuarantineForTest({
+        toolName: "reused_pid_tool",
+        reason: "unsupported schema",
+        failedAtMs: 123,
+        processId: process.pid,
+        processStartTime: currentStartTime + 1,
+      });
+
+      expect(collectRuntimePluginHealthSnapshot().runtimeToolQuarantines).toEqual([]);
     });
   });
 
@@ -204,7 +227,7 @@ describe("runtime plugin health snapshot", () => {
     ]);
   });
 
-  it("does not add a generic missing-channel failure when setup load already failed", () => {
+  it("does not inspect configured channel plugins for compact runtime health", () => {
     const registry = createEmptyPluginRegistry();
     registry.diagnostics.push({
       level: "error",
@@ -240,5 +263,6 @@ describe("runtime plugin health snapshot", () => {
         source: "diagnostic",
       },
     ]);
+    expect(resolveReadOnlyChannelPluginsForConfigMock).not.toHaveBeenCalled();
   });
 });

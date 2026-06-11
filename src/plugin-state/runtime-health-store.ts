@@ -1,3 +1,4 @@
+import { getProcessStartTime } from "../shared/pid-alive.js";
 // Shared mechanics for cross-process runtime health records persisted in the
 // core plugin-state store: envelope validation, process-liveness hygiene, and
 // per-process cleanup. Domain modules own record fields and display keys.
@@ -6,6 +7,7 @@ import { createCorePluginStateSyncKeyedStore } from "./plugin-state-store.js";
 /** Envelope persisted with every cross-process runtime health record. */
 export type RuntimeHealthRecordEnvelope = {
   processId: number;
+  processStartTime: number | null;
   failedAtMs: number;
 };
 
@@ -43,20 +45,44 @@ function hasValidEnvelope(
     typeof record.processId === "number" &&
     Number.isInteger(record.processId) &&
     record.processId > 0 &&
+    (record.processStartTime === null ||
+      (typeof record.processStartTime === "number" &&
+        Number.isFinite(record.processStartTime) &&
+        record.processStartTime >= 0)) &&
     typeof record.failedAtMs === "number" &&
     Number.isFinite(record.failedAtMs)
   );
 }
 
-// Liveness keeps health output actionable across restarts: a dead recorder's
-// failures disappear instead of lingering as stale state. PID reuse can keep a
-// stale record alive briefly; per-store TTLs bound that window.
-function processLooksLive(processId: number): boolean {
-  if (processId === process.pid) {
+/** Builds the common health envelope for records owned by this process. */
+export function createRuntimeHealthRecordEnvelope(failedAt: Date): RuntimeHealthRecordEnvelope {
+  return {
+    processId: process.pid,
+    processStartTime: getProcessStartTime(process.pid),
+    failedAtMs: failedAt.getTime(),
+  };
+}
+
+function processIdentityMatches(record: RuntimeHealthRecordEnvelope): boolean {
+  if (record.processStartTime === null) {
     return true;
   }
+  const currentStartTime = getProcessStartTime(record.processId);
+  return currentStartTime === null || currentStartTime === record.processStartTime;
+}
+
+// Liveness keeps health output actionable across restarts: a dead recorder's
+// failures disappear instead of lingering as stale state, and start-time identity
+// prevents a recycled PID from keeping old failures alive.
+function processLooksLive(record: RuntimeHealthRecordEnvelope): boolean {
+  if (record.processId === process.pid) {
+    return processIdentityMatches(record);
+  }
+  if (!processIdentityMatches(record)) {
+    return false;
+  }
   try {
-    process.kill(processId, 0);
+    process.kill(record.processId, 0);
     return true;
   } catch (error) {
     return error instanceof Error && "code" in error && error.code === "EPERM";
@@ -89,7 +115,7 @@ export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
         const byGroup = new Map<string, T>();
         for (const entry of openStore().entries()) {
           const record = normalize(entry.value);
-          if (!record || !processLooksLive(record.processId)) {
+          if (!record || !processLooksLive(record)) {
             continue;
           }
           const groupKey = options.displayKey(record);

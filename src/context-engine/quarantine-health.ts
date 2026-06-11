@@ -1,6 +1,7 @@
 // Persists context-engine runtime quarantines so health surfaces can see
 // failures recorded in sibling runtime processes.
 import {
+  createRuntimeHealthRecordEnvelope,
   createRuntimeHealthStore,
   type RuntimeHealthRecordEnvelope,
 } from "../plugin-state/runtime-health-store.js";
@@ -44,6 +45,7 @@ const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantin
       reason: value.reason,
       failedAtMs: value.failedAtMs,
       processId: value.processId,
+      processStartTime: value.processStartTime,
       ...(isNonEmptyString(value.owner) ? { owner: value.owner } : {}),
     };
   },
@@ -64,8 +66,7 @@ export function recordPersistedContextEngineQuarantine(
     engineId: quarantine.engineId,
     operation: quarantine.operation,
     reason: quarantine.reason,
-    failedAtMs: quarantine.failedAt.getTime(),
-    processId: process.pid,
+    ...createRuntimeHealthRecordEnvelope(quarantine.failedAt),
     ...(quarantine.owner ? { owner: quarantine.owner } : {}),
   };
   // The in-memory registry only records the first quarantine per engine, so

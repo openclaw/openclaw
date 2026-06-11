@@ -5,6 +5,7 @@ import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { getProcessStartTime } from "../shared/pid-alive.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
@@ -27,6 +28,7 @@ type ContextEngineQuarantineTestRecord = {
   reason: string;
   failedAtMs: number;
   processId: number;
+  processStartTime: number | null;
 };
 
 async function withLiveSiblingProcess<T>(fn: (pid: number) => Promise<T>): Promise<T> {
@@ -91,6 +93,7 @@ describe("context engine quarantine health", () => {
           reason: "current process failure",
           failedAtMs: 123,
           processId: process.pid,
+          processStartTime: getProcessStartTime(process.pid),
         });
         seedPersistedContextEngineQuarantineForTest({
           engineId: "lossless-claw",
@@ -99,6 +102,7 @@ describe("context engine quarantine health", () => {
           reason: "sibling process failure",
           failedAtMs: 789,
           processId: siblingProcessId,
+          processStartTime: getProcessStartTime(siblingProcessId),
         });
 
         clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
@@ -125,6 +129,7 @@ describe("context engine quarantine health", () => {
           reason: "current process failure a",
           failedAtMs: 123,
           processId: process.pid,
+          processStartTime: getProcessStartTime(process.pid),
         });
         seedPersistedContextEngineQuarantineForTest({
           engineId: "local-b",
@@ -132,6 +137,7 @@ describe("context engine quarantine health", () => {
           reason: "current process failure b",
           failedAtMs: 234,
           processId: process.pid,
+          processStartTime: getProcessStartTime(process.pid),
         });
         seedPersistedContextEngineQuarantineForTest({
           engineId: "lossless-claw",
@@ -140,6 +146,7 @@ describe("context engine quarantine health", () => {
           reason: "sibling process failure",
           failedAtMs: 789,
           processId: siblingProcessId,
+          processStartTime: getProcessStartTime(siblingProcessId),
         });
 
         clearContextEngineRuntimeQuarantine();
@@ -154,6 +161,27 @@ describe("context engine quarantine health", () => {
           },
         ]);
       });
+    });
+  });
+
+  it("drops persisted quarantine records when a PID has been reused", async () => {
+    const currentStartTime = getProcessStartTime(process.pid);
+    if (currentStartTime === null) {
+      return;
+    }
+    await withStateDirEnv("openclaw-context-engine-quarantine-pid-reuse-", async () => {
+      clearContextEngineRuntimeQuarantine();
+      seedPersistedContextEngineQuarantineForTest({
+        engineId: "lossless-claw",
+        owner: "plugin:lossless-claw",
+        operation: "bootstrap",
+        reason: "stale process failure",
+        failedAtMs: 123,
+        processId: process.pid,
+        processStartTime: currentStartTime + 1,
+      });
+
+      expect(listContextEngineQuarantines()).toEqual([]);
     });
   });
 
