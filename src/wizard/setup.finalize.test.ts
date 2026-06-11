@@ -1020,7 +1020,59 @@ describe("finalizeSetupWizard", () => {
     expectNoteTitleNotCalled(prompter, "Dashboard ready");
   });
 
-  it("emits a port-conflict hint when the gateway port is busy on an unreachable gateway", async () => {
+  it("emits a port-conflict hint when an installed daemon never binds the busy port", async () => {
+    waitForGatewayReachable.mockResolvedValue({
+      ok: false,
+      detail: "gateway did not become reachable",
+    });
+    probeGatewayReachable.mockResolvedValue({
+      ok: false,
+      detail: "gateway did not become reachable",
+    });
+    inspectPortUsage.mockImplementation(async (port: number) => ({
+      port,
+      status: "busy",
+      listeners: [{ pid: 4242, command: "node" }],
+      hints: [],
+    }));
+    const prompter = createLaterPrompter();
+    const runtime = createRuntime();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
+    const noteCalls = vi.mocked(prompter.note).mock.calls;
+    expect(noteCalls.some((call) => call[0].includes("Port 18789 is already in use."))).toBe(true);
+    expect(
+      noteCalls.some((call) => call[0].includes("openclaw onboard --gateway-port <port>")),
+    ).toBe(true);
+  });
+
+  it("does not show a port-conflict hint when attaching to an already-running gateway", async () => {
+    // No daemon install means we never tried to bind the port: a busy port is the gateway
+    // we are attaching to (probe failed on auth/protocol), not a conflict to "free".
     waitForGatewayReachable.mockResolvedValue({
       ok: false,
       detail: "gateway did not become reachable",
@@ -1062,9 +1114,11 @@ describe("finalizeSetupWizard", () => {
       runtime,
     });
 
-    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
-    expectNoteContains(prompter, "Port 18789 is already in use.", "Gateway");
-    expectNoteContains(prompter, "openclaw onboard --port <port>", "Gateway");
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    const noteCalls = vi.mocked(prompter.note).mock.calls;
+    expect(
+      noteCalls.some((call) => call[0].includes("openclaw onboard --gateway-port <port>")),
+    ).toBe(false);
   });
 
   it("does not show a Codex native search summary when web search is globally disabled", async () => {

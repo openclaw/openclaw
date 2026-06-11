@@ -116,8 +116,10 @@ function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
   return onboardSearchModulePromise;
 }
 
-// Preflight the gateway port when the gateway is unreachable so a busy port
-// surfaces the holding process and a `--port` hint instead of a generic timeout.
+// Preflight the gateway port only when we tried to *bind* a gateway (install-daemon)
+// and it never came up: a busy port then is a real bind conflict. Callers that merely
+// attach to an already-running gateway must not call this — there a busy port is the
+// expected listener and "free the port" would tell the user to kill their own gateway.
 async function buildGatewayPortConflictLines(port: number): Promise<string[]> {
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (diagnostics?.status !== "busy") {
@@ -125,7 +127,7 @@ async function buildGatewayPortConflictLines(port: number): Promise<string[]> {
   }
   return [
     ...formatPortDiagnostics(diagnostics),
-    `Free the port or re-run with a different one: ${formatCliCommand("openclaw onboard --port <port>")}.`,
+    `Free the port or re-run with a different one: ${formatCliCommand("openclaw onboard --gateway-port <port>")}.`,
   ];
 }
 
@@ -407,12 +409,12 @@ export async function finalizeSetupWizard(
         t("wizard.finalize.healthCheckHelp"),
       );
     } else {
-      const portConflictLines = await buildGatewayPortConflictLines(settings.port);
+      // No daemon was installed and none is expected running, so this run never tried to
+      // bind the port — skip the conflict hint (a listener here is not our failure to bind).
       await prompter.note(
         [
           t("wizard.finalize.gatewayNotDetected"),
           t("wizard.finalize.noBackgroundGatewayExpected"),
-          ...portConflictLines,
           t("wizard.finalize.startGatewayNow", {
             command: formatCliCommand("openclaw gateway run"),
           }),

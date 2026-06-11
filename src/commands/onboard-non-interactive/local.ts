@@ -325,15 +325,19 @@ export async function runNonInteractiveLocalSetup(params: {
       const diagnostics = opts.installDaemon
         ? await collectGatewayHealthFailureDiagnostics()
         : undefined;
-      // Preflight the port so a busy port surfaces the holding process and a
-      // `--port` hint instead of only a generic "not reachable" timeout.
+      // Only preflight the port when this run tried to *bind* a gateway (--install-daemon)
+      // and it never came up: a busy port then is a real bind conflict. The plain attach
+      // path waits for an already-running gateway, where a busy port is the expected
+      // listener rejecting the probe (auth/protocol), not a conflict to "free".
       const { formatPortDiagnostics, inspectPortUsage } = await import("../../infra/ports.js");
-      const portUsage = await inspectPortUsage(gatewayResult.port).catch(() => null);
+      const portUsage = opts.installDaemon
+        ? await inspectPortUsage(gatewayResult.port).catch(() => null)
+        : null;
       const portConflictHints =
         portUsage?.status === "busy"
           ? [
               ...formatPortDiagnostics(portUsage),
-              `Free the port or re-run with a different one: ${formatCliCommand("openclaw onboard --port <port>")}.`,
+              `Free the port or re-run with a different one: ${formatCliCommand("openclaw onboard --gateway-port <port>")}.`,
             ]
           : [];
       logNonInteractiveOnboardingFailure({
@@ -353,7 +357,6 @@ export async function runNonInteractiveLocalSetup(params: {
         diagnostics,
         hints: !opts.installDaemon
           ? [
-              ...portConflictHints,
               "Non-interactive local setup only waits for an already-running gateway unless you pass --install-daemon.",
               `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
               process.platform === "win32"
