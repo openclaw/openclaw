@@ -553,10 +553,14 @@ export async function dispatchOutbound(
   try {
     await Promise.race([dispatchPromise, timeoutPromise]);
   } catch {
+    // Preserve existing swallowed dispatch/timeout exits; cleanup is centralized below.
+  } finally {
+    // Dispatch can resolve without any deliver callback. Clear the watchdog
+    // so the completed turn does not leave stale timer work behind.
     if (timeoutId) {
       clearTimeout(timeoutId);
+      timeoutId = null;
     }
-  } finally {
     if (toolOnlyTimeoutId) {
       clearTimeout(toolOnlyTimeoutId);
       toolOnlyTimeoutId = null;
