@@ -2,9 +2,14 @@
 //
 // Default is the legacy pi-embedded path (compat with every existing
 // deployment). Opt into the Claude Agent SDK per-agent by setting
-// `agents.list[<agentId>].runtime.type = "claude-sdk"`. Opt into ACP
-// via `"acp"`. Anything else (missing agent, missing runtime field,
-// explicit `"embedded"`) stays on the legacy path.
+// `agents.list[<agentId>].runtime.type = "claude-sdk"`.
+//
+// Note: ACP (`runtime.type = "acp"`) is not dispatched here — ACP
+// conversations are bound at the channel layer (see
+// src/channels/plugins/acp-configured-binding-consumer.ts). Within
+// this selector, `"acp"` behaves like any other non-claude-sdk value
+// (missing agent, missing runtime field, explicit `"embedded"`) and
+// falls back to the legacy default path.
 //
 // Phase 4 may flip the default once the claude-sdk runtime has soaked
 // against real user traffic; this PR intentionally keeps the flip out
