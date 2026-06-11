@@ -498,6 +498,50 @@ function hasConfiguredFallbackSurface(params: {
   return Boolean(baseUrl);
 }
 
+function findConfiguredAgentModelMetadata(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): Partial<Model> | undefined {
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+  const directKeys = [
+    modelKey(params.provider, params.modelId),
+    `${params.provider}/${params.modelId}`,
+  ];
+  for (const key of directKeys) {
+    const entry = configuredModels[key];
+    if (entry && typeof entry === "object") {
+      return entry as Partial<Model>;
+    }
+  }
+
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, params.modelId)
+    .trim()
+    .toLowerCase();
+  for (const [rawKey, entry] of Object.entries(configuredModels)) {
+    const slashIndex = rawKey.indexOf("/");
+    if (slashIndex <= 0) {
+      continue;
+    }
+    const candidateProvider = rawKey.slice(0, slashIndex);
+    const candidateModelId = rawKey.slice(slashIndex + 1);
+    if (
+      normalizeProviderId(candidateProvider) === normalizedProvider &&
+      normalizeStaticProviderModelId(normalizedProvider, candidateModelId).trim().toLowerCase() ===
+        normalizedModelId &&
+      entry &&
+      typeof entry === "object"
+    ) {
+      return entry as Partial<Model>;
+    }
+  }
+  return undefined;
+}
+
 function readModelParams(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -516,7 +560,7 @@ function findConfiguredAgentModelParams(params: {
   cfg?: OpenClawConfig;
   provider: string;
   modelId: string;
-}): Record<string, unknown> | undefined {
+}): Partial<Model> | undefined {
   const configuredModels = params.cfg?.agents?.defaults?.models;
   if (!configuredModels) {
     return undefined;
@@ -1037,12 +1081,19 @@ function resolveConfiguredFallbackModel(params: {
   agentDir?: string;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  allowConfiguredMetadataFallback?: boolean;
 }): Model | undefined {
   const { provider, modelId, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
-  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
+  const configuredAgentModel = params.allowConfiguredMetadataFallback
+    ? findConfiguredAgentModelMetadata({ cfg, provider, modelId })
+    : undefined;
+  if (
+    !configuredAgentModel &&
+    !hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })
+  ) {
     return undefined;
   }
   const staticCatalogModel = configuredModel
@@ -1054,9 +1105,10 @@ function resolveConfiguredFallbackModel(params: {
         workspaceDir,
         includeRuntimeDiscovery: true,
       }) as StaticCatalogFallbackModel | undefined);
-  const metadataModel = configuredModel ?? staticCatalogModel;
+  const metadataModel = configuredModel ?? staticCatalogModel ?? configuredAgentModel;
   const fallbackCompat = configuredModel?.compat ?? staticCatalogModel?.compat;
   const fallbackMediaInput = configuredModel?.mediaInput ?? staticCatalogModel?.mediaInput;
+  const metadataModelName = typeof metadataModel?.name === "string" ? metadataModel.name : modelId;
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -1115,7 +1167,7 @@ function resolveConfiguredFallbackModel(params: {
       attachModelProviderRequestTransport(
         {
           id: modelId,
-          name: metadataModel?.name ?? modelId,
+          name: metadataModelName,
           api: requestConfig.api ?? "openai-responses",
           provider,
           baseUrl: requestConfig.baseUrl,
@@ -1123,7 +1175,7 @@ function resolveConfiguredFallbackModel(params: {
           input: resolveProviderModelInput({
             provider,
             modelId,
-            modelName: metadataModel?.name ?? modelId,
+            modelName: metadataModelName,
             input: metadataModel?.input,
           }),
           cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1409,6 +1461,7 @@ export async function resolveModelAsync(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     allowBundledStaticCatalogFallback?: boolean;
+    allowConfiguredMetadataFallback?: boolean;
     preferBundledStaticCatalogTransport?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
@@ -1578,6 +1631,7 @@ export async function resolveModelAsync(
       agentDir: resolvedAgentDir,
       workspaceDir,
       runtimeHooks,
+      allowConfiguredMetadataFallback: options?.allowConfiguredMetadataFallback,
     });
   }
   if (model && options?.allowBundledStaticCatalogFallback) {

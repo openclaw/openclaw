@@ -2257,6 +2257,40 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text"]);
   });
 
+  it("resolves metadata-only CLI-runtime agent models without provider registration", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-custom-private": {
+              agentRuntime: { id: "claude-cli" },
+              contextWindow: 200000,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync(
+      "anthropic",
+      "claude-custom-private",
+      "/tmp/agent",
+      cfg,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+        allowBundledStaticCatalogFallback: true,
+        allowConfiguredMetadataFallback: true,
+        preferBundledStaticCatalogTransport: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.provider).toBe("anthropic");
+    expect(result.model?.id).toBe("claude-custom-private");
+    expect(result.model?.contextWindow).toBe(200000);
+  });
+
   it("explains when an agent model entry is missing provider model registration", async () => {
     const cfg = {
       agents: {

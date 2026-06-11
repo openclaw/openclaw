@@ -18,16 +18,14 @@ import type {
   TextContent,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
-import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
-import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
@@ -39,8 +37,13 @@ import {
   getApiKeyForModel,
   requireApiKey,
 } from "./model-auth.js";
+import { resolveCliRuntimeExecutionProvider } from "./model-runtime-aliases.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
+import {
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+  resolveSelectedOpenAIRuntimeProvider,
+} from "./openai-routing.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -254,32 +257,30 @@ async function resolveRuntimeModel(params: {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 }> {
-  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
-  const model = resolveModelWithRegistry({
+  const harness = selectAgentHarness({
     provider: params.provider,
     modelId: params.model,
-    modelRegistry,
-    cfg: params.cfg,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
   });
-  if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
-  }
-
+  const harnessRuntime =
+    harness.id === "openclaw"
+      ? resolveAvailableAgentHarnessPolicy({
+          provider: params.provider,
+          modelId: params.model,
+          config: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        }).runtime
+      : harness.id;
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: params.cfg,
     provider: params.provider,
     acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: params.provider,
-      harnessRuntime: resolveAvailableAgentHarnessPolicy({
-        provider: params.provider,
-        modelId: params.model,
-        config: params.cfg,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      }).runtime,
+      harnessRuntime,
+      agentHarnessId: harness.id,
       config: params.cfg,
     }),
     agentDir: params.agentDir,
@@ -289,8 +290,88 @@ async function resolveRuntimeModel(params: {
     storePath: params.storePath,
     isNewSession: params.isNewSession,
   });
+
+  const cliRuntimeProvider = resolveCliRuntimeExecutionProvider({
+    provider: params.provider,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelId: params.model,
+    authProfileId,
+  });
+  const runtimeOwnsTransport = harness.id !== "openclaw" || Boolean(cliRuntimeProvider);
+  const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
+    provider: params.provider,
+    harnessRuntime,
+    agentHarnessId: harness.id,
+    authProfileProvider: authProfileId?.split(":", 1)[0],
+    authProfileId,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  const modelResolutionProviders =
+    selectedRuntimeProvider !== params.provider
+      ? [selectedRuntimeProvider, params.provider]
+      : [params.provider];
+  let resolvedModelProvider = params.provider;
+  let firstModelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+  let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+
+  for (const candidateProvider of modelResolutionProviders) {
+    const candidateResolution = await resolveModelAsync(
+      candidateProvider,
+      params.model,
+      params.agentDir,
+      params.cfg,
+      {
+        skipAgentDiscovery: true,
+        allowBundledStaticCatalogFallback: runtimeOwnsTransport,
+        allowConfiguredMetadataFallback: runtimeOwnsTransport,
+        preferBundledStaticCatalogTransport: runtimeOwnsTransport,
+        workspaceDir: params.workspaceDir,
+        authProfileId,
+      },
+    );
+    firstModelResolution ??= candidateResolution;
+    if (candidateResolution.model) {
+      resolvedModelProvider = candidateProvider;
+      modelResolution = candidateResolution;
+      break;
+    }
+  }
+
+  if (!modelResolution && !runtimeOwnsTransport) {
+    await ensureOpenClawModelsJson(
+      params.cfg,
+      params.agentDir,
+      params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined,
+    );
+    for (const candidateProvider of modelResolutionProviders) {
+      const candidateResolution = await resolveModelAsync(
+        candidateProvider,
+        params.model,
+        params.agentDir,
+        params.cfg,
+        {
+          workspaceDir: params.workspaceDir,
+          authProfileId,
+        },
+      );
+      firstModelResolution ??= candidateResolution;
+      if (candidateResolution.model) {
+        resolvedModelProvider = candidateProvider;
+        modelResolution = candidateResolution;
+        break;
+      }
+    }
+  }
+
+  modelResolution ??= firstModelResolution;
+  if (!modelResolution?.model) {
+    throw new Error(modelResolution?.error ?? `Unknown model: ${params.provider}/${params.model}`);
+  }
+
   return {
-    model,
+    model: { ...modelResolution.model, provider: resolvedModelProvider },
     authProfileId,
     authProfileIdSource: resolveReturnedAuthProfileSource(params.sessionEntry, authProfileId),
   };

@@ -76,8 +76,8 @@ vi.mock("./model-auth.js", () => ({
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
 }));
 
-vi.mock("./model-runtime-aliases.js", () => ({
-  resolveCliRuntimeExecutionProvider: ({
+vi.mock("./model-runtime-aliases.js", () => {
+  const resolveConfiguredRuntime = ({
     provider,
     cfg,
     modelId,
@@ -97,8 +97,13 @@ vi.mock("./model-runtime-aliases.js", () => ({
       ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
       : undefined;
     return runtime || undefined;
-  },
-}));
+  };
+  return {
+    resolveCliRuntimeExecutionProvider: resolveConfiguredRuntime,
+    isCliRuntimeAliasForProvider: (params: { runtime?: string; provider?: string }) =>
+      params.runtime === "claude-cli" && params.provider === "anthropic",
+  };
+});
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
@@ -441,10 +446,14 @@ describe("runBtwSideQuestion", () => {
     buildSessionContextMock.mockImplementation((entries: Array<{ message?: unknown }> = []) => {
       return { messages: entries.flatMap((entry) => (entry.message ? [entry.message] : [])) };
     });
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-      api: "anthropic-messages",
+    resolveModelAsyncMock.mockResolvedValue({
+      model: {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+      },
+      authStorage: { profiles: {} },
+      modelRegistry: { find: () => null },
     });
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({ version: 1, profiles: {} });
@@ -549,12 +558,52 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
-    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
-    expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
-    expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
-    expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
-      workspaceDir: "/tmp/workspace",
+    const resolveCall = mockCall(resolveModelAsyncMock);
+    expect(resolveCall?.[0]).toBe("anthropic");
+    expect(resolveCall?.[2]).toBe(DEFAULT_AGENT_DIR);
+    const resolveOptions = resolveCall?.[4] as Record<string, unknown> | undefined;
+    expect(resolveOptions?.workspaceDir).toBe("/tmp/workspace");
+    expect(resolveOptions?.skipAgentDiscovery).toBe(true);
+  });
+
+  // Regression: #92168 — when the canonical alias (anthropic/*) is routed via
+  // agentRuntime.id = claude-cli but the agent's models.json has no bare
+  // `anthropic` provider entry, BTW must still resolve the model through the
+  // bundled static catalog instead of the primitive registry-only path.
+  it("allows bundled catalog fallback for CLI-runtime alias models (#92168)", async () => {
+    resolveModelAsyncMock.mockReset();
+    resolveModelAsyncMock.mockResolvedValue({
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-7",
+        api: "anthropic-messages",
+      },
+      authStorage: { profiles: {} },
+      modelRegistry: { find: () => null },
     });
+    mockDoneAnswer("Recovered answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+    });
+
+    expect(result).toEqual({ text: "Recovered answer." });
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
+    const resolveOptions = mockCall(resolveModelAsyncMock)[4] as Record<string, unknown>;
+    expect(resolveOptions.allowBundledStaticCatalogFallback).toBe(true);
+    expect(resolveOptions.allowConfiguredMetadataFallback).toBe(true);
+    expect(resolveOptions.preferBundledStaticCatalogTransport).toBe(true);
+    expect(resolveOptions.skipAgentDiscovery).toBe(true);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
@@ -566,10 +615,14 @@ describe("runBtwSideQuestion", () => {
       runAttempt: vi.fn(),
       runSideQuestion: codexSideQuestionMock,
     });
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
+    resolveModelAsyncMock.mockResolvedValue({
+      model: {
+        provider: "openai",
+        id: "gpt-5.5",
+        api: "openai-responses",
+      },
+      authStorage: { profiles: {} },
+      modelRegistry: { find: () => null },
     });
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai:work");
 
@@ -840,11 +893,15 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "github-copilot",
-      id: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.individual.githubcopilot.com",
+    resolveModelAsyncMock.mockResolvedValue({
+      model: {
+        provider: "github-copilot",
+        id: "gpt-5.4",
+        api: "openai-responses",
+        baseUrl: "https://api.individual.githubcopilot.com",
+      },
+      authStorage: { profiles: {} },
+      modelRegistry: { find: () => null },
     });
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: "github-token",
@@ -891,11 +948,15 @@ describe("runBtwSideQuestion", () => {
     // bypassed the provider's createStreamFn/wrapStreamFn hooks. That caused
     // Ollama Cloud (api: "openai-completions", baseUrl: "https://ollama.com/")
     // to hit the marketing site instead of /v1/chat/completions.
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "ollama",
-      id: "glm-5.1",
-      api: "openai-completions",
-      baseUrl: "https://ollama.com/",
+    resolveModelAsyncMock.mockResolvedValue({
+      model: {
+        provider: "ollama",
+        id: "glm-5.1",
+        api: "openai-completions",
+        baseUrl: "https://ollama.com/",
+      },
+      authStorage: { profiles: {} },
+      modelRegistry: { find: () => null },
     });
     const providerStreamFn = vi
       .fn()
@@ -918,12 +979,16 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("routes MiniMax Anthropic fallback streams through the embedded resolver", async () => {
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "minimax-portal",
-      id: "MiniMax-M2.7",
-      api: "anthropic-messages",
-      baseUrl: "https://api.minimax.io/anthropic",
-      maxTokens: 196_608,
+    resolveModelAsyncMock.mockResolvedValue({
+      model: {
+        provider: "minimax-portal",
+        id: "MiniMax-M2.7",
+        api: "anthropic-messages",
+        baseUrl: "https://api.minimax.io/anthropic",
+        maxTokens: 196_608,
+      },
+      authStorage: { profiles: {} },
+      modelRegistry: { find: () => null },
     });
     registerProviderStreamForModelMock.mockReturnValue(undefined);
     const resolvedStreamFn = vi
@@ -988,10 +1053,14 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("allows Bedrock /btw runs to proceed without a static api key in aws-sdk mode", async () => {
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "amazon-bedrock",
-      id: "us.anthropic.claude-sonnet-4-5-v1:0",
-      api: "anthropic-messages",
+    resolveModelAsyncMock.mockResolvedValue({
+      model: {
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-5-v1:0",
+        api: "anthropic-messages",
+      },
+      authStorage: { profiles: {} },
+      modelRegistry: { find: () => null },
     });
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: undefined,
