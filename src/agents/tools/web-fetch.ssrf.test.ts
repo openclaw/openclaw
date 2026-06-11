@@ -42,6 +42,11 @@ function expectRawFetchSuccessDetails(details: unknown) {
   expect(typedDetails.extractor).toBe("raw");
 }
 
+function firstFetchUrl(fetchSpy: ReturnType<typeof setMockFetch>): string {
+  const input = fetchSpy.mock.calls[0]?.[0];
+  return input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+}
+
 function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
   useTrustedEnvProxy?: boolean;
@@ -173,7 +178,7 @@ describe("web_fetch SSRF protection", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/a\u00a0" });
 
-    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://example.com/a%C2%A0");
+    expect(firstFetchUrl(fetchSpy)).toBe("https://example.com/a%C2%A0");
   });
 
   it("trims leading Unicode whitespace through tool argument parsing", async () => {
@@ -183,7 +188,7 @@ describe("web_fetch SSRF protection", () => {
 
     await tool?.execute?.("call", { url: "\u00a0\ufeffhttps://example.com" });
 
-    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://example.com/");
+    expect(firstFetchUrl(fetchSpy)).toBe("https://example.com/");
   });
 
   it("trims trailing Unicode whitespace after a bare authority", async () => {
@@ -193,7 +198,7 @@ describe("web_fetch SSRF protection", () => {
 
     await tool?.execute?.("call", { url: "https://example.com\u2003" });
 
-    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://example.com/");
+    expect(firstFetchUrl(fetchSpy)).toBe("https://example.com/");
   });
 
   it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
