@@ -37,6 +37,9 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/model/i.test(msg) && /does not exist/i.test(msg)) {
     return true;
   }
+  if (/\bnot supported model\b/i.test(msg)) {
+    return true;
+  }
   if (/model/i.test(msg) && /deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) {
     return true;
   }

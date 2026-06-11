@@ -44,6 +44,20 @@ describe("live model error helpers", () => {
     expect(
       isModelNotFoundErrorMessage("The deployment does not exist or you do not have access."),
     ).toBe(false);
+    expect(
+      isModelNotFoundErrorMessage(
+        '{"error":{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}}',
+      ),
+    ).toBe(true);
+    expect(isModelNotFoundErrorMessage("The selected model does not support image input.")).toBe(
+      false,
+    );
+    expect(
+      isModelNotFoundErrorMessage("This model is not supported for tool calling on this endpoint."),
+    ).toBe(false);
+    expect(isModelNotFoundErrorMessage("Unsupported reasoning effort for model gpt-5.5.")).toBe(
+      false,
+    );
     expect(isModelNotFoundErrorMessage('{"error":{"message":"Resource missing","code":404}}')).toBe(
       false,
     );
