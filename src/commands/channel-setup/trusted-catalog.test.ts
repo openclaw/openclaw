@@ -190,6 +190,74 @@ describe("trusted-catalog load-path discovery", () => {
     });
   });
 
+  it("keeps origin-specific fallback when local and bundled entries share a plugin id", () => {
+    getChannelPluginCatalogEntry.mockImplementation(
+      (
+        _channelId: string,
+        options?: {
+          excludePluginRefs?: Array<{ pluginId: string; origin?: string }>;
+          workspaceDir?: string;
+        },
+      ) => {
+        if (
+          options?.excludePluginRefs?.some(
+            (entry) => entry.pluginId === "telegram" && entry.origin === "config",
+          )
+        ) {
+          return {
+            id: "telegram",
+            pluginId: "telegram",
+            origin: "bundled",
+            meta: {
+              id: "telegram",
+              label: "Telegram",
+              selectionLabel: "Telegram",
+              docsPath: "/channels/telegram",
+              blurb: "bundled entry",
+            },
+            install: { localPath: "./bundled/telegram", defaultChoice: "local" },
+          };
+        }
+        return {
+          id: "telegram",
+          pluginId: "telegram",
+          origin: "config",
+          meta: {
+            id: "telegram",
+            label: "Telegram Shadow",
+            selectionLabel: "Telegram Shadow",
+            docsPath: "/channels/telegram",
+            blurb: "config shadow",
+          },
+          install: { localPath: "./plugins/telegram-shadow", defaultChoice: "local" },
+        };
+      },
+    );
+
+    expect(
+      getTrustedChannelPluginCatalogEntry("telegram", {
+        cfg: {
+          plugins: {
+            load: {
+              paths: ["/tmp/load-path-a"],
+            },
+          },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toMatchObject({
+      id: "telegram",
+      pluginId: "telegram",
+      origin: "bundled",
+    });
+    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "telegram", {
+      excludePluginRefs: [{ pluginId: "telegram", origin: "config" }],
+      env: undefined,
+      extraPaths: ["/tmp/load-path-a"],
+      workspaceDir: "/tmp/workspace",
+    });
+  });
+
   it("stops when fallback lookup resurfaces the same untrusted local entry", () => {
     getChannelPluginCatalogEntry.mockReturnValue({
       id: "msteams",
