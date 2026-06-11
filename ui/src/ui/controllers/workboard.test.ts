@@ -314,6 +314,38 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
   });
 
+  it("clears stale task summaries when dispatch task refresh fails", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.tasksByCardId.set("card-1", sampleTask);
+    const dispatchedCard = { ...sampleCard, status: "ready" as const };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.dispatch") {
+        return {
+          promoted: [],
+          reclaimed: [],
+          blocked: [],
+          orchestrated: [],
+          count: 0,
+        };
+      }
+      if (method === "workboard.cards.list") {
+        return { cards: [dispatchedCard], statuses: ["todo", "ready", "done"] };
+      }
+      if (method === "tasks.list") {
+        throw new Error("task ledger unavailable");
+      }
+      return {};
+    });
+
+    await dispatchWorkboard({ host, client: client as never });
+
+    expect(state.cards).toEqual([dispatchedCard]);
+    expect(state.loaded).toBe(true);
+    expect(state.tasksByCardId.size).toBe(0);
+    expect(state.lastRefreshError).toBe("task ledger unavailable");
+  });
+
   it("skips refreshes while dispatch is in flight", async () => {
     const host = {};
     const state = getWorkboardState(host);

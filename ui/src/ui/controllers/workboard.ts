@@ -2426,6 +2426,7 @@ export async function dispatchWorkboard(params: {
     state.cards = normalized.cards;
     state.statuses = normalized.statuses;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
+    state.tasksByCardId = new Map();
     try {
       applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
     } catch (error) {
