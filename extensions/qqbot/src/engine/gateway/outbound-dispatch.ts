@@ -11,6 +11,7 @@
  */
 
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   parseAndSendMediaTags,
@@ -95,6 +96,11 @@ function immediateToolProgressText(payload: ReplyDeliverPayload): string | undef
     return undefined;
   }
   return text;
+}
+
+function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
+  const text = (payload.text ?? "").trim();
+  return !text || text === "[SKIP]" || isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
 }
 
 // ============ dispatchOutbound ============
@@ -236,6 +242,52 @@ export async function dispatchOutbound(
       textToSpeech: (params) => runtime.tts.textToSpeech(params),
       audioFileToSilkBase64: async (p) => (await audioFileToSilkBase64(p)) ?? undefined,
     },
+  };
+
+  const flushPendingToolDeliveries = async (): Promise<void> => {
+    if (toolMediaUrls.length > 0) {
+      const urlsToSend = [...toolMediaUrls];
+      toolMediaUrls.length = 0;
+      for (const mediaUrl of urlsToSend) {
+        try {
+          const result = await sendMedia({
+            to: qualifiedTarget,
+            text: "",
+            mediaUrl,
+            accountId: account.accountId,
+            replyToId: event.messageId,
+            account,
+          });
+          if (result.error) {
+            log?.error(`Tool media forward error: ${result.error}`);
+          }
+        } catch (err) {
+          log?.error(`Tool media forward failed: ${String(err)}`);
+        }
+      }
+    }
+
+    if (toolTexts.length > 0) {
+      const textsToSend = [...toolTexts];
+      toolTexts.length = 0;
+      for (const text of textsToSend) {
+        await sendTextOnlyReply(
+          text,
+          {
+            type: event.type,
+            senderId: event.senderId,
+            messageId: event.messageId,
+            channelId: event.channelId,
+            groupOpenid: event.groupOpenid,
+            msgIdx: event.msgIdx,
+          },
+          { account, qualifiedTarget, log },
+          sendWithRetry,
+          () => undefined,
+          deliverDeps,
+        );
+      }
+    }
   };
 
   const recordOutbound = () =>
@@ -396,6 +448,19 @@ export async function dispatchOutbound(
                 if (toolOnlyTimeoutId) {
                   clearTimeout(toolOnlyTimeoutId);
                   toolOnlyTimeoutId = null;
+                }
+
+                if (!streamingController && isSilentBlockReply(payload)) {
+                  if (hasPendingToolFallbackPayload()) {
+                    await flushPendingToolDeliveries();
+                    toolFallbackSent = true;
+                    recordOutbound();
+                  } else if (event.type === "group") {
+                    log?.info(
+                      `Model decided to skip group message (${(payload.text ?? "").trim() || "empty reply"}) from ${event.senderId}`,
+                    );
+                  }
+                  return;
                 }
 
                 if (streamingController && !streamingController.isTerminalPhase) {

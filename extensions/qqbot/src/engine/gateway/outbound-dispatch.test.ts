@@ -376,6 +376,43 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
+  it("flushes buffered tool text when non-streaming final block is silent", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "first visible tool message" }, { kind: "tool" });
+        await deliver({ text: "second visible tool message" }, { kind: "tool" });
+        await deliver({ text: "NO_REPLY" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(
+      makeInbound({
+        event: {
+          type: "group",
+          senderId: "member-openid",
+          messageId: "msg-group-tool-final-silent",
+          content: "<@BOT> do it",
+          timestamp: "2026-04-25T00:00:00.000Z",
+          groupOpenid: "group-openid",
+        },
+        route: { sessionKey: "qqbot:group:group-openid", accountId: "qq-main" },
+        isGroupChat: true,
+        peerId: "group-openid",
+        qualifiedTarget: "qqbot:group:group-openid",
+        fromAddress: "qqbot:group:group-openid",
+        agentBody: "do it",
+        body: "[member-openid] do it (@you)",
+      }),
+      { runtime, cfg: {}, account: { ...account, config: { streaming: false } } },
+    );
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      "first visible tool message",
+      "second visible tool message",
+    ]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
   it("renews pending tool-media fallback when partial progress is delivered", async () => {
     vi.useFakeTimers();
     const mediaUrl = "https://example.com/progress.png";
