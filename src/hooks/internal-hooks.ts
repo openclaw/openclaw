@@ -6,7 +6,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema.js" (fix(hooks): prevent re-entrant internal hook loops via AsyncLocalStorage guard)
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema.js"
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
