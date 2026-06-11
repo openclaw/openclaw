@@ -52,15 +52,20 @@ function signHmac(ts: number, callId: string): string {
 /**
  * Minimal realtime-voice provider whose bridge does nothing. `created()` flips once the
  * provider bridges a call, so tests can wait for the realtime session.start to register.
+ * `failConnect` makes the bridge's connect() reject (model never comes up).
  */
-function createMockRealtimeProvider(): {
+function createMockRealtimeProvider(opts?: { failConnect?: boolean }): {
   plugin: RealtimeVoiceProviderPlugin;
   created: () => boolean;
 } {
   let created = false;
   const bridge: RealtimeVoiceBridge = {
     supportsToolResultContinuation: true,
-    connect: async () => {},
+    connect: async () => {
+      if (opts?.failConnect) {
+        throw new Error("model down");
+      }
+    },
     sendAudio: () => {},
     sendImage: () => {},
     setMediaTimestamp: () => {},
@@ -999,5 +1004,117 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     expect(status.isTerminal).toBe(false);
 
     ws.close();
+  });
+
+  it("releases the realtime call when the bridge fails to connect (B1: no leaked in-progress state)", async () => {
+    const { port, provider: msProvider } = await setup();
+    const realtime = createMockRealtimeProvider({ failConnect: true });
+    msProvider.setRealtimeRuntime({
+      provider: realtime.plugin,
+      providerConfig: {} as never,
+      inboundPolicy: "open",
+    });
+    const callId = "teams-realtime-fail";
+    const { ws } = await connect(port, callId);
+    const closed = new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "thread-rt-fail",
+        caller: { aadId: "aad-rt-fail" },
+        recordingStatus: "active",
+      }),
+    );
+    await waitFor(() => realtime.created());
+
+    // connect() rejects -> the Teams session is hung up AND the realtimeCalls entry is
+    // released (previously the host close suppressed onSessionEnd, so getCallStatus
+    // reported the dead call in-progress forever).
+    await closed;
+    const status = await msProvider.getCallStatus({ providerCallId: callId });
+    expect(status.isTerminal).toBe(true);
+  });
+
+  it("manager-driven hangup releases per-call vision frames (B3)", async () => {
+    const { port, captured, provider: msProvider } = await setup();
+    const callId = "teams-hangup-release";
+    const { ws } = await connect(port, callId);
+
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "thread-release",
+        caller: { aadId: "aad-release" },
+        recordingStatus: "active",
+      }),
+    );
+    await waitFor(() => captured.current !== undefined);
+    ws.send(
+      JSON.stringify({
+        type: "video.frame",
+        source: "screenshare",
+        ts: 1,
+        width: 8,
+        height: 8,
+        mime: "image/jpeg",
+        dataBase64: "AQID",
+      }),
+    );
+    await waitFor(() => msProvider.getLatestVideoFrame(callId) !== undefined);
+
+    // Manager-initiated hangup (idle timeout / endCall): previously only a caller-driven
+    // session.end released the vision store, leaking ~1-2 MB per hung-up call.
+    await msProvider.hangupCall({
+      providerCallId: callId,
+      reason: "completed",
+    } as unknown as HangupCallInput);
+
+    expect(msProvider.getLatestVideoFrame(callId)).toBeUndefined();
+  });
+
+  it("finalizes a placed outbound call that ends before session.start — declined/busy (B5)", async () => {
+    const { port, manager } = await setup({
+      outbound: {
+        enabled: true,
+        workerBaseUrl: "https://worker.example",
+        tenantId: "tenant-1",
+        // Long safety net: proves the end event itself (not the no-answer timer) finalizes.
+        answerTimeoutMs: 60_000,
+      },
+    });
+    const graphCallId = "graph-declined-1";
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ callId: graphCallId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
+    try {
+      const placed = await manager.initiateCall("user:aad-declined", undefined, {
+        message: "Your report is ready.",
+        mode: "notify",
+      });
+      expect(placed.success).toBe(true);
+      // Hold the live record (removed from activeCalls once finalized).
+      const record = manager.getCallByProviderCallId(graphCallId);
+      expect(record?.callId).toBeDefined();
+
+      // The callee declines: the worker reports session.end WITHOUT ever sending session.start.
+      // Previously this canceled the no-answer timer but finalized nothing, so the CallRecord
+      // stayed active forever (counting against maxConcurrentCalls) and pendingOutbound leaked.
+      const { ws } = await connect(port, graphCallId);
+      ws.send(JSON.stringify({ type: "session.end", reason: "declined" }));
+
+      await waitFor(() => record?.endReason !== undefined);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -611,6 +611,17 @@ export class MsteamsMediaStream {
     if (!ws) {
       return;
     }
+    // A host-initiated close must still deliver onSessionEnd for a started session:
+    // cleanupConnection below deletes the connection meta, so by the time the ws
+    // close event fires there is no meta and the close handler skips delivery —
+    // which leaked host call state on paths like a realtime connect-failure close
+    // (the call stayed "in-progress" forever). The `ended` guard keeps a
+    // session.end-driven close single-delivery. (Review B1)
+    const meta = this.connectionMeta.get(callId);
+    if (meta?.started && !meta.ended) {
+      meta.ended = true;
+      this.config.onSessionEnd?.({ callId, reason });
+    }
     try {
       ws.close(1000, reason);
     } catch {
