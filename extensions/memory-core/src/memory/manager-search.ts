@@ -94,28 +94,61 @@ function readCount(row: { count?: number | bigint } | undefined): number {
   return 0;
 }
 
+// Decompose a token that contains CJK characters into LIKE substring terms.
+// Each CJK character becomes its own term while contiguous non-CJK runs (e.g.
+// the "API" in "API配置") are kept whole, so a doc only has to contain each
+// character/run somewhere — not the exact concatenation — to match.
+function splitCjkToken(token: string): string[] {
+  const terms: string[] = [];
+  let asciiRun = "";
+  for (const char of Array.from(token)) {
+    if (SHORT_CJK_TRIGRAM_RE.test(char)) {
+      if (asciiRun) {
+        terms.push(asciiRun);
+        asciiRun = "";
+      }
+      terms.push(char);
+    } else {
+      asciiRun += char;
+    }
+  }
+  if (asciiRun) {
+    terms.push(asciiRun);
+  }
+  return terms;
+}
+
 function planKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
   buildFtsQuery: (raw: string) => string | null;
-}): { matchQuery: string | null; substringTerms: string[] } {
+}): { matchQuery: string | null; substringTerms: string[]; fallbackLikeTerms: string[] } {
   if (params.ftsTokenizer !== "trigram") {
+    const tokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
     return {
       matchQuery: params.buildFtsQuery(params.query),
       substringTerms: [],
+      fallbackLikeTerms: uniqueStrings(tokens),
     };
   }
 
   const tokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
   if (tokens.length === 0) {
-    return { matchQuery: null, substringTerms: [] };
+    return { matchQuery: null, substringTerms: [], fallbackLikeTerms: [] };
   }
 
   const matchTerms: string[] = [];
   const substringTerms: string[] = [];
   for (const token of tokens) {
-    if (SHORT_CJK_TRIGRAM_RE.test(token) && Array.from(token).length < 3) {
-      substringTerms.push(token);
+    // The trigram tokenizer turns a multi-character CJK token into a quoted
+    // MATCH phrase that only matches the exact contiguous substring, which
+    // rarely exists verbatim in documents — so every CJK query scored
+    // textScore=0 (issue #92061). Route any CJK-bearing token through per-
+    // character LIKE terms instead, which reliably match regardless of where
+    // the characters appear. Single/double CJK characters already needed this
+    // because trigram requires >=3 characters to form a searchable token.
+    if (SHORT_CJK_TRIGRAM_RE.test(token)) {
+      substringTerms.push(...splitCjkToken(token));
       continue;
     }
     matchTerms.push(token);
@@ -124,6 +157,7 @@ function planKeywordSearch(params: {
   return {
     matchQuery: buildMatchQueryFromTerms(matchTerms),
     substringTerms,
+    fallbackLikeTerms: uniqueStrings([...matchTerms, ...substringTerms]),
   };
 }
 
@@ -346,6 +380,29 @@ export async function searchKeyword(params: {
   }>;
   let usedMatch = false;
 
+  // Per-term LIKE substring search used whenever MATCH is unusable: either it
+  // threw, or it succeeded but returned no rows for a query whose CJK tokens
+  // were decomposed into substring terms (issue #92061).
+  const runLikeFallback = (): typeof rows => {
+    const fallbackLikeClause = plan.fallbackLikeTerms
+      .map(() => " AND text LIKE ? ESCAPE '\\'")
+      .join("");
+    const fallbackLikeParams = plan.fallbackLikeTerms.map((term) => `%${escapeLikePattern(term)}%`);
+    return params.db
+      .prepare(
+        `SELECT id, path, source, start_line, end_line, text,\n` +
+          `       0 AS rank\n` +
+          `  FROM ${params.ftsTable}\n` +
+          ` WHERE 1=1${fallbackLikeClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
+          ` LIMIT ?`,
+      )
+      .all(
+        ...fallbackLikeParams,
+        ...params.sourceFilter.params,
+        params.limit,
+      ) as typeof rows;
+  };
+
   if (plan.matchQuery) {
     try {
       rows = params.db
@@ -364,29 +421,22 @@ export async function searchKeyword(params: {
           params.limit,
         ) as typeof rows;
       usedMatch = true;
+      // A successful MATCH that returns nothing is the CJK failure mode: the
+      // quoted trigram phrase had no exact substring hit. Retry with LIKE on
+      // the decomposed per-character terms so the keyword component still
+      // contributes instead of collapsing every hybrid result to textScore=0.
+      if (rows.length === 0 && plan.substringTerms.length > 0) {
+        rows = runLikeFallback();
+        usedMatch = false;
+      }
     } catch (matchErr) {
       // FTS5 MATCH can fail on certain token patterns depending on the
       // Node.js sqlite runtime and tokenizer (e.g. unicode61 vs trigram).
       // Log the root cause, then fall back to per-token LIKE-based substring
       // search so results are still returned instead of being silently dropped.
       console.warn(`memory search: FTS5 MATCH failed, falling back to LIKE: ${String(matchErr)}`);
-      const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
-      const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
-      const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
-      const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
-      rows = params.db
-        .prepare(
-          `SELECT id, path, source, start_line, end_line, text,\n` +
-            `       0 AS rank\n` +
-            `  FROM ${params.ftsTable}\n` +
-            ` WHERE 1=1${fallbackLikeClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
-            ` LIMIT ?`,
-        )
-        .all(
-          ...fallbackLikeParams,
-          ...params.sourceFilter.params,
-          params.limit,
-        ) as typeof rows;
+      rows = runLikeFallback();
+      usedMatch = false;
     }
   } else {
     rows = params.db

@@ -222,6 +222,103 @@ describe("searchKeyword trigram fallback", () => {
 
     expect(repeated[0]?.score).toBe(unique[0]?.score);
   });
+
+  // ===== CJK FTS textScore regression coverage (issue #92061) =====
+  //
+  // A multi-character CJK query used to be emitted as a single quoted trigram
+  // MATCH phrase (e.g. MATCH "飞书插件配置"), which only matches the exact
+  // contiguous substring. Real documents rarely contain that verbatim run, so
+  // MATCH returned zero rows, no LIKE fallback fired, and every hybrid result
+  // collapsed to textScore=0. The fix decomposes CJK tokens into per-character
+  // LIKE terms and adds a LIKE fallback when MATCH returns zero rows.
+
+  itWithTrigramFts(
+    "scores a multi-character CJK query with textScore=1 instead of 0 (issue #92061)",
+    async () => {
+      // The query characters are all present, but never as the contiguous
+      // substring "飞书插件配置" — the doc has "...配置飞书插件". Pre-fix this
+      // produced an empty keyword result (textScore=0); post-fix it matches.
+      const results = await runSearch({
+        rows: [{ id: "feishu", path: "memory/zh.md", text: "如何配置飞书插件" }],
+        query: "飞书插件配置",
+      });
+      expect(results.map((row) => row.id)).toEqual(["feishu"]);
+      expect(results[0]?.textScore).toBe(1);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+    },
+  );
+
+  itWithTrigramFts("requires every CJK character of the query to be present", async () => {
+    const results = await runSearch({
+      rows: [
+        { id: "full", path: "memory/full.md", text: "如何配置飞书插件" },
+        // Contains 飞书 but not 插件配置 — must be excluded by the per-character
+        // AND semantics rather than matched on a partial overlap.
+        { id: "partial", path: "memory/partial.md", text: "飞书云文档简介" },
+      ],
+      query: "飞书插件配置",
+    });
+    expect(results.map((row) => row.id)).toEqual(["full"]);
+  });
+
+  itWithTrigramFts(
+    "covers Japanese kanji queries that are not a contiguous substring",
+    async () => {
+      const results = await runSearch({
+        rows: [{ id: "jp", path: "memory/jp.md", text: "東京の駅の周辺を歩く" }],
+        query: "東京駅周辺",
+      });
+      expect(results.map((row) => row.id)).toEqual(["jp"]);
+      expect(results[0]?.textScore).toBe(1);
+    },
+  );
+
+  itWithTrigramFts(
+    "falls back to LIKE when a trigram MATCH returns zero rows without throwing",
+    async () => {
+      // "id" is a sub-trigram (<3 chars) Latin token, so MATCH "id" returns
+      // zero rows (without throwing) under the trigram tokenizer, while the CJK
+      // token splits into substring terms. Pre-fix the empty MATCH short-
+      // circuited to no results because the LIKE fallback only ran on
+      // exceptions; post-fix the zero-row MATCH triggers the LIKE fallback.
+      const results = await runSearch({
+        rows: [{ id: "doc", path: "memory/mixed.md", text: "id配置文档说明" }],
+        query: "id 配置",
+      });
+      expect(results.map((row) => row.id)).toEqual(["doc"]);
+      expect(results[0]?.textScore).toBe(1);
+    },
+  );
+
+  itWithTrigramFts("keeps non-CJK runs whole when splitting a mixed CJK token", async () => {
+    const results = await runSearch({
+      rows: [
+        // Contains the substring "API" and the characters 飞书 (not contiguous).
+        { id: "hit", path: "memory/api.md", text: "查看API文档和飞书设置" },
+        // Has 飞书 and scattered letters but no "API" substring — must be
+        // excluded, proving the ASCII run is matched whole rather than as the
+        // individual letters A, P, I.
+        { id: "miss", path: "memory/apple.md", text: "苹果Apple的飞书通知" },
+      ],
+      query: "API飞书",
+    });
+    expect(results.map((row) => row.id)).toEqual(["hit"]);
+  });
+
+  itWithTrigramFts(
+    "still BM25-scores a mixed Latin+CJK query through MATCH (no regression)",
+    async () => {
+      // The Latin term is trigram-eligible and present, so MATCH succeeds and
+      // the keyword score stays a real BM25 value rather than the LIKE default.
+      const results = await runSearch({
+        rows: [{ id: "doc", path: "memory/mixed.md", text: "feishu 配置文档说明" }],
+        query: "feishu 配置",
+      });
+      expect(results.map((row) => row.id)).toEqual(["doc"]);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+      expect(results[0]?.textScore).toBeLessThan(1);
+    },
+  );
 });
 
 describe("searchKeyword FTS MATCH fallback", () => {
