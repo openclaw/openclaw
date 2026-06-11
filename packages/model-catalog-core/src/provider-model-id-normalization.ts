@@ -140,8 +140,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       opus: "claude-opus-4-8",
       "opus-4.6": "claude-opus-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
-      "claude-haiku-4-5": "claude-haiku-4-5-20251001",
-      "claude-haiku-4.5": "claude-haiku-4-5-20251001",
+      "claude-haiku-4.5": "claude-haiku-4-5",
     };
     const anthropicPrefix = "anthropic/";
     const normalizedModel = normalizeLowercaseStringOrEmpty(model);

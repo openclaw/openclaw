@@ -113,8 +113,19 @@
             "maxTokens": 64000
           },
           {
-            "id": "claude-haiku-4-5-20251001",
+            "id": "claude-haiku-4-5",
             "name": "Claude Haiku 4.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
+            },
+            "contextWindow": 200000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "claude-haiku-4-5-20251001",
+            "name": "Claude Haiku 4.5 (2025-10-01)",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
@@ -153,8 +164,7 @@
           "opus": "claude-opus-4-8",
           "opus-4.6": "claude-opus-4-6",
           "sonnet-4.6": "claude-sonnet-4-6",
-          "claude-haiku-4-5": "claude-haiku-4-5-20251001",
-          "claude-haiku-4.5": "claude-haiku-4-5-20251001"
+          "claude-haiku-4.5": "claude-haiku-4-5"
         }
       }
     }

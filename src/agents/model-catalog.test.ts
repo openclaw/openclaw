@@ -1165,24 +1165,32 @@ describe("loadModelCatalog", () => {
 
     const result = loadManifestModelCatalog({ config: {} as OpenClawConfig });
 
-    const entry = requireCatalogEntry(result, "anthropic", "claude-haiku-4-5-20251001");
-    expect(entry).toMatchObject({
+    const rollingEntry = requireCatalogEntry(result, "anthropic", "claude-haiku-4-5");
+    expect(rollingEntry).toMatchObject({
       name: "Claude Haiku 4.5",
       input: ["text", "image"],
       reasoning: true,
       contextWindow: 200000,
       maxTokens: 64000,
     });
-    expect(entry.mediaInput).toEqual({
+    expect(rollingEntry.mediaInput).toEqual({
       image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+    });
+    const datedEntry = requireCatalogEntry(result, "anthropic", "claude-haiku-4-5-20251001");
+    expect(datedEntry).toMatchObject({
+      name: "Claude Haiku 4.5 (2025-10-01)",
+      input: ["text", "image"],
+      reasoning: true,
+      contextWindow: 200000,
+      maxTokens: 64000,
     });
     const aliases = (
       manifest.modelIdNormalization as {
         providers?: { anthropic?: { aliases?: Record<string, string> } };
       }
     ).providers?.anthropic?.aliases;
-    expect(aliases?.["claude-haiku-4-5"]).toBe("claude-haiku-4-5-20251001");
-    expect(aliases?.["claude-haiku-4.5"]).toBe("claude-haiku-4-5-20251001");
+    expect(aliases?.["claude-haiku-4-5"]).toBeUndefined();
+    expect(aliases?.["claude-haiku-4.5"]).toBe("claude-haiku-4-5");
   });
 
   it("loads manifest model id policies once for persisted read-only catalog rows", async () => {

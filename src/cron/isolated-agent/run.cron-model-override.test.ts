@@ -220,7 +220,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(result.status).toBe("error");
     // Even though the run failed, the session-level model override should
     // be persisted on the entry — not the agent default (Opus).
-    expect(cronSession.sessionEntry.model).toBe("claude-haiku-4-5-20251001");
+    expect(cronSession.sessionEntry.model).toBe("claude-haiku-4-5");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 

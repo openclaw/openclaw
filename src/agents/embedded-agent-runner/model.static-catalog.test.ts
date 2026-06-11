@@ -162,14 +162,18 @@ describe("resolveBundledStaticCatalogModel", () => {
   it("resolves Anthropic Haiku 4.5 by dated id and rolling aliases", () => {
     setManifestPlugins([createAnthropicManifestPlugin()]);
 
-    for (const modelId of [
-      "claude-haiku-4-5-20251001",
-      "claude-haiku-4-5",
-      "claude-haiku-4.5",
-      "anthropic/claude-haiku-4-5",
-      "anthropic/claude-haiku-4.5",
-      "anthropic/claude-haiku-4-5-20251001",
-    ]) {
+    for (const [modelId, expectedId, expectedName] of [
+      ["claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001", "Claude Haiku 4.5 (2025-10-01)"],
+      ["claude-haiku-4-5", "claude-haiku-4-5", "Claude Haiku 4.5"],
+      ["claude-haiku-4.5", "claude-haiku-4-5", "Claude Haiku 4.5"],
+      ["anthropic/claude-haiku-4-5", "claude-haiku-4-5", "Claude Haiku 4.5"],
+      ["anthropic/claude-haiku-4.5", "claude-haiku-4-5", "Claude Haiku 4.5"],
+      [
+        "anthropic/claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001",
+        "Claude Haiku 4.5 (2025-10-01)",
+      ],
+    ] as const) {
       const model = resolveBundledStaticCatalogModel({
         provider: "anthropic",
         modelId,
@@ -180,13 +184,13 @@ describe("resolveBundledStaticCatalogModel", () => {
         api: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         contextWindow: 200000,
-        id: "claude-haiku-4-5-20251001",
+        id: expectedId,
         input: ["text", "image"],
         maxTokens: 64000,
         mediaInput: {
           image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
         },
-        name: "Claude Haiku 4.5",
+        name: expectedName,
         provider: "anthropic",
         reasoning: true,
       });
