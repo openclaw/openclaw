@@ -2721,6 +2721,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.isContinuationWake).toBe(false);
   });
 
+  it("leaves ordinary subagent-return turns unmarked as continuation wakes (#989 chain-budget reset)", async () => {
+    // An ordinary inter-session subagent completion is NOT a mid-chain wake. It
+    // must NOT set isContinuationWake, otherwise the agent-runner chain-budget
+    // reset gate (#987) is skipped and a stale chain count rejects every fresh
+    // continuation elected from the subagent return (the #989 doom-lock hole).
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "subagent-return",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
+  });
+
   it("routes queued system events into user prompt text, not system prompt context", async () => {
     vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
       text: "System: [t] Model switched.",

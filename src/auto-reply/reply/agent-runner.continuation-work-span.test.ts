@@ -663,4 +663,59 @@ describe("runReplyAgent :: continuation chain-break reset (#987)", () => {
     expect(run.sessionEntry.continuationChainCount ?? 0).toBe(0);
     expect(run.sessionEntry.continuationChainId).toBeUndefined();
   });
+
+  it("resets a stale at-cap chain budget on an ordinary subagent-return so a fresh continuation passes the cap (#989 doom-lock)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    // The #987/#989 "195-forever" doom-lock: a long-lived session carries a
+    // stale chain count pinned at the cap. An ordinary inter-session subagent
+    // completes and returns — that arrives as `continuationTrigger:
+    // "subagent-return"`, which get-reply-run maps to isContinuationWake=false
+    // (proven in get-reply-run.media-only.test.ts). So at this reset gate it is
+    // an external turn-entry: the chain budget must rewind to 0, otherwise the
+    // fresh continuation elected from the subagent return is rejected forever
+    // against the stale at-cap count. maxChainLength=200, count seeded at 200.
+    const seededChainId = "019dcf57-9989-77cc-834b-b803d9262032";
+    const seededStartedAt = Date.now() - 7_200_000;
+    const seededEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 200,
+      continuationChainStartedAt: seededStartedAt,
+      continuationChainTokens: 900_000,
+      continuationChainId: seededChainId,
+    };
+    const run = createContinuationRun({
+      sessionKey: "continuation-chain-reset-subagent-return",
+      sessionEntry: seededEntry,
+      config: UNRELEASED_CHAIN_CONFIG,
+    });
+    const sessionStore = { [run.sessionKey]: seededEntry };
+
+    let countDuringInference: number | undefined;
+    let chainIdDuringInference: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      countDuringInference = run.sessionEntry.continuationChainCount;
+      chainIdDuringInference = run.sessionEntry.continuationChainId;
+      return {
+        payloads: [{ text: "Continue after subagent return\nCONTINUE_WORK:1" }],
+        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
+      };
+    });
+
+    // isContinuationWake=false models the ordinary subagent-return turn-entry.
+    await runWorkTurn(run, sessionStore, "Continue after subagent return\nCONTINUE_WORK:1", false);
+
+    // Budget zeroed before inference, fresh chain id minted, and the fresh chain
+    // took its FIRST work step (0 -> 1) instead of being rejected against the
+    // stale count=200 cap — the doom-lock is broken.
+    expect(countDuringInference).toBe(0);
+    expect(chainIdDuringInference).not.toBe(seededChainId);
+    const workSpans = spans.filter((s) => s.name === "continuation.work");
+    expect(workSpans).toHaveLength(1);
+    expect(run.sessionEntry.continuationChainCount).toBe(1);
+  });
 });

@@ -5,7 +5,7 @@ import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcrip
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
-export type ContinuationTrigger = "work-wake" | "delegate-return";
+export type ContinuationTrigger = "work-wake" | "delegate-return" | "subagent-return";
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
@@ -80,8 +80,11 @@ export type GetReplyOptions = {
   /**
    * Structured trigger identifying why this turn exists.
    * Used for wake classification instead of inferring from system-event queue text.
-   * - "work-wake": CONTINUE_WORK timer fired
-   * - "delegate-return": a delegate sub-agent completed and returned results
+   * - "work-wake": CONTINUE_WORK timer fired (mid-chain self-continuation step)
+   * - "delegate-return": an in-chain continuation-chain delegate hop
+   *   (`[continuation:chain-hop:N]`) returned (mid-chain step; preserves the chain budget)
+   * - "subagent-return": an ordinary inter-session subagent completed (external
+   *   turn-entry, NOT part of an active continuation chain; resets the chain budget)
    */
   continuationTrigger?: ContinuationTrigger;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
