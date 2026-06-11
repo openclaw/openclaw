@@ -9,6 +9,7 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { resolveChatAttachmentMaxBytes } from "../media/configured-max-bytes.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   extractFileContentFromSource,
@@ -99,11 +100,48 @@ export function sanitizeMimeType(value?: string): string | undefined {
   return match?.[1]?.toLowerCase();
 }
 
-function resolveFileLimits(cfg: OpenClawConfig) {
+const MB = 1024 * 1024;
+// Matches the documented `agents.defaults.pdfMaxPages` default used by the PDF
+// tool so the same config key keeps one meaning across surfaces.
+const DEFAULT_INBOUND_PDF_MAX_PAGES = 20;
+
+function positiveMbToBytes(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value * MB)
+    : undefined;
+}
+
+function positiveWholeNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+// Inbound chat attachments are accepted up to the chat attachment cap
+// (`agents.defaults.mediaMaxMb`, default 20MB), but `resolveInputFileLimits`
+// defaults to the OpenResponses 5MB/4-page caps. Route the agent-level limits
+// in here so an accepted PDF/document is extracted instead of silently
+// degrading to a bare attachment marker (#90098). Explicit
+// `gateway.http.endpoints.responses.files` config still wins.
+export function resolveFileLimits(cfg: OpenClawConfig) {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
   const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
+  const defaults = cfg.agents?.defaults;
+  // `pdfMaxBytesMb` may only raise the cap: anything already accepted at the
+  // attachment cap must stay extractable or the silent skip would come back.
+  const maxBytes =
+    files?.maxBytes ??
+    Math.max(resolveChatAttachmentMaxBytes(cfg), positiveMbToBytes(defaults?.pdfMaxBytesMb) ?? 0);
+  const pdfMaxPages =
+    files?.pdf?.maxPages ??
+    positiveWholeNumber(defaults?.pdfMaxPages) ??
+    DEFAULT_INBOUND_PDF_MAX_PAGES;
   return {
-    ...resolveInputFileLimits(files),
+    ...resolveInputFileLimits({
+      ...files,
+      maxBytes,
+      pdf: { ...files?.pdf, maxPages: pdfMaxPages },
+    }),
     allowedMimesConfigured,
   };
 }

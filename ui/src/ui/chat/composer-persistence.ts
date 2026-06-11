@@ -9,6 +9,10 @@ const MAX_STORED_SESSIONS = 20;
 const MAX_STORED_QUEUE_ITEMS = 50;
 export const INTERRUPTED_MODEL_WAIT_ERROR =
   "Model selection was interrupted. Review and retry when ready.";
+// Failed sends with this error predate the stack-safe parser fix and were
+// already surfaced as failed; auto-restoring them would replay stale sends
+// after upgrade, so drop them on persist and restore.
+const STALE_STACK_OVERFLOW_SEND_ERROR_PATTERN = /Maximum call stack size exceeded/i;
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };
@@ -129,6 +133,10 @@ function normalizeOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function isStaleStackOverflowSendError(value: unknown): boolean {
+  return STALE_STACK_OVERFLOW_SEND_ERROR_PATTERN.test(normalizeOptionalString(value) ?? "");
+}
+
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -196,6 +204,9 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     return null;
   }
   if (item.sendState === "sending") {
+    return null;
+  }
+  if (item.sendState === "failed" && isStaleStackOverflowSendError(item.sendError)) {
     return null;
   }
   const attachments = item.attachments?.map(serializeChatAttachment) ?? [];
@@ -270,6 +281,9 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
     item.sendError = INTERRUPTED_MODEL_WAIT_ERROR;
   }
   const sendError = normalizeOptionalString(entry.sendError);
+  if (item.sendState === "failed" && isStaleStackOverflowSendError(sendError)) {
+    return null;
+  }
   if (sendError) {
     item.sendError = sendError;
   }

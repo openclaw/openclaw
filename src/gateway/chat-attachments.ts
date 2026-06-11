@@ -4,8 +4,8 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { DEFAULT_CHAT_ATTACHMENT_MAX_MB } from "../media/configured-max-bytes.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
@@ -57,18 +57,6 @@ type SavedMedia = {
 
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
-
-export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
-
-/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
-export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
-  const configured = cfg.agents?.defaults?.mediaMaxMb;
-  const mb =
-    typeof configured === "number" && Number.isFinite(configured) && configured > 0
-      ? configured
-      : DEFAULT_CHAT_ATTACHMENT_MAX_MB;
-  return Math.floor(mb * 1024 * 1024);
-}
 
 type UnsupportedAttachmentReason =
   | "empty-payload"
@@ -146,11 +134,49 @@ function resolveAttachmentMime(params: {
   );
 }
 
+// Validate iteratively: attachments reach multi-megabyte sizes and a
+// full-string regex over those payloads can exhaust V8's regex stack
+// (RangeError: Maximum call stack size exceeded), failing valid sends.
 function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  let padding = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 61) {
+      padding += 1;
+      if (padding > 2) {
+        return false;
+      }
+      continue;
+    }
+    const isBase64Char =
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 43 ||
+      code === 47;
+    if (padding > 0 || !isBase64Char) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Index-based strip for the same reason as isValidBase64: no regex capture
+// over a multi-megabyte data URL payload.
+function stripBase64DataUrlPrefix(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("data:")) {
+    return trimmed;
+  }
+  const marker = ";base64,";
+  const markerIndex = trimmed.indexOf(marker);
+  if (markerIndex <= "data:".length) {
+    return trimmed;
+  }
+  return trimmed.slice(markerIndex + marker.length);
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
@@ -212,13 +238,7 @@ function normalizeAttachment(
     throw new Error(`attachment ${label}: only image/* supported`);
   }
 
-  let base64 = content.trim();
-  if (opts.stripDataUrlPrefix) {
-    const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
-    if (dataUrlMatch) {
-      base64 = dataUrlMatch[1];
-    }
-  }
+  const base64 = opts.stripDataUrlPrefix ? stripBase64DataUrlPrefix(content) : content.trim();
   return { label, mime, base64 };
 }
 

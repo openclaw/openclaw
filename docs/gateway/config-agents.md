@@ -442,8 +442,8 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
-- `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
-- `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
+- `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time. Values above the inbound attachment cap (`mediaMaxMb`, default 20 MB) also raise the byte limit for inbound document text extraction.
+- `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool, and the page cap for inbound PDF text extraction.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `toolProgressDetail`: detail mode for `/verbose` tool summaries and progress-draft tool lines. Values: `"explain"` (default, compact human labels) or `"raw"` (append raw command/detail when available). Per-agent `agents.list[].toolProgressDetail` overrides this default.
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.list[].reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.

@@ -847,11 +847,21 @@ async function loadChatHistoryUncached(
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) {
+  // Parse by index: a regex capture over a multi-megabyte attachment data URL
+  // can exhaust the engine's regex stack (RangeError: Maximum call stack size
+  // exceeded) and fail the send before it reaches the gateway.
+  if (!dataUrl.startsWith("data:")) {
     return null;
   }
-  return { mimeType: match[1], content: match[2] };
+  const marker = ";base64,";
+  const markerIndex = dataUrl.indexOf(marker);
+  if (markerIndex <= "data:".length || markerIndex + marker.length >= dataUrl.length) {
+    return null;
+  }
+  return {
+    mimeType: dataUrl.slice("data:".length, markerIndex),
+    content: dataUrl.slice(markerIndex + marker.length),
+  };
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {
