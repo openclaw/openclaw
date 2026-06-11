@@ -483,6 +483,8 @@ export interface MsteamsRealtimeCall {
   notifyInboundFrame(): void;
   /** Live human participant count (excludes the bot); drives the deterministic group-call gate. */
   setHumanCount(count: number): void;
+  /** A DTMF key the caller pressed; surfaced to the model as a user message so it can run IVR flows. */
+  notifyDtmf(digit: string): void;
   /** Active speaker's display name (unmixed-audio worker) — labels caller transcript turns. */
   setCurrentSpeaker(name: string | undefined): void;
   /** Update Teams recording status (gates the consult tool + background task). */
@@ -1478,6 +1480,13 @@ export function createMsteamsRealtimeCall(params: {
     },
     setHumanCount: (count: number) => {
       humanCount = count;
+    },
+    notifyDtmf: (digit: string) => {
+      // Surface the keypress to the model as a user message so it can drive IVR-style flows
+      // ("press 1 to…"). Recorded in the transcript like any caller turn.
+      const text = `[The caller pressed the "${digit}" key on their phone keypad.]`;
+      recordTranscript("user", text);
+      realtime.sendUserMessage(text);
     },
     setCurrentSpeaker: (name: string | undefined) => {
       currentSpeakerName = name;

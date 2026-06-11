@@ -78,12 +78,14 @@ function createMockProvider(): {
   sendAudio: ReturnType<typeof vi.fn>;
   sendImage: ReturnType<typeof vi.fn>;
   triggerGreeting: ReturnType<typeof vi.fn>;
+  sendUserMessage: ReturnType<typeof vi.fn>;
 } {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
   const submitToolResult = vi.fn();
   const sendAudio = vi.fn();
   const sendImage = vi.fn();
   const triggerGreeting = vi.fn();
+  const sendUserMessage = vi.fn();
 
   const bridge: RealtimeVoiceBridge = {
     supportsToolResultContinuation: true,
@@ -94,6 +96,7 @@ function createMockProvider(): {
     submitToolResult,
     acknowledgeMark: () => {},
     triggerGreeting,
+    sendUserMessage,
     close: () => {},
     isConnected: () => true,
   };
@@ -120,6 +123,7 @@ function createMockProvider(): {
     sendAudio,
     sendImage,
     triggerGreeting,
+    sendUserMessage,
   };
 }
 
@@ -609,6 +613,18 @@ describe("createMsteamsRealtimeCall", () => {
     call.setRecordingActive(true);
     expect(mock.triggerGreeting).toHaveBeenCalledTimes(1);
     expect(mock.triggerGreeting).toHaveBeenCalledWith("Deliver the Dubai time.");
+  });
+
+  it("surfaces a DTMF keypress to the model as a user message (#21)", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {} },
+    });
+    call.notifyDtmf("1");
+    expect(mock.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(mock.sendUserMessage.mock.calls[0]?.[0]).toContain('"1"');
   });
 
   it("injects the caller's name into the realtime instructions (roster greeting)", () => {
