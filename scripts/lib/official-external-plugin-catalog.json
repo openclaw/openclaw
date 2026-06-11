@@ -140,6 +140,38 @@
       }
     },
     {
+      "name": "@iflow-ai/iflow-plugin",
+      "description": "iFlow Search (心流搜索) — Chinese-first web search, image search, and web content fetch.",
+      "source": "external",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "iflow",
+          "label": "iFlow Search"
+        },
+        "webSearchProviders": [
+          {
+            "id": "iflow",
+            "label": "iFlow Search",
+            "hint": "Connect Your AI Agent to the Real World",
+            "onboardingScopes": ["text-inference"],
+            "credentialLabel": "iFlow API key",
+            "envVars": ["IFLOW_API_KEY"],
+            "placeholder": "Enter iFlow API key",
+            "signupUrl": "https://platform.iflow.cn",
+            "docsUrl": "https://docs.openclaw.ai/tools/iflow-search",
+            "credentialPath": "plugins.entries.iflow.config.webSearch.apiKey",
+            "autoDetectOrder": 80
+          }
+        ],
+        "install": {
+          "npmSpec": "@iflow-ai/iflow-plugin@0.1.6",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.7"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",
