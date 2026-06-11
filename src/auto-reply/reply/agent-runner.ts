@@ -1289,7 +1289,7 @@ export async function runReplyAgent(params: {
       resolvedQueue,
       "message-id",
       queuedRunFollowupTurn,
-      false,
+      true,
     );
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
