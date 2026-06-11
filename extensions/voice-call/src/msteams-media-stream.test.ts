@@ -439,6 +439,41 @@ describe("MsteamsMediaStream", () => {
     expect(ends).toHaveLength(0);
   });
 
+  it("normalizes blank caller ids to null in session.start (B11)", async () => {
+    // An empty-string aadId would survive downstream `aadId ?? fallback` checks and collapse all
+    // such callers into ONE session key (cross-caller memory bleed) / one delivery target.
+    const port = randomPort();
+    let session: MsteamsSession | undefined;
+    server = await startServer({
+      port,
+      onSessionStart: (s) => {
+        session = s;
+      },
+    });
+
+    const callId = "call-blank-aad";
+    const ws = openAuthed(port, callId);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "t",
+        caller: { aadId: "", displayName: "  ", tenantId: "tenant-1" },
+      }),
+    );
+    await waitFor(() => session !== undefined);
+
+    expect(session?.caller.aadId).toBeNull();
+    expect(session?.caller.displayName).toBeNull();
+    expect(session?.caller.tenantId).toBe("tenant-1");
+
+    ws.close();
+  });
+
   it("fires onSessionEnd exactly once when the host closes a started session (session.close)", async () => {
     // A host-initiated close (e.g. realtime connect failure calling session.close) destroys the
     // connection meta before the ws close event runs, so the close handler alone would never

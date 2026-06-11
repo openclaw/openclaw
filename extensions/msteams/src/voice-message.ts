@@ -18,24 +18,46 @@ export interface VoiceTranscript {
   placeholder: string;
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * Fold transcribed voice messages into the agent's message text. Each audio attachment's
- * placeholder is removed once and the transcripts are collectively prepended as a quoted block, so
- * the agent reads what was said instead of an opaque placeholder. Non-audio text/placeholders are
- * preserved. Returns rawBody unchanged when no transcript is usable.
+ * Fold transcribed voice messages into the agent's message text. Each TRANSCRIBED attachment's
+ * placeholder is consumed once and the transcripts are collectively prepended as a quoted block, so
+ * the agent reads what was said instead of an opaque placeholder. A failed clip keeps its
+ * placeholder (the agent should still see an opaque attachment remained), and a combined
+ * "<media:document> (N files)" token is decremented per consumed clip rather than leaving a
+ * dangling "(N files)" behind. (Review B13) Non-audio text/placeholders are preserved. Returns
+ * rawBody unchanged when no transcript is usable.
  */
 export function applyVoiceTranscripts(rawBody: string, items: VoiceTranscript[]): string {
   const usable = items.map((it) => it.transcript.trim()).filter((t) => t.length > 0);
   if (usable.length === 0) {
     return rawBody;
   }
-  // Drop one placeholder occurrence per audio attachment, leaving any real text behind.
+  // Consume one placeholder occurrence per transcribed clip. The body may carry the per-item
+  // placeholder N times, or one combined "<placeholder> (N files)" token covering N documents —
+  // treat the counter as N occurrences and decrement it.
   let remaining = rawBody;
   for (const it of items) {
-    const idx = remaining.indexOf(it.placeholder);
-    if (idx >= 0) {
-      remaining = remaining.slice(0, idx) + remaining.slice(idx + it.placeholder.length);
+    if (!it.transcript.trim()) {
+      continue; // failed clip: keep its placeholder in the body
     }
+    const match = new RegExp(`${escapeRegExp(it.placeholder)}(?: \\((\\d+) files\\))?`).exec(
+      remaining,
+    );
+    if (!match) {
+      continue;
+    }
+    const count = match[1] ? Number(match[1]) : 1;
+    const rest = count - 1;
+    const replacement =
+      rest <= 0 ? "" : rest === 1 ? it.placeholder : `${it.placeholder} (${rest} files)`;
+    remaining =
+      remaining.slice(0, match.index) +
+      replacement +
+      remaining.slice(match.index + match[0].length);
   }
   remaining = remaining.replace(/\s+/g, " ").trim();
 

@@ -1117,4 +1117,56 @@ describe("MsteamsProvider (audio loop wiring)", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("defers outbound streaming call.answered until the callee picks up — no deliver-to-ringing (B4)", async () => {
+    const { port, captured, manager } = await setup({
+      outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+    });
+    const graphCallId = "graph-ringing-1";
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ callId: graphCallId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
+    try {
+      const placed = await manager.initiateCall("user:aad-ring", undefined, {
+        message: "Your report is ready.",
+        mode: "notify",
+      });
+      expect(placed.success).toBe(true);
+      const record = manager.getCallByProviderCallId(graphCallId);
+
+      // The media WS attaches while the phone is still RINGING (no recordingStatus yet).
+      const { ws, inbound } = await connect(port, graphCallId);
+      ws.send(
+        JSON.stringify({
+          type: "session.start",
+          callId: graphCallId,
+          threadId: "thread-ring",
+          caller: { aadId: "bot" },
+          direction: "outbound",
+        }),
+      );
+      await waitFor(() => (captured.current?.session.connect.mock.calls.length ?? 0) === 1);
+
+      // Still ringing: the record must NOT be answered and the notify result must NOT be spoken
+      // (previously call.answered fired at attach and TTS'd the result into the ringing phone).
+      await new Promise<void>((r) => {
+        setTimeout(r, 80);
+      });
+      expect(record?.answeredAt).toBeUndefined();
+      expect(framesOf(inbound)).toHaveLength(0);
+
+      // The callee picks up: recording goes active → answered fires and the result is spoken.
+      ws.send(JSON.stringify({ type: "recording.status", status: "active" }));
+      await waitFor(() => record?.answeredAt !== undefined);
+      await waitFor(() => framesOf(inbound).length > 0, 3000);
+      ws.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

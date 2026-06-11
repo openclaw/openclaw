@@ -52,6 +52,30 @@ function readMSTeamsImBackValue(value: unknown): string | null {
   return normalizeOptionalString(msteams.value) ?? null;
 }
 
+/**
+ * Synthetic message activity for an invoke-driven dispatch (card action / message action). The user
+ * explicitly invoked the bot, so stamp a bot-mention entity: without it `wasMSTeamsBotMentioned` is
+ * false and group-chat mention-gating silently drops the dispatch right after the "On it" ack —
+ * the reply never comes, and the quoted prompt only pollutes the group history. (Review B8)
+ */
+function buildInvokeDispatchActivity(
+  activity: MSTeamsTurnContext["activity"],
+  text: string,
+): MSTeamsTurnContext["activity"] {
+  const botId = activity.recipient?.id;
+  return {
+    ...activity,
+    type: "message",
+    text,
+    entities: [
+      ...(activity.entities ?? []),
+      ...(botId
+        ? [{ type: "mention", mentioned: { id: botId, name: activity.recipient?.name ?? "" } }]
+        : []),
+    ],
+  };
+}
+
 function serializeAdaptiveCardActionValue(value: unknown): string | null {
   const submittedValue = extractAdaptiveCardSubmittedData(value);
   if (typeof submittedValue === "string") {
@@ -196,11 +220,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         if (text) {
           await handleTeamsMessage({
             ...ctx,
-            activity: {
-              ...ctx.activity,
-              type: "message",
-              text,
-            },
+            activity: buildInvokeDispatchActivity(ctx.activity, text),
           });
         }
         return;
@@ -217,11 +237,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         if (prompt) {
           await handleTeamsMessage({
             ...ctx,
-            activity: {
-              ...ctx.activity,
-              type: "message",
-              text: prompt,
-            },
+            activity: buildInvokeDispatchActivity(ctx.activity, prompt),
           });
         }
         return;

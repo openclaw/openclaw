@@ -107,6 +107,13 @@ interface MsteamsCallState {
   humanCount: number;
   /** Epoch ms of the last turn that addressed the bot, for the group-call follow-up window. */
   lastAddressedAt?: number;
+  /**
+   * Outbound streaming call whose `call.answered` is deferred until Teams recording goes active
+   * (the callee actually picked up). The media WS attaches while the phone may still be RINGING;
+   * firing answered at attach makes the manager TTS the notify result into the ringing phone.
+   * (Review B4 — the streaming twin of the realtime path's greetingOnRecordingActive.)
+   */
+  pendingAnswered?: { from: string; to: string };
 }
 
 /** Cap the pre-connect audio buffer at ~5 s of 20 ms frames to bound memory. */
@@ -374,8 +381,9 @@ export class MsteamsProvider implements VoiceCallProvider {
     // (per-phone memory). Prefer the Teams AAD object id; when it is absent fall
     // back to a per-call-unique value rather than a shared literal so distinct
     // anonymous callers never collide into one session (cross-caller memory
-    // bleed) or match an allowlist as a generic caller.
-    const from = session.caller.aadId ?? `teams:${providerCallId}`;
+    // bleed) or match an allowlist as a generic caller. `||` (not `??`) so a
+    // blank aadId also falls back. (Review B11)
+    const from = session.caller.aadId || `teams:${providerCallId}`;
     // Seed the recording gate for inbound video from the session's initial status.
     this.recordingActiveByCall.set(providerCallId, session.recordingStatus === "active");
 
@@ -511,15 +519,25 @@ export class MsteamsProvider implements VoiceCallProvider {
 
     this.createStreamingCallState(session, providerCallId, pending.internalCallId);
 
-    // The CallRecord exists in "initiated"; mark it answered so the manager speaks
-    // the initial message (notify) or starts the conversation.
-    this.manager.processEvent(
-      this.buildEvent(providerCallId, {
-        type: "call.answered",
-        from: pending.from,
-        to: pending.to,
-      }),
-    );
+    // The CallRecord exists in "initiated"; `call.answered` makes the manager speak the initial
+    // message (notify) or start the conversation. Deliver-to-ringing guard (review B4): the media
+    // WS attaches while the callee's phone may still be RINGING — recording flips active when they
+    // actually pick up — so firing answered at attach would TTS the notify result to nobody.
+    // Defer it to handleRecordingStatus unless the call is already answered.
+    if (session.recordingStatus === "active") {
+      this.manager.processEvent(
+        this.buildEvent(providerCallId, {
+          type: "call.answered",
+          from: pending.from,
+          to: pending.to,
+        }),
+      );
+    } else {
+      const state = this.calls.get(providerCallId);
+      if (state) {
+        state.pendingAnswered = { from: pending.from, to: pending.to };
+      }
+    }
     this.logger?.info(
       `MsteamsProvider: outbound session.start callId=${providerCallId} attached to internal ${pending.internalCallId}`,
     );
@@ -782,6 +800,15 @@ export class MsteamsProvider implements VoiceCallProvider {
     if (state) {
       state.recordingActive = active;
       this.logger?.info(`MsteamsProvider: recording.status ${info.callId} = ${info.status}`);
+      // Deferred outbound answered (review B4): recording active means the callee actually picked
+      // up — NOW mark the call answered so the manager speaks the notify result to a live person.
+      if (active && state.pendingAnswered && this.manager) {
+        const pendingAnswered = state.pendingAnswered;
+        state.pendingAnswered = undefined;
+        this.manager.processEvent(
+          this.buildEvent(info.callId, { type: "call.answered", ...pendingAnswered }),
+        );
+      }
     }
     // Realtime calls live in a separate map; keep their recording gate in sync so
     // the consult tool + background task respect the Media Access API too.
