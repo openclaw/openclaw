@@ -1271,6 +1271,7 @@ export async function runEmbeddedAttempt(
             memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
             senderId: params.senderId,
+            channelContext: params.channelContext,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,

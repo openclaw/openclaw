@@ -49,6 +49,7 @@ import {
 } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -106,6 +107,16 @@ type ExecToolArgs = Record<string, unknown> & {
   ask?: string;
   node?: string;
 };
+
+const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
+
+function buildChannelContextEnv(channelContext: unknown): Record<string, string> | undefined {
+  if (!channelContext) {
+    return undefined;
+  }
+  const serialized = safeJsonStringify(channelContext);
+  return serialized ? { [CHANNEL_CONTEXT_ENV_KEY]: serialized } : undefined;
+}
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
@@ -1572,9 +1583,13 @@ export function createExecTool(
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
-      const requestedEnv = resolvedExecEnvState?.pluginEnv
-        ? { ...params.env, ...resolvedExecEnvState.pluginEnv }
-        : params.env;
+      const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
+      const requestedEnv: Record<string, string> | undefined =
+        params.env !== undefined ||
+        resolvedExecEnvState?.pluginEnv !== undefined ||
+        channelContextEnv !== undefined
+          ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
+          : undefined;
       const hostEnvResult =
         host === "sandbox"
           ? null
@@ -1627,6 +1642,7 @@ export function createExecTool(
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
           : (hostEnvResult?.env ?? inheritedBaseEnv);
+      Object.assign(env, channelContextEnv);
 
       if (!sandbox && host === "gateway" && !requestedEnv?.PATH) {
         const shellPath = getShellPathFromLoginShell({
