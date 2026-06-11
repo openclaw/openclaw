@@ -167,6 +167,7 @@ describe("models-config", () => {
               openai: {
                 baseUrl: "   ",
                 apiKey: "OPENAI_API_KEY",
+                models: [],
               },
             },
           },
