@@ -94,7 +94,7 @@ function resolveUsableLocalCandidate(
     });
     return statSync(realPath).isFile() &&
       isInboundPathAllowed({ filePath: realPath, roots: canonicalRoots })
-      ? realPath
+      ? candidate
       : undefined;
   } catch {
     return undefined;
