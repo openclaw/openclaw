@@ -161,6 +161,12 @@ const MsteamsConfigSchema = z
      * call ends. Opt-in: the bot posting unprompted to chat must be an explicit operator decision.
      */
     meetingRecap: z.boolean().default(false),
+    /**
+     * Bilingual mode (#19): instruct the realtime model to detect the caller's language (Arabic or
+     * English), always reply in that same language, and translate accurately between the two on
+     * request. Off by default — the model's natural language-mirroring is unchanged.
+     */
+    bilingual: z.boolean().default(false),
   })
   .strict();
 export type MsteamsConfig = z.infer<typeof MsteamsConfigSchema>;
@@ -816,6 +822,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
           path: config.msteams.path ?? "/voice/msteams/stream",
           requireRecordingStatus: config.msteams.requireRecordingStatus ?? true,
           meetingRecap: config.msteams.meetingRecap ?? false,
+          bilingual: config.msteams.bilingual ?? false,
           outbound: {
             enabled: config.msteams.outbound?.enabled ?? false,
             workerBaseUrl: config.msteams.outbound?.workerBaseUrl,
