@@ -1,7 +1,7 @@
 // Telegram plugin module implements delivery.send behavior.
 import { type Bot, GrammyError } from "grammy";
 import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
@@ -17,7 +17,14 @@ import type { TelegramThreadSpec } from "./helpers.js";
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
-const EMPTY_TEXT_ERR_RE = /message text is empty/i;
+// Telegram rejects empty-text sends with two known descriptions:
+//   - "message text is empty" (long-standing API error)
+//   - "text must be non-empty" (newer Bot API variant observed when an
+//     interrupted mid-reply turn emits content that renders to only
+//     whitespace after markdown-to-HTML + the supported-tag filter,
+//     e.g. a partial code fence with no body or a heading with no text)
+// Match either so the silent-skip fallback below catches both.
+const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
@@ -98,7 +105,7 @@ export async function sendTelegramText(
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number> {
+): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     replyQuoteMessageId: opts?.replyQuoteMessageId,
@@ -133,9 +140,18 @@ export async function sendTelegramText(
   };
 
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
+  // When the plain fallback is also empty (an interrupted mid-reply turn whose
+  // markdown collapses to only whitespace after the markdown-to-HTML pipeline
+  // and the supported-tag filter, such as a half-emitted code fence or a
+  // bulleted list with no item content) skip the send instead of throwing:
+  // there is no useful payload, and a 400 here would be surfaced as a delivery
+  // failure even though the model produced nothing visible.
   if (!htmlText.trim()) {
     if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+      logVerbose(
+        `telegram sendMessage skipped chat=${chatId}: empty formatted text and empty plain fallback`,
+      );
+      return undefined;
     }
     return await sendPlainFallback();
   }
@@ -163,6 +179,16 @@ export async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
       if (!hasFallbackText) {
+        if (EMPTY_TEXT_ERR_RE.test(errText)) {
+          // Telegram confirmed the post-render payload is empty and there is
+          // nothing to fall back to; treat as a no-op to avoid noisy 400
+          // errors for chunks whose markdown collapsed to whitespace through
+          // the markdown-to-HTML and supported-tag rendering pipeline.
+          logVerbose(
+            `telegram sendMessage skipped chat=${chatId}: Telegram rejected text as empty and no plain fallback (${errText})`,
+          );
+          return undefined;
+        }
         throw err;
       }
       runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
