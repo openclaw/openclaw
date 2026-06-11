@@ -4,11 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePersistentDedupePluginStateNamespace } from "openclaw/plugin-sdk/persistent-dedupe";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
 import { resolveTelegramMessageCachePath } from "./message-cache.js";
-import { resolveTelegramMessageDispatchLegacyPath } from "./message-dispatch-dedupe.js";
+import {
+  buildTelegramMessageDispatchAccountReplayKey,
+  resolveTelegramMessageDispatchLegacyPath,
+  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
+  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
+  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
+  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
+} from "./message-dispatch-dedupe.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import {
   resolveTopicNameCacheNamespace,
@@ -37,6 +50,10 @@ function persistedCacheEntry(messageId: number, text: string): PersistedCacheEnt
     },
   };
 }
+
+afterEach(() => {
+  resetPluginStateStoreForTests();
+});
 
 describe("telegram state migrations", () => {
   it("detects legacy bot-info cache import", async () => {
@@ -354,6 +371,10 @@ describe("telegram state migrations", () => {
         },
       } as OpenClawConfig;
       const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const dispatchNamespace = resolvePersistentDedupePluginStateNamespace({
+        namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+        namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
+      });
 
       const byLabel = new Map(plans.map((plan) => [plan.label, plan]));
       expect(byLabel.get("Telegram update offset")).toMatchObject({
@@ -378,9 +399,26 @@ describe("telegram state migrations", () => {
       });
       expect(byLabel.get("Telegram message dispatch dedupe")).toMatchObject({
         kind: "plugin-state-import",
+        pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
         sourcePath: dispatchPath,
-        namespace: "telegram.message-dispatch-dedupe",
+        namespace: dispatchNamespace,
       });
+      const dispatchPlan = byLabel.get("Telegram message dispatch dedupe");
+      if (!dispatchPlan || dispatchPlan.kind !== "plugin-state-import") {
+        throw new Error("expected Telegram message dispatch dedupe import plan");
+      }
+      await expect(dispatchPlan.readEntries()).resolves.toMatchObject([
+        {
+          key: expect.stringMatching(/^k\.[a-f0-9]{32}$/),
+          value: {
+            key: buildTelegramMessageDispatchAccountReplayKey({
+              accountId: "ops",
+              key: JSON.stringify(["message", "7", 42]),
+            }),
+            seenAt: now,
+          },
+        },
+      ]);
 
       for (const label of [
         "Telegram update offset",
@@ -395,6 +433,122 @@ describe("telegram state migrations", () => {
         }
         expect(await plan.readEntries()).toHaveLength(1);
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates shipped Telegram message dispatch plugin-state buckets", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const now = Date.now();
+    const replayKey = JSON.stringify(["message", "7", 42]);
+    const dispatchNamespace = resolvePersistentDedupePluginStateNamespace({
+      namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+      namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
+    });
+    try {
+      const legacyStore = createPluginStateSyncKeyedStoreForTests("telegram", {
+        namespace: "telegram.message-dispatch-dedupe",
+        maxEntries: 4_096,
+        env,
+      });
+      legacyStore.register("legacy-bucket", {
+        scopeKey: "old-session-store",
+        namespace: "ops",
+        bucketId: "00",
+        entries: {
+          [replayKey]: now,
+        },
+      });
+      legacyStore.register("legacy-bucket-lock", {
+        scopeKey: "old-session-store",
+        namespace: "ops:lock",
+        bucketId: "00",
+        entries: {},
+      });
+
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                botToken: "123456:secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const plan = plans.find(
+        (candidate) =>
+          candidate.kind === "plugin-state-import" &&
+          candidate.label === "Telegram message dispatch dedupe" &&
+          candidate.sourcePath === "plugin state:telegram.message-dispatch-dedupe:ops",
+      );
+
+      expect(plan).toMatchObject({
+        kind: "plugin-state-import",
+        pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
+        namespace: dispatchNamespace,
+        cleanupWhenEmpty: true,
+      });
+      if (!plan || plan.kind !== "plugin-state-import") {
+        throw new Error("expected Telegram message dispatch plugin-state import plan");
+      }
+      const entries = await plan.readEntries();
+      expect(entries).toMatchObject([
+        {
+          key: expect.stringMatching(/^k\.[a-f0-9]{32}$/),
+          value: {
+            key: buildTelegramMessageDispatchAccountReplayKey({
+              accountId: "ops",
+              key: replayKey,
+            }),
+            seenAt: now,
+          },
+        },
+      ]);
+
+      const targetStore = createPluginStateSyncKeyedStoreForTests(
+        TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
+        {
+          namespace: dispatchNamespace,
+          maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
+          defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
+          env,
+        },
+      );
+      for (const entry of entries) {
+        targetStore.register(
+          entry.key,
+          entry.value,
+          entry.ttlMs ? { ttlMs: entry.ttlMs } : undefined,
+        );
+      }
+
+      // The plan stays detectable while legacy bucket rows remain so doctor --fix
+      // can finish by deleting the retired source namespace.
+      const plansAfterImport = await detectTelegramLegacyStateMigrations({ cfg, env });
+      expect(
+        plansAfterImport.some(
+          (candidate) =>
+            candidate.kind === "plugin-state-import" &&
+            candidate.sourcePath === "plugin state:telegram.message-dispatch-dedupe:ops",
+        ),
+      ).toBe(true);
+
+      await plan.removeSource?.();
+      expect(legacyStore.entries()).toHaveLength(0);
+
+      const plansAfterCleanup = await detectTelegramLegacyStateMigrations({ cfg, env });
+      expect(
+        plansAfterCleanup.some(
+          (candidate) =>
+            candidate.kind === "plugin-state-import" &&
+            candidate.sourcePath === "plugin state:telegram.message-dispatch-dedupe:ops",
+        ),
+      ).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

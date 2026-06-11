@@ -157,7 +157,14 @@ export function normalizeListenerAddress(raw: string): string {
 
 /** Render platform-specific hints for missing/stopped Gateway runtimes. */
 export function renderRuntimeHints(
-  runtime: { missingUnit?: boolean; missingSupervision?: boolean; status?: string } | undefined,
+  runtime:
+    | {
+        missingUnit?: boolean;
+        missingSupervision?: boolean;
+        missingGuiSession?: boolean;
+        status?: string;
+      }
+    | undefined,
   env: NodeJS.ProcessEnv = process.env,
   logFile?: string | null,
 ): string[] {
@@ -168,6 +175,21 @@ export function renderRuntimeHints(
   const fileLog = logFile ?? null;
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
+    if (fileLog) {
+      hints.push(`File logs: ${fileLog}`);
+    }
+    return hints;
+  }
+  if (runtime.missingGuiSession) {
+    hints.push(
+      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+    );
+    hints.push(
+      `Sign in to the macOS desktop as this user, then run: ${formatCliCommand("openclaw gateway restart", env)}`,
+    );
+    hints.push(
+      "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }

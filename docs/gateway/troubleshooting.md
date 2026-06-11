@@ -154,6 +154,10 @@ Do not use broad targets such as `~`, `/`, or a whole synced project folder.
 Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted
 `SKILL.md` directories.
 
+If Skill Workshop apply should also write through those trusted symlinked
+workspace skill paths, enable `skills.workshop.allowSymlinkTargetWrites`. Keep
+it disabled for read-only shared skill roots.
+
 Related:
 
 - [Skills config](/tools/skills-config#symlinked-sibling-repos)

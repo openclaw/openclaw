@@ -91,6 +91,17 @@ export type CronServiceDeps = {
       deliveryContext?: DeliveryContext;
     },
   ) => void;
+  /**
+   * Resolve the channel-correct origin delivery context for a session key (the
+   * value the channel's send expects, e.g. Telegram message_thread_id), sourced
+   * from the session store entry the wake targets. Used to carry the bound
+   * thread/topic onto manual wake system events. Optional: when unset, wakes
+   * route as before. Returning `undefined` is also a no-op (default routing).
+   */
+  resolveOriginDeliveryContext?: (params: {
+    sessionKey?: string;
+    agentId?: string;
+  }) => DeliveryContext | undefined;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
@@ -134,6 +145,13 @@ export type CronServiceDeps = {
       delivery?: CronDeliveryTrace;
     } & CronRunOutcome &
       CronRunTelemetry
+  >;
+  runCommandJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
   >;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
@@ -200,7 +218,12 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
   storePath: string;
+  /** Storage backend identifier. */
+  storage: "sqlite";
+  /** Resolved path to the shared state SQLite database. */
+  sqlitePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
 };

@@ -906,7 +906,6 @@ describe("qa cli runtime", () => {
         "runtime-tool-fs-read",
         "runtime-tool-fs-write",
         "runtime-tool-grep",
-        "runtime-tool-image-generate",
         "runtime-tool-session-status",
         "runtime-tool-sessions-spawn",
         "runtime-tool-web-fetch",
@@ -924,6 +923,7 @@ describe("qa cli runtime", () => {
     expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
       scenarioIds: [
         "runtime-soak-100-turn",
+        "runtime-tool-image-generate",
         "runtime-tool-memory-add",
         "runtime-tool-memory-recall",
         "runtime-tool-message-tool",
@@ -1040,7 +1040,7 @@ describe("qa cli runtime", () => {
               },
             },
           ],
-          counts: { total: 1, passed: 0, failed: 1 },
+          counts: { total: 1, passed: 1, failed: 0 },
           run: {
             providerMode: "mock-openai",
             primaryModel: "openai/gpt-5.5",
@@ -1056,12 +1056,12 @@ describe("qa cli runtime", () => {
         summary: "runtime-summary.json",
       });
 
-      expect(process.exitCode).toBe(1);
+      expect(process.exitCode).toBeUndefined();
       expect(stdoutWrite).toHaveBeenCalledWith(
         expect.stringContaining("QA runtime parity report:"),
       );
       expect(stdoutWrite).toHaveBeenCalledWith(
-        expect.stringContaining("QA runtime parity verdict: fail"),
+        expect.stringContaining("QA runtime parity verdict: pass"),
       );
     } finally {
       process.exitCode = priorExitCode;

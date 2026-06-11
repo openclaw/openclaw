@@ -305,6 +305,18 @@ describe("codex app-server session binding", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
+  it("does not recreate missing binding directories while clearing", async () => {
+    const deletedDir = path.join(tempDir, "deleted-session");
+    const sessionFile = path.join(deletedDir, "session.json");
+
+    await clearCodexAppServerBinding(sessionFile);
+    await expect(clearCodexAppServerBindingForThread(sessionFile, "thread-missing")).resolves.toBe(
+      false,
+    );
+
+    await expect(fs.access(deletedDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("clears a binding only when the thread matches", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(sessionFile, {

@@ -1815,6 +1815,7 @@ describe("matrix live qa scenarios", () => {
         },
       },
       {
+        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
         restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
       },
     );

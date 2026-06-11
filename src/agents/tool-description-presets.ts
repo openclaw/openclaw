@@ -30,7 +30,7 @@ export function describeSessionsHistoryTool(): string {
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(): string {
   return [
-    "Send message to visible session by sessionKey/label, or configured agent by agentId.",
+    "Send message to visible session by sessionKey/label, or configured agent by agentId; sessionKey wins when redundant label metadata is present.",
     "Thread-scoped chats rejected; target parent channel session.",
     "Creates missing configured-agent main session; waits for reply when available.",
   ].join(" ");

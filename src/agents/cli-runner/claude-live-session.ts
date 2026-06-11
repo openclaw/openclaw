@@ -32,6 +32,7 @@ import {
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -257,15 +258,13 @@ export function buildClaudeLiveArgs(params: {
 }
 
 function buildClaudeLiveKey(context: PreparedCliRunContext): string {
-  return `${context.backendResolved.id}:${sha256(
-    JSON.stringify({
-      agentAccountId: context.params.agentAccountId,
-      agentId: context.params.agentId,
-      authProfileId: context.effectiveAuthProfileId,
-      sessionId: context.params.sessionId,
-      sessionKey: context.params.sessionKey,
-    }),
-  )}`;
+  return `${context.backendResolved.id}:${buildClaudeOwnerKey({
+    agentAccountId: context.params.agentAccountId,
+    agentId: context.params.agentId,
+    authProfileId: context.effectiveAuthProfileId,
+    sessionId: context.params.sessionId,
+    sessionKey: context.params.sessionKey,
+  })}`;
 }
 
 function buildClaudeLiveFingerprint(params: {
@@ -1122,6 +1121,7 @@ function createTurn(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onCommentaryText?: (text: string) => void;
   session: ClaudeLiveSession;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -1148,6 +1148,7 @@ function createTurn(params: {
       onAssistantDelta: params.onAssistantDelta,
       onToolUseStart: params.onToolUseStart,
       onToolResult: params.onToolResult,
+      onCommentaryText: params.onCommentaryText,
     }),
     execPermission: params.execPermission,
     resolve: params.resolve,
@@ -1218,6 +1219,7 @@ export async function runClaudeLiveSessionTurn(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onCommentaryText?: (text: string) => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
@@ -1335,6 +1337,7 @@ export async function runClaudeLiveSessionTurn(params: {
       onAssistantDelta: params.onAssistantDelta,
       onToolUseStart: params.onToolUseStart,
       onToolResult: params.onToolResult,
+      onCommentaryText: params.onCommentaryText,
       session: liveSession,
       execPermission,
       resolve,
