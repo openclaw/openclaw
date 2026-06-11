@@ -3,6 +3,7 @@ import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  FULL_EXTENSIONS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
@@ -1393,6 +1394,26 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
 
     expect(spec?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
+    );
+  });
+
+  it("uses a longer default no-output timeout for the full extension aggregate", () => {
+    const [spec] = applyDefaultVitestNoOutputTimeout(
+      [
+        {
+          config: "test/vitest/vitest.full-extensions.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+      ],
+      { env: { PATH: "/usr/bin" } },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+      FULL_EXTENSIONS_VITEST_NO_OUTPUT_TIMEOUT_MS,
     );
   });
 

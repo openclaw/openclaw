@@ -42,6 +42,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
+      list: overrides?.agents?.list,
     },
     session: {
       store: storePath,
@@ -176,6 +177,31 @@ describe("agentCliCommand", () => {
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
+  });
+
+  it("resolves a configured agent name slug before gateway dispatch", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          { message: "hi", agent: "control-director", json: true },
+          jsonRuntime,
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireFirstCallArg(callGateway, "gateway") as {
+          params?: Record<string, unknown>;
+        };
+        expect(request.params?.agentId).toBe("main");
+        expect(request.params?.sessionKey).toBe("agent:main:main");
+      },
+      {
+        agents: {
+          list: [{ id: "main", name: "Control Director", default: true }],
+        },
+      },
+    );
   });
 
   it("stays silent when the gateway returns an intentional empty reply", async () => {

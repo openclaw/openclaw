@@ -123,6 +123,17 @@ vi.mock("../../infra/fs-safe.js", async () => {
     await vi.importActual<typeof import("../../infra/fs-safe.js")>("../../infra/fs-safe.js");
   return {
     ...actual,
+    openFileWithinRoot: async (params: { rootDir: string; relativePath: string }) =>
+      await mocks.rootOpen(params),
+    readFileWithinRoot: async (params: { rootDir: string; relativePath: string }) =>
+      await mocks.rootRead(params),
+    writeFileWithinRoot: async (params: {
+      rootDir: string;
+      relativePath: string;
+      data: string | Buffer;
+    }) => {
+      await mocks.rootWrite(params);
+    },
     root: vi.fn(async (rootDir: string) => ({
       open: async (relativePath: string, options?: Record<string, unknown>) =>
         await mocks.rootOpen({ rootDir, relativePath, ...options }),
@@ -176,6 +187,7 @@ const { __testing: agentsTesting, agentsHandlers } = await import("./agents.js")
 
 beforeEach(() => {
   agentsTesting.resetDepsForTests();
+  agentsTesting.setDepsForTests({ root: makeRootForTest() });
   mocks.listAgentEntries.mockImplementation((cfg: unknown) => getAgentList(cfg));
   mocks.findAgentEntryIndex.mockImplementation((list: unknown, agentId?: string) =>
     (Array.isArray(list) ? (list as MockAgentEntry[]) : []).findIndex(
@@ -290,6 +302,7 @@ type MockIdentity = {
 type MockAgentEntry = {
   id: string;
   name?: string;
+  roomId?: string;
   workspace?: string;
   agentDir?: string;
   model?: string;
@@ -313,6 +326,7 @@ function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
   const params = (opts as {
     agentId?: string;
     name?: string;
+    roomId?: string;
     workspace?: string;
     agentDir?: string;
     model?: string;
@@ -325,6 +339,7 @@ function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
   const nextEntry: MockAgentEntry = {
     ...base,
     ...(params.name ? { name: params.name } : {}),
+    ...(params.roomId ? { roomId: params.roomId } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.model ? { model: params.model } : {}),
@@ -719,6 +734,32 @@ describe("agents.update", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("persists a canonical dashboard room id", async () => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      roomId: "build",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.applyAgentConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        agentId: "test-agent",
+        roomId: "build",
+      }),
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          list: expect.arrayContaining([
+            expect.objectContaining({ id: "test-agent", roomId: "build" }),
+          ]),
+        }),
+      }),
+    );
   });
 
   it("rejects updating a nonexistent agent", async () => {
@@ -1315,7 +1356,7 @@ describe("agents.files.get/set symlink safety", () => {
       expect.objectContaining({
         rootDir: "/workspace/test-agent",
         relativePath: "AGENTS.md",
-        hardlinks: "reject",
+        rejectHardlinks: true,
         nonBlockingRead: true,
       }),
     );

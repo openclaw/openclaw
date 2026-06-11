@@ -67,6 +67,45 @@ export type ExternalFileWriteResult = {
   path: string;
 };
 
+export type SafeOpenErrorCode =
+  | "invalid-path"
+  | "not-found"
+  | "outside-workspace"
+  | "symlink"
+  | "not-file"
+  | "path-mismatch"
+  | "too-large";
+
+export class SafeOpenError extends Error {
+  code: SafeOpenErrorCode;
+
+  constructor(code: SafeOpenErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.code = code;
+    this.name = "SafeOpenError";
+  }
+}
+
+function toSafeOpenError(err: unknown): SafeOpenError {
+  const code =
+    typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
+      ? err.code
+      : undefined;
+  if (code === "not-found" || code === "ENOENT") {
+    return new SafeOpenError("not-found", "file not found", { cause: err });
+  }
+  if (code === "too-large") {
+    return new SafeOpenError("too-large", "file too large", { cause: err });
+  }
+  if (code === "symlink") {
+    return new SafeOpenError("symlink", "symlink not allowed", { cause: err });
+  }
+  if (code === "not-file" || code === "EISDIR") {
+    return new SafeOpenError("not-file", "not a file", { cause: err });
+  }
+  return new SafeOpenError("invalid-path", "invalid path", { cause: err });
+}
+
 export async function ensureAbsoluteDirectory(
   dirPath: string,
   options?: { scopeLabel?: string; mode?: number },
@@ -115,6 +154,26 @@ export async function writeExternalFileWithinRoot(
 }
 
 /** @deprecated Use root(rootDir).read(relativePath, options). */
+export async function openFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
+}) {
+  const root = await fsSafeRoot(params.rootDir);
+  try {
+    return await root.open(params.relativePath, {
+      hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
+      nonBlockingRead: params.nonBlockingRead,
+      symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
+    });
+  } catch (err) {
+    throw toSafeOpenError(err);
+  }
+}
+
+/** @deprecated Use root(rootDir).read(relativePath, options). */
 export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
@@ -124,12 +183,16 @@ export async function readFileWithinRoot(params: {
   maxBytes?: number;
 }): Promise<ReadResult> {
   const root = await fsSafeRoot(params.rootDir);
-  return await root.read(params.relativePath, {
-    hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
-    maxBytes: params.maxBytes,
-    nonBlockingRead: params.nonBlockingRead,
-    symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
-  });
+  try {
+    return await root.read(params.relativePath, {
+      hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
+      maxBytes: params.maxBytes,
+      nonBlockingRead: params.nonBlockingRead,
+      symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
+    });
+  } catch (err) {
+    throw toSafeOpenError(err);
+  }
 }
 
 /** @deprecated Use root(rootDir).write(relativePath, data, options). */
@@ -141,8 +204,12 @@ export async function writeFileWithinRoot(params: {
   mkdir?: boolean;
 }): Promise<void> {
   const root = await fsSafeRoot(params.rootDir);
-  await root.write(params.relativePath, params.data, {
-    encoding: params.encoding,
-    mkdir: params.mkdir,
-  });
+  try {
+    await root.write(params.relativePath, params.data, {
+      encoding: params.encoding,
+      mkdir: params.mkdir,
+    });
+  } catch (err) {
+    throw toSafeOpenError(err);
+  }
 }

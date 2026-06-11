@@ -161,6 +161,24 @@ If you have cron jobs from before the current delivery and store format, run `op
 
 ## Common edits
 
+Create a shell-free command job:
+
+```bash
+openclaw cron add \
+  --name "Paper audit" \
+  --every 15m \
+  --command /usr/bin/python3 \
+  --command-arg work/scripts/audit.py \
+  --command-arg --paper-only \
+  --command-cwd /path/to/workspace \
+  --command-env OPENCLAW_MODE=paper \
+  --timeout-seconds 180 \
+  --command-output-limit-bytes 24000 \
+  --no-deliver
+```
+
+Command jobs run the executable directly without a shell. Repeat `--command-arg` for each argument, repeat `--command-env KEY=VALUE` for environment overrides, and use `--command-success-exit-codes` when more than exit code `0` should count as success.
+
 Update delivery settings without changing the message:
 
 ```bash

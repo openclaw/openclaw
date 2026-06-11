@@ -13,9 +13,14 @@ import {
   resolveCronEditScheduleRequest,
 } from "./schedule-options.js";
 import {
+  collectRepeatedOption,
   getCronChannelOptions,
+  parseCronCommandArgs,
+  parseCronCommandEnv,
+  parseCronCommandSuccessExitCodes,
   parseCronToolsAllow,
   parseDurationMs,
+  parseNonNegativeIntOption,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
@@ -89,6 +94,25 @@ export function registerCronEditCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
+      .option("--command <path>", "Set command payload executable (runs directly without a shell)")
+      .option(
+        "--command-arg <arg>",
+        "Append one command argument (repeat for multiple args)",
+        collectRepeatedOption,
+        [],
+      )
+      .option("--command-cwd <dir>", "Set working directory for command payload")
+      .option(
+        "--command-env <key=value>",
+        "Set command environment variable (repeatable)",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--command-success-exit-codes <list>",
+        "Comma/space-separated successful command exit codes",
+      )
+      .option("--command-output-limit-bytes <n>", "Captured stdout/stderr tail bytes")
       .option(
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
@@ -139,6 +163,11 @@ export function registerCronEditCommand(cron: Command) {
           if (sessionTarget === "main" && opts.message) {
             throw new Error(
               "Main jobs cannot use --message; use --system-event or --session isolated.",
+            );
+          }
+          if (sessionTarget === "main" && opts.command) {
+            throw new Error(
+              "Main jobs cannot use --command; use --system-event or --session isolated.",
             );
           }
           if (
@@ -223,6 +252,24 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
+          const command = normalizeOptionalString(opts.command);
+          const commandArgs = parseCronCommandArgs(opts.commandArg);
+          const commandEnv = parseCronCommandEnv(opts.commandEnv);
+          const commandCwd = normalizeOptionalString(opts.commandCwd);
+          const commandSuccessExitCodes = parseCronCommandSuccessExitCodes(
+            opts.commandSuccessExitCodes,
+          );
+          const commandOutputLimitBytes = parseNonNegativeIntOption(
+            opts.commandOutputLimitBytes,
+            "--command-output-limit-bytes",
+          );
+          const hasCommandPatch =
+            Boolean(command) ||
+            Boolean(commandArgs) ||
+            Boolean(commandEnv) ||
+            Boolean(commandCwd) ||
+            Boolean(commandSuccessExitCodes) ||
+            typeof commandOutputLimitBytes === "number";
           const model = normalizeOptionalString(opts.model);
           const thinking = normalizeOptionalString(opts.thinking);
           const toolsAllow = parseCronToolsAllow(opts.tools);
@@ -241,16 +288,20 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
-            hasTimeoutSeconds ||
+            (!hasCommandPatch && hasTimeoutSeconds) ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
             Array.isArray(opts.tools) ||
             opts.clearTools ||
-            hasDeliveryModeFlag ||
-            hasDeliveryTarget ||
-            hasDeliveryAccount ||
-            hasBestEffort;
-          if (hasSystemEventPatch && hasAgentTurnPatch) {
+            (!hasCommandPatch &&
+              (hasDeliveryModeFlag ||
+                hasDeliveryTarget ||
+                hasDeliveryAccount ||
+                hasBestEffort));
+          const payloadChangeKinds = [hasSystemEventPatch, hasAgentTurnPatch, hasCommandPatch].filter(
+            Boolean,
+          ).length;
+          if (payloadChangeKinds > 1) {
             throw new Error("Choose at most one payload change");
           }
           if (hasSystemEventPatch) {
@@ -258,6 +309,26 @@ export function registerCronEditCommand(cron: Command) {
               kind: "systemEvent",
               text: String(opts.systemEvent),
             };
+          } else if (hasCommandPatch) {
+            const payload: Record<string, unknown> = { kind: "command" };
+            assignIf(payload, "command", command, Boolean(command));
+            assignIf(payload, "args", commandArgs, Boolean(commandArgs));
+            assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
+            assignIf(payload, "env", commandEnv, Boolean(commandEnv));
+            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            assignIf(
+              payload,
+              "successExitCodes",
+              commandSuccessExitCodes,
+              Boolean(commandSuccessExitCodes),
+            );
+            assignIf(
+              payload,
+              "outputLimitBytes",
+              commandOutputLimitBytes,
+              typeof commandOutputLimitBytes === "number",
+            );
+            patch.payload = payload;
           } else if (hasAgentTurnPatch) {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
             assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
@@ -279,6 +350,9 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+            if (hasCommandPatch && (opts.announce || hasDeliveryTarget || hasDeliveryAccount)) {
+              throw new Error("Command cron jobs run with delivery disabled.");
+            }
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
               delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";

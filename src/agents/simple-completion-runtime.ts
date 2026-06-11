@@ -2,6 +2,7 @@ import {
   completeSimple,
   type Api,
   type Model,
+  type SimpleStreamOptions,
   type ThinkingLevel as SimpleCompletionThinkingLevel,
 } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -40,6 +41,8 @@ export type SimpleCompletionModelOptions = {
   temperature?: number;
   reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
   signal?: AbortSignal;
+  timeoutMs?: number;
+  onPayload?: SimpleStreamOptions["onPayload"];
 };
 
 export type PreparedSimpleCompletionModel =

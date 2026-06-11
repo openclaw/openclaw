@@ -61,6 +61,102 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("loads configured user identity when the browser has no local override", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Ops",
+        assistantAvatar: "O",
+        assistantAgentId: "main",
+        userName: "Operator",
+        userAvatar: "data:image/jpeg;base64,avatar",
+        serverVersion: "2026.5.6",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    } as unknown as Storage);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: null,
+      userName: null,
+      userAvatar: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.userName).toBe("Operator");
+    expect(state.userAvatar).toBe("data:image/jpeg;base64,avatar");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps browser-local user identity ahead of configured defaults", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Ops",
+        assistantAvatar: "O",
+        assistantAgentId: "main",
+        userName: "Configured",
+        userAvatar: "data:image/jpeg;base64,configured",
+        serverVersion: "2026.5.6",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn((key: string) =>
+        key.includes("user") ? JSON.stringify({ name: "Local", avatar: "L" }) : null,
+      ),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    } as unknown as Storage);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: null,
+      userName: "Local",
+      userAvatar: "L",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.userName).toBe("Local");
+    expect(state.userAvatar).toBe("L");
+
+    vi.unstubAllGlobals();
+  });
+
   it("can refresh runtime bootstrap settings without clobbering session identity", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

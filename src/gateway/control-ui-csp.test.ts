@@ -17,6 +17,11 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
+  it("keeps dashboard content native instead of allowing nested dashboard frames", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).not.toContain("frame-src");
+  });
+
   it("allows OpenAI realtime WebRTC offer requests without allowing all HTTPS", () => {
     const csp = buildControlUiCspHeader();
     const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));

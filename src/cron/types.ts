@@ -145,9 +145,15 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronCommandPayload;
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronCommandPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -175,6 +181,31 @@ type CronAgentTurnPayloadPatch = {
 } & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
     toolsAllow?: string[] | null;
   };
+
+type CronCommandPayloadFields = {
+  /** Executable path or binary name. Runs without a shell. */
+  command: string;
+  /** Optional argv entries passed to the executable. */
+  args?: string[];
+  /** Optional working directory for the command. */
+  cwd?: string;
+  /** Optional environment overrides. Values are merged onto process.env. */
+  env?: Record<string, string>;
+  /** Optional wall-clock timeout for the command. */
+  timeoutSeconds?: number;
+  /** Exit codes considered successful. Defaults to [0]. */
+  successExitCodes?: number[];
+  /** Max stdout/stderr bytes retained for the run summary. */
+  outputLimitBytes?: number;
+};
+
+type CronCommandPayload = {
+  kind: "command";
+} & CronCommandPayloadFields;
+
+type CronCommandPayloadPatch = {
+  kind: "command";
+} & Partial<CronCommandPayloadFields>;
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;

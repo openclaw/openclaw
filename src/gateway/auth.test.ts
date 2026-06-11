@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
+  authorizeControlUiReadGatewayConnect,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
   hasForwardedRequestHeaders,
@@ -72,7 +73,10 @@ describe("gateway auth", () => {
   }
 
   async function expectTailscaleHeaderAuthResult(params: {
-    authorize: typeof authorizeHttpGatewayConnect | typeof authorizeWsControlUiGatewayConnect;
+    authorize:
+      | typeof authorizeHttpGatewayConnect
+      | typeof authorizeControlUiReadGatewayConnect
+      | typeof authorizeWsControlUiGatewayConnect;
     expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
   }) {
     const res = await params.authorize({
@@ -435,6 +439,13 @@ describe("gateway auth", () => {
     });
   });
 
+  it("enables tailscale header auth on control-ui read auth wrapper", async () => {
+    await expectTailscaleHeaderAuthResult({
+      authorize: authorizeControlUiReadGatewayConnect,
+      expected: { ok: true, method: "tailscale", user: "peter" },
+    });
+  });
+
   it("uses proxy-aware request client IP by default for rate-limit checks", async () => {
     const limiter = await expectTokenMismatchWithLimiter({
       reqHeaders: { "x-forwarded-for": "203.0.113.10" },
@@ -617,6 +628,37 @@ describe("trusted-proxy auth", () => {
   it("rejects trusted-proxy HTTP requests from origins outside the allowlist", async () => {
     await expect(
       authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://evil.example",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://evil.example",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "trusted_proxy_origin_not_allowed",
+    });
+  });
+
+  it("rejects trusted-proxy control-ui read requests from origins outside the allowlist", async () => {
+    await expect(
+      authorizeControlUiReadGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,

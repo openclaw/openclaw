@@ -104,6 +104,44 @@ describe("tasks gateway handlers", () => {
     });
   });
 
+  it("filters tasks by runId", async () => {
+    const wanted = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-wanted",
+      task: "Wanted task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-other",
+      task: "Other task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const { calls, respond } = captureRespond();
+    await tasksHandlers["tasks.list"]({
+      req: { type: "req", id: "req-run-filter", method: "tasks.list" },
+      params: { runId: "run-wanted", sessionKey: "agent:main:main" },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(calls[0]?.[1]).toMatchObject({
+      tasks: [{ id: wanted.taskId, runId: "run-wanted", title: "Wanted task" }],
+    });
+  });
+
   it("gets completed tasks with stable completed status", async () => {
     const task = createTaskRecord({
       runtime: "cli",
@@ -133,6 +171,71 @@ describe("tasks gateway handlers", () => {
         status: "completed",
         title: "Done task",
       },
+    });
+  });
+
+  it("exposes judge-blocked task completions with blocked status and evidence", async () => {
+    const task = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-blocked",
+      task: "Create a video game",
+      status: "succeeded",
+      deliveryStatus: "pending",
+      terminalOutcome: "blocked",
+      userVisible: true,
+      expectedDeliverable: "requested artifact",
+      acceptanceCriteria: ["attach the requested artifact"],
+      artifactIds: ["artifact-game-1"],
+      judgeStatus: "rejected",
+      judgeVerdict: "REQUEST_MORE_EVIDENCE",
+      judgeReason: "Missing playable artifact.",
+      judgeRunId: "judge-run-blocked",
+      blockedReason: "Judge blocked completion.",
+    });
+
+    const get = captureRespond();
+    await tasksHandlers["tasks.get"]({
+      req: { type: "req", id: "req-blocked-get", method: "tasks.get" },
+      params: { taskId: task.taskId },
+      respond: get.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(get.calls[0]?.[0]).toBe(true);
+    expect(get.calls[0]?.[1]).toMatchObject({
+      task: {
+        id: task.taskId,
+        status: "blocked",
+        userVisible: true,
+        expectedDeliverable: "requested artifact",
+        acceptanceCriteria: ["attach the requested artifact"],
+        artifactIds: ["artifact-game-1"],
+        judgeStatus: "rejected",
+        judgeVerdict: "REQUEST_MORE_EVIDENCE",
+        judgeReason: "Missing playable artifact.",
+        judgeRunId: "judge-run-blocked",
+        blockedReason: "Judge blocked completion.",
+      },
+    });
+
+    const list = captureRespond();
+    await tasksHandlers["tasks.list"]({
+      req: { type: "req", id: "req-blocked-list", method: "tasks.list" },
+      params: { status: "blocked" },
+      respond: list.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(list.calls[0]?.[0]).toBe(true);
+    expect(list.calls[0]?.[1]).toMatchObject({
+      tasks: [{ id: task.taskId, status: "blocked" }],
     });
   });
 

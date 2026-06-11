@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "probeId": "validation-safe-start-sync",
+  "status": "macbook_reply_written",
+  "seenProbeFile": "sync/mac-studio/validation-safe-start-sync.json",
+  "replyFile": "sync/macbook/validation-safe-start-sync.json",
+  "computerName": "Matthew’s Mac Studio",
+  "macUser": "openclaw",
+  "remoteLoginUsed": false,
+  "updatedAt": "2026-05-19T18:57:28Z"
+}

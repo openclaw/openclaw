@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "vocalPlanId": "validation-vocal-plan",
+  "sourceRef": "garageband-source-validation",
+  "sourceKind": "song",
+  "mode": "openclaw_or_cloud",
+  "direction": "Warm lead vocal with subtle airy harmonies for a GarageBand arrangement",
+  "lyrics": "We build the sound from sparks and stone",
+  "prompt": {
+    "candidateId": "validation-vocal-plan",
+    "model": "minimax/music-2.6",
+    "prompt": "Create an original vocal layer for Warm instrumental ambient piano cue for deep focus. Source audio reference: garageband-source-validation. Vocal direction: Warm lead vocal with subtle airy harmonies for a GarageBand arrangement. Mode: openclaw_or_cloud. Use the supplied original lyrics exactly unless the request asks for refinement. Avoid artist imitation, celebrity voice cloning, copyrighted lyrics, uncleared samples, and misleading real-person voice. Return a clean vocal-forward result suitable for importing into GarageBand.",
+    "lyrics": "We build the sound from sparks and stone",
+    "instrumental": false,
+    "durationSeconds": 60,
+    "format": "mp3",
+    "filename": "2026-05-14-validation-happy-path-validation-vocal-plan"
+  },
+  "status": "planned",
+  "createdAt": "2026-05-16T22:05:15.494Z",
+  "manualBoundaries": [
+    "OpenClaw music_generate can create vocal-forward audio when provider credentials exist.",
+    "Precise vocal alignment to an existing GarageBand session may require a cloud vocal/stem tool or manual GarageBand arrangement.",
+    "Voice cloning or artist imitation remains blocked unless explicit rights evidence is recorded."
+  ]
+}

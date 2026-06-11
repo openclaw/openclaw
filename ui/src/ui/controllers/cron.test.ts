@@ -114,6 +114,98 @@ describe("cron controller", () => {
     expect(normalized.deliveryMode).toBe("announce");
   });
 
+  it("builds command cron payloads with explicit args and execution options", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "command-job" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "command job",
+        payloadKind: "command",
+        payloadText: "/usr/bin/python3",
+        commandArgsText: "script.py\n--dry-run",
+        commandCwd: "/tmp/work",
+        commandEnvText: "OPENCLAW_MODE=paper",
+        commandSuccessExitCodes: "0,2",
+        commandOutputLimitBytes: "4096",
+        timeoutSeconds: "45",
+        deliveryMode: "none",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect(addCall[1]).toMatchObject({
+      name: "command job",
+      payload: {
+        kind: "command",
+        command: "/usr/bin/python3",
+        args: ["script.py", "--dry-run"],
+        cwd: "/tmp/work",
+        env: { OPENCLAW_MODE: "paper" },
+        successExitCodes: [0, 2],
+        outputLimitBytes: 4096,
+        timeoutSeconds: 45,
+      },
+      delivery: { mode: "none" },
+    });
+  });
+
+  it("hydrates command cron payload fields for editing", () => {
+    const state = createState({
+      cronJobs: [
+        {
+          id: "command-job",
+          name: "Command job",
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          schedule: { kind: "every", everyMs: 600_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "command",
+            command: "/usr/bin/python3",
+            args: ["script.py", "--dry-run"],
+            cwd: "/tmp/work",
+            env: { OPENCLAW_MODE: "paper" },
+            successExitCodes: [0, 2],
+            outputLimitBytes: 4096,
+            timeoutSeconds: 45,
+          },
+          delivery: { mode: "none" },
+          state: {},
+        },
+      ],
+    });
+
+    startCronEdit(state, state.cronJobs[0]);
+
+    expect(state.cronForm).toMatchObject({
+      payloadKind: "command",
+      payloadText: "/usr/bin/python3",
+      commandArgsText: "script.py\n--dry-run",
+      commandCwd: "/tmp/work",
+      commandEnvText: "OPENCLAW_MODE=paper",
+      commandSuccessExitCodes: "0,2",
+      commandOutputLimitBytes: "4096",
+      timeoutSeconds: "45",
+      deliveryMode: "none",
+    });
+  });
+
   it("forwards webhook delivery in cron.add payload", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -1352,6 +1444,12 @@ describe("cron controller", () => {
       if (method === "cron.runs") {
         return { entries: [], total: 0, hasMore: false, nextOffset: null };
       }
+      if (method === "cron.list") {
+        return { jobs: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
       return {};
     });
     const state = createState({
@@ -1375,5 +1473,10 @@ describe("cron controller", () => {
     await runCronJob(state, job, "due");
 
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({ limit: state.cronJobsLimit, offset: 0 }),
+    );
+    expect(request).toHaveBeenCalledWith("cron.status", {});
   });
 });

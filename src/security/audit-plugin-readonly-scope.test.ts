@@ -15,6 +15,7 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
+  getActivePluginRuntimeSubagentMode: () => "default",
   getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
 }));
 

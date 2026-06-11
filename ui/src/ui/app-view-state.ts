@@ -3,7 +3,35 @@ import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
+import type { ChatRunStatus } from "./chat/run-status.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type {
+  AppStudioActionReceipt,
+  AppStudioAppleFactsDraft,
+  AppStudioBuildEngine,
+  AppStudioDashboardSnapshot,
+  AppStudioFlowDraft,
+  AppStudioGateId,
+  AppStudioScreenImageDraft,
+} from "./controllers/app-studio-dashboard.ts";
+import type {
+  BookWriterActionReceipt,
+  BookWriterAiAction,
+  BookWriterAiHelpRequest,
+  BookWriterAiHelpSuggestion,
+  BookWriterCelebration,
+  BookWriterChapterSetupTarget,
+  BookWriterDashboardSnapshot,
+  BookWriterDashboardView,
+  BookWriterDashboardMode,
+  BookWriterDestructiveAction,
+  BookWriterIdeaSetupTarget,
+  BookWriterPlan,
+  BookWriterProfanityLevel,
+  BookWriterPublishedMetrics,
+  BookWriterPublishedProof,
+  BookWriterTonePreset,
+} from "./controllers/book-writer-dashboard.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -23,7 +51,20 @@ import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
+  AgentsRuntimeStatusResult,
   AgentIdentityResult,
+  SelfImprovementRecommendationGroup,
+  SelfImprovementRecommendation,
+  SelfImprovementAuditEvent,
+  SelfImprovementAnalysisRunResult,
+  SelfImprovementMaintenanceResult,
+  SelfImprovementModelPreflightResult,
+  SelfImprovementOperationalHealthResult,
+  SelfImprovementProductionCheckResult,
+  SelfImprovementDailyScorecard,
+  SelfImprovementProposal,
+  SelfImprovementScanResult,
+  SelfImprovementScorecard,
   AttentionItem,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
@@ -35,6 +76,7 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   NostrProfile,
+  OpsSummaryResult,
   PresenceEntry,
   SessionsUsageResult,
   CostUsageSummary,
@@ -44,8 +86,12 @@ import type {
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
+  ProjectsGetResult,
+  ProjectsListResult,
+  ProjectContextPreview,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+import type { AgentWorkflowOrderState, AgentsPanel } from "./views/agents.types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
@@ -58,6 +104,7 @@ export type AppViewState = {
   onboarding: boolean;
   basePath: string;
   connected: boolean;
+  connectionAttemptStarted: boolean;
   theme: ThemeName;
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;
@@ -96,6 +143,10 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatRunStatus?: ChatRunStatus | null;
+  chatTargetRunId?: string | null;
+  chatTargetAuditTs?: number | null;
+  chatTargetStatus?: "exact-run" | "timestamp-fallback" | "not-found" | null;
   chatSideResult: ChatSideResult | null;
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
@@ -106,7 +157,6 @@ export type AppViewState = {
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
-  chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionSwitchNotice: { id: number; text: string } | null;
@@ -126,6 +176,75 @@ export type AppViewState = {
   chatManualRefreshInFlight: boolean;
   chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;
+  kalshiDashboardLoading: boolean;
+  kalshiDashboardError: string | null;
+  kalshiDashboard: import("./controllers/kalshi-dashboard.js").KalshiDashboardSnapshot | null;
+  kalshiDashboardLastFetchAt: number | null;
+  kalshiDashboardTimezone: string;
+  kalshiDashboardTimeframe: string;
+  kalshiDashboardPnlTimeframe: string;
+  kalshiDashboardStrategySort: import("./views/kalshi-dashboard.js").KalshiStrategySort;
+  kalshiDashboardShowDeepAudit: boolean;
+  kalshiDashboardAuditPages: Record<string, number>;
+  kalshiDashboardAuditQueries: Record<string, string>;
+  patternLabDashboardLoading: boolean;
+  patternLabDashboardError: string | null;
+  patternLabDashboard:
+    | import("./controllers/pattern-lab-dashboard.js").PatternLabDashboardSnapshot
+    | null;
+  patternLabDashboardLastFetchAt: number | null;
+  patternLabApprovalBusy:
+    | import("./controllers/pattern-lab-dashboard.js").PatternLabAssetType
+    | null;
+  bookWriterLoading: boolean;
+  bookWriterError: string | null;
+  bookWriterDashboard: BookWriterDashboardSnapshot | null;
+  bookWriterLastFetchAt: number | null;
+  bookWriterSelectedRunId: string | null;
+  bookWriterTopicDraft: string;
+  bookWriterTargetWordsDraft: number;
+  bookWriterToneDraft: BookWriterTonePreset;
+  bookWriterCustomToneDraft: string;
+  bookWriterProfanityDraft: BookWriterProfanityLevel;
+  bookWriterPenNameDraft: string;
+  bookWriterNewBookSetupOpen: boolean;
+  bookWriterReadPage: number;
+  bookWriterReadPreviewOpen: boolean;
+  bookWriterReadPreviewMode: "paperback" | "ebook";
+  bookWriterActiveView: BookWriterDashboardView;
+  bookWriterMode: BookWriterDashboardMode;
+  bookWriterPendingAiAction: BookWriterAiAction | null;
+  bookWriterPendingAiSuggestion: BookWriterAiHelpSuggestion | null;
+  bookWriterPendingDestructiveAction: BookWriterDestructiveAction | null;
+  bookWriterActionReceipt: BookWriterActionReceipt | null;
+  bookWriterCelebration: BookWriterCelebration | null;
+  bookWriterFocusedParagraphId: string | null;
+  bookWriterSearchQuery: string;
+  bookWriterSavingAction: string | null;
+  bookWriterUndoStack: BookWriterPlan[];
+  bookWriterRedoStack: BookWriterPlan[];
+  appStudioLoading: boolean;
+  appStudioError: string | null;
+  appStudioDashboard: AppStudioDashboardSnapshot | null;
+  appStudioLastFetchAt: number | null;
+  appStudioSelectedAppDir: string | null;
+  appStudioPromptDraft: string;
+  appStudioCreateNameDraft: string;
+  appStudioCreateAppIdDraft: string;
+  appStudioCreateBundleIdDraft: string;
+  appStudioSavingAction: string | null;
+  appStudioActionReceipt: AppStudioActionReceipt | null;
+  appStudioAppleFactsDraft: AppStudioAppleFactsDraft;
+  appStudioBuildEngineDraft: AppStudioBuildEngine;
+  appStudioScreenImageDrafts: AppStudioScreenImageDraft[];
+  appStudioScreenImageNotesDraft: string;
+  appStudioScreenAnalysisDraft: string;
+  appStudioFlowDraft: AppStudioFlowDraft;
+  appStudioActionStartedAt: number | null;
+  kalshiDashboardPollInterval?: number | null;
+  dashboardPollInterval?: number | null;
+  dashboardPollInFlight?: boolean;
+  refreshActiveDashboardTab?: () => Promise<void> | void;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -232,6 +351,32 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
+  agentsRuntimeLoading: boolean;
+  agentsRuntimeError: string | null;
+  agentsRuntimeStatus: AgentsRuntimeStatusResult | null;
+  opsSummaryLoading: boolean;
+  opsSummaryError: string | null;
+  opsSummary: OpsSummaryResult | null;
+  selfImprovementLoading: boolean;
+  selfImprovementError: string | null;
+  selfImprovementRecommendations: SelfImprovementRecommendation[];
+  selfImprovementGroups: SelfImprovementRecommendationGroup[];
+  selfImprovementScorecard: SelfImprovementScorecard | null;
+  selfImprovementScorecards: SelfImprovementDailyScorecard[];
+  selfImprovementHealth: SelfImprovementOperationalHealthResult | null;
+  selfImprovementProposals: SelfImprovementProposal[];
+  selfImprovementAuditEvents: SelfImprovementAuditEvent[];
+  selfImprovementTotal: number;
+  selfImprovementScanLoading: boolean;
+  selfImprovementLastScan: SelfImprovementScanResult["scan"] | null;
+  selfImprovementAnalysisLoading: boolean;
+  selfImprovementLastAnalysis: SelfImprovementAnalysisRunResult | null;
+  selfImprovementModelPreflightLoading: boolean;
+  selfImprovementLastModelPreflight: SelfImprovementModelPreflightResult | null;
+  selfImprovementProductionCheckLoading: boolean;
+  selfImprovementLastProductionCheck: SelfImprovementProductionCheckResult | null;
+  selfImprovementMaintenanceLoading: boolean;
+  selfImprovementLastMaintenance: SelfImprovementMaintenanceResult | null;
   toolsCatalogLoading: boolean;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
@@ -240,7 +385,10 @@ export type AppViewState = {
   toolsEffectiveResultKey: string | null;
   toolsEffectiveError: string | null;
   toolsEffectiveResult: import("./types.js").ToolsEffectiveResult | null;
-  agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+  agentsPanel: AgentsPanel;
+  agentsWorkflowRoomId: string | null;
+  agentsWorkflowStepId: string | null;
+  agentsWorkflowOrders: AgentWorkflowOrderState;
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFilesList: AgentsFilesListResult | null;
@@ -279,6 +427,22 @@ export type AppViewState = {
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
+  projectsLoading: boolean;
+  projectsSaving: boolean;
+  projectsError: string | null;
+  projectsList: ProjectsListResult | null;
+  projectsSelectedId: string | null;
+  projectsDetail: ProjectsGetResult | null;
+  projectsContextPreview: ProjectContextPreview | null;
+  projectsSessions: SessionsListResult | null;
+  projectCreateName: string;
+  projectCreateDescription: string;
+  projectCreateInstructions: string;
+  projectResourcePath: string;
+  projectResourceName: string;
+  projectResourceNote: string;
+  projectSearchQuery: string;
+  projectInstructionsDraft: string;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
@@ -430,6 +594,97 @@ export type AppViewState = {
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
     loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
+    loadKalshiDashboard: (opts?: {
+      auditTablePages?: Record<string, number>;
+      auditTableQueries?: Record<string, string>;
+      force?: boolean;
+      quiet?: boolean;
+      view?: "full" | "workspace";
+    }) => Promise<void>;
+    loadPatternLabDashboard: () => Promise<void>;
+    approvePatternLabAssetType: (
+      assetType: import("./controllers/pattern-lab-dashboard.js").PatternLabAssetType,
+    ) => Promise<void>;
+    loadBookWriterDashboard: (opts?: { runId?: string | null; quiet?: boolean }) => Promise<void>;
+    createBookWriterPlan: () => Promise<void>;
+    createBookWriterFullDraft: () => Promise<void>;
+    saveBookWriterPlan: (plan: BookWriterPlan) => Promise<void>;
+    deleteBookWriterPlan: (runId: string) => Promise<void>;
+    deleteActiveBookWriterPlans: (runIds: string[]) => Promise<void>;
+    archiveBookWriterPlan: (runId: string) => Promise<void>;
+    restoreArchivedBookWriterPlan: (archivedId: string) => Promise<void>;
+    deleteArchivedBookWriterPlan: (archivedId: string) => Promise<void>;
+    copyBookWriterPlan: (runId: string) => Promise<void>;
+    restoreDeletedBookWriterPlan: (deletedId: string) => Promise<void>;
+    deleteDeletedBookWriterPlan: (deletedId: string) => Promise<void>;
+    emptyDeletedBookWriterPlans: () => Promise<void>;
+    finishBookWriterPlan: (runId: string, proof?: BookWriterPublishedProof) => Promise<void>;
+    restoreFinishedBookWriterPlan: (finishedId: string) => Promise<void>;
+    updatePublishedBookWriterMetrics: (
+      finishedId: string,
+      metrics: BookWriterPublishedMetrics,
+    ) => Promise<void>;
+    draftBookWriterPlan: () => Promise<void>;
+    fillBookWriterParagraphPlans: (chapterId?: string) => Promise<void>;
+    generateBookWriterIdeaSetup: (targets: BookWriterIdeaSetupTarget[]) => Promise<void>;
+    generateBookWriterChapterSetup: (targets: BookWriterChapterSetupTarget[]) => Promise<void>;
+    updateBookWriterPenNameProfile: (profile: {
+      name: string;
+      lane: string;
+      readerPromise: string;
+    }) => Promise<void>;
+    draftBookWriterParagraph: (paragraphId: string, replaceExisting?: boolean) => Promise<void>;
+    propagateBookWriterStoryChange: () => Promise<void>;
+    rebalanceBookWriterStructure: () => Promise<void>;
+    stitchBookWriterPlan: () => Promise<void>;
+    packageBookWriterPlan: () => Promise<void>;
+    fixBookWriterPlan: () => Promise<void>;
+    prepareBookWriterPublish: () => Promise<void>;
+    prepareBookWriterPublishWithCoverStrategy: (
+      coverStrategy: "upload" | "kdp-cover-creator",
+    ) => Promise<void>;
+    generateBookWriterCoverConcept: () => Promise<void>;
+    generateBookWriterEditableCoverConcept: () => Promise<void>;
+    editBookWriterCoverWithLocalAi: (
+      variantId: string | undefined,
+      instruction: string,
+    ) => Promise<void>;
+    approveBookWriterCover: (variantId?: string) => Promise<void>;
+    uploadBookWriterCoverFile: (file: File) => Promise<void>;
+    disableBookWriterAutomation: () => Promise<void>;
+    requestBookWriterAiHelp: (request: BookWriterAiHelpRequest) => Promise<void>;
+    requestBookWriterSetupAiHelp: (
+      intent: BookWriterAiHelpRequest["intent"],
+      customDirection?: string,
+    ) => Promise<void>;
+    applyBookWriterAiSuggestion: (
+      suggestion: BookWriterAiHelpSuggestion,
+      value?: string,
+    ) => Promise<void>;
+    cancelBookWriterAiSuggestion: () => void;
+    createBookWriterQuickRead: () => Promise<void>;
+    undoBookWriterEdit: () => Promise<void>;
+    redoBookWriterEdit: () => Promise<void>;
+    loadAppStudioDashboard: (opts?: { appDir?: string | null; quiet?: boolean }) => Promise<void>;
+    createAppStudioProject: () => Promise<void>;
+    applyAppStudioPrompt: () => Promise<void>;
+    setAppStudioBuildEngine: (buildEngine: AppStudioBuildEngine) => Promise<void>;
+    runAppStudioGate: (gate: AppStudioGateId) => Promise<void>;
+    selectAppStudioProject: (appDir: string) => Promise<void>;
+    reorderAppStudioScreens: (screenId: string, direction: "up" | "down") => Promise<void>;
+    setAppStudioScreenOrder: (screenIds: string[]) => Promise<void>;
+    updateAppStudioScreenImageFiles: (files: FileList | File[] | null) => Promise<void>;
+    updateAppStudioScreenImageNotes: (value: string) => void;
+    updateAppStudioScreenAnalysisDraft: (value: string) => void;
+    importAppStudioScreenImages: () => Promise<void>;
+    applyAppStudioScreenAnalysis: () => Promise<void>;
+    updateAppStudioFlowDraft: (field: keyof AppStudioFlowDraft, value: string) => void;
+    addAppStudioScreenFlowConnection: () => Promise<void>;
+    removeAppStudioScreenFlowConnection: (edgeId: string) => Promise<void>;
+    updateAppStudioAppleFact: (field: keyof AppStudioAppleFactsDraft, value: string) => void;
+    importAppStudioAppleFacts: () => Promise<void>;
+    approveAppStudioGate: (approvalId: string) => Promise<void>;
+    dismissAppStudioReceipt: () => void;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;

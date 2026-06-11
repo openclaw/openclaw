@@ -112,7 +112,7 @@
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -167,7 +167,7 @@
 .sidebar-markdown :where(h1) {
   font-size: 1.65em;
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
   margin: 1.6em 0 0.6em;
   padding-bottom: 0.35em;
   border-bottom: 1px solid var(--border);
@@ -179,7 +179,7 @@
 .sidebar-markdown :where(h2) {
   font-size: 1.35em;
   font-weight: 650;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   margin: 1.4em 0 0.5em;
   padding-bottom: 0.25em;
   border-bottom: 1px solid var(--border);
@@ -191,7 +191,7 @@
 .sidebar-markdown :where(h3) {
   font-size: 1.15em;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   margin: 1.2em 0 0.4em;
   line-height: 1.35;
   text-wrap: balance;
@@ -341,7 +341,7 @@
   color: var(--muted);
   background: var(--secondary);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0;
 }
 
 .sidebar-markdown :where(tbody tr:hover) {
@@ -365,7 +365,7 @@
 
 .sidebar-markdown-reader.sidebar-markdown :where(h1, h2) {
   font-family: var(--md-preview-serif);
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 
 .sidebar-markdown-reader.sidebar-markdown :where(h1) {
@@ -442,6 +442,16 @@
 
 /* Mobile: Full-screen modal */
 @media (max-width: 768px) {
+  .chat-split-container:not(.chat-split-container--open) {
+    flex: 1 1 0;
+    height: auto;
+  }
+
+  .chat-split-container:not(.chat-split-container--open) .chat-main {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
   .chat-split-container--open {
     position: fixed;
     top: 0;

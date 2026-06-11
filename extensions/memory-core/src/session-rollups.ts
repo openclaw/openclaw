@@ -95,6 +95,8 @@ export function resolveMemoryRollupConfig(
   pluginConfig: Record<string, unknown>,
 ): MemoryRollupConfig {
   const memoryRollups = asRecord(pluginConfig?.memoryRollups);
+  const maxMessages = memoryRollups?.maxMessages;
+  const maxSummaryChars = memoryRollups?.maxSummaryChars;
   return {
     enabled: Boolean(memoryRollups?.enabled ?? false),
     outputDir:
@@ -102,13 +104,12 @@ export function resolveMemoryRollupConfig(
         ? memoryRollups.outputDir.trim()
         : DEFAULT_ROLLUP_DIR,
     maxMessages:
-      Number.isFinite(Number(memoryRollups?.maxMessages)) && Number(memoryRollups?.maxMessages) > 0
-        ? Math.max(1, Math.trunc(Number(memoryRollups.maxMessages)))
+      Number.isFinite(Number(maxMessages)) && Number(maxMessages) > 0
+        ? Math.max(1, Math.trunc(Number(maxMessages)))
         : DEFAULT_MAX_MESSAGES,
     maxSummaryChars:
-      Number.isFinite(Number(memoryRollups?.maxSummaryChars)) &&
-      Number(memoryRollups?.maxSummaryChars) > 0
-        ? Math.max(200, Math.trunc(Number(memoryRollups.maxSummaryChars)))
+      Number.isFinite(Number(maxSummaryChars)) && Number(maxSummaryChars) > 0
+        ? Math.max(200, Math.trunc(Number(maxSummaryChars)))
         : DEFAULT_MAX_SUMMARY_CHARS,
     redactSecrets:
       memoryRollups?.redactSecrets === undefined
@@ -274,7 +275,7 @@ function parseTranscriptMessages(entry: SessionFileEntry): TranscriptLine[] {
       bySourceLine.set(sourceLine, {
         role,
         text: [text],
-        timestampMs: timestampMs > 0 ? timestampMs : 0,
+        timestampMs: Math.max(timestampMs, 0),
       });
       continue;
     }
@@ -285,7 +286,7 @@ function parseTranscriptMessages(entry: SessionFileEntry): TranscriptLine[] {
   }
 
   return [...bySourceLine.entries()]
-    .sort(([left], [right]) => left - right)
+    .toSorted(([left], [right]) => left - right)
     .map(([, bucket]) => ({
       role: bucket.role,
       text: normalizeText(bucket.text.join(" ")),
@@ -398,7 +399,7 @@ function formatFrontmatterValue(value: string): string {
   if (value.length === 0) {
     return '""';
   }
-  if (/[:\[\]{}&,\n\r"']/.test(value)) {
+  if (/[:[\]{}&,\n\r"']/.test(value)) {
     return JSON.stringify(value);
   }
   return value;
@@ -714,7 +715,7 @@ export async function writeSessionRollups(params: {
     };
   }
 
-  const shouldApply = Boolean(params.apply) && !Boolean(params.dryRun);
+  const shouldApply = params.apply && !params.dryRun;
   let wrote = 0;
   let unchanged = 0;
   let skipped = 0;

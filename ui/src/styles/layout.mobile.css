@@ -94,8 +94,8 @@
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     position: fixed;
-    top: 0;
-    bottom: 0;
+    top: var(--safe-area-top);
+    bottom: var(--safe-area-bottom);
     left: 0;
     z-index: 70;
     width: min(86vw, 320px);
@@ -140,6 +140,15 @@
   .shell--nav-drawer-open .shell-nav-backdrop {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .shell--nav-drawer-open .content--chat .agent-chat__input,
+  .shell--nav-collapsed.shell--nav-drawer-open .content--chat .agent-chat__input {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 40;
+    transform: translate3d(0, calc(100% + 24px), 0);
   }
 
   /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
@@ -524,6 +533,10 @@
     gap: 12px;
   }
 
+  .content.content--chat {
+    padding: 0;
+  }
+
   /* Cards */
   .card {
     padding: 12px;
@@ -611,6 +624,16 @@
     padding: 0 8px 12px;
   }
 
+  .content--chat .chat-split-container {
+    flex: 1 1 0;
+    height: auto;
+  }
+
+  .content--chat .chat-main {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
   .chat-msg {
     max-width: 90%;
   }
@@ -624,6 +647,24 @@
     gap: 8px;
   }
 
+  .content--chat .chat {
+    padding-bottom: 0;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .chat-thread {
+    padding-bottom: var(
+      --chat-thread-bottom-padding,
+      calc(150px + var(--safe-area-bottom) + var(--mobile-keyboard-inset, 0px))
+    );
+    scroll-padding-bottom: var(
+      --chat-thread-bottom-padding,
+      calc(150px + var(--safe-area-bottom) + var(--mobile-keyboard-inset, 0px))
+    );
+  }
+
   .chat-compose__field textarea {
     min-height: 60px;
     padding: 8px 10px;
@@ -631,33 +672,198 @@
     font-size: 14px;
   }
 
-  .agent-chat__input {
-    margin: 0 8px calc(10px + var(--safe-area-bottom));
+  .content--chat .agent-chat__input {
+    position: fixed;
+    right: max(10px, var(--safe-area-right));
+    bottom: calc(max(10px, var(--safe-area-bottom)) + var(--mobile-keyboard-inset, 0px));
+    left: max(10px, var(--safe-area-left));
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "attachments attachments attachments"
+      "talk talk talk"
+      "left composer right";
+    align-items: end;
+    column-gap: 8px;
+    row-gap: 6px;
+    margin: 0;
+    padding: 8px;
+    border-radius: 28px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035)),
+      color-mix(in srgb, var(--chrome-strong) 94%, transparent);
+    border-color: color-mix(in srgb, var(--mission-panel-line) 78%, transparent);
+    z-index: 90;
+    max-height: min(38vh, 230px);
+    box-shadow:
+      0 18px 56px rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(255, 255, 255, 0.045) inset,
+      0 0 36px color-mix(in srgb, var(--accent-2) 10%, transparent);
+    transform: translate3d(0, 0, 0);
+    transition:
+      bottom 180ms var(--ease-out),
+      border-color 160ms var(--ease-out),
+      box-shadow 160ms var(--ease-out),
+      background 160ms var(--ease-out);
+    will-change: bottom;
   }
 
-  .agent-chat__toolbar {
-    align-items: stretch;
-    gap: 8px;
-    padding: 6px 8px;
+  .content--chat .agent-chat__input:focus-within {
+    z-index: 95;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow:
+      0 22px 68px rgba(0, 0, 0, 0.56),
+      0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
+      0 0 42px color-mix(in srgb, var(--accent-2) 15%, transparent);
   }
 
-  .agent-chat__toolbar-left,
-  .agent-chat__toolbar-right {
-    flex-wrap: wrap;
+  .content--chat .chat-attachments-preview {
+    grid-column: 1 / -1;
+  }
+
+  .content--chat .agent-chat__stt-interim {
+    grid-area: talk;
+    padding: 4px 8px 0;
+  }
+
+  .content--chat .agent-chat__composer-combobox {
+    grid-area: composer;
+    min-width: 0;
+  }
+
+  .content--chat .agent-chat__composer-combobox > textarea {
+    min-height: 44px;
+    max-height: min(118px, 22vh);
+    font-size: 16px;
+    padding: 10px 4px;
+    scroll-margin-bottom: var(
+      --chat-thread-bottom-padding,
+      calc(150px + var(--safe-area-bottom) + var(--mobile-keyboard-inset, 0px))
+    );
+  }
+
+  .content--chat .agent-chat__toolbar {
+    display: contents;
+    padding: 0;
+    border-top: 0;
+  }
+
+  .content--chat .agent-chat__toolbar-left,
+  .content--chat .agent-chat__toolbar-right {
     gap: 6px;
   }
 
-  .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost,
-  .chat-send-btn {
+  .content--chat .agent-chat__toolbar-left {
+    grid-area: left;
+    min-width: 0;
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .content--chat .agent-chat__toolbar-right {
+    grid-area: right;
+    position: relative;
+    flex: 0 0 auto;
+  }
+
+  .content--chat .agent-chat__toolbar .agent-chat__desktop-run-control {
+    display: none;
+  }
+
+  .content--chat .agent-chat__mobile-actions {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+  }
+
+  .content--chat .agent-chat__mobile-actions[open] .agent-chat__mobile-actions-toggle {
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent-2) 20%, transparent);
+  }
+
+  .content--chat .agent-chat__mobile-actions[open] .agent-chat__mobile-actions-sheet {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 10px);
+    display: grid;
+    min-width: min(220px, calc(100vw - 32px));
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--mission-panel-line) 78%, transparent);
+    border-radius: 18px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035)),
+      color-mix(in srgb, var(--chrome-strong) 98%, #000);
+    box-shadow:
+      0 18px 48px rgba(0, 0, 0, 0.52),
+      0 0 0 1px rgba(255, 255, 255, 0.045) inset;
+  }
+
+  .content--chat .agent-chat__mobile-actions-sheet button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 46px;
+    padding: 0 14px;
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--mission-panel-line) 46%, transparent);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+  }
+
+  .content--chat .agent-chat__mobile-actions-sheet button:last-child {
+    border-bottom: 0;
+  }
+
+  .content--chat .agent-chat__mobile-actions-sheet button:disabled {
+    color: var(--muted);
+    opacity: 0.55;
+  }
+
+  .content--chat .agent-chat__mobile-actions-sheet svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+  }
+
+  .content--chat .agent-chat__token-count {
+    display: none;
+  }
+
+  .content--chat .agent-chat__input-btn,
+  .content--chat .agent-chat__toolbar .btn--ghost,
+  .content--chat .chat-send-btn {
     width: 44px;
     min-width: 44px;
     height: 44px;
   }
 
-  .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg,
-  .chat-send-btn svg {
+  .content--chat .chat-send-btn {
+    color: var(--text);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent),
+      color-mix(in srgb, var(--accent-2) 18%, transparent);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--accent-2) 12%, transparent);
+  }
+
+  .content--chat .chat-send-btn:disabled {
+    color: var(--muted);
+    background: transparent;
+    border-color: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .content--chat .agent-chat__input {
+      transition: none;
+    }
+  }
+
+  .content--chat .agent-chat__input-btn svg,
+  .content--chat .agent-chat__toolbar .btn--ghost svg,
+  .content--chat .chat-send-btn svg {
     width: 16px;
     height: 16px;
   }
@@ -917,6 +1123,19 @@
   .filters {
     flex-wrap: wrap;
     gap: 8px;
+  }
+}
+
+/* Last-line mobile drawer guard: the nav drawer always owns the screen. */
+@media (max-width: 1100px) {
+  .shell--nav-drawer-open .agent-chat__input,
+  .shell--nav-collapsed.shell--nav-drawer-open .agent-chat__input {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    z-index: -1 !important;
+    transform: translate3d(0, calc(100% + 24px), 0) !important;
   }
 }
 

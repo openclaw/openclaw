@@ -7,6 +7,7 @@ import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.j
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { resolveGatewayRuntimeSnapshotServiceCommand } from "../daemon/gateway-runtime-snapshot.js";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
 import {
   OPENCLAW_WRAPPER_ENV_KEY,
@@ -532,10 +533,14 @@ export async function buildGatewayInstallPlan(params: {
     nodePath,
     wrapperPath,
   });
+  const runtimeSnapshotCommand = resolveGatewayRuntimeSnapshotServiceCommand({
+    programArguments,
+    environment: serviceInputEnv,
+  });
   await emitDaemonInstallRuntimeWarning({
     env: params.env,
     runtime: params.runtime,
-    programArguments,
+    programArguments: runtimeSnapshotCommand.programArguments,
     warn: params.warn,
     title: "Gateway runtime",
   });
@@ -549,13 +554,17 @@ export async function buildGatewayInstallPlan(params: {
     platform,
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
+  const serviceEnvironmentWithSnapshot = {
+    ...serviceEnvironment,
+    ...runtimeSnapshotCommand.environment,
+  };
 
   const { environment, environmentValueSources } = await buildGatewayInstallEnvironment({
     env: serviceInputEnv,
     config: params.config,
     authStore: params.authStore,
     warn: params.warn,
-    serviceEnvironment,
+    serviceEnvironment: serviceEnvironmentWithSnapshot,
     existingEnvironment: params.existingEnvironment,
     existingEnvironmentValueSources: params.existingEnvironmentValueSources,
     platform,
@@ -563,7 +572,7 @@ export async function buildGatewayInstallPlan(params: {
 
   // Lowest to highest: preserved custom vars, durable config, auth env refs, generated service env.
   return {
-    programArguments,
+    programArguments: runtimeSnapshotCommand.programArguments,
     workingDirectory: resolveGatewayInstallWorkingDirectory({
       env: serviceInputEnv,
       platform,

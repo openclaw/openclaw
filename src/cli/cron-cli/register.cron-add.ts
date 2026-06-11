@@ -12,11 +12,16 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
+  collectRepeatedOption,
   getCronChannelOptions,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
+  parseCronCommandArgs,
+  parseCronCommandEnv,
+  parseCronCommandSuccessExitCodes,
   parseCronToolsAllow,
+  parseNonNegativeIntOption,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -102,6 +107,25 @@ export function registerCronAddCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
+      .option("--command <path>", "Command executable payload (runs directly without a shell)")
+      .option(
+        "--command-arg <arg>",
+        "Append one command argument (repeat for multiple args)",
+        collectRepeatedOption,
+        [],
+      )
+      .option("--command-cwd <dir>", "Working directory for --command")
+      .option(
+        "--command-env <key=value>",
+        "Environment variable for --command (repeatable)",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--command-success-exit-codes <list>",
+        "Comma/space-separated successful command exit codes",
+      )
+      .option("--command-output-limit-bytes <n>", "Captured stdout/stderr tail bytes")
       .option(
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
@@ -151,14 +175,33 @@ export function registerCronAddCommand(cron: Command) {
           const payload = (() => {
             const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
             const message = normalizeOptionalString(opts.message) ?? "";
-            const chosen = [Boolean(systemEvent), Boolean(message)].filter(Boolean).length;
+            const command = normalizeOptionalString(opts.command) ?? "";
+            const chosen = [Boolean(systemEvent), Boolean(message), Boolean(command)].filter(
+              Boolean,
+            ).length;
             if (chosen !== 1) {
-              throw new Error("Choose exactly one payload: --system-event or --message");
+              throw new Error("Choose exactly one payload: --system-event, --message, or --command");
             }
             if (systemEvent) {
               return { kind: "systemEvent" as const, text: systemEvent };
             }
             const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
+            if (command) {
+              return {
+                kind: "command" as const,
+                command,
+                args: parseCronCommandArgs(opts.commandArg),
+                cwd: normalizeOptionalString(opts.commandCwd),
+                env: parseCronCommandEnv(opts.commandEnv),
+                timeoutSeconds:
+                  timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
+                successExitCodes: parseCronCommandSuccessExitCodes(opts.commandSuccessExitCodes),
+                outputLimitBytes: parseNonNegativeIntOption(
+                  opts.commandOutputLimitBytes,
+                  "--command-output-limit-bytes",
+                ),
+              };
+            }
             return {
               kind: "agentTurn" as const,
               message,
@@ -177,7 +220,8 @@ export function registerCronAddCommand(cron: Command) {
               : () => undefined;
           const sessionSource = optionSource("session");
           const sessionTargetRaw = normalizeOptionalString(opts.session) ?? "";
-          const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+          const inferredSessionTarget =
+            payload.kind === "systemEvent" ? "main" : "isolated";
           const sessionTarget =
             sessionSource === "cli"
               ? normalizeCronSessionTargetOption(sessionTargetRaw) || ""
@@ -198,14 +242,34 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
           }
-          if (isIsolatedLikeSessionTarget && payload.kind !== "agentTurn") {
-            throw new Error("Isolated/current/custom-session jobs require --message (agentTurn).");
+          if (
+            isIsolatedLikeSessionTarget &&
+            payload.kind !== "agentTurn" &&
+            payload.kind !== "command"
+          ) {
+            throw new Error(
+              "Isolated/current/custom-session jobs require --message or --command.",
+            );
           }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
             (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")
           ) {
-            throw new Error("--announce/--no-deliver require a non-main agentTurn session target.");
+            if (!(payload.kind === "command" && opts.deliver === false && !opts.announce)) {
+              throw new Error(
+                "--announce/--no-deliver require a non-main agentTurn session target; command jobs use no delivery.",
+              );
+            }
+          }
+          if (
+            payload.kind === "command" &&
+            (opts.announce ||
+              optionSource("channel") === "cli" ||
+              optionSource("to") === "cli" ||
+              optionSource("account") === "cli" ||
+              optionSource("threadId") === "cli")
+          ) {
+            throw new Error("Command cron jobs run with delivery disabled.");
           }
 
           const accountId = normalizeOptionalString(opts.account);
@@ -228,6 +292,8 @@ export function registerCronAddCommand(cron: Command) {
                 : hasNoDeliver
                   ? "none"
                   : "announce"
+              : isIsolatedLikeSessionTarget && payload.kind === "command"
+                ? "none"
               : undefined;
 
           const name = normalizeOptionalString(opts.name) ?? "";

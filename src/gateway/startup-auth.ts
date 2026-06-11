@@ -58,6 +58,15 @@ export function mergeGatewayTailscaleConfig(
   if (override.mode !== undefined) {
     merged.mode = override.mode;
   }
+  if (override.binaryPath !== undefined) {
+    merged.binaryPath = override.binaryPath;
+  }
+  if (override.socketPath !== undefined) {
+    merged.socketPath = override.socketPath;
+  }
+  if (override.required !== undefined) {
+    merged.required = override.required;
+  }
   if (override.resetOnExit !== undefined) {
     merged.resetOnExit = override.resetOnExit;
   }

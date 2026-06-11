@@ -9,6 +9,7 @@ const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
+const resolveTailscaleClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -24,6 +25,10 @@ vi.mock("./onboard-helpers.js", () => ({
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
+}));
+
+vi.mock("../infra/tailscale.js", () => ({
+  resolveTailscaleClient: resolveTailscaleClientMock,
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -42,14 +47,23 @@ function resetRuntime() {
   runtime.exit.mockClear();
 }
 
-function mockSnapshot(token: unknown = "abc") {
+function mockSnapshot(token: unknown = "abc", gatewayOverrides: Record<string, unknown> = {}) {
+  const auth =
+    gatewayOverrides.auth && typeof gatewayOverrides.auth === "object"
+      ? { token, ...(gatewayOverrides.auth as Record<string, unknown>) }
+      : { token };
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
     raw: "{}",
     parsed: {},
     valid: true,
-    config: { gateway: { auth: { token } } },
+    config: {
+      gateway: {
+        ...gatewayOverrides,
+        auth,
+      },
+    },
     issues: [],
     legacyIssues: [],
   });
@@ -71,6 +85,7 @@ describe("dashboardCommand", () => {
     openUrlMock.mockClear();
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
+    resolveTailscaleClientMock.mockClear();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
@@ -95,6 +110,41 @@ describe("dashboardCommand", () => {
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
+    );
+  });
+
+  it("prefers the active Tailscale Serve dashboard link when configured", async () => {
+    mockSnapshot("abc123", {
+      controlUi: { basePath: "/kalshi" },
+      tailscale: {
+        mode: "serve",
+        binaryPath: "/opt/homebrew/bin/tailscale",
+        socketPath: "/tmp/tailscaled.sock",
+      },
+    });
+    resolveTailscaleClientMock.mockResolvedValue({
+      binary: "/opt/homebrew/bin/tailscale",
+      socketPath: "/tmp/tailscaled.sock",
+      backendState: "Running",
+      dnsName: "mac-studio-userspace.tail6ec0db.ts.net",
+      ips: ["100.110.93.73"],
+      installKind: "homebrew",
+      warnings: [],
+    });
+    copyToClipboardMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    expect(resolveTailscaleClientMock).toHaveBeenCalledWith(undefined, {
+      binaryPath: "/opt/homebrew/bin/tailscale",
+      socketPath: "/tmp/tailscaled.sock",
+    });
+    expect(resolveControlUiLinksMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Dashboard URL: https://mac-studio-userspace.tail6ec0db.ts.net/kalshi/",
+    );
+    expect(copyToClipboardMock).toHaveBeenCalledWith(
+      "https://mac-studio-userspace.tail6ec0db.ts.net/kalshi/#token=abc123",
     );
   });
 

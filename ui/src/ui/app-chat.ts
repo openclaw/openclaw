@@ -18,9 +18,8 @@ import {
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
-import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+import { resolveControlUiSharedFirstAuthCandidates } from "./control-ui-auth.ts";
 import {
   abortChatRun,
   loadChatHistory,
@@ -48,6 +47,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
+  chatTaskId?: string | null;
   chatSending: boolean;
   lastError?: string | null;
   basePath: string;
@@ -79,7 +79,20 @@ export type ChatSendOptions = {
   restoreDraft?: boolean;
 };
 
+type SlashCommandExecutor = typeof import("./chat/slash-command-executor.ts").executeSlashCommand;
+let slashCommandExecutor: Promise<SlashCommandExecutor> | null = null;
+
+async function loadSlashCommandExecutor(): Promise<SlashCommandExecutor> {
+  slashCommandExecutor ??= import("./chat/slash-command-executor.ts").then(
+    (mod) => mod.executeSlashCommand,
+  );
+  return slashCommandExecutor;
+}
+
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+const CHAT_RUN_RECONCILE_INITIAL_DELAY_MS = 4_000;
+const CHAT_RUN_RECONCILE_STEP_MS = 2_500;
+const CHAT_RUN_RECONCILE_MAX_DELAY_MS = 15_000;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -87,6 +100,68 @@ export {
   resetChatInputHistoryNavigation,
 };
 export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
+
+type ChatRunReconcileTimer = {
+  runId: string;
+  timer: number;
+  attempts: number;
+};
+
+const chatRunReconcileTimers = new WeakMap<object, ChatRunReconcileTimer>();
+
+function clearChatRunReconcile(host: ChatHost) {
+  const current = chatRunReconcileTimers.get(host as object);
+  if (!current) {
+    return;
+  }
+  window.clearTimeout(current.timer);
+  chatRunReconcileTimers.delete(host as object);
+}
+
+function resolveChatRunReconcileDelayMs(attempts: number): number {
+  return Math.min(
+    CHAT_RUN_RECONCILE_MAX_DELAY_MS,
+    CHAT_RUN_RECONCILE_INITIAL_DELAY_MS + attempts * CHAT_RUN_RECONCILE_STEP_MS,
+  );
+}
+
+function scheduleChatRunReconcile(host: ChatHost, runId: string, attempts = 0) {
+  if (typeof window === "undefined" || !runId.trim()) {
+    return;
+  }
+  const previous = chatRunReconcileTimers.get(host as object);
+  if (previous?.runId === runId && previous.attempts > attempts) {
+    return;
+  }
+  if (previous) {
+    window.clearTimeout(previous.timer);
+  }
+  const timer = window.setTimeout(async () => {
+    const current = chatRunReconcileTimers.get(host as object);
+    if (!current || current.runId !== runId || host.chatRunId !== runId) {
+      return;
+    }
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      scheduleChatRunReconcile(host, runId, attempts + 1);
+      return;
+    }
+    if (!host.connected || !host.client) {
+      scheduleChatRunReconcile(host, runId, attempts + 1);
+      return;
+    }
+    await loadChatHistory(host as unknown as ChatState, {
+      targetRunId: runId,
+      quiet: true,
+    });
+    host.requestUpdate?.();
+    if (host.chatRunId === runId) {
+      scheduleChatRunReconcile(host, runId, attempts + 1);
+    } else {
+      clearChatRunReconcile(host);
+    }
+  }, resolveChatRunReconcileDelayMs(attempts));
+  chatRunReconcileTimers.set(host as object, { runId, timer, attempts });
+}
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -261,6 +336,9 @@ async function sendChatMessageNow(
   }
   if (ok && opts?.refreshSessions && runId) {
     host.refreshSessionsAfterChat.add(runId);
+  }
+  if (ok && runId) {
+    scheduleChatRunReconcile(host, runId);
   }
   if (ok) {
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, opts?.attachments));
@@ -675,8 +753,9 @@ async function dispatchSlashCommand(
   }
 
   const targetSessionKey = host.sessionKey;
-  let result: Awaited<ReturnType<typeof executeSlashCommand>>;
+  let result: Awaited<ReturnType<SlashCommandExecutor>>;
   try {
+    const executeSlashCommand = await loadSlashCommandExecutor();
     result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
       chatModelCatalog: host.chatModelCatalog,
       sessionsResult: host.sessionsResult,
@@ -696,6 +775,7 @@ async function dispatchSlashCommand(
     host.chatRunId = result.trackRunId;
     host.chatStream = "";
     host.chatSending = false;
+    scheduleChatRunReconcile(host, result.trackRunId);
   }
 
   if (result.pendingCurrentRun && host.chatRunId) {
@@ -728,6 +808,7 @@ async function clearChatHistory(host: ChatHost) {
     host.chatSideResultTerminalRuns?.clear();
     host.chatStream = null;
     host.chatRunId = null;
+    host.chatTaskId = null;
     await loadChatHistory(host as unknown as ChatState);
   } catch (err) {
     host.lastError = String(err);
@@ -751,7 +832,12 @@ export async function refreshChat(
   opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
 ) {
   const requestUpdate = () => host.requestUpdate?.();
-  const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
+  const activeRunId = host.chatRunId;
+  const historyRefresh = (
+    activeRunId
+      ? loadChatHistory(host as unknown as ChatState, { targetRunId: activeRunId })
+      : loadChatHistory(host as unknown as ChatState)
+  ).finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     }
@@ -894,12 +980,33 @@ function setChatAvatarMeta(
       : null;
 }
 
-function buildControlUiAuthHeaders(authHeader: string | null): Record<string, string> | undefined {
-  return authHeader ? { Authorization: authHeader } : undefined;
-}
-
 function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
   return avatarUrl.startsWith("/");
+}
+
+async function fetchChatAvatarWithAuthCandidates(
+  host: ChatHost,
+  url: string,
+): Promise<{ response: Response; authToken: string | null }> {
+  const candidates = resolveControlUiSharedFirstAuthCandidates(host);
+  if (candidates.length === 0) {
+    return { response: await fetch(url, { method: "GET" }), authToken: null };
+  }
+  let lastResponse: Response | null = null;
+  for (const token of candidates) {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    lastResponse = response;
+    if (response.status !== 401) {
+      return { response, authToken: token };
+    }
+  }
+  return {
+    response: lastResponse ?? (await fetch(url, { method: "GET" })),
+    authToken: candidates.at(-1) ?? null,
+  };
 }
 
 export async function refreshChatAvatar(host: ChatHost) {
@@ -917,11 +1024,9 @@ export async function refreshChatAvatar(host: ChatHost) {
     return;
   }
   clearChatAvatarState(host);
-  const authHeader = resolveControlUiAuthHeader(host);
-  const headers = buildControlUiAuthHeaders(authHeader);
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
-    const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
+    const { response: res, authToken } = await fetchChatAvatarWithAuthCandidates(host, url);
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       return;
     }
@@ -950,7 +1055,7 @@ export async function refreshChatAvatar(host: ChatHost) {
     }
     const avatarRes = await fetch(avatarUrl, {
       method: "GET",
-      ...(headers ? { headers } : {}),
+      ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
     });
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {

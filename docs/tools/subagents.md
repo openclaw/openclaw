@@ -96,6 +96,7 @@ requester chat when the run finishes.
 
     - `Result` — latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text. Terminal failed runs do not reuse captured reply text.
     - `Status` — `completed successfully` / `failed` / `timed out` / `unknown`.
+    - `Judge verdict` — for Judge sub-agent completions, the runtime parses the required six-line verdict into structured metadata. Non-`APPROVE` or malformed Judge output is carried as not approved so the requester agent cannot safely summarize it as completion.
     - Compact runtime/token stats.
     - A delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata).
 

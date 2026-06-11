@@ -751,6 +751,17 @@ export function createGatewayHttpServer(opts: {
             }),
         });
         requestStages.push({
+          name: "control-ui-pattern-lab-media",
+          run: async () =>
+            (await getControlUiModule()).handleControlUiPatternLabMediaRequest(req, res, {
+              basePath: controlUiBasePath,
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+        requestStages.push({
           name: "control-ui-avatar",
           run: async () => {
             const { handleControlUiAvatarRequest } = await getControlUiModule();

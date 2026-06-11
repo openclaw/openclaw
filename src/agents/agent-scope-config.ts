@@ -36,6 +36,20 @@ export type ResolvedAgentConfig = {
   tools?: AgentEntry["tools"];
 };
 
+export type AgentSelectorResolution =
+  | {
+      ok: true;
+      agentId: string;
+      selector: string;
+      source: "id" | "name";
+    }
+  | {
+      ok: false;
+      reason: "missing" | "unknown" | "ambiguous";
+      selector: string;
+      agentIds?: string[];
+    };
+
 let defaultAgentWarned = false;
 
 function warnMultipleDefaultAgents(): void {
@@ -77,6 +91,51 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
     ids.push(id);
   }
   return ids.length > 0 ? ids : [DEFAULT_AGENT_ID];
+}
+
+export function resolveAgentSelector(
+  cfg: OpenClawConfig,
+  selector: string | undefined | null,
+): AgentSelectorResolution {
+  const raw = (selector ?? "").trim();
+  if (!raw) {
+    return { ok: false, reason: "missing", selector: "" };
+  }
+
+  const normalized = normalizeAgentId(raw);
+  const ids = listAgentIds(cfg);
+  if (ids.includes(normalized)) {
+    return { ok: true, agentId: normalized, selector: raw, source: "id" };
+  }
+
+  const matches: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of listAgentEntries(cfg)) {
+    const name = readStringValue(entry.name)?.trim();
+    if (!name || normalizeAgentId(name) !== normalized) {
+      continue;
+    }
+    const id = normalizeAgentId(entry.id);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    matches.push(id);
+  }
+
+  if (matches.length === 1) {
+    return { ok: true, agentId: matches[0], selector: raw, source: "name" };
+  }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      reason: "ambiguous",
+      selector: raw,
+      agentIds: matches.toSorted(),
+    };
+  }
+
+  return { ok: false, reason: "unknown", selector: raw };
 }
 
 export function resolveDefaultAgentId(cfg: OpenClawConfig): string {

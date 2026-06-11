@@ -287,7 +287,7 @@ async function listStartupMemoryPathsByDate(params: {
       uniqueStamps.map((stamp) => {
         const newestSluggedNames = (sluggedStatsByStamp.get(stamp) ?? [])
           .toSorted((left, right) => {
-            const mtimeDiff = Number(right.stat.mtimeMs) - Number(left.stat.mtimeMs);
+            const mtimeDiff = Number(right.stat?.mtimeMs ?? 0) - Number(left.stat?.mtimeMs ?? 0);
             if (mtimeDiff !== 0) {
               return mtimeDiff;
             }

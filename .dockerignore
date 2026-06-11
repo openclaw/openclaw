@@ -44,6 +44,7 @@ coverage
 docs/.generated
 **/.generated
 *.log
+scripts/kalshi/logs
 tmp
 **/tmp
 dist-runtime

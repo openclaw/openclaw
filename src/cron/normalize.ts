@@ -45,6 +45,17 @@ function hasAgentTurnPayloadHint(payload: UnknownRecord) {
   );
 }
 
+function hasCommandPayloadHint(payload: UnknownRecord) {
+  return (
+    hasTrimmedStringValue(payload.command) ||
+    normalizeTrimmedStringArray(payload.args) !== undefined ||
+    hasTrimmedStringValue(payload.cwd) ||
+    (payload.env !== null && typeof payload.env === "object") ||
+    normalizeFiniteIntegerArray(payload.successExitCodes) !== undefined ||
+    typeof payload.outputLimitBytes === "number"
+  );
+}
+
 function normalizeTrimmedStringArray(
   value: unknown,
   options?: { allowNull?: boolean },
@@ -62,6 +73,54 @@ function normalizeTrimmedStringArray(
     return null;
   }
   return undefined;
+}
+
+function normalizeFiniteIntegerArray(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => {
+      if (typeof entry === "number" && Number.isFinite(entry)) {
+        return Math.floor(entry);
+      }
+      if (typeof entry === "string" && entry.trim()) {
+        const parsed = Number(entry);
+        return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+      }
+      return undefined;
+    })
+    .filter((entry): entry is number => entry !== undefined);
+  if (normalized.length === 0 && value.length > 0) {
+    return undefined;
+  }
+  return Array.from(new Set(normalized));
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : undefined;
+  }
+  return undefined;
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const normalizedKey = normalizeOptionalString(key);
+    if (!normalizedKey || typeof entry !== "string") {
+      continue;
+    }
+    next[normalizedKey] = entry;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function coerceSchedule(schedule: UnknownRecord) {
@@ -166,6 +225,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "command") {
+    next.kind = "command";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -173,8 +234,11 @@ function coercePayload(payload: UnknownRecord) {
     const message = normalizeOptionalString(next.message);
     const text = normalizeOptionalString(next.text);
     const hasAgentTurnHint = hasAgentTurnPayloadHint(next);
+    const hasCommandHint = hasCommandPayloadHint(next);
     if (message) {
       next.kind = "agentTurn";
+    } else if (hasCommandHint) {
+      next.kind = "command";
     } else if (text && hasAgentTurnHint) {
       next.kind = "agentTurn";
       next.message = text;
@@ -221,6 +285,54 @@ function coercePayload(payload: UnknownRecord) {
       delete next.timeoutSeconds;
     }
   }
+  if ("command" in next) {
+    const command = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.command);
+    if (command !== undefined) {
+      next.command = command;
+    } else {
+      delete next.command;
+    }
+  }
+  if ("args" in next) {
+    const args = normalizeTrimmedStringArray(next.args);
+    if (args !== undefined) {
+      next.args = args;
+    } else {
+      delete next.args;
+    }
+  }
+  if ("cwd" in next) {
+    const cwd = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.cwd);
+    if (cwd !== undefined) {
+      next.cwd = cwd;
+    } else {
+      delete next.cwd;
+    }
+  }
+  if ("env" in next) {
+    const env = normalizeStringRecord(next.env);
+    if (env !== undefined) {
+      next.env = env;
+    } else {
+      delete next.env;
+    }
+  }
+  if ("successExitCodes" in next) {
+    const successExitCodes = normalizeFiniteIntegerArray(next.successExitCodes);
+    if (successExitCodes !== undefined) {
+      next.successExitCodes = successExitCodes;
+    } else {
+      delete next.successExitCodes;
+    }
+  }
+  if ("outputLimitBytes" in next) {
+    const outputLimitBytes = normalizeNonNegativeInteger(next.outputLimitBytes);
+    if (outputLimitBytes !== undefined) {
+      next.outputLimitBytes = outputLimitBytes;
+    } else {
+      delete next.outputLimitBytes;
+    }
+  }
   if ("fallbacks" in next) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
@@ -245,6 +357,12 @@ function coercePayload(payload: UnknownRecord) {
   }
   if (next.kind === "systemEvent") {
     delete next.message;
+    delete next.command;
+    delete next.args;
+    delete next.cwd;
+    delete next.env;
+    delete next.successExitCodes;
+    delete next.outputLimitBytes;
     delete next.model;
     delete next.fallbacks;
     delete next.thinking;
@@ -254,6 +372,21 @@ function coercePayload(payload: UnknownRecord) {
     delete next.toolsAllow;
   } else if (next.kind === "agentTurn") {
     delete next.text;
+    delete next.command;
+    delete next.args;
+    delete next.cwd;
+    delete next.env;
+    delete next.successExitCodes;
+    delete next.outputLimitBytes;
+  } else if (next.kind === "command") {
+    delete next.text;
+    delete next.message;
+    delete next.model;
+    delete next.fallbacks;
+    delete next.thinking;
+    delete next.lightContext;
+    delete next.allowUnsafeExternalContent;
+    delete next.toolsAllow;
   }
   if ("deliver" in next) {
     delete next.deliver;
@@ -308,6 +441,32 @@ function coerceDelivery(delivery: UnknownRecord) {
 }
 
 function inferTopLevelPayload(next: UnknownRecord) {
+  const command = normalizeOptionalString(next.command) ?? "";
+  if (command) {
+    const payload: UnknownRecord = { kind: "command", command };
+    const args = normalizeTrimmedStringArray(next.args);
+    if (args !== undefined) {
+      payload.args = args;
+    }
+    const cwd = normalizeOptionalString(next.cwd);
+    if (cwd) {
+      payload.cwd = cwd;
+    }
+    const env = normalizeStringRecord(next.env);
+    if (env !== undefined) {
+      payload.env = env;
+    }
+    const successExitCodes = normalizeFiniteIntegerArray(next.successExitCodes);
+    if (successExitCodes !== undefined) {
+      payload.successExitCodes = successExitCodes;
+    }
+    const outputLimitBytes = normalizeNonNegativeInteger(next.outputLimitBytes);
+    if (outputLimitBytes !== undefined) {
+      payload.outputLimitBytes = outputLimitBytes;
+    }
+    return payload;
+  }
+
   const message = normalizeOptionalString(next.message) ?? "";
   if (message) {
     return { kind: "agentTurn", message } satisfies UnknownRecord;
@@ -417,6 +576,12 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.allowUnsafeExternalContent;
   delete next.message;
   delete next.text;
+  delete next.command;
+  delete next.args;
+  delete next.cwd;
+  delete next.env;
+  delete next.successExitCodes;
+  delete next.outputLimitBytes;
   delete next.kind;
   delete next.cron;
   delete next.tz;

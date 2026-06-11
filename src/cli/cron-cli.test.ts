@@ -58,10 +58,16 @@ type CronUpdatePatch = {
     payload?: {
       kind?: string;
       message?: string;
+      command?: string;
+      args?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
       model?: string;
       thinking?: string;
       lightContext?: boolean;
       toolsAllow?: string[];
+      successExitCodes?: number[];
+      outputLimitBytes?: number;
     };
     delivery?: {
       mode?: string;
@@ -77,10 +83,18 @@ type CronUpdatePatch = {
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
   payload?: {
+    kind?: string;
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
     model?: string;
     thinking?: string;
     lightContext?: boolean;
     toolsAllow?: string[];
+    timeoutSeconds?: number;
+    successExitCodes?: number[];
+    outputLimitBytes?: number;
   };
   delivery?: {
     mode?: string;
@@ -303,6 +317,58 @@ describe("cron cli", () => {
 
     expect(params?.payload?.model).toBe("opus");
     expect(params?.payload?.thinking).toBe("low");
+  });
+
+  it("creates shell-free command payloads on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Command job",
+      "--every",
+      "10m",
+      "--command",
+      "/usr/bin/python3",
+      "--command-arg",
+      "script.py",
+      "--command-arg",
+      "--dry-run",
+      "--command-cwd",
+      "/tmp/work",
+      "--command-env",
+      "OPENCLAW_MODE=paper",
+      "--timeout-seconds",
+      "45",
+      "--command-success-exit-codes",
+      "0,2",
+      "--command-output-limit-bytes",
+      "4096",
+    ]);
+
+    expect(params.sessionTarget).toBe("isolated");
+    expect(params.delivery?.mode).toBe("none");
+    expect(params.payload).toMatchObject({
+      kind: "command",
+      command: "/usr/bin/python3",
+      args: ["script.py", "--dry-run"],
+      cwd: "/tmp/work",
+      env: { OPENCLAW_MODE: "paper" },
+      timeoutSeconds: 45,
+      successExitCodes: [0, 2],
+      outputLimitBytes: 4096,
+    });
+  });
+
+  it("rejects command cron add delivery options", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "Command job",
+      "--every",
+      "10m",
+      "--command",
+      "/usr/bin/true",
+      "--announce",
+    ]);
   });
 
   it("defaults isolated cron add to announce delivery", async () => {
@@ -732,6 +798,46 @@ describe("cron cli", () => {
     ]);
 
     expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
+  });
+
+  it("sets command payload fields on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--command",
+      "/usr/bin/node",
+      "--command-arg",
+      "task.mjs",
+      "--command-env",
+      "OPENCLAW_MODE=paper",
+      "--command-success-exit-codes",
+      "0 3",
+      "--command-output-limit-bytes",
+      "8192",
+      "--timeout-seconds",
+      "90",
+      "--no-deliver",
+    ]);
+
+    expect(patch.patch?.payload).toMatchObject({
+      kind: "command",
+      command: "/usr/bin/node",
+      args: ["task.mjs"],
+      env: { OPENCLAW_MODE: "paper" },
+      successExitCodes: [0, 3],
+      outputLimitBytes: 8192,
+      timeoutSeconds: 90,
+    });
+    expect(patch.patch?.delivery).toMatchObject({ mode: "none" });
+  });
+
+  it("rejects command cron edit delivery options", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--command",
+      "/usr/bin/true",
+      "--announce",
+    ]);
   });
 
   it("sets and clears agent id on cron edit", async () => {

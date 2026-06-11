@@ -13,6 +13,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { executeCommandPayloadCronJob } from "../command-payload.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import {
   createCronRunDiagnosticsFromError,
@@ -1511,8 +1512,11 @@ async function executeDetachedCronJob(
       delivery?: CronDeliveryTrace;
     }
 > {
+  if (job.payload.kind === "command") {
+    return await executeCommandPayloadCronJob(state, job, abortSignal);
+  }
   if (job.payload.kind !== "agentTurn") {
-    const error = "isolated job requires payload.kind=agentTurn";
+    const error = 'isolated job requires payload.kind="agentTurn" or "command"';
     return {
       status: "skipped",
       error,

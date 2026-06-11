@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "jobId": "2026-05-14-validation-happy-path-vocal-validation-cloud-vocal-1778969134425",
+  "status": "exported_to_macbook",
+  "createdAt": "2026-05-16T22:05:34.426Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "project": {
+    "runId": "2026-05-14-validation-happy-path",
+    "request": "Warm instrumental ambient piano cue for deep focus",
+    "artist": "Validation Artist",
+    "platform": "youtube",
+    "durationSeconds": 60,
+    "instrumental": true
+  },
+  "exportItem": {
+    "id": "validation-cloud-vocal",
+    "kind": "vocal",
+    "sourcePath": "music-creator-v1/projects/2026-05-14-validation-happy-path/vocals/validation-cloud-vocal/validation-cloud-vocal.wav",
+    "bridgeAudioPath": "to-macbook/2026-05-14-validation-happy-path-vocal-validation-cloud-vocal-1778969134425/audio/validation-cloud-vocal.wav",
+    "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+    "details": {
+      "vocalId": "validation-cloud-vocal",
+      "planId": "validation-vocal-plan",
+      "sourceKind": "simulated_cloud_vocal",
+      "sourcePath": "music-creator-v1/projects/2026-05-14-validation-happy-path/selected/candidate-01.wav",
+      "path": "vocals/validation-cloud-vocal/validation-cloud-vocal.wav",
+      "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+      "ingestedAt": "2026-05-16T22:05:27.019Z",
+      "status": "ingested"
+    }
+  },
+  "prompt": null,
+  "macBookInstructions": [
+    "Open open-in-garageband.command on the MacBook.",
+    "GarageBand will open and Finder will reveal the audio file.",
+    "Drag the file into GarageBand, edit/arrange with local AU plugins, then bounce/export audio into from-macbook/<job-id>/.",
+    "Run bridge-ingest on the Mac Studio to pull the returned audio back into Music Creator V1."
+  ]
+}

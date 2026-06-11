@@ -38,7 +38,36 @@ describe("lazy view rendering", () => {
     );
 
     expect(onChange).toHaveBeenCalled();
+    expect(view.pending()).toBe(false);
     expect(container.textContent).toContain("Logs view");
+  });
+
+  it("can preload a view module and reports pending accurately", async () => {
+    const onChange = vi.fn();
+    let resolveLoader: (mod: { label: string }) => void = (_mod) => {
+      throw new Error("preload loader did not expose a resolver");
+    };
+    const loader = vi.fn(
+      () =>
+        new Promise<{ label: string }>((resolve) => {
+          resolveLoader = resolve;
+        }),
+    );
+    const view = createLazyView(loader, onChange);
+
+    view.preload();
+    view.preload();
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(view.pending()).toBe(true);
+    expect(view.read()).toBeNull();
+
+    resolveLoader({ label: "Preloaded" });
+    await flushPromises();
+
+    expect(view.pending()).toBe(false);
+    expect(view.read()).toEqual({ label: "Preloaded" });
+    expect(onChange).toHaveBeenCalled();
   });
 
   it("renders a recoverable error panel when a lazy module import fails", async () => {

@@ -6,6 +6,30 @@ import {
 } from "../../../agents/internal-event-contract.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
+const JudgeCompletionVerdictSchema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Literal("parsed"),
+      verdict: Type.String({
+        enum: ["APPROVE", "REJECT", "ESCALATE_TO_HUMAN", "REQUEST_MORE_EVIDENCE", "SANDBOX_ONLY"],
+      }),
+      scope: Type.String(),
+      evidence: Type.String(),
+      risk: Type.String({ enum: ["low", "medium", "high", "prohibited", "unclear"] }),
+      reason: Type.String(),
+      conditions: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Literal("invalid"),
+      errors: Type.Array(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
@@ -19,6 +43,7 @@ export const AgentInternalEventSchema = Type.Object(
     result: Type.String(),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
     statsLine: Type.Optional(Type.String()),
+    judgeVerdict: Type.Optional(JudgeCompletionVerdictSchema),
     replyInstruction: Type.String(),
   },
   { additionalProperties: false },

@@ -15,6 +15,40 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toEqual(expect.arrayContaining(["node.pluginSurface.refresh"]));
   });
 
+  it("advertises task ledger RPCs", () => {
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining(["tasks.list", "tasks.get", "tasks.cancel"]),
+    );
+  });
+
+  it("advertises Self-Improvement Governor proposal and scorecard RPCs", () => {
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "selfImprovement.auditEvents.list",
+        "selfImprovement.scorecard",
+        "selfImprovement.health",
+        "selfImprovement.productionCheck",
+        "selfImprovement.maintenance.run",
+        "selfImprovement.analysis.run",
+        "selfImprovement.models.preflight",
+        "selfImprovement.evals.run",
+        "selfImprovement.groups.update",
+        "selfImprovement.proposals.list",
+        "selfImprovement.proposals.get",
+        "selfImprovement.proposals.update",
+        "selfImprovement.curator.list",
+        "selfImprovement.curator.get",
+        "selfImprovement.curator.update",
+      ]),
+    );
+  });
+
+  it("advertises native Pattern Lab dashboard RPCs", () => {
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining(["patternLab.dashboard.snapshot", "patternLab.assets.approve"]),
+    );
+  });
+
   it("advertises the versioned Talk session RPCs", () => {
     expect(listGatewayMethods()).toEqual(
       expect.arrayContaining([

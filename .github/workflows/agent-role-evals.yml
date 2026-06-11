@@ -1,0 +1,119 @@
+name: Agent Role Evals
+
+on:
+  schedule:
+    - cron: "37 8 * * *"
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: Run live agent turns after the static catalog gate
+        required: false
+        default: false
+        type: boolean
+      live_agents:
+        description: Comma or space separated agent ids for live evals
+        required: false
+        default: "main,judge,program-manager,memory-knowledge-curator,market-research-analyst"
+        type: string
+      live_model:
+        description: Optional model ref override for live evals
+        required: false
+        default: "ollama/qwen3.5:4b"
+        type: string
+      timeout_seconds:
+        description: Per-agent live eval timeout
+        required: false
+        default: "180"
+        type: string
+      ollama_min_mem_mb:
+        description: Minimum available memory required inside the local Ollama container
+        required: false
+        default: "8192"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-role-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+
+jobs:
+  contract-catalog:
+    name: Agent role contract catalog
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+      - name: Validate role contracts
+        run: pnpm agents:eval:contracts
+
+  live-role-turns:
+    name: Live role turns
+    needs: contract-catalog
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_live) || (github.event_name == 'schedule' && vars.OPENCLAW_AGENT_ROLE_EVAL_LIVE != '0') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_AGENT_EVAL_LIVE_AGENTS: ${{ vars.OPENCLAW_AGENT_ROLE_EVAL_AGENTS }}
+      OPENCLAW_AGENT_EVAL_LIVE_MODEL: ${{ vars.OPENCLAW_AGENT_ROLE_EVAL_MODEL }}
+      OPENCLAW_AGENT_EVAL_BOOTSTRAP_OLLAMA: ${{ vars.OPENCLAW_AGENT_ROLE_EVAL_BOOTSTRAP_OLLAMA }}
+      OPENCLAW_AGENT_EVAL_OLLAMA_MIN_MEM_MB: ${{ vars.OPENCLAW_AGENT_ROLE_EVAL_OLLAMA_MIN_MEM_MB }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+      - name: Hydrate live auth inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+      - name: Start local Ollama for local-first evals
+        env:
+          INPUT_LIVE_MODEL: ${{ inputs.live_model }}
+          INPUT_OLLAMA_MIN_MEM_MB: ${{ inputs.ollama_min_mem_mb }}
+        run: node scripts/agent-role-eval-workflow.mjs prepare-ollama
+      - name: Run representative live role evals
+        env:
+          INPUT_LIVE_AGENTS: ${{ inputs.live_agents }}
+          INPUT_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+          OPENCLAW_AGENT_ROLE_EVAL_REPORT_DIR: artifacts/agent-role-evals
+        run: node scripts/agent-role-eval-workflow.mjs run-live
+      - name: Stop local Ollama
+        if: always()
+        run: node scripts/agent-role-eval-workflow.mjs stop-ollama
+      - name: Verify live role eval report
+        if: always()
+        env:
+          INPUT_LIVE_AGENTS: ${{ inputs.live_agents }}
+          INPUT_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        run: node scripts/agent-role-eval-workflow.mjs verify-report artifacts/agent-role-evals
+      - name: Upload live role eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-role-eval-report
+          path: artifacts/agent-role-evals
+          if-no-files-found: warn

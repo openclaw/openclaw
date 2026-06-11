@@ -18,6 +18,7 @@ export type CronPayloadOutcome = {
   deliveryPayloads: DeliveryPayload[];
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
+  benignSkipReason?: string;
   embeddedRunError?: string;
   pendingPresentationWarningError?: string;
 };
@@ -49,6 +50,30 @@ const CRON_DENIAL_CASE_INSENSITIVE_TOKENS = [
   "did not run",
   "was denied",
 ] as const;
+const CRON_OPERATIONAL_FAILURE_PATTERNS: Array<{ token: string; pattern: RegExp }> = [
+  { token: "script missing", pattern: /\bscript (?:missing|not found)\b/i },
+  { token: "no such file or directory", pattern: /\bno such file or directory\b/i },
+  { token: "module not found", pattern: /\b(?:modulenotfounderror|module not found)\b/i },
+  { token: "traceback", pattern: /\btraceback \(most recent call last\)/i },
+  {
+    token: "command failed",
+    pattern:
+      /(?:^|[\n.!?:]\s*)(?!(?:if|unless|when|whenever)\s+(?:any\s+)?(?:the\s+|a\s+)?command\s+(?:failed|exited|returned)\b)(?:(?:the|this|a|exec|tool|script|process)\s+)?command\s+(?:failed|exited nonzero|returned non-?zero)\b/i,
+  },
+  {
+    token: "exit code",
+    pattern:
+      /\b(?:(?:command|process|script|tool|exec)\s+(?:failed|exited|returned)[^\n.]{0,120}\bexit code\s+[1-9]\d*|(?:exited|returned)\s+with\s+exit code\s+[1-9]\d*)\b/i,
+  },
+  { token: "ok:false", pattern: /(?:\bok\s*:\s*false\b|["']ok["']\s*:\s*false)/i },
+] as const;
+const CRON_BENIGN_SKIP_PATTERNS: Array<{ reason: string; pattern: RegExp }> = [
+  {
+    reason: "scheduled learning lock active",
+    pattern:
+      /\b(?:status["']?\s*:\s*["']?SKIPPED_LOCK_ACTIVE|SKIPPED_LOCK_ACTIVE|(?:scheduled|weather) learning lock is active|lock is active)\b/i,
+  },
+] as const;
 
 export function detectCronDenialToken(text: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(text);
@@ -64,6 +89,32 @@ export function detectCronDenialToken(text: string | undefined): string | undefi
   for (const token of CRON_DENIAL_CASE_INSENSITIVE_TOKENS) {
     if (lowerText.includes(token)) {
       return token;
+    }
+  }
+  for (const { token, pattern } of CRON_OPERATIONAL_FAILURE_PATTERNS) {
+    if (pattern.test(normalized)) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
+export function detectCronBenignSkipReason(text: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(text);
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    /\b(?:status bridge|bridge status|launchd status summary|all services report ok status|all systems operational|all commands executed successfully|no critical failures)\b/i.test(
+      normalized,
+    ) &&
+    !/\b(?:stop(?:ping)? immediately|do not run the dashboard|first command)\b/i.test(normalized)
+  ) {
+    return undefined;
+  }
+  for (const { reason, pattern } of CRON_BENIGN_SKIP_PATTERNS) {
+    if (pattern.test(normalized)) {
+      return reason;
     }
   }
   return undefined;
@@ -88,6 +139,16 @@ function resolveCronDenialSignal(
 
 function formatCronDenialSignal(signal: CronDenialSignal): string {
   return `cron classifier: denial token "${signal.token}" detected in ${signal.field}`;
+}
+
+function resolveCronBenignSkipReason(fields: Array<{ text?: string | undefined }>) {
+  for (const { text } of fields) {
+    const reason = detectCronBenignSkipReason(text);
+    if (reason) {
+      return reason;
+    }
+  }
+  return undefined;
 }
 
 function normalizeCronFailureSignal(
@@ -319,7 +380,7 @@ export function resolveCronPayloadOutcome(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
-  const denialSignal = resolveCronDenialSignal([
+  const signalFields = [
     { field: "summary", text: summary },
     { field: "outputText", text: outputText },
     { field: "synthesizedText", text: synthesizedText },
@@ -329,14 +390,17 @@ export function resolveCronPayloadOutcome(params: {
       field: `payloads[${index}].text`,
       text: payload?.text,
     })),
-  ]);
+  ];
+  const benignSkipReason = resolveCronBenignSkipReason(signalFields);
+  const denialSignal = benignSkipReason ? undefined : resolveCronDenialSignal(signalFields);
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload ||
-    failureSignal !== undefined ||
-    denialSignal !== undefined ||
-    runLevelError !== undefined;
+    benignSkipReason === undefined &&
+    (hasFatalStructuredErrorPayload ||
+      failureSignal !== undefined ||
+      denialSignal !== undefined ||
+      runLevelError !== undefined);
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
@@ -348,6 +412,7 @@ export function resolveCronPayloadOutcome(params: {
   const fatalDeliveryText =
     structuredErrorText ??
     failureSignal?.message ??
+    (denialSignal ? synthesizedText : undefined) ??
     (shouldUseRunLevelErrorPayload ? runLevelError : undefined);
   const fatalDeliveryPayload = fatalDeliveryText
     ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
@@ -362,6 +427,7 @@ export function resolveCronPayloadOutcome(params: {
       ? false
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
+    benignSkipReason,
     embeddedRunError: structuredErrorText
       ? structuredErrorText
       : failureSignal

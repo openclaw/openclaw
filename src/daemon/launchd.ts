@@ -12,6 +12,7 @@ import {
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { resolveGatewayRuntimeSnapshotServiceCommand } from "./gateway-runtime-snapshot.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
@@ -762,16 +763,18 @@ export async function installLaunchAgent(
 
 async function rewriteLaunchAgentPlistForRestart({
   env,
+  force = false,
   label,
   plistPath,
 }: {
   env: GatewayServiceEnv;
+  force?: boolean;
   label: string;
   plistPath: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
   if (!existing?.programArguments.length) {
-    return;
+    return false;
   }
 
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
@@ -781,12 +784,30 @@ async function rewriteLaunchAgentPlistForRestart({
     env,
     environment: existing.environment,
   });
-  const prepared = await prepareLaunchAgentProgramArguments({
-    env,
-    label,
+  const runtimeSnapshotCommand = resolveGatewayRuntimeSnapshotServiceCommand({
     programArguments: existing.programArguments,
     environment: existing.environment,
   });
+  const environment = {
+    ...existing.environment,
+    ...runtimeSnapshotCommand.environment,
+  };
+  const prepared = await prepareLaunchAgentProgramArguments({
+    env,
+    label,
+    programArguments: runtimeSnapshotCommand.programArguments,
+    environment,
+  });
+  const snapshotEnvironmentChanged = Object.entries(runtimeSnapshotCommand.environment).some(
+    ([key, value]) => existing.environment?.[key] !== value,
+  );
+  const changed =
+    force ||
+    JSON.stringify(prepared.programArguments) !== JSON.stringify(existing.programArguments) ||
+    snapshotEnvironmentChanged;
+  if (!changed) {
+    return false;
+  }
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -798,6 +819,7 @@ async function rewriteLaunchAgentPlistForRestart({
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  return true;
 }
 
 async function ensureLaunchAgentLoadedAfterFailure(params: {
@@ -855,6 +877,25 @@ export async function restartLaunchAgent({
   // `openclaw gateway restart` is an explicit operator request to bring the
   // LaunchAgent back, so clear any persisted disabled state before restart.
   await execLaunchctl(["enable", serviceTarget]);
+  const rewrotePlist = await rewriteLaunchAgentPlistForRestart({
+    env: serviceEnv,
+    label,
+    plistPath,
+  });
+  if (rewrotePlist) {
+    const bootout = await execLaunchctl(["bootout", domain, plistPath]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
+    await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath,
+      actionHint: "openclaw gateway restart",
+    });
+    writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
+    return { outcome: "completed" };
+  }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
@@ -868,7 +909,7 @@ export async function restartLaunchAgent({
   }
 
   // If the service was previously booted out, re-register the plist and retry.
-  await rewriteLaunchAgentPlistForRestart({ env: serviceEnv, label, plistPath });
+  await rewriteLaunchAgentPlistForRestart({ env: serviceEnv, force: true, label, plistPath });
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget,

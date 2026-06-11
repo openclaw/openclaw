@@ -53,6 +53,8 @@ import {
   AgentsListParamsSchema,
   type AgentsListResult,
   AgentsListResultSchema,
+  type AgentsRuntimeStatusParams,
+  AgentsRuntimeStatusParamsSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
   type ChannelsStartParams,
@@ -194,6 +196,36 @@ import {
   PluginApprovalResolveParamsSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
+  type ProjectsContextPreviewParams,
+  ProjectsContextPreviewParamsSchema,
+  type ProjectsCreateParams,
+  ProjectsCreateParamsSchema,
+  type ProjectsDeleteParams,
+  ProjectsDeleteParamsSchema,
+  type ProjectsGetParams,
+  ProjectsGetParamsSchema,
+  type ProjectsListParams,
+  ProjectsListParamsSchema,
+  type ProjectsResourcesAddParams,
+  ProjectsResourcesAddParamsSchema,
+  type ProjectsResourcesListParams,
+  ProjectsResourcesListParamsSchema,
+  type ProjectsResourcesReindexParams,
+  ProjectsResourcesReindexParamsSchema,
+  type ProjectsResourcesRemoveParams,
+  ProjectsResourcesRemoveParamsSchema,
+  type ProjectsResourcesUploadParams,
+  ProjectsResourcesUploadParamsSchema,
+  type ProjectsRestoreParams,
+  ProjectsRestoreParamsSchema,
+  type ProjectsSessionsAttachParams,
+  ProjectsSessionsAttachParamsSchema,
+  type ProjectsSessionsDetachParams,
+  ProjectsSessionsDetachParamsSchema,
+  type ProjectsSessionsListParams,
+  ProjectsSessionsListParamsSchema,
+  type ProjectsUpdateParams,
+  ProjectsUpdateParamsSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -289,6 +321,62 @@ import {
   type SecretsResolveResult,
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
+  type SelfImprovementAnalysisRunParams,
+  SelfImprovementAnalysisRunParamsSchema,
+  type SelfImprovementAnalysisRunResult,
+  SelfImprovementAnalysisRunResultSchema,
+  type SelfImprovementAuditEventsListParams,
+  SelfImprovementAuditEventsListParamsSchema,
+  type SelfImprovementAuditEventsListResult,
+  SelfImprovementAuditEventsListResultSchema,
+  type SelfImprovementHealthParams,
+  SelfImprovementHealthParamsSchema,
+  type SelfImprovementProductionCheckParams,
+  SelfImprovementProductionCheckParamsSchema,
+  type SelfImprovementProductionCheckResult,
+  SelfImprovementProductionCheckResultSchema,
+  type SelfImprovementMaintenanceRunParams,
+  SelfImprovementMaintenanceRunParamsSchema,
+  type SelfImprovementMaintenanceResult,
+  SelfImprovementMaintenanceResultSchema,
+  type SelfImprovementOperationalHealthResult,
+  SelfImprovementOperationalHealthResultSchema,
+  type SelfImprovementModelPreflightParams,
+  SelfImprovementModelPreflightParamsSchema,
+  type SelfImprovementModelPreflightResult,
+  SelfImprovementModelPreflightResultSchema,
+  type SelfImprovementReviewerEvalRunParams,
+  SelfImprovementReviewerEvalRunParamsSchema,
+  type SelfImprovementReviewerEvalRunResult,
+  SelfImprovementReviewerEvalRunResultSchema,
+  type SelfImprovementCuratorGetParams,
+  SelfImprovementCuratorGetParamsSchema,
+  type SelfImprovementCuratorListParams,
+  SelfImprovementCuratorListParamsSchema,
+  type SelfImprovementCuratorUpdateParams,
+  SelfImprovementCuratorUpdateParamsSchema,
+  type SelfImprovementGroupsUpdateParams,
+  SelfImprovementGroupsUpdateParamsSchema,
+  type SelfImprovementProposalsGetParams,
+  SelfImprovementProposalsGetParamsSchema,
+  type SelfImprovementProposalsListParams,
+  SelfImprovementProposalsListParamsSchema,
+  type SelfImprovementProposalsUpdateParams,
+  SelfImprovementProposalsUpdateParamsSchema,
+  type SelfImprovementRecommendationsGetParams,
+  SelfImprovementRecommendationsGetParamsSchema,
+  type SelfImprovementRecommendationsListParams,
+  SelfImprovementRecommendationsListParamsSchema,
+  type SelfImprovementRecommendationsSummaryParams,
+  SelfImprovementRecommendationsSummaryParamsSchema,
+  type SelfImprovementRecommendationsSummaryResult,
+  SelfImprovementRecommendationsSummaryResultSchema,
+  type SelfImprovementRecommendationsUpdateParams,
+  SelfImprovementRecommendationsUpdateParamsSchema,
+  type SelfImprovementScorecardParams,
+  SelfImprovementScorecardParamsSchema,
+  type SelfImprovementScanParams,
+  SelfImprovementScanParamsSchema,
   type SessionsAbortParams,
   SessionsAbortParamsSchema,
   type SessionsCompactParams,
@@ -432,6 +520,9 @@ export const validateAgentIdentityParams =
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
+export const validateAgentsRuntimeStatusParams = ajv.compile<AgentsRuntimeStatusParams>(
+  AgentsRuntimeStatusParamsSchema,
+);
 export const validateAgentsCreateParams = ajv.compile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = ajv.compile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = ajv.compile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -564,6 +655,76 @@ export const validateSessionsUsageParams =
 export const validateTasksListParams = ajv.compile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = ajv.compile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = ajv.compile<TasksCancelParams>(TasksCancelParamsSchema);
+export const validateSelfImprovementScanParams = ajv.compile<SelfImprovementScanParams>(
+  SelfImprovementScanParamsSchema,
+);
+export const validateSelfImprovementScorecardParams = ajv.compile<SelfImprovementScorecardParams>(
+  SelfImprovementScorecardParamsSchema,
+);
+export const validateSelfImprovementHealthParams = ajv.compile<SelfImprovementHealthParams>(
+  SelfImprovementHealthParamsSchema,
+);
+export const validateSelfImprovementProductionCheckParams =
+  ajv.compile<SelfImprovementProductionCheckParams>(SelfImprovementProductionCheckParamsSchema);
+export const validateSelfImprovementProductionCheckResult =
+  ajv.compile<SelfImprovementProductionCheckResult>(SelfImprovementProductionCheckResultSchema);
+export const validateSelfImprovementMaintenanceRunParams =
+  ajv.compile<SelfImprovementMaintenanceRunParams>(SelfImprovementMaintenanceRunParamsSchema);
+export const validateSelfImprovementMaintenanceResult =
+  ajv.compile<SelfImprovementMaintenanceResult>(SelfImprovementMaintenanceResultSchema);
+export const validateSelfImprovementOperationalHealthResult =
+  ajv.compile<SelfImprovementOperationalHealthResult>(SelfImprovementOperationalHealthResultSchema);
+export const validateSelfImprovementAnalysisRunParams =
+  ajv.compile<SelfImprovementAnalysisRunParams>(SelfImprovementAnalysisRunParamsSchema);
+export const validateSelfImprovementAnalysisRunResult =
+  ajv.compile<SelfImprovementAnalysisRunResult>(SelfImprovementAnalysisRunResultSchema);
+export const validateSelfImprovementAuditEventsListParams =
+  ajv.compile<SelfImprovementAuditEventsListParams>(SelfImprovementAuditEventsListParamsSchema);
+export const validateSelfImprovementAuditEventsListResult =
+  ajv.compile<SelfImprovementAuditEventsListResult>(SelfImprovementAuditEventsListResultSchema);
+export const validateSelfImprovementModelPreflightParams =
+  ajv.compile<SelfImprovementModelPreflightParams>(SelfImprovementModelPreflightParamsSchema);
+export const validateSelfImprovementModelPreflightResult =
+  ajv.compile<SelfImprovementModelPreflightResult>(SelfImprovementModelPreflightResultSchema);
+export const validateSelfImprovementReviewerEvalRunParams =
+  ajv.compile<SelfImprovementReviewerEvalRunParams>(SelfImprovementReviewerEvalRunParamsSchema);
+export const validateSelfImprovementReviewerEvalRunResult =
+  ajv.compile<SelfImprovementReviewerEvalRunResult>(SelfImprovementReviewerEvalRunResultSchema);
+export const validateSelfImprovementRecommendationsListParams =
+  ajv.compile<SelfImprovementRecommendationsListParams>(
+    SelfImprovementRecommendationsListParamsSchema,
+  );
+export const validateSelfImprovementRecommendationsSummaryParams =
+  ajv.compile<SelfImprovementRecommendationsSummaryParams>(
+    SelfImprovementRecommendationsSummaryParamsSchema,
+  );
+export const validateSelfImprovementRecommendationsSummaryResult =
+  ajv.compile<SelfImprovementRecommendationsSummaryResult>(
+    SelfImprovementRecommendationsSummaryResultSchema,
+  );
+export const validateSelfImprovementRecommendationsGetParams =
+  ajv.compile<SelfImprovementRecommendationsGetParams>(
+    SelfImprovementRecommendationsGetParamsSchema,
+  );
+export const validateSelfImprovementRecommendationsUpdateParams =
+  ajv.compile<SelfImprovementRecommendationsUpdateParams>(
+    SelfImprovementRecommendationsUpdateParamsSchema,
+  );
+export const validateSelfImprovementGroupsUpdateParams =
+  ajv.compile<SelfImprovementGroupsUpdateParams>(SelfImprovementGroupsUpdateParamsSchema);
+export const validateSelfImprovementProposalsListParams =
+  ajv.compile<SelfImprovementProposalsListParams>(SelfImprovementProposalsListParamsSchema);
+export const validateSelfImprovementProposalsGetParams =
+  ajv.compile<SelfImprovementProposalsGetParams>(SelfImprovementProposalsGetParamsSchema);
+export const validateSelfImprovementProposalsUpdateParams =
+  ajv.compile<SelfImprovementProposalsUpdateParams>(SelfImprovementProposalsUpdateParamsSchema);
+export const validateSelfImprovementCuratorListParams =
+  ajv.compile<SelfImprovementCuratorListParams>(SelfImprovementCuratorListParamsSchema);
+export const validateSelfImprovementCuratorGetParams = ajv.compile<SelfImprovementCuratorGetParams>(
+  SelfImprovementCuratorGetParamsSchema,
+);
+export const validateSelfImprovementCuratorUpdateParams =
+  ajv.compile<SelfImprovementCuratorUpdateParams>(SelfImprovementCuratorUpdateParamsSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -712,6 +873,47 @@ export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalRes
 );
 export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
+);
+export const validateProjectsListParams = ajv.compile<ProjectsListParams>(ProjectsListParamsSchema);
+export const validateProjectsGetParams = ajv.compile<ProjectsGetParams>(ProjectsGetParamsSchema);
+export const validateProjectsCreateParams = ajv.compile<ProjectsCreateParams>(
+  ProjectsCreateParamsSchema,
+);
+export const validateProjectsUpdateParams = ajv.compile<ProjectsUpdateParams>(
+  ProjectsUpdateParamsSchema,
+);
+export const validateProjectsDeleteParams = ajv.compile<ProjectsDeleteParams>(
+  ProjectsDeleteParamsSchema,
+);
+export const validateProjectsRestoreParams = ajv.compile<ProjectsRestoreParams>(
+  ProjectsRestoreParamsSchema,
+);
+export const validateProjectsResourcesListParams = ajv.compile<ProjectsResourcesListParams>(
+  ProjectsResourcesListParamsSchema,
+);
+export const validateProjectsResourcesAddParams = ajv.compile<ProjectsResourcesAddParams>(
+  ProjectsResourcesAddParamsSchema,
+);
+export const validateProjectsResourcesUploadParams = ajv.compile<ProjectsResourcesUploadParams>(
+  ProjectsResourcesUploadParamsSchema,
+);
+export const validateProjectsResourcesRemoveParams = ajv.compile<ProjectsResourcesRemoveParams>(
+  ProjectsResourcesRemoveParamsSchema,
+);
+export const validateProjectsResourcesReindexParams = ajv.compile<ProjectsResourcesReindexParams>(
+  ProjectsResourcesReindexParamsSchema,
+);
+export const validateProjectsSessionsListParams = ajv.compile<ProjectsSessionsListParams>(
+  ProjectsSessionsListParamsSchema,
+);
+export const validateProjectsSessionsAttachParams = ajv.compile<ProjectsSessionsAttachParams>(
+  ProjectsSessionsAttachParamsSchema,
+);
+export const validateProjectsSessionsDetachParams = ajv.compile<ProjectsSessionsDetachParams>(
+  ProjectsSessionsDetachParamsSchema,
+);
+export const validateProjectsContextPreviewParams = ajv.compile<ProjectsContextPreviewParams>(
+  ProjectsContextPreviewParamsSchema,
 );
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
@@ -907,9 +1109,25 @@ export {
   AgentsFilesSetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
+  AgentsRuntimeStatusParamsSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
   PluginsUiDescriptorsParamsSchema,
+  ProjectsListParamsSchema,
+  ProjectsGetParamsSchema,
+  ProjectsCreateParamsSchema,
+  ProjectsUpdateParamsSchema,
+  ProjectsDeleteParamsSchema,
+  ProjectsRestoreParamsSchema,
+  ProjectsResourcesListParamsSchema,
+  ProjectsResourcesAddParamsSchema,
+  ProjectsResourcesUploadParamsSchema,
+  ProjectsResourcesRemoveParamsSchema,
+  ProjectsResourcesReindexParamsSchema,
+  ProjectsSessionsListParamsSchema,
+  ProjectsSessionsAttachParamsSchema,
+  ProjectsSessionsDetachParamsSchema,
+  ProjectsContextPreviewParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -977,6 +1195,34 @@ export type {
   DevicePairListParams,
   DevicePairApproveParams,
   DevicePairRejectParams,
+  SelfImprovementAnalysisRunParams,
+  SelfImprovementAnalysisRunResult,
+  SelfImprovementAuditEventsListParams,
+  SelfImprovementAuditEventsListResult,
+  SelfImprovementCuratorGetParams,
+  SelfImprovementCuratorListParams,
+  SelfImprovementCuratorUpdateParams,
+  SelfImprovementGroupsUpdateParams,
+  SelfImprovementHealthParams,
+  SelfImprovementProductionCheckParams,
+  SelfImprovementProductionCheckResult,
+  SelfImprovementMaintenanceRunParams,
+  SelfImprovementMaintenanceResult,
+  SelfImprovementModelPreflightParams,
+  SelfImprovementModelPreflightResult,
+  SelfImprovementOperationalHealthResult,
+  SelfImprovementProposalsGetParams,
+  SelfImprovementProposalsListParams,
+  SelfImprovementProposalsUpdateParams,
+  SelfImprovementRecommendationsGetParams,
+  SelfImprovementRecommendationsListParams,
+  SelfImprovementRecommendationsSummaryParams,
+  SelfImprovementRecommendationsSummaryResult,
+  SelfImprovementRecommendationsUpdateParams,
+  SelfImprovementReviewerEvalRunParams,
+  SelfImprovementReviewerEvalRunResult,
+  SelfImprovementScanParams,
+  SelfImprovementScorecardParams,
   ConfigGetParams,
   ConfigSetParams,
   ConfigApplyParams,
@@ -1044,9 +1290,25 @@ export type {
   ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
+  AgentsRuntimeStatusParams,
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
+  ProjectsListParams,
+  ProjectsGetParams,
+  ProjectsCreateParams,
+  ProjectsUpdateParams,
+  ProjectsDeleteParams,
+  ProjectsRestoreParams,
+  ProjectsResourcesListParams,
+  ProjectsResourcesAddParams,
+  ProjectsResourcesUploadParams,
+  ProjectsResourcesRemoveParams,
+  ProjectsResourcesReindexParams,
+  ProjectsSessionsListParams,
+  ProjectsSessionsAttachParams,
+  ProjectsSessionsDetachParams,
+  ProjectsContextPreviewParams,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,

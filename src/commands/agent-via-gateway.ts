@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { listAgentIds } from "../agents/agent-scope.js";
+import { resolveAgentSelector } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError, randomIdempotencyKey } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -80,6 +79,21 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   return raw;
 }
 
+function resolveAgentSelectorOrThrow(cfg: OpenClawConfig, selector: string): string {
+  const resolution = resolveAgentSelector(cfg, selector);
+  if (resolution.ok) {
+    return resolution.agentId;
+  }
+  if (resolution.reason === "ambiguous") {
+    throw new Error(
+      `Ambiguous agent selector "${selector}" matches multiple configured agent names: ${(resolution.agentIds ?? []).join(", ")}. Use an explicit agent id.`,
+    );
+  }
+  throw new Error(
+    `Unknown agent id "${selector}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+  );
+}
+
 function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
@@ -142,15 +156,7 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
 
   const cfg = getRuntimeConfig();
   const agentIdRaw = opts.agent?.trim();
-  const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
-  if (agentId) {
-    const knownAgents = listAgentIds(cfg);
-    if (!knownAgents.includes(agentId)) {
-      throw new Error(
-        `Unknown agent id "${agentIdRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
-      );
-    }
-  }
+  const agentId = agentIdRaw ? resolveAgentSelectorOrThrow(cfg, agentIdRaw) : undefined;
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs =
     timeoutSeconds === 0
@@ -244,13 +250,17 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
     if (isGatewayAgentTimeoutError(err)) {
-      const fallbackSession = createGatewayTimeoutFallbackSession(opts.agent);
+      const fallbackAgentId = opts.agent
+        ? resolveAgentSelectorOrThrow(getRuntimeConfig(), opts.agent)
+        : undefined;
+      const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
       runtime.error?.(
         `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
       );
       return await agentCommand(
         {
           ...localOpts,
+          agentId: fallbackAgentId ?? localOpts.agentId,
           sessionId: fallbackSession.sessionId,
           sessionKey: fallbackSession.sessionKey,
           runId: fallbackSession.sessionId,

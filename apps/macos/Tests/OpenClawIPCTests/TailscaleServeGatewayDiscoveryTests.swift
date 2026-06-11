@@ -95,4 +95,24 @@ struct TailscaleServeGatewayDiscoveryTests {
         #expect(env["TERM"] == "xterm-256color")
         #expect(env["HOME"] == "/Users/tester")
     }
+
+    @Test func `adds socket flag before status command when socket configured`() {
+        #expect(TailscaleServeGatewayDiscovery.statusArguments(socketPath: "/tmp/tailscaled.sock") == [
+            "--socket",
+            "/tmp/tailscaled.sock",
+            "status",
+            "--json",
+        ])
+        #expect(TailscaleServeGatewayDiscovery.statusArguments(socketPath: nil) == ["status", "--json"])
+    }
+
+    @Test func `prefers explicit tailscale socket candidate`() {
+        let sockets = TailscaleServeGatewayDiscovery.socketCandidates(env: [
+            "OPENCLAW_TAILSCALE_SOCKET": "/tmp/tailscaled.sock",
+            "HOME": "/Users/tester",
+        ])
+
+        #expect(sockets.first == "/tmp/tailscaled.sock")
+        #expect(sockets.contains(where: { $0 == nil }))
+    }
 }

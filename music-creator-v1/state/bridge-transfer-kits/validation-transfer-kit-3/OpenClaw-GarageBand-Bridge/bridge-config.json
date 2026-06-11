@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "bridgeRoot": "/Users/openclaw/openclaw/music-creator-v1/tmp-safe-bridge",
+  "createdAt": "2026-05-19T18:59:31.295Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "transport": "shared-folder",
+  "nodePairing": {
+    "gatewayHost": "100.103.214.120",
+    "gatewayPort": 18789,
+    "gatewayTls": false,
+    "displayName": "GarageBand MacBook",
+    "privateWsOptInRequired": true,
+    "secretPolicy": "Gateway tokens are never written into the iCloud bridge."
+  },
+  "remoteExecution": {
+    "enabledByDefault": false,
+    "status": "deprecated_for_safety",
+    "replacement": "macbook-pull-agent.command",
+    "note": "Remote Login/SSH is not required for the safer pull-agent bridge."
+  },
+  "pullAgent": {
+    "mode": "macbook_polls_signed_jobs",
+    "publicKeyFile": "macstudio-bridge-signing.pub.pem",
+    "privateKeyLocation": "music-creator-v1/state/garageband-bridge-signing-key.pem",
+    "privateKeyWrittenToBridge": false,
+    "allowedActions": [
+      "health-check",
+      "garageband-status",
+      "list-bridge-files",
+      "open-latest-bridge-job",
+      "open-bridge-job"
+    ],
+    "requestFolder": "to-macbook/requests",
+    "resultFolder": "from-macbook/agent-results"
+  },
+  "folders": {
+    "toMacBook": "/Users/openclaw/openclaw/music-creator-v1/tmp-safe-bridge/to-macbook",
+    "fromMacBook": "/Users/openclaw/openclaw/music-creator-v1/tmp-safe-bridge/from-macbook",
+    "logs": "/Users/openclaw/openclaw/music-creator-v1/tmp-safe-bridge/logs"
+  },
+  "defaults": {
+    "garageBandPlugin": "Valhalla Supermassive AU",
+    "openClawHost": "Mac Studio",
+    "garageBandHost": "MacBook"
+  }
+}

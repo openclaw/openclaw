@@ -203,6 +203,41 @@ function renderGroupedMessage(
   );
 }
 
+it("marks the transcript bubble matching the target run id", () => {
+  const container = document.createElement("div");
+  renderGroupedMessage(
+    container,
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "guarded reply" }],
+      __openclaw: { runId: "run:judge/1" },
+    },
+    "assistant",
+    { targetRunId: "run:judge/1" },
+  );
+
+  const bubble = container.querySelector<HTMLElement>(".chat-bubble--run-target");
+  expect(bubble?.dataset.openclawRunId).toBe("run:judge/1");
+  expect(bubble?.id).toBe("chat-run-run-judge-1-assistant-message");
+});
+
+it("marks the transcript bubble matching the fallback transcript sequence", () => {
+  const container = document.createElement("div");
+  renderGroupedMessage(
+    container,
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "historical guarded reply" }],
+      __openclaw: { seq: 7 },
+    },
+    "assistant",
+    { targetTranscriptSeq: 7 },
+  );
+
+  const bubble = container.querySelector<HTMLElement>(".chat-bubble--run-target");
+  expect(bubble?.dataset.openclawRunId).toBeUndefined();
+});
+
 function createMessageGroup(message: unknown, role: string): MessageGroup {
   const timestamp =
     typeof message === "object" &&

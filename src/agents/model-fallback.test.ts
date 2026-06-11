@@ -807,6 +807,36 @@ describe("runWithModelFallback", () => {
     expect(classificationRecord.reason).toBe("format");
   });
 
+  it("classifies non-GPT terminal provider network errors for configured fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [
+        {
+          text: "LLM request failed: connection refused by the provider endpoint.",
+          isError: true,
+        },
+      ],
+      meta: {
+        durationMs: 1,
+        finalAssistantRawText: "[assistant turn failed before producing content]",
+      },
+    };
+
+    const classification = classifyEmbeddedPiRunResultForModelFallback({
+      provider: "ollama",
+      model: "openclaw-control-qwen36-27b:latest",
+      result: runResult,
+    });
+    const classificationRecord = requireRecord(
+      classification,
+      "terminal provider network classification",
+    );
+    expect(classificationRecord.reason).toBe("timeout");
+    expect(classificationRecord.status).toBe(408);
+    expect(classificationRecord.rawError).toBe(
+      "LLM request failed: connection refused by the provider endpoint.",
+    );
+  });
+
   it("keeps aborted harness-classified GPT-5 runs out of fallback", () => {
     const runResult: EmbeddedPiRunResult = {
       payloads: [],

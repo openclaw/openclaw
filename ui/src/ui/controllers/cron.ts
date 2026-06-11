@@ -32,6 +32,9 @@ export type CronFieldKey =
   | "cronExpr"
   | "staggerAmount"
   | "payloadText"
+  | "commandEnvText"
+  | "commandSuccessExitCodes"
+  | "commandOutputLimitBytes"
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
@@ -142,9 +145,44 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     errors.payloadText =
       form.payloadKind === "systemEvent"
         ? "cron.errors.systemTextRequired"
-        : "cron.errors.agentMessageRequired";
+        : form.payloadKind === "command"
+          ? "Command executable is required."
+          : "cron.errors.agentMessageRequired";
   }
-  if (form.payloadKind === "agentTurn") {
+  if (form.payloadKind === "command") {
+    const envLines = form.commandEnvText
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of envLines) {
+      const index = line.indexOf("=");
+      const key = index >= 0 ? line.slice(0, index).trim() : "";
+      if (index <= 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        errors.commandEnvText = "Environment lines must use KEY=VALUE.";
+        break;
+      }
+    }
+    if (form.commandSuccessExitCodes.trim()) {
+      const invalid = form.commandSuccessExitCodes
+        .split(/[,\s]+/u)
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .some((value) => {
+          const parsed = Number.parseInt(value, 10);
+          return !Number.isFinite(parsed) || parsed < 0;
+        });
+      if (invalid) {
+        errors.commandSuccessExitCodes = "Success exit codes must be non-negative integers.";
+      }
+    }
+    if (form.commandOutputLimitBytes.trim()) {
+      const parsed = toNumber(form.commandOutputLimitBytes.trim(), -1);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        errors.commandOutputLimitBytes = "Output limit must be 0 or greater.";
+      }
+    }
+  }
+  if (form.payloadKind === "agentTurn" || form.payloadKind === "command") {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
       const timeout = toNumber(timeoutRaw, 0);
@@ -465,7 +503,28 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
     payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
-    payloadText: payload?.kind === "systemEvent" ? payload.text : (payload?.message ?? ""),
+    payloadText:
+      payload?.kind === "systemEvent"
+        ? payload.text
+        : payload?.kind === "command"
+          ? payload.command
+          : (payload?.message ?? ""),
+    commandArgsText: payload?.kind === "command" ? (payload.args ?? []).join("\n") : "",
+    commandCwd: payload?.kind === "command" ? (payload.cwd ?? "") : "",
+    commandEnvText:
+      payload?.kind === "command" && payload.env
+        ? Object.entries(payload.env)
+            .map(([key, value]) => `${key}=${value}`)
+            .join("\n")
+        : "",
+    commandSuccessExitCodes:
+      payload?.kind === "command" && payload.successExitCodes?.length
+        ? payload.successExitCodes.join(",")
+        : "",
+    commandOutputLimitBytes:
+      payload?.kind === "command" && typeof payload.outputLimitBytes === "number"
+        ? String(payload.outputLimitBytes)
+        : "",
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
@@ -502,7 +561,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertAccountId:
       failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
     timeoutSeconds:
-      payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
+      (payload?.kind === "agentTurn" || payload?.kind === "command") &&
+      typeof payload.timeoutSeconds === "number"
         ? String(payload.timeoutSeconds)
         : "",
   };
@@ -568,6 +628,79 @@ function buildCronPayload(form: CronFormState) {
       throw new Error(t("cron.errors.systemEventTextRequired"));
     }
     return { kind: "systemEvent" as const, text };
+  }
+  if (form.payloadKind === "command") {
+    const command = form.payloadText.trim();
+    if (!command) {
+      throw new Error("Command is required");
+    }
+    const args = form.commandArgsText
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const envEntries = form.commandEnvText
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const env: Record<string, string> = {};
+    for (const line of envEntries) {
+      const index = line.indexOf("=");
+      const key = index >= 0 ? line.slice(0, index).trim() : "";
+      if (index <= 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error("Environment lines must use KEY=VALUE.");
+      }
+      env[key] = line.slice(index + 1);
+    }
+    const successExitCodes = form.commandSuccessExitCodes
+      .split(/[,\s]+/u)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          throw new Error("Success exit codes must be non-negative integers.");
+        }
+        return parsed;
+      });
+    const payload: {
+      kind: "command";
+      command: string;
+      args?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      timeoutSeconds?: number;
+      successExitCodes?: number[];
+      outputLimitBytes?: number;
+    } = {
+      kind: "command",
+      command,
+    };
+    if (args.length > 0) {
+      payload.args = args;
+    }
+    const cwd = form.commandCwd.trim();
+    if (cwd) {
+      payload.cwd = cwd;
+    }
+    if (Object.keys(env).length > 0) {
+      payload.env = env;
+    }
+    const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
+    if (timeoutSeconds > 0) {
+      payload.timeoutSeconds = timeoutSeconds;
+    }
+    if (successExitCodes.length > 0) {
+      payload.successExitCodes = Array.from(new Set(successExitCodes));
+    }
+    const outputLimitRaw = form.commandOutputLimitBytes.trim();
+    if (outputLimitRaw) {
+      const outputLimitBytes = toNumber(outputLimitRaw, -1);
+      if (!Number.isFinite(outputLimitBytes) || outputLimitBytes < 0) {
+        throw new Error("Output limit must be 0 or greater.");
+      }
+      payload.outputLimitBytes = Math.floor(outputLimitBytes);
+    }
+    return payload;
   }
   const message = form.payloadText.trim();
   if (!message) {
@@ -744,6 +877,8 @@ export async function toggleCronJob(state: CronState, job: CronJob, enabled: boo
 export async function runCronJob(state: CronState, job: CronJob, mode: "force" | "due" = "force") {
   await withCronBusy(state, async (client) => {
     await client.request("cron.run", { id: job.id, mode });
+    await loadCronJobsPage(state);
+    await loadCronStatus(state);
     await loadCronRuns(state, state.cronRunsScope === "all" ? null : job.id);
   });
 }

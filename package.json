@@ -1470,6 +1470,8 @@
     "config:docs:gen": "node --import tsx scripts/generate-config-doc-baseline.ts --write",
     "config:schema:check": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "config:schema:gen": "node --import tsx scripts/generate-base-config-schema.ts --write",
+    "control-director:eval": "pnpm test src/agents/control-director-contract.test.ts src/agents/agent-command.live-model-switch.test.ts src/auto-reply/reply/get-reply-directives.target-session.test.ts test/scripts/control-director-readiness.test.ts",
+    "control-director:readiness": "node scripts/control-director-readiness.mjs",
     "crabbox:hydrate": "node scripts/crabbox-wrapper.mjs actions hydrate",
     "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
     "crabbox:stop": "node scripts/crabbox-wrapper.mjs stop",
@@ -1850,6 +1852,7 @@
     "ui:install": "node scripts/ui.js install",
     "verify": "node scripts/verify.mjs",
     "ui:smoke:projects": "node --import tsx scripts/dev/control-ui-projects-smoke.ts",
+    "ui:smoke:self-improvement": "node --import tsx scripts/dev/control-ui-self-improvement-smoke.ts",
     "ui:smoke:snes-studio": "node --import tsx scripts/dev/control-ui-snes-studio-smoke.ts",
     "ui:smoke:dashboard": "node --import tsx scripts/dev/control-ui-dashboard-smoke-suite.ts"
   },

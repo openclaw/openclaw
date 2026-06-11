@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "vocalPlanId": "safe-original-rap-test",
+  "sourceRef": "garageband-source-validation",
+  "sourceKind": "song",
+  "mode": "openclaw_or_cloud",
+  "direction": "original urgent baritone West Coast rap vocal with crisp diction and no artist imitation",
+  "lyrics": "Original words only",
+  "compliance": {
+    "status": "clear_for_draft",
+    "blocksDraft": false,
+    "blocksRelease": true,
+    "matchedRules": [],
+    "releaseGates": [
+      "rightsOwnerConfirmed",
+      "aiDisclosureReviewed",
+      "modelToolRightsEvidenceRecorded",
+      "platformMetadataComplete",
+      "publicPublishingApproval"
+    ]
+  },
+  "prompt": {
+    "candidateId": "safe-original-rap-test",
+    "model": "minimax/music-2.6",
+    "prompt": "Create an original vocal layer for Warm instrumental ambient piano cue for deep focus. Source audio reference: garageband-source-validation. Vocal direction: original urgent baritone West Coast rap vocal with crisp diction and no artist imitation. Mode: openclaw_or_cloud. Use the supplied original lyrics exactly unless the request asks for refinement. Avoid artist imitation, celebrity voice cloning, copyrighted lyrics, uncleared samples, and misleading real-person voice. Return a clean vocal-forward result suitable for importing into GarageBand.",
+    "lyrics": "Original words only",
+    "instrumental": false,
+    "durationSeconds": 60,
+    "format": "mp3",
+    "filename": "2026-05-14-validation-happy-path-safe-original-rap-test"
+  },
+  "status": "planned",
+  "createdAt": "2026-05-16T22:11:53.175Z",
+  "manualBoundaries": [
+    "OpenClaw music_generate can create vocal-forward audio when provider credentials exist.",
+    "Precise vocal alignment to an existing GarageBand session may require a cloud vocal/stem tool or manual GarageBand arrangement.",
+    "Voice cloning or artist imitation remains blocked unless explicit rights evidence is recorded."
+  ]
+}

@@ -594,14 +594,16 @@ describe("memory cli", () => {
         const writeJson = spyRuntimeJson(defaultRuntime);
         await runMemoryCli(["status", "--agent", "main", "--json"]);
 
-        const payload = firstWrittenJsonArg<{
-          rollup: {
-            error?: string;
-            plan: {
-              discovered: number;
+        const payload = firstWrittenJsonArg<
+          Array<{
+            rollup: {
+              error?: string;
+              plan: {
+                discovered: number;
+              };
             };
-          };
-        }>(writeJson);
+          }>
+        >(writeJson);
         const first = payload?.[0];
         expect(first?.rollup?.error).toContain("plan failed");
         expect(first?.rollup?.plan?.discovered).toBe(0);
@@ -653,14 +655,16 @@ describe("memory cli", () => {
         const writeJson = spyRuntimeJson(defaultRuntime);
         await runMemoryCli(["status", "--agent", "main", "--json"]);
 
-        const payload = firstWrittenJsonArg<{
-          indexCoverage: {
-            memoryFilesDiscovered: number | null;
-            memoryFilesIndexed: number | null;
-            sessionTranscriptsDiscovered: number | null;
-            sessionTranscriptsIndexed: number | null;
-          };
-        }>(writeJson);
+        const payload = firstWrittenJsonArg<
+          Array<{
+            indexCoverage: {
+              memoryFilesDiscovered: number | null;
+              memoryFilesIndexed: number | null;
+              sessionTranscriptsDiscovered: number | null;
+              sessionTranscriptsIndexed: number | null;
+            };
+          }>
+        >(writeJson);
         expect(payload?.[0]?.indexCoverage?.memoryFilesDiscovered).toBe(1);
         expect(payload?.[0]?.indexCoverage?.memoryFilesIndexed).toBe(1);
         expect(payload?.[0]?.indexCoverage?.sessionTranscriptsDiscovered).toBe(1);
@@ -1067,17 +1071,19 @@ describe("memory cli", () => {
         const writeJson = spyRuntimeJson(defaultRuntime);
         await runMemoryCli(["rollup", "--agent", "main", "--json"]);
 
-        const payload = firstWrittenJsonArg<{
-          agentId: string;
-          workspaceDir: string | null;
-          discovered: number;
-          generated: number;
-          pending: number;
-          stale: number;
-          orphaned: number;
-          actions: Array<{ sourceTranscript: string }>;
-          orphans: Array<{ sourceTranscript?: string }>;
-        }>(writeJson);
+        const payload = firstWrittenJsonArg<
+          Array<{
+            agentId: string;
+            workspaceDir: string | null;
+            discovered: number;
+            generated: number;
+            pending: number;
+            stale: number;
+            orphaned: number;
+            actions: Array<{ sourceTranscript: string }>;
+            orphans: Array<{ sourceTranscript?: string }>;
+          }>
+        >(writeJson);
         expect(Array.isArray(payload)).toBe(true);
         expect(payload?.[0]?.agentId).toBe("main");
         expect(payload?.[0]?.discovered).toBe(1);
@@ -1126,10 +1132,12 @@ describe("memory cli", () => {
         const error = spyRuntimeErrors(defaultRuntime);
         await runMemoryCli(["rollup", "--agent", "main", "--apply", "--json"]);
 
-        const payload = firstWrittenJsonArg<{
-          agentId: string;
-          indexError?: string;
-        }>(writeJson);
+        const payload = firstWrittenJsonArg<
+          Array<{
+            agentId: string;
+            indexError?: string;
+          }>
+        >(writeJson);
         expect(payload?.[0]?.agentId).toBe("main");
         expect(payload?.[0]?.indexError).toContain("index unavailable");
         expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory rollup index failed"));

@@ -3,6 +3,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
+import "../../styles/chat.css";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   getChatAttachmentPreviewUrl,
@@ -30,6 +31,7 @@ import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
+import { chatRunStatusLabel, type ChatRunStatus } from "../chat/run-status.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
@@ -50,6 +52,7 @@ import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
+import { chatEphemeralState as vs, resetChatViewState } from "./chat-view-state.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -70,6 +73,10 @@ export type ChatProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  runStatus?: ChatRunStatus | null;
+  targetRunId?: string | null;
+  targetAuditTs?: number | null;
+  targetStatus?: "exact-run" | "timestamp-fallback" | "not-found" | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -102,6 +109,7 @@ export type ChatProps = {
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
   onRefresh: () => void;
+  onLoadTargetHistory?: () => void;
   onToggleFocusMode: () => void;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -137,6 +145,8 @@ const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
 const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
 const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
+const scrolledTargetKeys = new Set<string>();
+const MAX_SCROLLED_TARGET_KEYS = 100;
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -154,43 +164,181 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
   );
 }
 
-interface ChatEphemeralState {
-  slashMenuOpen: boolean;
-  slashMenuItems: SlashCommandDef[];
-  slashMenuIndex: number;
-  slashMenuMode: "command" | "args";
-  slashMenuCommand: SlashCommandDef | null;
-  slashMenuArgItems: string[];
-  slashMenuExpanded: boolean;
-  searchOpen: boolean;
-  searchQuery: string;
-  pinnedExpanded: boolean;
+function rememberScrolledTargetKey(key: string): boolean {
+  if (scrolledTargetKeys.has(key)) {
+    return false;
+  }
+  scrolledTargetKeys.add(key);
+  while (scrolledTargetKeys.size > MAX_SCROLLED_TARGET_KEYS) {
+    const oldest = scrolledTargetKeys.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    scrolledTargetKeys.delete(oldest);
+  }
+  return true;
 }
 
-function createChatEphemeralState(): ChatEphemeralState {
-  return {
-    slashMenuOpen: false,
-    slashMenuItems: [],
-    slashMenuIndex: 0,
-    slashMenuMode: "command",
-    slashMenuCommand: null,
-    slashMenuArgItems: [],
-    slashMenuExpanded: false,
-    searchOpen: false,
-    searchQuery: "",
-    pinnedExpanded: false,
+function resolveTargetScrollKey(params: {
+  sessionKey: string;
+  targetRunId?: string | null;
+  targetAuditTs?: number | null;
+  targetTranscriptSeq?: number | null;
+}): string | null {
+  if (params.targetRunId) {
+    return `${params.sessionKey}:run:${params.targetRunId}`;
+  }
+  if (params.targetTranscriptSeq) {
+    return `${params.sessionKey}:seq:${params.targetTranscriptSeq}`;
+  }
+  if (typeof params.targetAuditTs === "number" && Number.isFinite(params.targetAuditTs)) {
+    return `${params.sessionKey}:audit:${params.targetAuditTs}`;
+  }
+  return null;
+}
+
+function scheduleTargetBubbleScroll(container: Element | undefined, targetKey: string | null) {
+  if (!container || !targetKey || !rememberScrolledTargetKey(targetKey)) {
+    return;
+  }
+  const scrollTarget = (allowRetry = true) => {
+    const target = container.querySelector<HTMLElement>(".chat-bubble--run-target");
+    if (!target) {
+      if (allowRetry) {
+        window.setTimeout(() => scrollTarget(false), 0);
+      }
+      return;
+    }
+    target.setAttribute("tabindex", "-1");
+    if (typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "center", behavior: "auto" });
+    }
+    if (typeof target.focus === "function") {
+      target.focus({ preventScroll: true });
+    }
   };
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => scrollTarget());
+    return;
+  }
+  window.setTimeout(() => scrollTarget(), 0);
 }
 
-const vs = createChatEphemeralState();
-
-/**
- * Reset chat view ephemeral state when navigating away.
- * Clears search/slash UI that should not survive navigation.
- */
-export function resetChatViewState() {
-  Object.assign(vs, createChatEphemeralState());
+function renderTargetStatusNotice(props: ChatProps, targetMissing: boolean) {
+  const status = props.targetStatus ?? null;
+  if (status === "exact-run") {
+    return html`<div class="chat-target-notice" role="status">
+      ${t("chat.judgeGuardTargetExact")}
+    </div>`;
+  }
+  if (status === "timestamp-fallback") {
+    return html`<div class="chat-target-notice" role="status">
+      ${t("chat.judgeGuardTargetFallback")}
+    </div>`;
+  }
+  if (!targetMissing) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-target-notice" role="status">
+      <span>${t("chat.judgeGuardTargetMissing")}</span>
+      <button
+        class="btn btn--subtle btn--sm"
+        type="button"
+        @click=${props.onLoadTargetHistory ?? props.onRefresh}
+      >
+        ${t("chat.loadJudgeGuardTarget")}
+      </button>
+    </div>
+  `;
 }
+
+const JUDGE_GUARD_TRANSCRIPT_FALLBACK_WINDOW_MS = 15 * 60 * 1000;
+
+function getOpenClawMeta(message: unknown): Record<string, unknown> | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const meta = (message as { __openclaw?: unknown }).__openclaw;
+  return meta && typeof meta === "object" && !Array.isArray(meta)
+    ? (meta as Record<string, unknown>)
+    : null;
+}
+
+function messageHasRunId(message: unknown, runId: string | null | undefined): boolean {
+  if (!runId) {
+    return false;
+  }
+  return getOpenClawMeta(message)?.runId === runId;
+}
+
+function resolveMessageSeq(message: unknown): number | null {
+  const seq = getOpenClawMeta(message)?.seq;
+  return typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : null;
+}
+
+function resolveMessageTimestamp(message: unknown): number | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const timestamp = (message as { timestamp?: unknown }).timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isAssistantTranscriptMessage(message: unknown): boolean {
+  return (
+    Boolean(message && typeof message === "object" && !Array.isArray(message)) &&
+    (message as { role?: unknown }).role === "assistant"
+  );
+}
+
+function resolveFallbackTargetSeq(params: {
+  messages: readonly unknown[];
+  targetRunId?: string | null;
+  targetAuditTs?: number | null;
+}): number | null {
+  if (
+    params.targetRunId &&
+    params.messages.some((message) => messageHasRunId(message, params.targetRunId))
+  ) {
+    return null;
+  }
+  const auditTs =
+    typeof params.targetAuditTs === "number" && Number.isFinite(params.targetAuditTs)
+      ? params.targetAuditTs
+      : null;
+  if (auditTs === null) {
+    return null;
+  }
+
+  let best: { seq: number; delta: number; before: boolean } | null = null;
+  for (const message of params.messages) {
+    if (!isAssistantTranscriptMessage(message)) {
+      continue;
+    }
+    const seq = resolveMessageSeq(message);
+    const timestamp = resolveMessageTimestamp(message);
+    if (seq === null || timestamp === null) {
+      continue;
+    }
+    const delta = Math.abs(auditTs - timestamp);
+    if (delta > JUDGE_GUARD_TRANSCRIPT_FALLBACK_WINDOW_MS) {
+      continue;
+    }
+    const before = timestamp <= auditTs;
+    if (
+      !best ||
+      (before && !best.before) ||
+      (before === best.before && delta < best.delta) ||
+      (before === best.before && delta === best.delta && seq > best.seq)
+    ) {
+      best = { seq, delta, before };
+    }
+  }
+  return best?.seq ?? null;
+}
+
+export { resetChatViewState } from "./chat-view-state.ts";
 
 export const cleanupChatModuleState = resetChatViewState;
 
@@ -311,6 +459,21 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     });
     reader.readAsDataURL(file);
   }
+}
+
+function handleChatThreadPointerDown(e: PointerEvent) {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !active.closest(".agent-chat__input")) {
+    return;
+  }
+  const target = e.target instanceof Element ? e.target : null;
+  if (target?.closest(".agent-chat__input")) {
+    return;
+  }
+  if (e.pointerType === "mouse" && window.innerWidth > 768) {
+    return;
+  }
+  active.blur();
 }
 
 function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof nothing {
@@ -814,6 +977,7 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const visibleRunStatus = chatRunStatusLabel(props.runStatus, props.assistantName);
 
   const handleCodeBlockCopy = (e: Event) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy");
@@ -841,6 +1005,27 @@ export function renderChat(props: ChatProps) {
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
   });
+  const targetTranscriptSeq = resolveFallbackTargetSeq({
+    messages: props.messages,
+    targetRunId: props.targetRunId,
+    targetAuditTs: props.targetAuditTs,
+  });
+  const hasTargetRequest = Boolean(
+    props.targetRunId ||
+    (typeof props.targetAuditTs === "number" && Number.isFinite(props.targetAuditTs)),
+  );
+  const hasExactTargetRun = Boolean(
+    props.targetRunId &&
+    props.messages.some((message) => messageHasRunId(message, props.targetRunId)),
+  );
+  const showTargetMissingNotice =
+    hasTargetRequest && !props.loading && !hasExactTargetRun && targetTranscriptSeq === null;
+  const targetScrollKey = resolveTargetScrollKey({
+    sessionKey: props.sessionKey,
+    targetRunId: props.targetRunId,
+    targetAuditTs: props.targetAuditTs,
+    targetTranscriptSeq,
+  });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const toggleToolCardExpanded = (toolCardId: string) => {
@@ -856,7 +1041,9 @@ export function renderChat(props: ChatProps) {
       role="log"
       aria-live="polite"
       @scroll=${props.onChatScroll}
+      @pointerdown=${handleChatThreadPointerDown}
       @click=${handleCodeBlockCopy}
+      ${ref((el) => scheduleTargetBubbleScroll(el, targetScrollKey))}
     >
       <div class="chat-thread-inner">
         ${showLoadingSkeleton
@@ -985,6 +1172,8 @@ export function renderChat(props: ChatProps) {
                 canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                targetRunId: props.targetRunId ?? null,
+                targetTranscriptSeq,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
                 onDelete: () => {
@@ -1177,7 +1366,7 @@ export function renderChat(props: ChatProps) {
           class="chat-main"
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
         >
-          ${thread}
+          ${renderTargetStatusNotice(props, showTargetMissingNotice)} ${thread}
         </div>
 
         ${sidebarOpen
@@ -1254,6 +1443,19 @@ export function renderChat(props: ChatProps) {
                   : props.realtimeTalkStatus === "connecting"
                     ? "Connecting Talk..."
                     : "Talk live")}
+              </div>
+            `
+          : nothing}
+        ${visibleRunStatus
+          ? html`
+              <div
+                class="agent-chat__run-status"
+                role="status"
+                aria-live="polite"
+                data-chat-run-status="true"
+              >
+                <span class="chat-working-orb" aria-hidden="true"></span>
+                <span>${visibleRunStatus}</span>
               </div>
             `
           : nothing}

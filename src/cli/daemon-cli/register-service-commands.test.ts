@@ -4,6 +4,9 @@ import { addGatewayServiceCommands } from "./register-service-commands.js";
 
 const runDaemonInstall = vi.fn(async (_opts: unknown) => {});
 const runDaemonRestart = vi.fn(async (_opts: unknown) => {});
+const runGatewaySnapshotPrune = vi.fn(async (_opts: unknown) => {});
+const runGatewaySnapshotRollback = vi.fn(async (_opts: unknown) => {});
+const runGatewaySnapshotStatus = vi.fn(async (_opts: unknown) => {});
 const runDaemonStart = vi.fn(async (_opts: unknown) => {});
 const runDaemonStatus = vi.fn(async (_opts: unknown) => {});
 const runDaemonStop = vi.fn(async (_opts: unknown) => {});
@@ -24,6 +27,12 @@ vi.mock("./lifecycle.runtime.js", () => ({
   runDaemonUninstall: (opts: unknown) => runDaemonUninstall(opts),
 }));
 
+vi.mock("./snapshot.runtime.js", () => ({
+  runGatewaySnapshotPrune: (opts: unknown) => runGatewaySnapshotPrune(opts),
+  runGatewaySnapshotRollback: (opts: unknown) => runGatewaySnapshotRollback(opts),
+  runGatewaySnapshotStatus: (opts: unknown) => runGatewaySnapshotStatus(opts),
+}));
+
 function createGatewayParentLikeCommand() {
   const gateway = new Command().name("gateway");
   // Mirror overlapping root gateway options that conflict with service subcommand options.
@@ -39,6 +48,9 @@ describe("addGatewayServiceCommands", () => {
   beforeEach(() => {
     runDaemonInstall.mockClear();
     runDaemonRestart.mockClear();
+    runGatewaySnapshotPrune.mockClear();
+    runGatewaySnapshotRollback.mockClear();
+    runGatewaySnapshotStatus.mockClear();
     runDaemonStart.mockClear();
     runDaemonStatus.mockClear();
     runDaemonStop.mockClear();
@@ -115,6 +127,30 @@ describe("addGatewayServiceCommands", () => {
             requireRpc: true,
           }),
         );
+      },
+    },
+    {
+      name: "forwards snapshot status json",
+      argv: ["snapshot", "status", "--json"],
+      assert: () => {
+        expect(runGatewaySnapshotStatus).toHaveBeenCalledWith({ json: true });
+      },
+    },
+    {
+      name: "forwards snapshot prune keep count",
+      argv: ["snapshot", "prune", "--keep", "4"],
+      assert: () => {
+        expect(runGatewaySnapshotPrune).toHaveBeenCalledWith({ keep: "4", json: false });
+      },
+    },
+    {
+      name: "forwards snapshot rollback release id",
+      argv: ["snapshot", "rollback", "release-a"],
+      assert: () => {
+        expect(runGatewaySnapshotRollback).toHaveBeenCalledWith({
+          releaseId: "release-a",
+          json: false,
+        });
       },
     },
   ])("$name", async ({ argv, assert }) => {

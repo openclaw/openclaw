@@ -457,6 +457,28 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
     });
   });
 
+  it("falls back on provider endpoint connection-refused assistant errors", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess("connect ECONNREFUSED 127.0.0.1:11434");
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:connection-refused-defaults-fallback",
+        runId: "run:connection-refused-defaults-fallback",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("timeout");
+      expect(result.attempts[0]?.error).toContain("ECONNREFUSED");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
   it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

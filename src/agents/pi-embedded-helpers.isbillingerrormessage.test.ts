@@ -812,6 +812,19 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
     );
   });
 
+  it("classifies provider endpoint transport failures as timeout", () => {
+    for (const sample of [
+      "connect ECONNREFUSED 127.0.0.1:11434",
+      "LLM request failed: connection refused by the provider endpoint.",
+      "dial tcp: lookup api.example.com: no such host (ENOTFOUND)",
+      "network is unreachable while connecting to provider endpoint",
+      "fetch failed: socket hang up",
+    ]) {
+      expect(classifyFailoverReason(sample), sample).toBe("timeout");
+      expect(isFailoverErrorMessage(sample), sample).toBe(true);
+    }
+  });
+
   it("does not match wrapped or unrelated unknown-error phrases as bare wrapper", () => {
     // Wrapped messages must not slip into failover-as-timeout via the bare match.
     expect(classifyFailoverReason("LLM request failed with an unknown error.")).toBeNull();

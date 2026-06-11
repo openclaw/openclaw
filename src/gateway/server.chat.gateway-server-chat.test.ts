@@ -895,6 +895,117 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send creates and finalizes a user-visible task", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({ text: "Verified and done." });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-chat-task-ok",
+        8000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "check the thing",
+        idempotencyKey: "idem-chat-task-ok",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.taskId).toEqual(expect.any(String));
+      await finalPromise;
+
+      await vi.waitFor(async () => {
+        const tasks = await rpcReq<{ tasks?: Array<Record<string, unknown>> }>(ws, "tasks.list", {
+          sessionKey: "main",
+          runId: "idem-chat-task-ok",
+          limit: 1,
+        });
+        expect(tasks.ok).toBe(true);
+        expect(tasks.payload?.tasks?.[0]).toMatchObject({
+          taskId: res.payload?.taskId,
+          runId: "idem-chat-task-ok",
+          kind: "chat",
+          status: "completed",
+          judgeStatus: "approved",
+          judgeVerdict: "APPROVE",
+        });
+      });
+    });
+  });
+
+  test("chat.send marks working-only final replies as blocked tasks", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({ text: "I am working on it and will check." });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-chat-task-blocked",
+        8000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "check the project",
+        idempotencyKey: "idem-chat-task-blocked",
+      });
+      expect(res.ok).toBe(true);
+      await finalPromise;
+
+      await vi.waitFor(async () => {
+        const tasks = await rpcReq<{ tasks?: Array<Record<string, unknown>> }>(ws, "tasks.list", {
+          sessionKey: "main",
+          runId: "idem-chat-task-blocked",
+          limit: 1,
+        });
+        expect(tasks.ok).toBe(true);
+        expect(tasks.payload?.tasks?.[0]).toMatchObject({
+          runId: "idem-chat-task-blocked",
+          status: "blocked",
+          judgeStatus: "rejected",
+          judgeVerdict: "REQUEST_MORE_EVIDENCE",
+        });
+        const blockedReason = tasks.payload?.tasks?.[0]?.blockedReason;
+        expect(typeof blockedReason === "string" ? blockedReason : "").toContain("future work");
+      });
+    });
+  });
+
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(async (dir) => {
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;

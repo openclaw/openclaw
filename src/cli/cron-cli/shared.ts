@@ -154,6 +154,66 @@ export function parseCronToolsAllow(input: unknown): string[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+export function collectRepeatedOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+export function parseCronCommandArgs(input: unknown): string[] | undefined {
+  const values = Array.isArray(input) ? input.map((value) => String(value)) : [];
+  return values.length > 0 ? values : undefined;
+}
+
+export function parseCronCommandEnv(input: unknown): Record<string, string> | undefined {
+  const values = Array.isArray(input) ? input.map((value) => String(value)) : [];
+  if (values.length === 0) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const raw of values) {
+    const index = raw.indexOf("=");
+    if (index <= 0) {
+      throw new Error("--command-env values must use KEY=VALUE");
+    }
+    const key = raw.slice(0, index).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`invalid --command-env key: ${key || "(empty)"}`);
+    }
+    env[key] = raw.slice(index + 1);
+  }
+  return env;
+}
+
+export function parseCronCommandSuccessExitCodes(input: unknown): number[] | undefined {
+  const raw = normalizeOptionalString(input);
+  if (!raw) {
+    return undefined;
+  }
+  const values = raw
+    .split(/[,\s]+/u)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error("--command-success-exit-codes must be non-negative integers");
+      }
+      return parsed;
+    });
+  return values.length > 0 ? Array.from(new Set(values)) : undefined;
+}
+
+export function parseNonNegativeIntOption(input: unknown, flag: string): number | undefined {
+  const raw = normalizeOptionalString(input);
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${flag} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *

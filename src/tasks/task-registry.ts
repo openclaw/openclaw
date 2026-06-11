@@ -46,6 +46,7 @@ import type {
   TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
+  TaskJudgeStatus,
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/registry");
@@ -409,6 +410,28 @@ function normalizeTaskTerminalOutcome(
   return value === "succeeded" || value === "blocked" ? value : undefined;
 }
 
+function normalizeStringArray(value: readonly string[] | null | undefined): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => (typeof entry === "string" ? entry.replace(/\s+/g, " ").trim() : ""))
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeTaskJudgeStatus(
+  value: TaskJudgeStatus | null | undefined,
+): TaskJudgeStatus | undefined {
+  return value === "not_required" ||
+    value === "pending" ||
+    value === "approved" ||
+    value === "rejected" ||
+    value === "invalid"
+    ? value
+    : undefined;
+}
+
 function shouldApplyRunScopedStatusUpdate(params: {
   currentStatus: TaskStatus;
   nextStatus: TaskStatus;
@@ -751,6 +774,15 @@ function mergeExistingTaskForCreate(
     preferMetadata?: boolean;
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
+    userVisible?: boolean;
+    expectedDeliverable?: string | null;
+    acceptanceCriteria?: string[];
+    artifactIds?: string[];
+    judgeStatus?: TaskJudgeStatus;
+    judgeVerdict?: string;
+    judgeReason?: string;
+    judgeRunId?: string;
+    blockedReason?: string;
   },
 ): TaskRecord {
   const patch: Partial<TaskRecord> = {};
@@ -782,6 +814,41 @@ function mergeExistingTaskForCreate(
   }
   if (params.agentId?.trim() && !existing.agentId?.trim()) {
     patch.agentId = params.agentId.trim();
+  }
+  if (params.userVisible === true && existing.userVisible !== true) {
+    patch.userVisible = true;
+  }
+  const expectedDeliverable = normalizeTaskSummary(params.expectedDeliverable);
+  if (expectedDeliverable && !existing.expectedDeliverable?.trim()) {
+    patch.expectedDeliverable = expectedDeliverable;
+  }
+  const acceptanceCriteria = normalizeStringArray(params.acceptanceCriteria);
+  if (acceptanceCriteria && !existing.acceptanceCriteria?.length) {
+    patch.acceptanceCriteria = acceptanceCriteria;
+  }
+  const artifactIds = normalizeStringArray(params.artifactIds);
+  if (artifactIds && !existing.artifactIds?.length) {
+    patch.artifactIds = artifactIds;
+  }
+  const judgeStatus = normalizeTaskJudgeStatus(params.judgeStatus);
+  if (judgeStatus && !existing.judgeStatus) {
+    patch.judgeStatus = judgeStatus;
+  }
+  const judgeVerdict = normalizeTaskSummary(params.judgeVerdict);
+  if (judgeVerdict && !existing.judgeVerdict?.trim()) {
+    patch.judgeVerdict = judgeVerdict;
+  }
+  const judgeReason = normalizeTaskSummary(params.judgeReason);
+  if (judgeReason && !existing.judgeReason?.trim()) {
+    patch.judgeReason = judgeReason;
+  }
+  const judgeRunId = normalizeOptionalString(params.judgeRunId);
+  if (judgeRunId && !existing.judgeRunId?.trim()) {
+    patch.judgeRunId = judgeRunId;
+  }
+  const blockedReason = normalizeTaskSummary(params.blockedReason);
+  if (blockedReason && !existing.blockedReason?.trim()) {
+    patch.blockedReason = blockedReason;
   }
   const nextLabel = params.label?.trim();
   if (params.preferMetadata) {
@@ -1500,6 +1567,15 @@ export function createTaskRecord(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  userVisible?: boolean;
+  expectedDeliverable?: string | null;
+  acceptanceCriteria?: string[];
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 }): TaskRecord {
   ensureTaskRegistryReady();
   const requesterSessionKey = resolveTaskRequesterSessionKey(params);
@@ -1554,6 +1630,14 @@ export function createTaskRecord(params: {
     scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
+  const expectedDeliverable = normalizeTaskSummary(params.expectedDeliverable);
+  const acceptanceCriteria = normalizeStringArray(params.acceptanceCriteria);
+  const artifactIds = normalizeStringArray(params.artifactIds);
+  const judgeStatus = normalizeTaskJudgeStatus(params.judgeStatus);
+  const judgeVerdict = normalizeTaskSummary(params.judgeVerdict);
+  const judgeReason = normalizeTaskSummary(params.judgeReason);
+  const judgeRunId = normalizeOptionalString(params.judgeRunId);
+  const blockedReason = normalizeTaskSummary(params.blockedReason);
   const record: TaskRecord = normalizeTaskTimestamps({
     taskId,
     runtime: params.runtime,
@@ -1582,6 +1666,15 @@ export function createTaskRecord(params: {
       status,
       terminalOutcome: params.terminalOutcome,
     }),
+    ...(params.userVisible === true ? { userVisible: true } : {}),
+    ...(expectedDeliverable ? { expectedDeliverable } : {}),
+    ...(acceptanceCriteria ? { acceptanceCriteria } : {}),
+    ...(artifactIds ? { artifactIds } : {}),
+    ...(judgeStatus ? { judgeStatus } : {}),
+    ...(judgeVerdict ? { judgeVerdict } : {}),
+    ...(judgeReason ? { judgeReason } : {}),
+    ...(judgeRunId ? { judgeRunId } : {}),
+    ...(blockedReason ? { blockedReason } : {}),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
     record.cleanupAfter =
@@ -1628,6 +1721,12 @@ function updateTaskStateByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
   eventSummary?: string | null;
 }) {
   ensureTaskRegistryReady();
@@ -1675,6 +1774,24 @@ function updateTaskStateByRunId(params: {
         status: nextStatus,
         terminalOutcome: params.terminalOutcome,
       });
+    }
+    if (params.artifactIds !== undefined) {
+      patch.artifactIds = normalizeStringArray(params.artifactIds);
+    }
+    if (params.judgeStatus !== undefined) {
+      patch.judgeStatus = normalizeTaskJudgeStatus(params.judgeStatus);
+    }
+    if (params.judgeVerdict !== undefined) {
+      patch.judgeVerdict = normalizeTaskSummary(params.judgeVerdict);
+    }
+    if (params.judgeReason !== undefined) {
+      patch.judgeReason = normalizeTaskSummary(params.judgeReason);
+    }
+    if (params.judgeRunId !== undefined) {
+      patch.judgeRunId = normalizeOptionalString(params.judgeRunId);
+    }
+    if (params.blockedReason !== undefined) {
+      patch.blockedReason = normalizeTaskSummary(params.blockedReason);
     }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??
@@ -1779,6 +1896,12 @@ export function markTaskTerminalByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 }) {
   return finalizeTaskRunByRunId(params);
 }
@@ -1795,6 +1918,12 @@ export function finalizeTaskRunByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
@@ -1808,6 +1937,12 @@ export function finalizeTaskRunByRunId(params: {
     progressSummary: params.progressSummary,
     terminalSummary: params.terminalSummary,
     terminalOutcome: params.terminalOutcome,
+    artifactIds: params.artifactIds,
+    judgeStatus: params.judgeStatus,
+    judgeVerdict: params.judgeVerdict,
+    judgeReason: params.judgeReason,
+    judgeRunId: params.judgeRunId,
+    blockedReason: params.blockedReason,
   });
 }
 

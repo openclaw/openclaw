@@ -1,5 +1,28 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+export type {
+  SelfImprovementRecommendationGroup,
+  SelfImprovementRecommendation,
+  SelfImprovementActionQueueSummary,
+  SelfImprovementActionability,
+  SelfImprovementAuditEvent,
+  SelfImprovementAnalysisRunResult,
+  SelfImprovementModelPreflightResult,
+  SelfImprovementOperationalHealthResult,
+  SelfImprovementProductionCheckResult,
+  SelfImprovementMaintenanceResult,
+  SelfImprovementDailyScorecard,
+  SelfImprovementProposal,
+  SelfImprovementScanResult,
+  SelfImprovementScorecard,
+  SelfImprovementScorecardResult,
+  SelfImprovementSummaryResult,
+} from "../../../src/self-improvement/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type {
+  ProjectContextPreview,
+  ProjectRecord,
+  ProjectResourceRecord,
+} from "../../../src/projects/store.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
   GatewayAgentRuntime,
@@ -16,11 +39,149 @@ export type ChannelsStatusSnapshot = {
   channelDetailLabels?: Record<string, string>;
   channelSystemImages?: Record<string, string>;
   channelMeta?: ChannelUiMetaEntry[];
+  partial?: boolean;
+  warnings?: string[];
   channels: Record<string, unknown>;
   channelAccounts: Record<string, ChannelAccountSnapshot[]>;
   channelDefaultAccountId: Record<string, string>;
-  partial?: boolean;
-  warnings?: string[];
+};
+
+export type AgentsRuntimeModelStatus = {
+  provider: string;
+  name: string;
+  model: string;
+  sizeBytes: number;
+  sizeVramBytes?: number;
+  contextLength?: number;
+  processor?: string;
+  expiresAt?: string;
+  parameterSize?: string;
+  quantization?: string;
+};
+
+export type AgentsInstalledModelStatus = {
+  provider: string;
+  name: string;
+  model: string;
+  sizeBytes: number;
+  parameterSize?: string;
+  quantization?: string;
+};
+
+export type AgentsRuntimeStatusResult = {
+  ts: number;
+  system: {
+    totalBytes: number;
+    freeBytes: number;
+    usedBytes: number;
+    usedRatio: number;
+    macosMemory?: {
+      available: boolean;
+      pageSizeBytes: number;
+      freeBytes: number;
+      speculativeBytes: number;
+      purgeableBytes: number;
+      fileBackedBytes: number;
+      anonymousBytes: number;
+      wiredBytes: number;
+      compressedBytes: number;
+      reclaimableBytes: number;
+      availabilityEstimateBytes: number;
+      error?: string;
+    };
+    processes?: {
+      available: boolean;
+      totalRssBytes: number;
+      openclawRssBytes: number;
+      ollamaRssBytes: number;
+      otherRssBytes: number;
+      error?: string;
+      top: Array<{
+        pid: number;
+        name: string;
+        command: string;
+        rssBytes: number;
+        category: "openclaw" | "ollama" | "other";
+      }>;
+    };
+  };
+  localModels: {
+    provider: string;
+    available: boolean;
+    error?: string;
+    totalLoadedBytes: number;
+    totalLoadedVramBytes: number;
+    count: number;
+    models: AgentsRuntimeModelStatus[];
+    installedAvailable?: boolean;
+    installedError?: string;
+    installedModels?: AgentsInstalledModelStatus[];
+    process?: {
+      available: boolean;
+      rssBytes: number;
+      processCount: number;
+      error?: string;
+    };
+  };
+  warnings: string[];
+};
+
+export type OpsSummaryIssue = {
+  id: string;
+  severity: "critical" | "high" | "medium" | "low";
+  title: string;
+  affected: string;
+  detectedAt: number | null;
+  likelyCause: string;
+  nextInspection: string;
+  source: "cron" | "runtime" | "gateway" | "channel" | "memory" | "customization";
+  plainSummary?: string;
+  whyItMatters?: string;
+  recommendedAction?: string;
+};
+
+export type DashboardCustomizationProtection = {
+  status: "protected" | "needs_review" | "missing" | "unknown";
+  checkedAt: number;
+  generatedAtUtc: string | null;
+  manifestPath: string;
+  patchPath: string | null;
+  fileCount: number;
+  missingFileCount: number;
+  contentDriftCount: number;
+  patchApplies: boolean | null;
+  updateGuardActive: boolean;
+  preserveDirty: boolean;
+  sourceRootConfigured: boolean;
+  detail: string;
+};
+
+export type OpsSummaryResult = {
+  ts: number;
+  state: "healthy" | "watching" | "needs_review" | "degraded" | "critical";
+  issues: OpsSummaryIssue[];
+  checks: {
+    cronEnabled: boolean;
+    cronJobs: number;
+    failedCronJobs: number;
+    nextCronRunAtMs: number | null;
+    channelAccounts: number;
+    loadedModelCount: number;
+    loadedModelBytes: number;
+    ollamaProcessRssBytes: number;
+    openclawProcessRssBytes: number;
+    macosAvailabilityEstimateBytes: number | null;
+    customizationProtection?: DashboardCustomizationProtection;
+  };
+  next: {
+    automation: string;
+    nextCronRunAtMs: number | null;
+  };
+  sources: {
+    runtimeTelemetry: "live" | "unavailable";
+    cron: "live" | "unavailable";
+    channels: "live";
+  };
 };
 
 export type ChannelUiMetaEntry = {
@@ -416,12 +577,27 @@ export type SessionCompactionCheckpointPreview = Pick<
   "checkpointId" | "createdAt" | "reason"
 >;
 
+export type SessionJudgeGuardAuditEntry = {
+  ts: number;
+  runId?: string;
+  action: "rewrote_final_success_claim";
+  verdictStatus: "parsed" | "invalid";
+  verdict?: string;
+  scope?: string;
+  risk?: string;
+  conditions?: string;
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
   surface?: string;
   subject?: string;
   room?: string;
@@ -451,15 +627,33 @@ export type GatewaySessionRow = {
   endedAt?: number;
   runtimeMs?: number;
   childSessions?: string[];
+  projectId?: string;
   model?: string;
   modelProvider?: string;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  judgeGuardAudit?: SessionJudgeGuardAuditEntry[];
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
+
+export type { ProjectContextPreview, ProjectRecord, ProjectResourceRecord };
+
+export type ProjectsListResult = {
+  ok: true;
+  ts: number;
+  count: number;
+  projects: ProjectRecord[];
+};
+
+export type ProjectsGetResult = {
+  ok: true;
+  project: ProjectRecord;
+  sessions?: SessionsListResult;
+  contextPreview?: ProjectContextPreview;
+};
 
 export type SessionsCompactionListResult = {
   ok: true;
@@ -554,6 +748,16 @@ export type CronPayload =
       channel?: string;
       to?: string;
       bestEffortDeliver?: boolean;
+    }
+  | {
+      kind: "command";
+      command: string;
+      args?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      timeoutSeconds?: number;
+      successExitCodes?: number[];
+      outputLimitBytes?: number;
     };
 
 export type CronDelivery = {

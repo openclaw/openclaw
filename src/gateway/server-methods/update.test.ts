@@ -145,13 +145,14 @@ beforeEach(() => {
 async function invokeUpdateRun(
   params: Record<string, unknown>,
   respond?: (ok: boolean, response?: unknown) => void,
+  runtimeConfig: Record<string, unknown> = { update: {} },
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
   await updateHandlers["update.run"]({
     params,
     respond: onRespond as never,
-    context: { getRuntimeConfig: () => ({ update: {} }) },
+    context: { getRuntimeConfig: () => runtimeConfig },
   } as never);
 }
 
@@ -235,6 +236,24 @@ describe("update.run timeout normalization", () => {
     expect(runGatewayUpdateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         timeoutMs: 1000,
+      }),
+    );
+  });
+
+  it("passes customization-preserving update config to the update runner", async () => {
+    await invokeUpdateRun({}, undefined, {
+      update: {
+        preserveDirty: true,
+        sourceRoot: "/Users/openclaw/openclaw",
+        requiredPaths: ["ui/src/ui/views/agents-room.ts"],
+      },
+    });
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preserveDirty: true,
+        sourceRoot: "/Users/openclaw/openclaw",
+        requiredPaths: ["ui/src/ui/views/agents-room.ts"],
       }),
     );
   });

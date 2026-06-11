@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "requestId": "transfer-health-1779217092471-11c95d03",
+  "action": "health-check",
+  "status": "done",
+  "updatedAt": "2026-05-19T18:58:13Z",
+  "remoteLoginUsed": false,
+  "arbitraryCommandsAllowed": false,
+  "detail": "MacBook pull agent healthy on Matthew’s Mac Studio. Remote Login is not used."
+}

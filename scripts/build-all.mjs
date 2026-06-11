@@ -90,6 +90,11 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
   },
+  {
+    label: "gateway-runtime-snapshot",
+    kind: "node",
+    args: ["scripts/promote-gateway-runtime-snapshot.mjs"],
+  },
 ];
 
 export const BUILD_ALL_PROFILES = {

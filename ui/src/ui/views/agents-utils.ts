@@ -245,7 +245,7 @@ export function resolveChatAvatarRenderUrl(
 
 export function agentLogoUrl(basePath: string): string {
   const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
-  return base ? `${base}/favicon.svg` : "favicon.svg";
+  return base ? `${base}/favicon-32.png` : "favicon-32.png";
 }
 
 export function assistantAvatarFallbackUrl(basePath: string): string {

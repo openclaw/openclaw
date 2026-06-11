@@ -45,6 +45,7 @@ export type LoadPluginLookUpTableParams = {
   env: NodeJS.ProcessEnv;
   index?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
+  extraAgentHarnessRuntimes?: readonly string[];
 };
 
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
@@ -75,6 +76,9 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     env: params.env,
     index,
     manifestRegistry,
+    ...(params.extraAgentHarnessRuntimes !== undefined
+      ? { extraAgentHarnessRuntimes: params.extraAgentHarnessRuntimes }
+      : {}),
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
 

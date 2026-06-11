@@ -43,6 +43,7 @@ type DevicesRpcOpts = {
   latest?: boolean;
   yes?: boolean;
   pending?: boolean;
+  olderThan?: string;
   device?: string;
   role?: string;
   scope?: string[];
@@ -51,7 +52,10 @@ type DevicesRpcOpts = {
 type DeviceTokenSummary = {
   role: string;
   scopes?: string[];
+  createdAtMs?: number;
+  rotatedAtMs?: number;
   revokedAtMs?: number;
+  lastUsedAtMs?: number;
 };
 
 type PendingDevice = {
@@ -71,12 +75,16 @@ type PairedDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  platform?: string;
+  clientId?: string;
+  clientMode?: string;
   roles?: string[];
   scopes?: string[];
   remoteIp?: string;
   tokens?: DeviceTokenSummary[];
   createdAtMs?: number;
   approvedAtMs?: number;
+  lastSeenAtMs?: number;
 };
 
 type DevicePairingList = {
@@ -90,6 +98,8 @@ const FALLBACK_STATE_MISMATCH_MESSAGE =
   "Gateway requires device pairing, but local fallback pairing state does not contain the gateway request.";
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
+const CONTROL_UI_SMOKE_DISPLAY_NAME_PREFIX = "OpenClaw smoke ";
+const DEFAULT_SMOKE_PRUNE_OLDER_THAN_MS = 7 * 24 * 60 * 60 * 1000;
 const KNOWN_NON_ADMIN_OPERATOR_SCOPES = new Set<OperatorScope>([
   "operator.approvals",
   "operator.pairing",
@@ -397,6 +407,83 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   return parts.join(", ");
 }
 
+function parseDurationMs(value: string | undefined, fallbackMs: number): number | null {
+  const raw = normalizeOptionalString(value);
+  if (!raw) {
+    return fallbackMs;
+  }
+  const match = /^(\d+)(ms|s|m|h|d)?$/i.exec(raw);
+  if (!match) {
+    return null;
+  }
+  const amount = Number(match[1]);
+  const unit = (match[2] ?? "ms").toLowerCase();
+  const multiplier =
+    unit === "d"
+      ? 24 * 60 * 60 * 1000
+      : unit === "h"
+        ? 60 * 60 * 1000
+        : unit === "m"
+          ? 60 * 1000
+          : unit === "s"
+            ? 1000
+            : 1;
+  return amount * multiplier;
+}
+
+function formatDurationForCommand(ms: number): string {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const hourMs = 60 * 60 * 1000;
+  const minuteMs = 60 * 1000;
+  if (ms > 0 && ms % dayMs === 0) {
+    return `${ms / dayMs}d`;
+  }
+  if (ms > 0 && ms % hourMs === 0) {
+    return `${ms / hourMs}h`;
+  }
+  if (ms > 0 && ms % minuteMs === 0) {
+    return `${ms / minuteMs}m`;
+  }
+  return `${ms}ms`;
+}
+
+function resolveDeviceLastSignalAtMs(device: PairedDevice): number {
+  const tokenLastUsed = (device.tokens ?? [])
+    .map((token) => token.lastUsedAtMs)
+    .filter((value): value is number => typeof value === "number");
+  return Math.max(
+    0,
+    device.lastSeenAtMs ?? 0,
+    ...tokenLastUsed,
+    device.approvedAtMs ?? 0,
+    device.createdAtMs ?? 0,
+  );
+}
+
+function isLabeledControlUiSmokeDevice(device: PairedDevice): boolean {
+  const displayName = normalizeOptionalString(device.displayName) ?? "";
+  return (
+    displayName.startsWith(CONTROL_UI_SMOKE_DISPLAY_NAME_PREFIX) &&
+    device.clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI &&
+    device.clientMode === GATEWAY_CLIENT_MODES.WEBCHAT
+  );
+}
+
+function findPrunableSmokeDevices(params: {
+  paired: PairedDevice[];
+  olderThanMs: number;
+  nowMs: number;
+}): Array<PairedDevice & { lastSignalAtMs: number }> {
+  return params.paired
+    .map((device) => ({ ...device, lastSignalAtMs: resolveDeviceLastSignalAtMs(device) }))
+    .filter(
+      (device) =>
+        isLabeledControlUiSmokeDevice(device) &&
+        params.nowMs - device.lastSignalAtMs >= params.olderThanMs,
+    )
+    .toSorted((a, b) => a.lastSignalAtMs - b.lastSignalAtMs);
+}
+
 function formatPendingDeviceIdentity(request: PendingDevice): string {
   const displayName = normalizeOptionalString(request.displayName);
   if (displayName) {
@@ -674,6 +761,82 @@ export function registerDevicesCli(program: Command) {
         if (opts.pending) {
           defaultRuntime.log(
             `${theme.warn("Rejected")} ${rejectedRequestIds.length} pending request${rejectedRequestIds.length === 1 ? "" : "s"}`,
+          );
+        }
+      }),
+  );
+
+  devicesCallOpts(
+    devices
+      .command("prune-smoke")
+      .description("Remove old labeled Control UI smoke-test pairings")
+      .option(
+        "--older-than <duration>",
+        "Only remove labeled smoke-test devices unused for this long (ms, s, m, h, d)",
+        "7d",
+      )
+      .option("--yes", "Confirm removal of matched smoke-test devices", false)
+      .action(async (opts: DevicesRpcOpts) => {
+        const olderThanMs = parseDurationMs(opts.olderThan, DEFAULT_SMOKE_PRUNE_OLDER_THAN_MS);
+        if (olderThanMs === null) {
+          defaultRuntime.error(
+            "Invalid --older-than duration. Use values like 0, 30m, 12h, or 7d.",
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+        const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+        const candidates = findPrunableSmokeDevices({
+          paired: Array.isArray(list.paired) ? list.paired : [],
+          olderThanMs,
+          nowMs: Date.now(),
+        });
+        const removedDeviceIds: string[] = [];
+        if (opts.yes) {
+          for (const device of candidates) {
+            const deviceId = normalizeOptionalString(device.deviceId);
+            if (!deviceId) {
+              continue;
+            }
+            await callGatewayCli("device.pair.remove", opts, { deviceId });
+            removedDeviceIds.push(deviceId);
+          }
+        }
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            olderThanMs,
+            dryRun: opts.yes !== true,
+            matched: candidates.map((device) => ({
+              deviceId: device.deviceId,
+              displayName: device.displayName,
+              platform: device.platform,
+              lastSignalAtMs: device.lastSignalAtMs,
+            })),
+            removedDevices: removedDeviceIds,
+          });
+          return;
+        }
+        const ageLabel = formatDurationForCommand(olderThanMs);
+        if (candidates.length === 0) {
+          defaultRuntime.log(
+            theme.muted(`No labeled Control UI smoke-test pairings older than ${ageLabel}.`),
+          );
+          return;
+        }
+        const verb = opts.yes ? theme.warn("Removed") : theme.warn("Would remove");
+        defaultRuntime.log(
+          `${verb} ${candidates.length} labeled Control UI smoke-test pairing${candidates.length === 1 ? "" : "s"} older than ${ageLabel}.`,
+        );
+        for (const device of candidates) {
+          defaultRuntime.log(
+            `  ${theme.command(device.deviceId)} ${theme.muted(device.displayName ?? "")}`,
+          );
+        }
+        if (!opts.yes) {
+          defaultRuntime.log(
+            theme.muted(
+              `Preview only. Rerun ${formatCliCommand("openclaw devices prune-smoke --yes")} to remove only these labeled smoke-test devices.`,
+            ),
           );
         }
       }),

@@ -53,6 +53,7 @@ describe("startGatewayEarlyRuntime", () => {
       removeChatRun: () => undefined,
       agentRunSeq: new Map(),
       nodeSendToSession: () => {},
+      cron: { list: vi.fn(async () => []) } as never,
       skillsRefreshDelayMs: 30_000,
       getSkillsRefreshTimer: () => null,
       setSkillsRefreshTimer: () => {},

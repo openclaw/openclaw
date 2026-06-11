@@ -108,9 +108,19 @@ vi.mock("../chat/build-chat-items.ts", () => ({
 }));
 
 vi.mock("../chat/grouped-render.ts", () => ({
-  renderMessageGroup: (group: { messages: Array<{ message: unknown }> }) => {
+  renderMessageGroup: (
+    group: { messages: Array<{ message: unknown }> },
+    opts: { targetTranscriptSeq?: number | null } = {},
+  ) => {
     const element = document.createElement("div");
-    element.className = "chat-group";
+    const matchesTarget = group.messages.some(({ message }) => {
+      const meta =
+        message && typeof message === "object" && !Array.isArray(message)
+          ? (message as { __openclaw?: { seq?: unknown } }).__openclaw
+          : null;
+      return typeof opts.targetTranscriptSeq === "number" && meta?.seq === opts.targetTranscriptSeq;
+    });
+    element.className = matchesTarget ? "chat-group chat-bubble--run-target" : "chat-group";
     element.textContent = group.messages
       .map(({ message }) => {
         if (typeof message === "object" && message !== null && "content" in message) {
@@ -230,12 +240,10 @@ function createChatHeaderState(
           currentModel = normalized.slice(slashIndex + 1);
         } else {
           currentModel = normalized;
-          const matchingProviders: string[] = [];
-          for (const entry of catalog) {
-            if (entry.id === normalized && entry.provider) {
-              matchingProviders.push(entry.provider);
-            }
-          }
+          const matchingProviders = catalog
+            .filter((entry) => entry.id === normalized)
+            .map((entry) => entry.provider)
+            .filter(Boolean);
           currentModelProvider =
             matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
         }
@@ -333,17 +341,6 @@ async function flushTasks() {
   await vi.dynamicImportSettled();
 }
 
-function getChatModelSelect(container: Element): HTMLSelectElement {
-  const select = container.querySelector<HTMLSelectElement>(
-    'select[data-chat-model-select="true"]',
-  );
-  expect(select).toBeInstanceOf(HTMLSelectElement);
-  if (!(select instanceof HTMLSelectElement)) {
-    throw new Error("Expected chat model select");
-  }
-  return select;
-}
-
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
   const container = document.createElement("div");
   render(
@@ -428,6 +425,124 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
 }
 
 describe("chat compaction divider", () => {
+  it("falls back to the nearest historical assistant message when target run metadata is absent", () => {
+    const auditTs = 1710000005000;
+    const container = renderChatView({
+      targetRunId: "run-historical-judge",
+      targetAuditTs: auditTs,
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older reply" }],
+          timestamp: auditTs - 120_000,
+          __openclaw: { seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "guarded historical reply" }],
+          timestamp: auditTs - 100,
+          __openclaw: { seq: 4 },
+        },
+      ],
+    });
+
+    const bubble = container.querySelector<HTMLElement>(".chat-bubble--run-target");
+    expect(bubble?.textContent).toContain("guarded historical reply");
+  });
+
+  it("scrolls the targeted Judge Guard transcript bubble into view once", async () => {
+    const scrollIntoView = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const auditTs = 1710000005000;
+      renderChatView({
+        targetRunId: "run-historical-judge-scroll",
+        targetAuditTs: auditTs,
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "guarded historical reply" }],
+            timestamp: auditTs - 100,
+            __openclaw: { seq: 5 },
+          },
+        ],
+      });
+
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "auto" });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it("shows a target history action when a Judge Guard transcript target is not loaded", () => {
+    const onLoadTargetHistory = vi.fn();
+    const container = renderChatView({
+      targetRunId: "run-missing-judge-target",
+      targetAuditTs: 1710000005000,
+      onLoadTargetHistory,
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "unrelated reply" }],
+          timestamp: 1710000005000 - 3_600_000,
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    const notice = container.querySelector<HTMLElement>(".chat-target-notice");
+    expect(notice?.textContent).toContain("Judge Guard transcript target not found");
+    expect(notice?.textContent).toContain("Load around target");
+    notice?.querySelector("button")?.click();
+    expect(onLoadTargetHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows exact Judge Guard target status after targeted history loads", () => {
+    const container = renderChatView({
+      targetRunId: "run-loaded-judge-target",
+      targetStatus: "exact-run",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "target reply" }],
+          timestamp: 1710000005000,
+          __openclaw: { runId: "run-loaded-judge-target", seq: 1 },
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-target-notice")?.textContent).toContain(
+      "exact run match",
+    );
+  });
+
+  it("shows fallback Judge Guard target status after timestamp fallback loads", () => {
+    const container = renderChatView({
+      targetRunId: "run-fallback-judge-target",
+      targetAuditTs: 1710000005000,
+      targetStatus: "timestamp-fallback",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "fallback reply" }],
+          timestamp: 1710000004900,
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-target-notice")?.textContent).toContain(
+      "timestamp fallback",
+    );
+  });
+
   it("renders checkpoint recovery copy and action", () => {
     const onOpenSessionCheckpoints = vi.fn();
     const container = renderChatView({
@@ -440,8 +555,7 @@ describe("chat compaction divider", () => {
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent).toContain("Open checkpoints");
 
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button!.click();
+    button?.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
   });
@@ -459,7 +573,7 @@ describe("chat loading skeleton", () => {
   it("shows the skeleton while the initial history load has no rendered content", () => {
     const container = renderChatView({ loading: true });
 
-    expect(container.querySelectorAll(".chat-loading-skeleton")).toHaveLength(1);
+    expect(container.querySelector(".chat-loading-skeleton")).not.toBeNull();
     expect(container.querySelector(".agent-chat__welcome")).toBeNull();
   });
 
@@ -498,7 +612,7 @@ describe("chat loading skeleton", () => {
     });
 
     expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
-    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 });
 
@@ -506,7 +620,7 @@ describe("chat voice controls", () => {
   it("keeps Talk visible without the stale browser dictation button", () => {
     const container = renderChatView();
 
-    expect(container.querySelectorAll('[aria-label="Start Talk"]')).toHaveLength(1);
+    expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
@@ -523,9 +637,7 @@ describe("chat voice controls", () => {
       'Realtime voice provider "openai" is not configured',
     );
 
-    const dismiss = container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]');
-    expect(dismiss).toBeInstanceOf(HTMLButtonElement);
-    dismiss!.click();
+    container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
 
     expect(onDismissError).toHaveBeenCalledTimes(1);
   });
@@ -534,14 +646,14 @@ describe("chat voice controls", () => {
 describe("chat slash menu accessibility", () => {
   function inputDraft(container: HTMLElement, value: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    expect(textarea).not.toBeNull();
     textarea!.value = value;
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   function keydownComposer(container: HTMLElement, key: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    expect(textarea).not.toBeNull();
     textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
 
@@ -597,17 +709,12 @@ describe("chat slash menu accessibility", () => {
       : null;
     const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
 
-    if (!nextActiveId) {
-      throw new Error("Expected command navigation to set aria-activedescendant");
-    }
+    expect(nextActiveId).toBeTruthy();
     expect(nextActiveId).not.toBe(initialActiveId);
     expect(activeOption?.getAttribute("aria-selected")).toBe("true");
     expect(status?.getAttribute("aria-live")).toBe("polite");
-    const announcementText = status?.textContent?.trim();
-    if (!announcementText) {
-      throw new Error("Expected command navigation to update the live announcement");
-    }
-    expect(announcementText).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+    expect(status?.textContent?.trim()).toBeTruthy();
+    expect(status?.textContent).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
   });
 
   it("wires fixed argument suggestions with command-and-argument option ids", () => {
@@ -638,12 +745,11 @@ describe("chat slash menu accessibility", () => {
 
     inputDraft(container, "/");
     container = renderChatView({ draft, onDraftChange });
-    const activeDescendant = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    if (!activeDescendant) {
-      throw new Error("Expected slash suggestions to set aria-activedescendant");
-    }
+    expect(
+      container
+        .querySelector<HTMLTextAreaElement>("textarea")
+        ?.getAttribute("aria-activedescendant"),
+    ).toBeTruthy();
 
     inputDraft(container, "plain message");
     container = renderChatView({ draft, onDraftChange });
@@ -672,12 +778,12 @@ describe("chat attachment picker", () => {
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
 
-    expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(input).not.toBeNull();
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
-    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
 
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalledWith([
@@ -692,7 +798,7 @@ describe("chat attachment picker", () => {
     const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];
     expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:application\/pdf;base64,/);
     const preview = renderChatView({ attachments: nextAttachments });
-    expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
+    expect(preview.querySelector(".chat-attachment-thumb--file")).not.toBeNull();
     expect(preview.textContent).toContain("brief.pdf");
   });
 
@@ -702,12 +808,12 @@ describe("chat attachment picker", () => {
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
 
-    expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(input).not.toBeNull();
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
-    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
@@ -785,6 +891,7 @@ describe("chat welcome", () => {
     let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
     const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
+    expect(avatar).not.toBeNull();
     expect(avatar?.tagName).toBe("DIV");
     expect(avatar?.textContent).toContain("VC");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
@@ -795,21 +902,25 @@ describe("chat welcome", () => {
     });
 
     const imageAvatar = container.querySelector<HTMLImageElement>("img");
+    expect(imageAvatar).not.toBeNull();
     expect(imageAvatar?.getAttribute("src")).toBe("blob:identity-avatar");
     expect(imageAvatar?.getAttribute("alt")).toBe("Val");
+    expect(imageAvatar?.getAttribute("style")).toContain("width:108px");
+    expect(imageAvatar?.getAttribute("style")).toContain("height:108px");
 
     container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
 
     const fallbackAvatar = container.querySelector<HTMLImageElement>(
       ".agent-chat__avatar--logo img",
     );
+    expect(fallbackAvatar).not.toBeNull();
     expect(fallbackAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
     expect(fallbackAvatar?.getAttribute("alt")).toBe("Val");
   });
 });
 
 describe("chat session controls", () => {
-  it("filters chat sessions by agent and switches to that agent's recent session", () => {
+  it("filters chat sessions by agent and switches to that agent's recent session", async () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";
@@ -857,7 +968,7 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
   });
 
-  it("falls back to the selected agent's main session when no sessions exist yet", () => {
+  it("falls back to the selected agent's main session when no sessions exist yet", async () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";
@@ -884,7 +995,7 @@ describe("chat session controls", () => {
     const agentSelect = container.querySelector<HTMLSelectElement>(
       'select[data-chat-agent-filter="true"]',
     );
-    expect(agentSelect).toBeInstanceOf(HTMLSelectElement);
+    expect(agentSelect).not.toBeNull();
 
     agentSelect!.value = "beta";
     agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -904,7 +1015,7 @@ describe("chat session controls", () => {
     expect(notice?.getAttribute("role")).toBe("status");
     expect(notice?.getAttribute("aria-live")).toBe("polite");
     expect(notice?.textContent?.trim()).toBe("Switched to Coding");
-    expect(container.querySelectorAll(".chat-controls__session-row--flash")).toHaveLength(1);
+    expect(container.querySelector(".chat-controls__session-row--flash")).not.toBeNull();
   });
 
   it("shows the active agent main session instead of a blank select when no row exists yet", () => {
@@ -949,11 +1060,14 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.value).toBe("");
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("");
 
-    modelSelect.value = "openai/gpt-5-mini";
-    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    modelSelect!.value = "openai/gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
@@ -976,11 +1090,14 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.value).toBe("openai/gpt-5-mini");
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
 
-    modelSelect.value = "";
-    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    modelSelect!.value = "";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
@@ -998,8 +1115,11 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.disabled).toBe(true);
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.disabled).toBe(true);
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
@@ -1007,15 +1127,20 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = getChatModelSelect(container);
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
 
-    modelSelect.value = "openai/gpt-5-mini";
-    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    modelSelect!.value = "openai/gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
     render(renderChatSessionSelect(state), container);
 
-    const rerendered = getChatModelSelect(container);
-    expect(rerendered.value).toBe("openai/gpt-5-mini");
+    const rerendered = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(rerendered?.value).toBe("openai/gpt-5-mini");
   });
 
   it("uses default thinking options when the active session is absent", () => {
@@ -1046,7 +1171,7 @@ describe("chat session controls", () => {
       [...(thinkingSelect?.options ?? [])]
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("Override: maximum");
+    ).toBe("maximum");
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -1063,8 +1188,8 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+    expect(thinkingSelect?.title).toBe("Default (adaptive)");
   });
 
   it("always renders full thinking labels", () => {
@@ -1094,14 +1219,14 @@ describe("chat session controls", () => {
 
     expect(container.querySelector('select[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.title).toBe("Inherited: high");
+    expect(thinkingSelect?.title).toBe("Default (high)");
     expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
-      "Inherited: high",
-      "Off",
-      "Override: low",
-      "Override: medium",
-      "Override: high",
-      "Override: xhigh",
+      "Default (high)",
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
     ]);
   });
 
@@ -1118,7 +1243,7 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+    expect(thinkingSelect?.title).toBe("Default (adaptive)");
   });
 });

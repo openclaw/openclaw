@@ -39,6 +39,8 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 
 - After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
 - Re-open anytime: `openclaw dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
+- When `gateway.tailscale.mode` is `serve` or `funnel`, `openclaw dashboard`
+  prefers the active Tailscale HTTPS hostname instead of a loopback URL.
 - If clipboard and browser delivery fail, `openclaw dashboard` still prints the
   clean URL and tells you to use the token from `OPENCLAW_GATEWAY_TOKEN` or
   `gateway.auth.token` as the URL fragment key `token`; it does not print token

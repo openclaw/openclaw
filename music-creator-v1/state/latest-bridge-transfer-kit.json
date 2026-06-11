@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "status": "transfer_return_imported",
+  "importedAt": "2026-05-19T18:59:32.231Z",
+  "bridgeRoot": "/Users/openclaw/openclaw/music-creator-v1/tmp-safe-bridge",
+  "returnRoot": "/Users/openclaw/openclaw/music-creator-v1/state/bridge-transfer-kits/validation-transfer-kit-3/OpenClaw-GarageBand-Bridge",
+  "importedSubtrees": [
+    "from-macbook",
+    "sync/macbook",
+    "logs"
+  ],
+  "latestReplyProbeId": "transfer-1779217171307-77698009",
+  "safety": {
+    "executedReturnedFiles": false,
+    "importedToMacBookRequests": false,
+    "remoteLoginUsed": false
+  },
+  "nextAction": "Run bridge-sync-status and bridge-status to verify the MacBook reply/result."
+}

@@ -48,6 +48,8 @@ export type GatewayLockOptions = {
   lockDir?: string;
   /** Override process command-line reader (testing seam). */
   readProcessCmdline?: (pid: number) => string[] | null;
+  /** Override gateway port probe (testing seam). */
+  checkPortFree?: (port: number) => Promise<boolean>;
 };
 
 export class GatewayLockError extends Error {
@@ -189,9 +191,10 @@ async function resolveGatewayOwnerStatus(
   platform: NodeJS.Platform,
   port: number | undefined,
   readCmdline?: (pid: number) => string[] | null,
+  checkPortFreeFn = checkPortFree,
 ): Promise<LockOwnerStatus> {
   if (port != null) {
-    const portFree = await checkPortFree(port);
+    const portFree = await checkPortFreeFn(port);
     if (portFree) {
       return "dead";
     }
@@ -305,6 +308,7 @@ export async function acquireGatewayLock(
             platform,
             port,
             opts.readProcessCmdline,
+            opts.checkPortFree,
           )
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {

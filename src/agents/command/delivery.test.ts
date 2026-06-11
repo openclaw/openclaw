@@ -77,12 +77,12 @@ function expectTextPayload(payload: TextPayloadLike | undefined, text: string): 
   expect(payload?.text).toBe(text);
 }
 
-function requirePayload(payloads: readonly ReplyPayload[], index: number): ReplyPayload {
+function requirePayload(payloads: readonly unknown[], index: number): ReplyPayload {
   const payload = payloads.at(index);
   if (!payload) {
     throw new Error(`expected payload at index ${index}`);
   }
-  return payload;
+  return payload as ReplyPayload;
 }
 
 function latestNormalizerOptions(): MediaNormalizerOptions {
@@ -213,6 +213,55 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
     expect(delivered.payloads).toHaveLength(1);
     expectTextPayload(delivered.payloads[0], "Options: on, off.");
+  });
+
+  it("guards local preview completion claims when Judge did not approve", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:judge:subagent:child",
+            announceType: "subagent task",
+            taskLabel: "Judge review",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "VERDICT: REJECT",
+            judgeVerdict: {
+              status: "parsed",
+              verdict: "REJECT",
+              scope: "build completion",
+              evidence: "direct command output: pnpm build exited 1",
+              risk: "low",
+              reason: "failed command evidence contradicts completion claim",
+              conditions: "rerun build successfully",
+            },
+            replyInstruction: "Report the verdict.",
+          },
+        ],
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Done. Complete and verified." }],
+      result: createResult(),
+    });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("VERDICT: REJECT"));
+    expect(delivered.payloads).toHaveLength(1);
+    expect(requirePayload(delivered.payloads, 0).text).toContain("VERDICT: REJECT");
+    expect(requirePayload(delivered.payloads, 0).text).toContain(
+      "CONDITIONS: rerun build successfully",
+    );
   });
 
   it("normalizes reply-media paths before outbound delivery", async () => {

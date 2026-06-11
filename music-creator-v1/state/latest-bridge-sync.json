@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-05-19T18:59:37.324Z",
+  "bridgeRoot": "/Users/openclaw/openclaw/music-creator-v1/tmp-safe-bridge",
+  "probeId": "transfer-1779217171307-77698009",
+  "probeSeen": true,
+  "replySeen": true,
+  "verifiedBidirectionalSync": true,
+  "probeCreatedAt": "2026-05-19T18:59:31.307Z",
+  "replyUpdatedAt": "2026-05-19T18:59:31Z",
+  "macBookComputerName": "Matthew’s Mac Studio",
+  "remoteLoginUsed": false,
+  "nextAction": "Sync is verified. Run bridge-queue-job and macbook-pull-agent.command for safe automation."
+}

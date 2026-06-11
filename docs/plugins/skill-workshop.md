@@ -89,6 +89,13 @@ With this config:
 - threshold-based reviewer passes can propose skill updates
 - no skill file is written until a pending proposal is applied
 
+The [Self-Improvement Governor](/automation/self-improvement-governor) can read
+pending and quarantined proposal records and create curator recommendations. It
+does not apply proposals or write skills directly. Governor memory/skill
+proposals stay in pending curator mode until an operator accepts them, links a
+Skill Workshop proposal, and attaches promotion proof through
+`openclaw self-improvement curator ...` or the Control UI.
+
 Use automatic writes only in trusted workspaces:
 
 ```json5
@@ -538,6 +545,13 @@ Quarantined proposals:
 
 To recover from a quarantined proposal, create a new safe proposal with the
 unsafe content removed. Do not edit the store JSON by hand.
+
+The Self-Improvement Governor treats Skill Workshop state as read-only input. It
+groups pending/quarantined proposal recommendations, routes them to the
+Memory/Knowledge Curator, and keeps all procedural-memory writes in pending or
+approval-gated review. Its curator workflow records only proposal status,
+workshop linkage, proof-present audit metadata, and reasons; it never calls
+`apply`, writes `SKILL.md`, or bypasses quarantine.
 
 ## Prompt guidance
 

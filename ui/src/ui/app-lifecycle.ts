@@ -1,3 +1,4 @@
+import { refreshChat } from "./app-chat.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -6,6 +7,11 @@ import {
   stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
+  startKalshiDashboardPolling,
+  shouldPollKalshiDashboard,
+  stopKalshiDashboardPolling,
+  startDashboardPolling,
+  stopDashboardPolling,
 } from "./app-polling.ts";
 import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
@@ -17,14 +23,21 @@ import {
 } from "./app-settings.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { installMobileViewportInsetObserver } from "./mobile-viewport.ts";
 import type { Tab } from "./navigation.ts";
 
+const MOBILE_RESUME_RECONCILE_DEBOUNCE_MS = 350;
+const MOBILE_RESUME_RECONCILE_MIN_INTERVAL_MS = 1_000;
+
 type LifecycleHost = {
+  style: CSSStyleDeclaration;
   basePath: string;
-  client?: { stop: () => void } | null;
+  client?: { stop: () => void; connected?: boolean } | null;
   connectGeneration: number;
   connected?: boolean;
+  connectionAttemptStarted?: boolean;
   tab: Tab;
+  agentsPanel?: string;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarSource?: string | null;
@@ -54,18 +67,132 @@ type LifecycleHost = {
   logsScrollFrame?: number | null;
   controlUiTabPaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
+  kalshiDashboardPollInterval?: number | null;
+  dashboardPollInterval?: number | null;
+  dashboardPollInFlight?: boolean;
+  refreshActiveDashboardTab?: () => Promise<void> | void;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  mobileViewportCleanup?: (() => void) | null;
+  mobileResumeCleanup?: (() => void) | null;
+  requestUpdate?: () => void;
 };
+
+type MobileResumeState = {
+  lastRunAtMs: number;
+  timer: number | null;
+  inFlight: boolean;
+};
+
+const mobileResumeStates = new WeakMap<object, MobileResumeState>();
+
+function getMobileResumeState(host: LifecycleHost): MobileResumeState {
+  let state = mobileResumeStates.get(host as object);
+  if (!state) {
+    state = { lastRunAtMs: 0, timer: null, inFlight: false };
+    mobileResumeStates.set(host as object, state);
+  }
+  return state;
+}
+
+function clientAppearsConnected(host: LifecycleHost): boolean {
+  if (!host.connected || !host.client) {
+    return false;
+  }
+  return typeof host.client.connected === "boolean" ? host.client.connected : true;
+}
+
+async function reconcileAfterMobileResume(host: LifecycleHost) {
+  const state = getMobileResumeState(host);
+  if (state.inFlight) {
+    return;
+  }
+  state.inFlight = true;
+  state.lastRunAtMs = Date.now();
+  try {
+    if (!clientAppearsConnected(host)) {
+      connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+      return;
+    }
+    if (host.tab !== "chat") {
+      return;
+    }
+    await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+    host.requestUpdate?.();
+  } finally {
+    state.inFlight = false;
+  }
+}
+
+function scheduleMobileResumeReconcile(host: LifecycleHost) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    return;
+  }
+  const state = getMobileResumeState(host);
+  if (state.timer !== null) {
+    window.clearTimeout(state.timer);
+  }
+  const elapsed = Date.now() - state.lastRunAtMs;
+  const delay =
+    elapsed >= MOBILE_RESUME_RECONCILE_MIN_INTERVAL_MS
+      ? MOBILE_RESUME_RECONCILE_DEBOUNCE_MS
+      : MOBILE_RESUME_RECONCILE_MIN_INTERVAL_MS - elapsed;
+  state.timer = window.setTimeout(() => {
+    state.timer = null;
+    void reconcileAfterMobileResume(host);
+  }, delay);
+}
+
+function installMobileResumeObserver(host: LifecycleHost) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  host.mobileResumeCleanup?.();
+  const schedule = () => scheduleMobileResumeReconcile(host);
+  const scheduleWhenVisible = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      return;
+    }
+    schedule();
+  };
+  window.addEventListener("pageshow", schedule);
+  window.addEventListener("focus", scheduleWhenVisible);
+  window.addEventListener("online", schedule);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", scheduleWhenVisible);
+  }
+  host.mobileResumeCleanup = () => {
+    const state = getMobileResumeState(host);
+    if (state.timer !== null) {
+      window.clearTimeout(state.timer);
+      state.timer = null;
+    }
+    window.removeEventListener("pageshow", schedule);
+    window.removeEventListener("focus", scheduleWhenVisible);
+    window.removeEventListener("online", schedule);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", scheduleWhenVisible);
+    }
+    host.mobileResumeCleanup = null;
+  };
+}
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
+  host.connectionAttemptStarted = true;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
+  installMobileResumeObserver(host);
   void bootstrapReady.finally(() => {
     if (host.connectGeneration !== connectGeneration) {
       return;
@@ -79,6 +206,12 @@ export function handleConnected(host: LifecycleHost) {
   if (host.tab === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   }
+  if (shouldPollKalshiDashboard(host)) {
+    startKalshiDashboardPolling(
+      host as unknown as Parameters<typeof startKalshiDashboardPolling>[0],
+    );
+  }
+  startDashboardPolling(host as unknown as Parameters<typeof startDashboardPolling>[0]);
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
     host as unknown as Parameters<typeof startControlUiResponsivenessObserver>[0],
   );
@@ -86,6 +219,7 @@ export function handleConnected(host: LifecycleHost) {
 
 export function handleFirstUpdated(host: LifecycleHost) {
   observeTopbar(host as unknown as Parameters<typeof observeTopbar>[0]);
+  installMobileViewportInsetObserver(host);
 }
 
 function cancelHostAnimationFrame(frame: number | null | undefined) {
@@ -107,6 +241,8 @@ export function handleDisconnected(host: LifecycleHost) {
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  stopKalshiDashboardPolling(host as unknown as Parameters<typeof stopKalshiDashboardPolling>[0]);
+  stopDashboardPolling(host as unknown as Parameters<typeof stopDashboardPolling>[0]);
   cancelHostAnimationFrame(host.chatScrollFrame);
   host.chatScrollFrame = null;
   cancelHostAnimationFrame(host.logsScrollFrame);
@@ -122,9 +258,14 @@ export function handleDisconnected(host: LifecycleHost) {
   host.client?.stop();
   host.client = null;
   host.connected = false;
+  host.connectionAttemptStarted = false;
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
+  host.mobileViewportCleanup?.();
+  host.mobileViewportCleanup = null;
+  host.mobileResumeCleanup?.();
+  host.mobileResumeCleanup = null;
   host.controlUiResponsivenessObserver?.disconnect();
   host.controlUiResponsivenessObserver = null;
 }

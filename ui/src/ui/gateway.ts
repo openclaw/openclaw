@@ -138,6 +138,7 @@ type Pending = {
   reject: (err: unknown) => void;
   method: string;
   startedAtMs: number;
+  timeoutId?: number;
 };
 
 type SelectedConnectAuth = {
@@ -175,8 +176,10 @@ export type GatewayConnectDevice = {
 
 export type GatewayConnectClientInfo = {
   id: GatewayClientName;
+  displayName?: string;
   version: string;
   platform: string;
+  deviceFamily?: string;
   mode: GatewayClientMode;
   instanceId?: string;
 };
@@ -220,8 +223,10 @@ export type GatewayBrowserClientOptions = {
   token?: string;
   password?: string;
   clientName?: GatewayClientName;
+  displayName?: string;
   clientVersion?: string;
   platform?: string;
+  deviceFamily?: string;
   mode?: GatewayClientMode;
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
@@ -229,6 +234,10 @@ export type GatewayBrowserClientOptions = {
   onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayRequestTiming) => void;
+};
+
+export type GatewayBrowserRequestOptions = {
+  timeoutMs?: number;
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
@@ -411,6 +420,9 @@ export class GatewayBrowserClient {
 
   private flushPending(err: Error) {
     for (const [id, p] of this.pending) {
+      if (p.timeoutId !== undefined) {
+        window.clearTimeout(p.timeoutId);
+      }
       this.emitRequestTiming(id, p, false, "CLIENT_CLOSED");
       p.reject(err);
     }
@@ -443,8 +455,10 @@ export class GatewayBrowserClient {
   private buildConnectClient(): GatewayConnectClientInfo {
     return {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      displayName: this.opts.displayName,
       version: this.opts.clientVersion ?? "control-ui",
       platform: this.opts.platform ?? navigator.platform ?? "web",
+      deviceFamily: this.opts.deviceFamily,
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
     };
@@ -667,6 +681,9 @@ export class GatewayBrowserClient {
         return;
       }
       this.pending.delete(res.id);
+      if (pending.timeoutId !== undefined) {
+        window.clearTimeout(pending.timeoutId);
+      }
       if (res.ok) {
         this.emitRequestTiming(res.id, pending, true);
         pending.resolve(res.payload);
@@ -719,17 +736,22 @@ export class GatewayBrowserClient {
     };
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: GatewayBrowserRequestOptions,
+  ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
     }
-    return this.requestOnSocket(this.ws, method, params);
+    return this.requestOnSocket(this.ws, method, params, options);
   }
 
   private requestOnSocket<T = unknown>(
     ws: WebSocket,
     method: string,
     params?: unknown,
+    options?: GatewayBrowserRequestOptions,
   ): Promise<T> {
     if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
@@ -737,9 +759,27 @@ export class GatewayBrowserClient {
     const id = generateUUID();
     const frame = { type: "req", id, method, params };
     const startedAtMs = this.nowMs();
+    const timeoutMs =
+      typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+        ? Math.max(1, Math.trunc(options.timeoutMs))
+        : null;
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject, method, startedAtMs });
     });
+    if (timeoutMs !== null) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        pending.timeoutId = window.setTimeout(() => {
+          const current = this.pending.get(id);
+          if (!current) {
+            return;
+          }
+          this.pending.delete(id);
+          this.emitRequestTiming(id, current, false, "CLIENT_TIMEOUT");
+          current.reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+    }
     ws.send(JSON.stringify(frame));
     return p;
   }

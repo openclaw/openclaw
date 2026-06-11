@@ -325,14 +325,14 @@ export function renderReadingIndicatorGroup(
   basePath?: string,
   authToken?: string | null,
 ) {
+  const name = assistant?.name ?? "OpenClaw";
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
-        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-          <span class="chat-reading-indicator__dots">
-            <span></span><span></span><span></span>
-          </span>
+        <div class="chat-bubble chat-working-indicator" role="status" aria-live="polite">
+          <span class="chat-working-orb" aria-hidden="true"></span>
+          <span class="chat-working-label">${name} is working on a reply</span>
         </div>
       </div>
     </div>
@@ -363,6 +363,10 @@ export function renderStreamingGroup(
           { isStreaming: true, showReasoning: false },
           onOpenSidebar,
         )}
+        <div class="chat-stream-status" role="status" aria-live="polite">
+          <span class="chat-working-orb" aria-hidden="true"></span>
+          <span>${name} is replying</span>
+        </div>
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
           ${renderChatTimestamp(startedAt)}
@@ -395,6 +399,8 @@ export function renderMessageGroup(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
+    targetRunId?: string | null;
+    targetTranscriptSeq?: number | null;
     onDelete?: () => void;
   },
 ) {
@@ -461,6 +467,8 @@ export function renderMessageGroup(
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
+              targetRunId: opts.targetRunId,
+              targetTranscriptSeq: opts.targetTranscriptSeq,
             },
             opts.onOpenSidebar,
           ),
@@ -1367,6 +1375,30 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: SidebarCo
   `;
 }
 
+function extractOpenClawRunId(message: unknown): string | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const meta = (message as { __openclaw?: unknown }).__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const runId = (meta as { runId?: unknown }).runId;
+  return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function extractOpenClawTranscriptSeq(message: unknown): number | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const meta = (message as { __openclaw?: unknown }).__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const seq = (meta as { seq?: unknown }).seq;
+  return typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : null;
+}
+
 function renderGroupedMessage(
   message: unknown,
   messageKey: string,
@@ -1387,6 +1419,8 @@ function renderGroupedMessage(
     assistantAttachmentAuthToken?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    targetRunId?: string | null;
+    targetTranscriptSeq?: number | null;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -1481,9 +1515,22 @@ function renderGroupedMessage(
 
   const hasActions = canCopyMarkdown || canExpand;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
+  const messageRunId = extractOpenClawRunId(message);
+  const messageSeq = extractOpenClawTranscriptSeq(message);
+  const isTargetRun = Boolean(
+    (opts.targetRunId && messageRunId === opts.targetRunId) ||
+    (opts.targetTranscriptSeq && messageSeq === opts.targetTranscriptSeq),
+  );
+  const runAnchorId = messageRunId
+    ? `chat-run-${`${messageRunId}-${messageKey}`.replace(/[^A-Za-z0-9_-]/g, "-")}`
+    : undefined;
 
   return html`
-    <div class="${bubbleClasses}">
+    <div
+      class="${bubbleClasses} ${isTargetRun ? "chat-bubble--run-target" : ""}"
+      id=${runAnchorId ?? nothing}
+      data-openclaw-run-id=${messageRunId ?? nothing}
+    >
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">

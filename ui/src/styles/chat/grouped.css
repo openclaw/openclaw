@@ -5,7 +5,7 @@
 /* Chat Group Layout - default (assistant/other on left) */
 .chat-group {
   display: flex;
-  gap: 10px;
+  gap: 16px;
   align-items: flex-start;
   margin-bottom: 14px;
   margin-left: 4px;
@@ -35,7 +35,7 @@
 }
 
 .chat-group.tool .chat-group-messages {
-  max-width: min(980px, calc(100% - 46px));
+  max-width: min(980px, calc(100% - 118px));
 }
 
 .chat-group.user .chat-group-footer {
@@ -166,14 +166,14 @@
 
 /* Avatar Styles */
 .chat-avatar {
-  width: 36px;
-  height: 36px;
+  width: 108px !important;
+  height: 108px !important;
   border-radius: var(--radius-md);
   background: var(--panel-strong);
   display: grid;
   place-items: center;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 32px;
   flex-shrink: 0;
   align-self: flex-end;
   margin-bottom: 4px;
@@ -208,6 +208,17 @@ img.chat-avatar {
   object-position: center;
 }
 
+.chat-avatar.chat-avatar--todd-stanski,
+img.chat-avatar.chat-avatar--todd-stanski {
+  width: 54px !important;
+  height: 54px !important;
+  min-width: 54px !important;
+  min-height: 54px !important;
+  max-width: 54px !important;
+  max-height: 54px !important;
+  font-size: 18px;
+}
+
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
@@ -240,6 +251,11 @@ img.chat-avatar {
 
 .chat-bubble.has-copy {
   padding-right: 70px;
+}
+
+.chat-bubble--run-target {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .chat-duplicate-count {
@@ -629,7 +645,14 @@ details.msg-meta:not([open]) .msg-meta__details {
   }
 
   .chat-group.tool .chat-group-messages {
-    max-width: calc(100% - 46px);
+    max-width: calc(100% - 82px);
+  }
+
+  .chat-avatar,
+  img.chat-avatar {
+    width: 72px !important;
+    height: 72px !important;
+    font-size: 24px;
   }
 }
 

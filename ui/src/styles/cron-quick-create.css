@@ -19,7 +19,7 @@
   gap: 10px;
   font-size: 1.2rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   margin: 0;
   color: var(--text-strong);
 }
@@ -144,7 +144,7 @@
 .cqc-body__heading {
   font-size: 1.05rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   margin: 0 0 4px;
   color: var(--text-strong);
 }
@@ -197,7 +197,7 @@
   font-weight: 600;
   color: var(--muted);
   margin-bottom: 6px;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 .cqc-input {
@@ -277,7 +277,7 @@
 .cqc-preset-card__label {
   font-size: 0.8125rem;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   color: var(--text-strong);
 }
 
@@ -329,7 +329,7 @@
 .cqc-radio-card__label {
   font-size: 0.875rem;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   color: var(--text-strong);
 }
 

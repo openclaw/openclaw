@@ -221,11 +221,27 @@ export function collectGatewayRunChunkBudgetErrors(params = {}) {
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
-export function checkCliBootstrapExternalImports(params = {}) {
-  const errors = [
+export function collectCliBootstrapErrors(params = {}) {
+  return [
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
   ];
+}
+
+function isPossiblyTransientBuildOutputError(error) {
+  return (
+    error.includes("Run pnpm build first.") ||
+    error.includes("could not resolve") ||
+    error.includes("could not find the bundled gateway run chunk")
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function checkCliBootstrapExternalImports(params = {}) {
+  const errors = collectCliBootstrapErrors(params);
   if (errors.length === 0) {
     return;
   }
@@ -239,7 +255,22 @@ export function checkCliBootstrapExternalImports(params = {}) {
 
 if (isMainModule()) {
   try {
-    checkCliBootstrapExternalImports();
+    const retryDelaysMs = [50, 150, 300, 600];
+    let errors = collectCliBootstrapErrors();
+    for (const delayMs of retryDelaysMs) {
+      if (errors.length === 0 || !errors.every(isPossiblyTransientBuildOutputError)) {
+        break;
+      }
+      await sleep(delayMs);
+      errors = collectCliBootstrapErrors();
+    }
+    if (errors.length > 0) {
+      console.error("CLI bootstrap import guard failed:");
+      for (const error of errors) {
+        console.error(`  - ${error}`);
+      }
+      throw new Error("CLI bootstrap static graph imports external packages.");
+    }
     console.log("CLI bootstrap import guard passed.");
   } catch {
     process.exit(1);

@@ -1,8 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+const mocks = vi.hoisted(() => ({
+  getTailnetHostname: vi.fn(),
+}));
+
+vi.mock("../infra/tailscale.js", () => ({
+  getTailnetHostname: mocks.getTailnetHostname,
+}));
+
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
+  beforeEach(() => {
+    mocks.getTailnetHostname.mockReset();
+  });
+
   it("applies origins seeded from runtime bind and port without persisting config", async () => {
     const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -38,5 +51,32 @@ describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
     expect(result).toEqual({ config, seededAllowedOrigins: false });
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("adds active Tailscale origin for serve mode runtime", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("mac-studio-userspace.tailnet.ts.net");
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    const result = await maybeSeedControlUiAllowedOriginsAtStartup({
+      config: {
+        gateway: {
+          tailscale: {
+            mode: "serve",
+            binaryPath: "/opt/homebrew/bin/tailscale",
+            socketPath: "/tmp/tailscaled.sock",
+          },
+        },
+      },
+      log,
+    });
+
+    expect(result.seededAllowedOrigins).toBe(true);
+    expect(mocks.getTailnetHostname).toHaveBeenCalledWith(undefined, {
+      binaryPath: "/opt/homebrew/bin/tailscale",
+      socketPath: "/tmp/tailscaled.sock",
+    });
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
+      "https://mac-studio-userspace.tailnet.ts.net",
+    ]);
   });
 });

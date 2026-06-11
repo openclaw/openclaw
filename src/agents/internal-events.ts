@@ -8,6 +8,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
+import type { JudgeCompletionVerdict } from "./judge-gate.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 
 type AgentTaskCompletionInternalEvent = {
@@ -22,6 +23,7 @@ type AgentTaskCompletionInternalEvent = {
   result: string;
   mediaUrls?: string[];
   statsLine?: string;
+  judgeVerdict?: JudgeCompletionVerdict;
   replyInstruction: string;
 };
 
@@ -50,6 +52,35 @@ function formatChildResultDataBlock(value: string): string {
   );
 }
 
+function formatJudgeVerdictBlock(judgeVerdict: JudgeCompletionVerdict | undefined): string[] {
+  if (!judgeVerdict) {
+    return [];
+  }
+  if (judgeVerdict.status === "invalid") {
+    const errors = sanitizeSingleLineField(judgeVerdict.errors.join("; "), "unknown parse error");
+    return [
+      "[Judge verdict status]",
+      "status: invalid",
+      `errors: ${errors}`,
+      "runtime_directive: Treat this Judge result as not approved until a valid six-line verdict is obtained.",
+    ];
+  }
+  const approvalDirective =
+    judgeVerdict.verdict === "APPROVE"
+      ? "The reviewed gate may be treated as approved only within the stated scope and conditions."
+      : "Do not claim the reviewed gate is approved, complete, or safe; report the verdict and conditions/blocker.";
+  return [
+    "[Judge verdict]",
+    `verdict: ${sanitizeSingleLineField(judgeVerdict.verdict, "unknown")}`,
+    `scope: ${sanitizeSingleLineField(judgeVerdict.scope, "unknown")}`,
+    `evidence: ${sanitizeSingleLineField(judgeVerdict.evidence, "insufficient")}`,
+    `risk: ${sanitizeSingleLineField(judgeVerdict.risk, "unclear")}`,
+    `reason: ${sanitizeSingleLineField(judgeVerdict.reason, "No reason supplied.")}`,
+    `conditions: ${sanitizeSingleLineField(judgeVerdict.conditions, "none")}`,
+    `runtime_directive: ${approvalDirective}`,
+  ];
+}
+
 function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
   const sessionKey = sanitizeSingleLineField(event.childSessionKey, "unknown");
   const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
@@ -68,6 +99,10 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
     "",
     result,
   ];
+  const judgeVerdictBlock = formatJudgeVerdictBlock(event.judgeVerdict);
+  if (judgeVerdictBlock.length > 0) {
+    lines.push("", ...judgeVerdictBlock);
+  }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }
@@ -94,6 +129,10 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
     "",
     result,
   ];
+  const judgeVerdictBlock = formatJudgeVerdictBlock(event.judgeVerdict);
+  if (judgeVerdictBlock.length > 0) {
+    lines.push("", ...judgeVerdictBlock);
+  }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }

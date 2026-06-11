@@ -1,5 +1,6 @@
 export const miscExtensionTestRoots = [
   "extensions/arcee",
+  "extensions/book-writer",
   "extensions/brave",
   "extensions/device-pair",
   "extensions/diagnostics-otel",

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "status": "reply_written",
+  "probeId": "transfer-1779217092460-b0fe702f",
+  "updatedAt": "2026-05-19T18:58:12Z",
+  "remoteLoginUsed": false,
+  "replyFile": "sync/macbook/transfer-1779217092460-b0fe702f.json",
+  "nextAction": "On the Mac Studio, run bridge-sync-status to verify the reply synced back."
+}

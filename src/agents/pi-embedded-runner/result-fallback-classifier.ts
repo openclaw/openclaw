@@ -1,11 +1,14 @@
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { resolveFailoverStatus } from "../failover-error.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
+import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import { hasOutboundDeliveryEvidence, hasVisibleAgentPayload } from "./delivery-evidence.js";
 import type { EmbeddedPiRunResult } from "./types.js";
 
 const EMPTY_TERMINAL_REPLY_RE = /Agent couldn't generate a response/i;
 const PLAN_ONLY_TERMINAL_REPLY_RE = /Agent stopped after repeated plan-only turns/i;
+const FAILED_ASSISTANT_TURN_SENTINEL = "[assistant turn failed before producing content]";
 
 function isEmbeddedPiRunResult(value: unknown): value is EmbeddedPiRunResult {
   return Boolean(
@@ -24,6 +27,47 @@ function hasDeliberateSilentTerminalReply(result: EmbeddedPiRunResult): boolean 
   return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
     (text) => typeof text === "string" && isSilentReplyPayloadText(text),
   );
+}
+
+function collectTerminalProviderErrorTexts(result: EmbeddedPiRunResult): string[] {
+  const texts: string[] = [];
+  for (const payload of result.payloads ?? []) {
+    const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+    if (payload?.isError === true && text) {
+      texts.push(text);
+    }
+  }
+  for (const text of [
+    result.meta.finalAssistantVisibleText,
+    result.meta.finalAssistantRawText,
+    result.meta.error?.message,
+  ]) {
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    if (trimmed && trimmed !== FAILED_ASSISTANT_TURN_SENTINEL) {
+      texts.push(trimmed);
+    }
+  }
+  return Array.from(new Set(texts));
+}
+
+function classifyTerminalProviderError(params: {
+  provider: string;
+  model: string;
+  result: EmbeddedPiRunResult;
+}): ModelFallbackResultClassification {
+  for (const text of collectTerminalProviderErrorTexts(params.result)) {
+    const reason = classifyFailoverReason(text, { provider: params.provider });
+    if (!reason) {
+      continue;
+    }
+    return {
+      message: text,
+      reason,
+      status: resolveFailoverStatus(reason),
+      rawError: text,
+    };
+  }
+  return null;
 }
 
 function classifyHarnessResult(params: {
@@ -78,6 +122,18 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   }
   if (hasOutboundDeliveryEvidence(params.result)) {
     return null;
+  }
+  if (hasDeliberateSilentTerminalReply(params.result)) {
+    return null;
+  }
+
+  const terminalProviderError = classifyTerminalProviderError({
+    provider: params.provider,
+    model: params.model,
+    result: params.result,
+  });
+  if (terminalProviderError) {
+    return terminalProviderError;
   }
 
   const harnessClassification = classifyHarnessResult({

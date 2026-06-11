@@ -122,6 +122,33 @@ openclaw gateway restart --force
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
 </Warning>
 
+## Manage Runtime Snapshots
+
+Source-checkout installs can run the managed Gateway from a promoted runtime snapshot instead of the actively edited `dist/` tree. This keeps dashboard assets and bundled plugin runtime files stable across local edits and makes rollback possible if a build serves a bad UI.
+
+Inspect retained snapshots:
+
+```bash
+openclaw gateway snapshot status
+openclaw gateway snapshot status --json
+```
+
+Remove older unprotected snapshots:
+
+```bash
+openclaw gateway snapshot prune
+openclaw gateway snapshot prune --keep 4
+```
+
+Rollback the latest pointer to a retained release:
+
+```bash
+openclaw gateway snapshot rollback <release-id>
+openclaw gateway restart
+```
+
+Rollback only changes which retained snapshot is marked latest. Restart the Gateway separately to activate it. OpenClaw protects the latest snapshot and snapshots referenced by managed LaunchAgent files from pruning.
+
 ### Startup profiling
 
 - Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings for installed-index, manifest registry, startup planning, and owner-map work.

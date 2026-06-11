@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -26,7 +22,6 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -115,22 +110,6 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function filterSessionStoreToConfiguredAgents(
-  cfg: OpenClawConfig,
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  const configuredAgentIds = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
-  return Object.fromEntries(
-    Object.entries(store).filter(([key]) => {
-      if (key === "global" || key === "unknown") {
-        return true;
-      }
-      const parsed = parseAgentSessionKey(key);
-      return parsed ? configuredAgentIds.has(normalizeAgentId(parsed.agentId)) : false;
-    }),
-  );
-}
 
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
@@ -245,6 +224,72 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
   return status === "started";
 }
 
+async function emitCreateParentResetHooks(params: {
+  cfg: OpenClawConfig;
+  parentSessionKey: string;
+  parentEntry: SessionEntry;
+  nextSessionKey: string;
+  nextSessionId: string;
+}) {
+  const { archiveSessionTranscriptsForSessionDetailed, emitGatewayBeforeResetPluginHook } =
+    await loadSessionsRuntimeModule();
+  const parentTarget = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.parentSessionKey,
+  });
+  const parentAgentId = normalizeAgentId(parentTarget.agentId ?? resolveDefaultAgentId(params.cfg));
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, parentAgentId);
+  await triggerInternalHook(
+    createInternalHookEvent(
+      "command",
+      "new",
+      parentTarget.canonicalKey ?? params.parentSessionKey,
+      {
+        sessionEntry: params.parentEntry,
+        previousSessionEntry: params.parentEntry,
+        commandSource: "webchat",
+        cfg: params.cfg,
+        workspaceDir,
+      },
+    ),
+  );
+  await emitGatewayBeforeResetPluginHook({
+    cfg: params.cfg,
+    key: params.parentSessionKey,
+    target: parentTarget,
+    storePath: parentTarget.storePath,
+    entry: params.parentEntry,
+    reason: "new",
+  });
+  const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+    await loadSessionsRuntimeModule();
+  const archivedTranscripts = archiveSessionTranscriptsForSessionDetailed({
+    sessionId: params.parentEntry.sessionId,
+    storePath: parentTarget.storePath,
+    sessionFile: params.parentEntry.sessionFile,
+    agentId: parentTarget.agentId,
+    reason: "reset",
+  });
+  emitGatewaySessionEndPluginHook({
+    cfg: params.cfg,
+    sessionKey: parentTarget.canonicalKey ?? params.parentSessionKey,
+    sessionId: params.parentEntry.sessionId,
+    storePath: parentTarget.storePath,
+    sessionFile: params.parentEntry.sessionFile,
+    agentId: parentTarget.agentId,
+    reason: "new",
+    archivedTranscripts,
+    nextSessionId: params.nextSessionId,
+    nextSessionKey: params.nextSessionKey,
+  });
+  emitGatewaySessionStartPluginHook({
+    cfg: params.cfg,
+    sessionKey: params.nextSessionKey,
+    sessionId: params.nextSessionId,
+    resumedFrom: params.parentEntry.sessionId,
+  });
+}
+
 function emitSessionsChanged(
   context: Pick<
     GatewayRequestContext,
@@ -304,6 +349,7 @@ function emitSessionsChanged(
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
             responseUsage: sessionRow.responseUsage,
+            projectId: sessionRow.projectId,
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
@@ -691,13 +737,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const listStore =
-      p.configuredAgentsOnly === true ? filterSessionStoreToConfiguredAgents(cfg, store) : store;
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = await listSessionsFromStoreAsync({
       cfg,
       storePath,
-      store: listStore,
+      store,
       modelCatalog,
       opts: p,
     });
@@ -731,7 +775,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           enforce: params.enforce,
           activeKey: params.activeKey,
           fixMissing: params.fixMissing,
-          fixDmScope: params.fixDmScope,
         },
       });
       const result = serializeSessionCleanupResult({
@@ -1012,6 +1055,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     let canonicalParentSessionKey: string | undefined;
+    let parentSessionEntry: SessionEntry | undefined;
     if (parentSessionKey) {
       const parent = loadSessionEntry(parentSessionKey);
       if (!parent.entry?.sessionId) {
@@ -1023,76 +1067,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
       canonicalParentSessionKey = parent.canonicalKey;
-    }
-    if (
-      canonicalParentSessionKey &&
-      p.emitCommandHooks === true &&
-      !requestedKey &&
-      !resolveOptionalInitialSessionMessage(p) &&
-      cfg.session?.dmScope === "main"
-    ) {
-      const parentAgentId = normalizeAgentId(
-        resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? resolveDefaultAgentId(cfg),
-      );
-      const parentMainKey = resolveAgentMainSessionKey({ cfg, agentId: parentAgentId });
-      if (canonicalParentSessionKey === parentMainKey) {
+      parentSessionEntry = parent.entry;
+      if (p.emitCommandHooks === true && cfg.session?.dmScope === "main") {
         const { performGatewaySessionReset } = await loadSessionsRuntimeModule();
-        const resetResult = await performGatewaySessionReset({
+        const reset = await performGatewaySessionReset({
           key: canonicalParentSessionKey,
           reason: "new",
           commandSource: "webchat",
         });
-        if (!resetResult.ok) {
-          respond(false, undefined, resetResult.error);
+        if (!reset.ok) {
+          respond(false, undefined, reset.error);
           return;
         }
         respond(
           true,
           {
             ok: true,
-            key: resetResult.key,
-            sessionId: resetResult.entry.sessionId,
-            entry: resetResult.entry,
+            key: reset.key,
+            sessionId: reset.entry.sessionId,
+            entry: reset.entry,
             runStarted: false,
           },
           undefined,
         );
         emitSessionsChanged(context, {
-          sessionKey: resetResult.key,
-          reason: "new",
+          sessionKey: reset.key,
+          reason: "create",
         });
         return;
       }
-    }
-    if (canonicalParentSessionKey && p.emitCommandHooks === true) {
-      const { entry: parentEntry } = loadSessionEntry(canonicalParentSessionKey);
-      const parentAgentId = normalizeAgentId(
-        resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? resolveDefaultAgentId(cfg),
-      );
-      const workspaceDir = resolveAgentWorkspaceDir(cfg, parentAgentId);
-      if (hasInternalHookListeners("command", "new")) {
-        const hookEvent = createInternalHookEvent("command", "new", canonicalParentSessionKey, {
-          sessionEntry: parentEntry,
-          previousSessionEntry: parentEntry,
-          commandSource: "webchat",
-          cfg,
-          workspaceDir,
-        });
-        await triggerInternalHook(hookEvent);
-      }
-      const parentTarget = resolveGatewaySessionStoreTarget({
-        cfg,
-        key: canonicalParentSessionKey,
-      });
-      const { emitGatewayBeforeResetPluginHook } = await loadSessionsRuntimeModule();
-      await emitGatewayBeforeResetPluginHook({
-        cfg,
-        key: canonicalParentSessionKey,
-        target: parentTarget,
-        storePath: parentTarget.storePath,
-        entry: parentEntry,
-        reason: "new",
-      });
     }
     const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
     const key = requestedKey
@@ -1114,6 +1117,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         patch: {
           key: target.canonicalKey,
           label: normalizeOptionalString(p.label),
+          projectId: normalizeOptionalString(p.projectId),
           model: normalizeOptionalString(p.model),
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
@@ -1169,6 +1173,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             sessionFile: ensured.transcriptPath,
           };
         }
+      });
+    }
+    if (p.emitCommandHooks === true && canonicalParentSessionKey && parentSessionEntry) {
+      await emitCreateParentResetHooks({
+        cfg,
+        parentSessionKey: canonicalParentSessionKey,
+        parentEntry: parentSessionEntry,
+        nextSessionKey: target.canonicalKey,
+        nextSessionId: createdEntry.sessionId,
       });
     }
 
@@ -1235,32 +1248,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
         reason: "send",
-      });
-    }
-    if (canonicalParentSessionKey && p.emitCommandHooks === true) {
-      const { entry: parentEntry } = loadSessionEntry(canonicalParentSessionKey);
-      const parentTarget = resolveGatewaySessionStoreTarget({
-        cfg,
-        key: canonicalParentSessionKey,
-      });
-      const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
-        await loadSessionsRuntimeModule();
-      emitGatewaySessionEndPluginHook({
-        cfg,
-        sessionKey: canonicalParentSessionKey,
-        sessionId: parentEntry?.sessionId,
-        storePath: parentTarget.storePath,
-        sessionFile: parentEntry?.sessionFile,
-        agentId: parentTarget.agentId,
-        reason: "new",
-        nextSessionId: createdEntry.sessionId,
-        nextSessionKey: target.canonicalKey,
-      });
-      emitGatewaySessionStartPluginHook({
-        cfg,
-        sessionKey: target.canonicalKey,
-        sessionId: createdEntry.sessionId,
-        resumedFrom: parentEntry?.sessionId,
       });
     }
   },

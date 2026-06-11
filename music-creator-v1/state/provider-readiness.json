@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-05-16T23:58:14.213Z",
+  "providerReady": false,
+  "providers": [
+    {
+      "provider": "Google Lyria",
+      "envKeys": [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY"
+      ],
+      "models": [
+        "google/lyria-3-clip-preview"
+      ],
+      "ready": false,
+      "env": [
+        {
+          "name": "GEMINI_API_KEY",
+          "present": false
+        },
+        {
+          "name": "GOOGLE_API_KEY",
+          "present": false
+        }
+      ]
+    },
+    {
+      "provider": "MiniMax Music",
+      "envKeys": [
+        "MINIMAX_API_KEY"
+      ],
+      "models": [
+        "minimax/music-2.6"
+      ],
+      "ready": false,
+      "env": [
+        {
+          "name": "MINIMAX_API_KEY",
+          "present": false
+        }
+      ]
+    },
+    {
+      "provider": "ComfyUI Music Workflow",
+      "envKeys": [
+        "COMFY_API_KEY",
+        "COMFY_CLOUD_API_KEY"
+      ],
+      "models": [
+        "comfy/workflow"
+      ],
+      "ready": false,
+      "env": [
+        {
+          "name": "COMFY_API_KEY",
+          "present": false
+        },
+        {
+          "name": "COMFY_CLOUD_API_KEY",
+          "present": false
+        }
+      ]
+    },
+    {
+      "provider": "Kits AI Royalty-Free Voices",
+      "envKeys": [
+        "KITS_API_KEY"
+      ],
+      "models": [
+        "kits/voice-conversion"
+      ],
+      "ready": false,
+      "env": [
+        {
+          "name": "KITS_API_KEY",
+          "present": false
+        }
+      ]
+    }
+  ],
+  "secretPolicy": "Music Creator V1 records only key presence. It never writes provider secrets.",
+  "nextActions": [
+    "Export one supported provider key in the shell that runs generate-live.",
+    "Optionally configure agents.defaults.musicGenerationModel in OpenClaw.",
+    "Run provider-setup, then generate-live."
+  ]
+}

@@ -5,12 +5,18 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
 import { i18n } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import { renderLoginGate, resolveLoginFailureFeedback } from "./login-gate.ts";
+import {
+  renderConnectionLoader,
+  renderLoginGate,
+  resolveLoginFailureFeedback,
+  shouldShowConnectionLoader,
+} from "./login-gate.ts";
 
 function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   return {
     basePath: "",
     connected: false,
+    connectionAttemptStarted: false,
     lastError: null,
     lastErrorCode: null,
     loginShowGatewayToken: false,
@@ -197,5 +203,65 @@ describe("renderLoginGate", () => {
     expect(alert?.textContent).toContain("openclaw dashboard");
     expect(alert?.querySelector("details")?.textContent).toContain("protocol mismatch");
     expect(alert?.querySelector("a")?.getAttribute("href")).toContain("docs.openclaw.ai");
+  });
+
+  it("offers local creative studios before Gateway auth", async () => {
+    const container = document.createElement("div");
+    const state = createState({ basePath: "/ui" });
+
+    render(renderLoginGate(state), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Music Studio");
+    expect(container.textContent).toContain("Local-first music creation");
+    expect(container.querySelector<HTMLAnchorElement>('a[href="/ui/music-studio"]')).not.toBeNull();
+    expect(container.textContent).toContain("SNES Studio");
+    expect(container.textContent).toContain("Local-first SNES project tooling");
+    expect(container.querySelector<HTMLAnchorElement>('a[href="/ui/snes-studio"]')).not.toBeNull();
+  });
+});
+
+describe("connection loader", () => {
+  it("shows a non-secret loader during auto-connect attempts", () => {
+    const container = document.createElement("div");
+    const state = createState({
+      connectionAttemptStarted: true,
+      settings: {
+        ...createState().settings,
+        token: "secret-token",
+      },
+    });
+
+    expect(shouldShowConnectionLoader(state)).toBe(true);
+    render(renderConnectionLoader(state), container);
+
+    expect(container.textContent).toContain("Opening OpenClaw");
+    expect(container.textContent).toContain("Secure connection in progress");
+    expect(container.textContent).toContain("Mission Link");
+    expect(container.textContent).not.toContain("secret-token");
+    expect(container.querySelector("input")).toBeNull();
+    expect(container.querySelector(".login-gate__connect")).toBeNull();
+  });
+
+  it("keeps the full login gate for real connection failures", () => {
+    const failed = createState({
+      lastError: "unauthorized: gateway token mismatch",
+      settings: {
+        ...createState().settings,
+        token: "secret-token",
+      },
+    });
+    const missing = createState();
+    const typedButNotConnecting = createState({
+      password: "secret-password",
+      settings: {
+        ...createState().settings,
+        token: "secret-token",
+      },
+    });
+
+    expect(shouldShowConnectionLoader(failed)).toBe(false);
+    expect(shouldShowConnectionLoader(missing)).toBe(false);
+    expect(shouldShowConnectionLoader(typedButNotConnecting)).toBe(false);
   });
 });

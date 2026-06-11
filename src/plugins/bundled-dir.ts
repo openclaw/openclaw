@@ -9,6 +9,7 @@ import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
+const RUNTIME_SNAPSHOT_ROOT_ENV = "OPENCLAW_RUNTIME_SNAPSHOT_ROOT";
 let bundledPluginsDirOverrideForTest: string | undefined;
 const bundledPluginsDirCache = new Map<string, string | undefined>();
 
@@ -148,6 +149,54 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
   return realOverride;
 }
 
+function resolveRuntimeSnapshotRoot(env: NodeJS.ProcessEnv): string | null {
+  const raw = env[RUNTIME_SNAPSHOT_ROOT_ENV]?.trim();
+  return raw ? path.resolve(resolveUserPath(raw, env)) : null;
+}
+
+function resolveTrustedRuntimeSnapshotOverride(
+  resolvedOverride: string,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  const snapshotRoot = resolveRuntimeSnapshotRoot(env);
+  if (!snapshotRoot) {
+    return null;
+  }
+  const realSnapshotRoot = safeRealpathSync(snapshotRoot);
+  const realOverride = safeRealpathSync(resolvedOverride);
+  if (!realSnapshotRoot || !realOverride) {
+    return null;
+  }
+
+  const snapshotBundledRoot = safeRealpathSync(
+    path.join(snapshotRoot, "dist-runtime", "extensions"),
+  );
+  if (!snapshotBundledRoot || realOverride !== snapshotBundledRoot) {
+    return null;
+  }
+
+  const packageRoots = resolvePackageRootsForBundledPlugins();
+  if (
+    !packageRoots.some((packageRoot) => {
+      const realPackageRoot = safeRealpathSync(packageRoot);
+      return Boolean(realPackageRoot && pathContains(realPackageRoot, realSnapshotRoot));
+    })
+  ) {
+    return null;
+  }
+
+  return hasUsableBundledPluginTree(realOverride) ? realOverride : null;
+}
+
+function resolveRuntimeSnapshotBundledDir(env: NodeJS.ProcessEnv): string | null {
+  const snapshotRoot = resolveRuntimeSnapshotRoot(env);
+  if (!snapshotRoot) {
+    return null;
+  }
+  const candidate = path.join(snapshotRoot, "dist-runtime", "extensions");
+  return resolveTrustedRuntimeSnapshotOverride(candidate, env);
+}
+
 function overrideResolvesUnderPackageBundledRoot(params: {
   resolvedOverride: string;
   packageRoot: string;
@@ -205,6 +254,7 @@ function createBundledPluginsDirCacheKey(env: NodeJS.ProcessEnv): string {
     processVitest: process.env.VITEST ?? "",
     nodeEnv: process.env.NODE_ENV ?? "",
     argv1: process.argv[1] ?? "",
+    runtimeSnapshotRoot: env[RUNTIME_SNAPSHOT_ROOT_ENV] ?? "",
     execPath: process.execPath,
     openClawHome: env.OPENCLAW_HOME ?? "",
     home: env.HOME ?? "",
@@ -222,6 +272,11 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
     return bundledPluginsDirOverrideForTest;
   }
 
+  const snapshotBundledDir = resolveRuntimeSnapshotBundledDir(env);
+  if (snapshotBundledDir) {
+    return snapshotBundledDir;
+  }
+
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   let rejectedExistingOverride: string | null = null;
   if (override) {
@@ -233,6 +288,10 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
       const trustedOverride = resolveTrustedExistingOverride(resolvedOverride);
       if (trustedOverride) {
         return trustedOverride;
+      }
+      const snapshotOverride = resolveTrustedRuntimeSnapshotOverride(resolvedOverride, env);
+      if (snapshotOverride) {
+        return snapshotOverride;
       }
       rejectedExistingOverride = resolvedOverride;
     }

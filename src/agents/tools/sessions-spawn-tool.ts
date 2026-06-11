@@ -10,6 +10,7 @@ import { callGateway } from "../../gateway/call.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { buildJudgeHandoffPreflight } from "../judge-gate.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -323,6 +324,27 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+      const judgePreflight =
+        runtime === "subagent"
+          ? buildJudgeHandoffPreflight({
+              task,
+              requestedAgentId,
+              requesterAgentId: opts?.requesterAgentIdOverride,
+              requesterSessionKey: opts?.agentSessionKey,
+              model: modelOverride,
+            })
+          : undefined;
+      if (judgePreflight?.status === "blocked") {
+        return jsonResult({
+          status: "error",
+          errorCode: "judge_handoff_packet_invalid",
+          error: judgePreflight.error,
+          missingFields: judgePreflight.missingFields,
+          detectedFields: judgePreflight.detectedFields,
+          ...roleContext,
+        });
+      }
+      const subagentTask = judgePreflight?.status === "ready" ? judgePreflight.task : task;
 
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
@@ -429,7 +451,7 @@ export function createSessionsSpawnTool(
 
       const result = await spawnSubagentDirect(
         {
-          task,
+          task: subagentTask,
           label: label || undefined,
           agentId: requestedAgentId,
           model: modelOverride,
@@ -463,7 +485,22 @@ export function createSessionsSpawnTool(
         },
       );
 
-      return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+      const resultWithJudgePreflight =
+        judgePreflight?.status === "ready"
+          ? {
+              ...result,
+              judgePreflight: {
+                gate: judgePreflight.auditRecord.gate,
+                verdict: judgePreflight.verdict.verdict,
+                risk: judgePreflight.verdict.risk,
+                evidenceTier: judgePreflight.verdict.evidenceTier,
+                conditions: judgePreflight.verdict.conditions,
+                auditRecord: judgePreflight.auditRecord,
+              },
+            }
+          : result;
+
+      return jsonResult(addRoleToFailureResult(resultWithJudgePreflight, requestedAgentId));
     },
   };
 }

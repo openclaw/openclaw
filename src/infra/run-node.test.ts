@@ -18,6 +18,10 @@ import {
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mjs";
+import {
+  preserveControlUiAssets,
+  restorePreservedControlUiAssets,
+} from "../../scripts/tsdown-build.mjs";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const ROOT_SRC = "src/index.ts";
@@ -166,6 +170,14 @@ function gatewayCallStatusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "gateway", "call", "status", "--json"];
 }
 
+function cronListCommandSpawn(entrypoint = "openclaw.mjs") {
+  return [process.execPath, entrypoint, "cron", "list", "--json"];
+}
+
+function cronRunCommandSpawn(entrypoint = "openclaw.mjs") {
+  return [process.execPath, entrypoint, "cron", "run", "job-1"];
+}
+
 function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
 }
@@ -206,6 +218,29 @@ async function setupTrackedProject(
   await touchProjectFiles(tmp, options.oldPaths ?? [], OLD_TIME);
   await touchProjectFiles(tmp, options.buildPaths ?? [], BUILD_TIME);
   await touchProjectFiles(tmp, options.newPaths ?? [], NEW_TIME);
+}
+
+async function writePromotedRuntimeSnapshot(tmp: string) {
+  const snapshotRoot = path.join(
+    tmp,
+    ".artifacts",
+    "openclaw-gateway-runtime",
+    "releases",
+    "release-a",
+  );
+  const entrypoint = path.join(snapshotRoot, "dist", "entry.js");
+  const bundledPluginsDir = path.join(snapshotRoot, "dist-runtime", "extensions");
+  await writeProjectFiles(tmp, {
+    [path.relative(tmp, entrypoint)]: "console.log('snapshot cli');\n",
+    [path.relative(tmp, path.join(snapshotRoot, "dist", "control-ui", "index.html"))]:
+      "<!doctype html>\n",
+    [path.relative(tmp, path.join(bundledPluginsDir, "demo", "package.json"))]: "{}\n",
+    [path.join(".artifacts", "openclaw-gateway-runtime", "latest.json")]: `${JSON.stringify({
+      version: 1,
+      root: snapshotRoot,
+    })}\n`,
+  });
+  return { bundledPluginsDir, entrypoint, snapshotRoot };
 }
 
 function createSpawnRecorder(
@@ -319,6 +354,58 @@ async function runGatewayCallStatusCommand(params: {
   });
 }
 
+async function runCronListCommand(params: {
+  tmp: string;
+  spawn: (cmd: string, args: string[], options?: unknown) => ReturnType<typeof createExitedProcess>;
+  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  env?: Record<string, string>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
+}) {
+  return await runNodeMain({
+    cwd: params.tmp,
+    args: ["cron", "list", "--json"],
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      ...params.env,
+    },
+    spawn: params.spawn,
+    ...(params.spawnSync ? { spawnSync: params.spawnSync } : {}),
+    ...(params.runRuntimePostBuild ? { runRuntimePostBuild: params.runRuntimePostBuild } : {}),
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
+async function runCronRunCommand(params: {
+  tmp: string;
+  spawn: (cmd: string, args: string[], options?: unknown) => ReturnType<typeof createExitedProcess>;
+  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  env?: Record<string, string>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
+}) {
+  return await runNodeMain({
+    cwd: params.tmp,
+    args: ["cron", "run", "job-1"],
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      ...params.env,
+    },
+    spawn: params.spawn,
+    ...(params.spawnSync ? { spawnSync: params.spawnSync } : {}),
+    ...(params.runRuntimePostBuild ? { runRuntimePostBuild: params.runRuntimePostBuild } : {}),
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
 async function runQaCommand(params: {
   tmp: string;
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
@@ -352,6 +439,23 @@ async function expectManifestId(tmp: string, relativePath: string, id: string) {
 }
 
 describe("run-node script", () => {
+  it("preserves built Control UI assets across the tsdown clean wrapper", async () => {
+    await withTempDir({ prefix: "openclaw-tsdown-control-ui-" }, async (tmp) => {
+      const indexPath = resolvePath(tmp, "dist/control-ui/index.html");
+      await fs.mkdir(path.dirname(indexPath), { recursive: true });
+      await fs.writeFile(indexPath, "<html>dashboard</html>\n", "utf-8");
+
+      const preserved = preserveControlUiAssets({ cwd: tmp });
+      expect(preserved).not.toBeNull();
+      expect(fsSync.existsSync(indexPath)).toBe(false);
+
+      fsSync.rmSync(resolvePath(tmp, "dist"), { recursive: true, force: true });
+
+      expect(restorePreservedControlUiAssets(preserved)).toBe(true);
+      await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("dashboard");
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves control-ui assets by building with tsdown --no-clean",
     async () => {
@@ -1485,6 +1589,7 @@ describe("run-node script", () => {
           [ROOT_SRC]: "export const value = 1;\n",
         },
         buildPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, DIST_ENTRY, BUILD_STAMP],
+        newPaths: [ROOT_SRC],
       });
 
       const requirement = resolveBuildRequirement(
@@ -1498,6 +1603,57 @@ describe("run-node script", () => {
         shouldBuild: true,
         reason: "dirty_watched_tree",
       });
+    });
+  });
+
+  it("does not rebuild dirty watched source trees already covered by the build stamp", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        buildPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: ` M ${ROOT_SRC}\n`,
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("uses current dirty dist without rebuilding on repeated CLI calls", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
     });
   });
 
@@ -1533,6 +1689,82 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([gatewayCallStatusCommandSpawn()]);
       expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs read-only cron diagnostics from the promoted runtime snapshot without rebuilding", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [ROOT_TSCONFIG, ROOT_PACKAGE, DIST_ENTRY, BUILD_STAMP, RUNTIME_POSTBUILD_STAMP],
+        newPaths: [ROOT_SRC],
+      });
+      const snapshot = await writePromotedRuntimeSnapshot(tmp);
+
+      const runRuntimePostBuild = vi.fn();
+      const spawnCalls: Array<{ args: string[]; env: Record<string, string | undefined> }> = [];
+      const spawn = (cmd: string, args: string[], options?: unknown) => {
+        const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({ args: [cmd, ...args], env: { ...opts?.env } });
+        return createExitedProcess(0);
+      };
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+
+      const exitCode = await runCronListCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls.map((call) => call.args)).toEqual([
+        cronListCommandSpawn(snapshot.entrypoint),
+      ]);
+      expect(spawnCalls[0]?.env.OPENCLAW_RUNTIME_SNAPSHOT_ROOT).toBe(snapshot.snapshotRoot);
+      expect(spawnCalls[0]?.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe(snapshot.bundledPluginsDir);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
+  it("still rebuilds dirty source before running mutating cron jobs", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [ROOT_TSCONFIG, ROOT_PACKAGE, DIST_ENTRY, BUILD_STAMP, RUNTIME_POSTBUILD_STAMP],
+        newPaths: [ROOT_SRC],
+      });
+      await writePromotedRuntimeSnapshot(tmp);
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+
+      const exitCode = await runCronRunCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        cronRunCommandSpawn(),
+      ]);
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
     });
   });
 

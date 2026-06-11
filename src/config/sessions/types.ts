@@ -147,6 +147,19 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
+export type SessionJudgeGuardAuditEntry = {
+  ts: number;
+  runId?: string;
+  action: "rewrote_final_success_claim";
+  verdictStatus: "parsed" | "invalid";
+  verdict?: string;
+  scope?: string;
+  risk?: string;
+  conditions?: string;
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
 export type LaneExecutionState =
   | "active"
   | "draining"
@@ -202,6 +215,8 @@ export type SessionEntry = {
   spawnedWorkspaceDir?: string;
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
+  /** Optional project association used by the Control UI project workspace. */
+  projectId?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
   forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
@@ -216,6 +231,8 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
+  /** Capped audit trail for Judge-driven final-reply rewrites. */
+  judgeGuardAudit?: SessionJudgeGuardAuditEntry[];
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */

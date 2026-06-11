@@ -390,6 +390,7 @@ describe("CLI attempt execution", () => {
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
+      runId: "run-cli-transcript-anchor",
     });
 
     const sessionFile = updatedEntry?.sessionFile;
@@ -412,6 +413,7 @@ describe("CLI attempt execution", () => {
     expect(messages[0]).toMatchObject({
       role: "user",
       content: "persist this",
+      __openclaw: { runId: "run-cli-transcript-anchor" },
     });
     expect(messages[1]).toMatchObject({
       role: "assistant",
@@ -419,6 +421,7 @@ describe("CLI attempt execution", () => {
       provider: "claude-cli",
       model: "opus",
       content: [{ type: "text", text: "hello from cli" }],
+      __openclaw: { runId: "run-cli-transcript-anchor" },
     });
   });
 

@@ -1,0 +1,8369 @@
+.snes-studio {
+  display: grid;
+  gap: 16px;
+  color: var(--fg);
+}
+
+.snes-studio--simple {
+  gap: 18px;
+}
+
+.snes-mode-rail,
+.snes-create-bar,
+.snes-make-mode,
+.snes-scene-builder,
+.snes-sound-desk,
+.snes-object-cards,
+.snes-play-mode,
+.snes-ship-mode,
+.snes-advanced-workbench-toggle,
+.snes-make-ai-tools,
+.snes-ai-review,
+.snes-selected-object-editor,
+.snes-ship-proof,
+.snes-build-control-strip,
+.snes-project-safety-bar,
+.snes-recent-activity {
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+  box-shadow: var(--shadow-sm);
+}
+
+.snes-mode-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.snes-mode-rail button,
+.snes-create-bar button,
+.snes-make-mode button,
+.snes-scene-builder button,
+.snes-object-cards button,
+.snes-play-mode button,
+.snes-ship-mode button,
+.snes-advanced-workbench-toggle button,
+.snes-ai-review button,
+.snes-selected-object-editor button,
+.snes-ship-proof button,
+.snes-editor-panel-rail button,
+.snes-build-control-strip button,
+.snes-project-safety-bar button,
+.snes-file-button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 760;
+  padding: 10px 12px;
+}
+
+.snes-mode-rail button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 72px;
+  gap: 4px 10px;
+  align-content: center;
+  align-items: center;
+  text-align: left;
+}
+
+.snes-mode-rail button.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.snes-mode-rail strong {
+  font-size: 1rem;
+}
+
+.snes-mode-rail__step {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 10%, var(--surface));
+  color: var(--fg);
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.snes-mode-rail__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.snes-mode-rail__status {
+  grid-column: 1 / -1;
+  justify-self: start;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  color: var(--accent-strong, var(--accent));
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.snes-mode-rail span,
+.snes-create-bar small,
+.snes-object-cards p,
+.snes-simple-status span,
+.snes-object-tray span,
+.snes-advanced-workbench-toggle small {
+  color: color-mix(in srgb, var(--fg) 68%, var(--muted));
+  font-size: 0.78rem;
+}
+
+.snes-mode-rail .snes-mode-rail__step {
+  color: var(--fg);
+  font-size: 0.8rem;
+}
+
+.snes-mode-rail .snes-mode-rail__status {
+  color: var(--accent-strong, var(--accent));
+  font-size: 0.7rem;
+}
+
+.snes-help-term {
+  position: relative;
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  vertical-align: baseline;
+}
+
+.snes-help-term__label {
+  color: inherit;
+  font: inherit;
+}
+
+.snes-help-term button {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-inline: 2px 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--fg);
+  cursor: help;
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 0;
+}
+
+.snes-help-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  left: 0;
+  display: none;
+  width: min(300px, 78vw);
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 98%, var(--bg));
+  box-shadow: 0 18px 44px rgba(4, 14, 28, 0.18);
+  color: var(--fg);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.snes-help-term:hover .snes-help-popover,
+.snes-help-term:focus-within .snes-help-popover {
+  display: grid;
+}
+
+.snes-help-popover span,
+.snes-help-popover small {
+  color: color-mix(in srgb, var(--fg) 70%, var(--muted));
+  font-size: 0.78rem;
+  line-height: 1.38;
+}
+
+.snes-learning-drawer {
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+  padding: 7px 10px;
+}
+
+.snes-learning-drawer summary {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.snes-learning-drawer summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-learning-drawer__mark {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 82%, var(--fg));
+  font-weight: 950;
+}
+
+.snes-learning-drawer summary strong,
+.snes-learning-drawer summary small {
+  display: block;
+}
+
+.snes-learning-drawer summary strong {
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+
+.snes-learning-drawer summary small {
+  color: color-mix(in srgb, var(--fg) 62%, var(--muted));
+  font-size: 0.74rem;
+  font-weight: 720;
+}
+
+.snes-learning-drawer__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.snes-learning-drawer__grid article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+  padding: 9px;
+}
+
+.snes-learning-drawer__grid strong {
+  color: var(--fg);
+  font-size: 0.82rem;
+}
+
+.snes-learning-drawer__grid span,
+.snes-learning-drawer__grid small {
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.74rem;
+  line-height: 1.32;
+}
+
+.snes-make-mode,
+.snes-play-mode,
+.snes-ship-mode,
+.snes-scene-builder,
+.snes-sound-desk,
+.snes-object-cards {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.snes-make-mode__intro {
+  display: grid;
+  max-width: 820px;
+  gap: 8px;
+}
+
+.snes-make-mode__intro h2 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 2rem;
+  line-height: 1.12;
+}
+
+.snes-make-mode__intro p {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 1rem;
+}
+
+.snes-create-bar {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 190px) minmax(280px, 1fr) minmax(190px, 260px)
+    auto auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px;
+}
+
+.snes-create-bar.compact {
+  grid-template-columns:
+    minmax(140px, 180px) minmax(260px, 1fr) minmax(170px, 230px)
+    auto auto;
+}
+
+.snes-create-bar label,
+.snes-make-mode details label,
+.snes-selected-object-editor label {
+  display: grid;
+  gap: 6px;
+  color: color-mix(in srgb, var(--fg) 76%, var(--muted));
+  font-size: 0.78rem;
+  font-weight: 840;
+}
+
+.snes-create-bar select,
+.snes-create-bar textarea,
+.snes-make-mode textarea,
+.snes-selected-object-editor input,
+.snes-selected-object-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 76%, var(--surface));
+  color: var(--fg);
+  padding: 10px 12px;
+}
+
+.snes-create-bar__provider {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.snes-create-bar__provider button.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.snes-ai-route-badges {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+}
+
+.snes-ai-route-badges.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.snes-ai-route-badges article {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid rgba(23, 32, 42, 0.11);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 7px 8px;
+}
+
+.snes-ai-route-badges strong {
+  overflow: visible;
+  color: #17202a;
+  font-size: 0.72rem;
+  line-height: 1.12;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.snes-ai-route-badges small {
+  overflow: visible;
+  color: #526576;
+  font-size: 0.65rem;
+  font-weight: 760;
+  line-height: 1.15;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.snes-ai-live-check {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(22, 99, 255, 0.16);
+  border-radius: 16px;
+  background: #f7fbff;
+  color: #17202a;
+  padding: 8px 10px;
+}
+
+.snes-ai-live-check.connected {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: #eefcf6;
+}
+
+.snes-ai-live-check span {
+  color: #526576;
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1.12;
+  text-transform: uppercase;
+}
+
+.snes-ai-live-check strong {
+  color: #17202a;
+  font-size: 0.84rem;
+  line-height: 1.14;
+}
+
+.snes-ai-live-check p {
+  margin: 0;
+  color: #405266;
+  font-size: 0.72rem;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.snes-ai-live-check__proof {
+  color: #405266;
+  font-size: 0.69rem;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.snes-ai-live-check__proof--passed {
+  color: #0f766e;
+}
+
+.snes-ai-live-check__proof--failed {
+  color: #b91c1c;
+}
+
+.snes-ai-live-check__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.snes-ai-live-check button {
+  justify-self: start;
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 0.72rem;
+}
+
+.snes-create-bar__send,
+.snes-ship-actions button.primary,
+.snes-play-mode button.primary,
+.snes-scene-builder button.primary {
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
+  background: color-mix(in srgb, var(--accent) 24%, var(--surface));
+}
+
+.snes-create-bar__send:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.snes-studio--prompt-first {
+  align-content: start;
+  gap: 14px;
+}
+
+.snes-studio--ai-stage {
+  --snes-stage-ink: #182434;
+  --snes-stage-muted: #526576;
+  --snes-stage-line: rgba(24, 36, 52, 0.14);
+  --snes-stage-paper: #fbfcfd;
+  --snes-stage-action: #125fd8;
+  --snes-stage-success: #16815f;
+  gap: 18px;
+  color: var(--snes-stage-ink);
+}
+
+.snes-ai-game-stage {
+  display: grid;
+  gap: 14px;
+}
+
+.snes-ai-stage-ask,
+.snes-ai-game-stage__play,
+.snes-ai-piece-dock,
+.snes-ai-selected-panel,
+.snes-ai-change-history,
+.snes-ai-export-card,
+.snes-ai-expert-studio {
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 18px;
+  background: var(--snes-stage-paper);
+  box-shadow: 0 12px 32px rgba(6, 18, 32, 0.08);
+}
+
+.snes-ai-stage-ask {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.5fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px;
+}
+
+.snes-ai-stage-ask__copy,
+.snes-ai-stage-ask__prompt,
+.snes-ai-change-history,
+.snes-ai-export-card,
+.snes-ai-selected-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.snes-ai-stage-ask h2,
+.snes-ai-game-stage__play-header h3,
+.snes-ai-selected-panel h3,
+.snes-ai-export-card h3 {
+  margin: 0;
+  color: var(--snes-stage-ink);
+  letter-spacing: 0;
+}
+
+.snes-ai-stage-ask p,
+.snes-ai-game-stage__play-header p,
+.snes-ai-selected-panel p,
+.snes-ai-export-card p,
+.snes-ai-piece-dock span,
+.snes-ai-change-history span,
+.snes-ai-change-history small,
+.snes-ai-stage-ask small {
+  margin: 0;
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-ai-stage-ask__prompt span,
+.snes-ai-selected-panel label,
+.snes-ai-stage-ask label {
+  color: var(--snes-stage-ink);
+  font-weight: 850;
+}
+
+.snes-ai-stage-ask textarea,
+.snes-ai-selected-panel input,
+.snes-ai-selected-panel select,
+.snes-ai-selected-panel textarea {
+  width: 100%;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 14px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  font: inherit;
+  padding: 11px 12px;
+}
+
+.snes-ai-stage-ask textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.snes-ai-selected-panel textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.snes-ai-selected-panel__look {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 12px;
+  background: #f7fbff;
+  padding: 10px;
+}
+
+.snes-ai-selected-panel__look strong {
+  color: var(--snes-stage-ink);
+}
+
+.snes-ai-selected-panel__look span {
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-ai-stage-provider,
+.snes-ai-stage-ask__actions,
+.snes-ai-stage-chips,
+.snes-ai-selected-panel__actions,
+.snes-ai-export-card__actions,
+.snes-ai-game-stage__play-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.snes-ai-stage-provider {
+  align-self: stretch;
+  justify-content: end;
+}
+
+.snes-ai-stage-ask button,
+.snes-ai-piece-dock button,
+.snes-ai-selected-panel button,
+.snes-ai-export-card button,
+.snes-ai-expert-studio button,
+.snes-ai-game-stage__play-actions button {
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 12px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  cursor: pointer;
+  font-weight: 860;
+  padding: 10px 12px;
+}
+
+.snes-ai-stage-ask button.primary,
+.snes-ai-selected-panel button.primary,
+.snes-ai-export-card button.primary,
+.snes-ai-game-stage__play-actions button.primary {
+  border-color: transparent;
+  background: var(--snes-stage-action);
+  color: #ffffff;
+  box-shadow: 0 10px 22px rgba(18, 95, 216, 0.22);
+}
+
+.snes-ai-stage-provider button.active {
+  border-color: transparent;
+  background: #182434;
+  color: #ffffff;
+}
+
+.snes-ai-stage-chips,
+.snes-ai-stage-ask > small {
+  grid-column: 2 / 4;
+}
+
+.snes-ai-stage-live-proof {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 3px;
+  border: 1px solid rgba(18, 95, 216, 0.16);
+  border-radius: 12px;
+  background: #eef5ff;
+  color: var(--snes-stage-ink);
+  padding: 9px 11px;
+}
+
+.snes-ai-stage-live-proof strong,
+.snes-ai-stage-live-proof span {
+  margin: 0;
+}
+
+.snes-ai-stage-live-proof span {
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-ai-stage-live-proof--passed {
+  border-color: rgba(22, 129, 95, 0.22);
+  background: #eefaf5;
+}
+
+.snes-ai-stage-live-proof--needs-setup,
+.snes-ai-stage-live-proof--failed {
+  border-color: rgba(217, 119, 6, 0.26);
+  background: #fff8eb;
+}
+
+.snes-ai-stage-chips button {
+  border-radius: 999px;
+  padding: 8px 11px;
+}
+
+.snes-ai-game-stage__body {
+  display: grid;
+  grid-template-columns: minmax(560px, 1fr) minmax(280px, 360px);
+  gap: 14px;
+  align-items: start;
+}
+
+.snes-ai-game-stage__play {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.snes-ai-game-stage__play-header {
+  display: flex;
+  gap: 12px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.snes-ai-game-stage__side {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.snes-ai-piece-dock {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.5fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+}
+
+.snes-ai-piece-dock__list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-ai-piece-dock .snes-canvas-piece-shelf__piece {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  align-items: center;
+  text-align: left;
+}
+
+.snes-ai-piece-dock .snes-piece-glyph {
+  grid-row: 1 / span 2;
+  width: 22px;
+  height: 22px;
+}
+
+.snes-ai-selected-panel,
+.snes-ai-change-history,
+.snes-ai-export-card {
+  padding: 12px;
+}
+
+.snes-ai-selected-panel.empty {
+  background: #f5f8ff;
+}
+
+.snes-ai-selected-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-ai-selected-panel button.danger {
+  border-color: rgba(190, 18, 60, 0.28);
+  color: #9f1239;
+}
+
+.snes-ai-change-history article {
+  display: grid;
+  gap: 4px;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.snes-ai-change-history code {
+  overflow: hidden;
+  border-radius: 10px;
+  background: #eef2f7;
+  color: #324255;
+  font-size: 0.72rem;
+  padding: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snes-ai-export-card details {
+  border: 1px solid rgba(24, 36, 52, 0.1);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 8px 10px;
+}
+
+.snes-ai-expert-studio {
+  overflow: hidden;
+}
+
+.snes-ai-expert-studio > summary {
+  display: grid;
+  gap: 3px;
+  cursor: pointer;
+  padding: 12px 14px;
+}
+
+.snes-ai-expert-studio > summary span {
+  color: var(--snes-stage-action);
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.snes-ai-expert-studio[open] {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+
+.snes-ai-expert-studio[open] > :not(summary) {
+  margin-inline: 12px;
+}
+
+.snes-studio--ai-stage .snes-playtest {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.36fr);
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.snes-studio--ai-stage .snes-playtest > .snes-section-header {
+  display: none;
+}
+
+.snes-studio--ai-stage .snes-playtest__stage {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  min-height: 420px;
+  border-radius: 18px;
+}
+
+.snes-studio--ai-stage .snes-play-moments {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.snes-studio--ai-stage .snes-play-controller {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: end;
+  grid-template-columns: 1fr;
+}
+
+.snes-studio--ai-stage .snes-playtest__hud,
+.snes-studio--ai-stage .snes-playtest__expert,
+.snes-studio--ai-stage .snes-play-event-drawer {
+  grid-column: 1 / -1;
+}
+
+.snes-studio--ai-stage .snes-playtest__marker {
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  box-shadow: 0 10px 20px rgba(6, 18, 32, 0.18);
+  cursor: grab;
+  padding: 0;
+}
+
+.snes-studio--ai-stage .snes-playtest__marker.active,
+.snes-studio--ai-stage .snes-playtest__marker:focus-visible {
+  z-index: 8;
+  outline: 3px solid #ffcf2e;
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  .snes-ai-stage-ask,
+  .snes-ai-game-stage__body,
+  .snes-ai-piece-dock,
+  .snes-studio--ai-stage .snes-playtest {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-ai-stage-provider {
+    justify-content: start;
+  }
+
+  .snes-ai-stage-chips,
+  .snes-ai-stage-ask > small {
+    grid-column: auto;
+  }
+
+  .snes-ai-game-stage__play-header {
+    display: grid;
+  }
+
+  .snes-studio--ai-stage .snes-playtest__stage {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 220px;
+  }
+
+  .snes-studio--ai-stage .snes-play-moments {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .snes-studio--ai-stage .snes-play-controller {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .snes-studio--ai-stage .snes-playtest__hud,
+  .snes-studio--ai-stage .snes-playtest__expert,
+  .snes-studio--ai-stage .snes-play-event-drawer {
+    grid-column: 1;
+  }
+
+  .snes-ai-piece-dock__list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.snes-studio--guided-platformer {
+  --snes-stage-ink: #17202a;
+  --snes-stage-muted: #5f6f7e;
+  --snes-stage-line: rgba(23, 32, 42, 0.13);
+  --snes-stage-paper: #fbfcfd;
+  --snes-stage-action: #1263d8;
+  --snes-stage-success: #15835f;
+  gap: 14px;
+  color: var(--snes-stage-ink);
+}
+
+.snes-guided-game-builder {
+  display: grid;
+  gap: 12px;
+}
+
+.snes-arcade-builder--start {
+  display: grid;
+  gap: 14px;
+}
+
+.snes-arcade-start {
+  display: grid;
+  min-height: min(720px, calc(100vh - 180px));
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-content: center;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 250, 255, 0.96)),
+    radial-gradient(circle at top right, rgba(32, 154, 119, 0.14), transparent 38%);
+  box-shadow: 0 18px 48px rgba(6, 18, 32, 0.1);
+  padding: clamp(18px, 4vw, 42px);
+}
+
+.snes-arcade-start__copy {
+  display: grid;
+  max-width: 780px;
+  gap: 8px;
+}
+
+.snes-arcade-start__copy h2 {
+  margin: 0;
+  color: var(--snes-stage-ink);
+  font-size: clamp(2rem, 4vw, 4.2rem);
+  line-height: 1;
+}
+
+.snes-arcade-start__copy p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--snes-stage-muted);
+  font-size: 1.08rem;
+  line-height: 1.45;
+}
+
+.snes-arcade-start__prompt {
+  display: grid;
+  gap: 8px;
+  max-width: 860px;
+  color: var(--snes-stage-ink);
+  font-weight: 900;
+}
+
+.snes-arcade-start__prompt textarea {
+  width: 100%;
+  min-height: 170px;
+  border: 2px solid rgba(18, 99, 216, 0.22);
+  border-radius: 18px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  box-shadow: 0 14px 30px rgba(6, 18, 32, 0.08);
+  font: inherit;
+  font-size: 1.08rem;
+  line-height: 1.45;
+  padding: 16px;
+  resize: vertical;
+}
+
+.snes-arcade-start__bottom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+
+.snes-arcade-start__label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--snes-stage-muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.snes-arcade-start__bottom > button.primary {
+  min-height: 56px;
+  border: 0;
+  border-radius: 16px;
+  background: #1263d8;
+  color: #ffffff;
+  box-shadow: 0 14px 28px rgba(18, 99, 216, 0.24);
+  cursor: pointer;
+  font-size: 1.02rem;
+  font-weight: 950;
+  padding: 0 22px;
+}
+
+.snes-graphics-style-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, auto) auto;
+  gap: 12px;
+  align-items: center;
+  max-width: 1080px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(250, 253, 255, 0.98)),
+    linear-gradient(90deg, rgba(255, 207, 46, 0.14), rgba(56, 154, 216, 0.1));
+  padding: 12px;
+}
+
+.snes-graphics-style-card h4,
+.snes-graphics-style-card p,
+.snes-graphics-style-card small {
+  margin: 0;
+}
+
+.snes-graphics-style-card h4 {
+  color: var(--snes-stage-ink);
+}
+
+.snes-graphics-style-card p,
+.snes-graphics-style-card small {
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-graphics-style-card.active {
+  border-color: rgba(22, 129, 95, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(22, 129, 95, 0.14);
+}
+
+.snes-graphics-style-card__swatches {
+  display: grid;
+  grid-template-columns: repeat(4, 22px);
+  gap: 5px;
+}
+
+.snes-graphics-style-card__swatches span {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #ffffff;
+  border-radius: 7px;
+  background: var(--swatch);
+  box-shadow: 0 0 0 1px rgba(23, 32, 42, 0.12);
+}
+
+.snes-graphics-style-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.snes-graphics-style-card__facts span {
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #17202a;
+  font-size: 0.78rem;
+  font-weight: 850;
+  padding: 5px 8px;
+}
+
+.snes-graphics-style-card button {
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 12px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  cursor: pointer;
+  font-weight: 900;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+
+.snes-graphics-style-card button.active {
+  border-color: transparent;
+  background: #16815f;
+  color: #ffffff;
+}
+
+.snes-arcade-start__chips,
+.snes-arcade-start__promise {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 1080px;
+}
+
+.snes-arcade-start__chips button,
+.snes-arcade-start__promise article {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 16px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  padding: 12px;
+  text-align: left;
+}
+
+.snes-arcade-start__chips button {
+  cursor: pointer;
+}
+
+.snes-arcade-start__chips small,
+.snes-arcade-start__promise small {
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-arcade-start__promise span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #eaf7f1;
+  color: #15835f;
+  font-weight: 950;
+}
+
+.snes-arcade-header {
+  background:
+    linear-gradient(180deg, #ffffff, #f8fbff),
+    radial-gradient(circle at top right, rgba(255, 207, 46, 0.18), transparent 34%);
+}
+
+.snes-arcade-ask-bar {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 10px;
+  border: 1px solid rgba(18, 99, 216, 0.18);
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(6, 18, 32, 0.09);
+  padding: 14px;
+}
+
+.snes-guided-playtest .snes-arcade-ask-bar {
+  grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.4fr);
+  align-items: start;
+  border-color: rgba(18, 99, 216, 0.28);
+}
+
+.snes-guided-playtest .snes-arcade-ask-bar__actions,
+.snes-guided-playtest .snes-area-prompt-suggestions,
+.snes-guided-playtest .snes-area-quick-actions,
+.snes-guided-playtest .snes-area-ai-preview {
+  grid-column: 1 / -1;
+}
+
+.snes-arcade-ask-bar--area {
+  border-color: rgba(255, 207, 46, 0.62);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 250, 229, 0.92)), #ffffff;
+}
+
+.snes-arcade-ask-bar__context {
+  display: grid;
+  gap: 3px;
+}
+
+.snes-arcade-ask-bar__context span {
+  color: #1263d8;
+  font-size: 0.78rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.snes-arcade-ask-bar__context strong {
+  color: var(--snes-stage-ink);
+  font-size: 1rem;
+}
+
+.snes-arcade-ask-bar__context small {
+  color: var(--snes-stage-muted);
+}
+
+.snes-arcade-ask-bar textarea {
+  width: 100%;
+  min-height: 70px;
+  border: 1px solid rgba(23, 32, 42, 0.14);
+  border-radius: 14px;
+  background: #f9fbfd;
+  color: var(--snes-stage-ink);
+  font: inherit;
+  padding: 12px;
+  resize: vertical;
+}
+
+.snes-arcade-ask-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.snes-area-prompt-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.snes-area-prompt-suggestions span {
+  color: #795300;
+  font-size: 0.78rem;
+  font-weight: 900;
+  margin-right: 2px;
+}
+
+.snes-area-prompt-suggestions button {
+  border-color: rgba(164, 111, 0, 0.24);
+  background: #fff8dc;
+  min-height: 34px;
+}
+
+.snes-area-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(18, 99, 216, 0.16);
+  border-radius: 16px;
+  background: #f4f9ff;
+  padding: 8px;
+}
+
+.snes-area-quick-actions span {
+  color: #35536f;
+  font-size: 0.78rem;
+  font-weight: 900;
+  margin-right: 2px;
+}
+
+.snes-area-quick-actions button {
+  min-height: 36px;
+}
+
+.snes-area-ai-preview {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(18, 99, 216, 0.18);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8fbff, #eef6ff);
+  padding: 12px;
+}
+
+.snes-area-ai-preview__copy {
+  display: grid;
+  gap: 3px;
+}
+
+.snes-area-ai-preview__copy span {
+  color: #1263d8;
+  font-size: 0.76rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.snes-area-ai-preview__copy strong {
+  color: var(--snes-stage-ink);
+}
+
+.snes-area-ai-preview__copy small,
+.snes-area-ai-preview li {
+  color: var(--snes-stage-muted);
+}
+
+.snes-area-ai-preview ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.snes-area-ai-preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 860px) {
+  .snes-guided-playtest .snes-arcade-ask-bar {
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+
+  .snes-guided-playtest .snes-arcade-ask-bar textarea {
+    min-height: 54px;
+  }
+}
+
+.snes-emulator-canvas {
+  cursor: crosshair;
+}
+
+.snes-emulator-selection {
+  position: absolute;
+  z-index: 9;
+  min-width: 24px;
+  min-height: 24px;
+  border: 3px solid #ffcf2e;
+  border-radius: 14px;
+  background: rgba(255, 207, 46, 0.16);
+  box-shadow: 0 0 0 999px rgba(6, 18, 32, 0.08);
+  pointer-events: none;
+  touch-action: none;
+}
+
+.snes-emulator-selection.moving,
+.snes-emulator-selection.resizing {
+  background: rgba(255, 207, 46, 0.28);
+  box-shadow:
+    0 0 0 999px rgba(6, 18, 32, 0.1),
+    0 0 0 4px rgba(255, 255, 255, 0.36);
+}
+
+.snes-emulator-selection span {
+  position: absolute;
+  top: -34px;
+  left: 0;
+  border-radius: 999px;
+  background: #17202a;
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 950;
+  padding: 6px 9px;
+  cursor: move;
+  pointer-events: auto;
+  touch-action: none;
+  white-space: nowrap;
+}
+
+.snes-emulator-selection__resize {
+  position: absolute;
+  right: -10px;
+  bottom: -10px;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  overflow: hidden;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #17202a;
+  color: transparent;
+  cursor: nwse-resize;
+  pointer-events: auto;
+  touch-action: none;
+  padding: 0;
+  box-shadow: 0 8px 16px rgba(6, 18, 32, 0.2);
+}
+
+.snes-emulator-selection__resize::before,
+.snes-emulator-selection__resize::after {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  display: block;
+  width: 10px;
+  height: 2px;
+  border-radius: 999px;
+  background: #ffcf2e;
+  content: "";
+}
+
+.snes-emulator-selection__resize::after {
+  width: 2px;
+  height: 10px;
+}
+
+.snes-guided-hero,
+.snes-guided-card,
+.snes-guided-control-bar,
+.snes-guided-health,
+.snes-guided-receipt,
+.snes-ai-production-card,
+.snes-guided-selected-empty,
+.snes-guided-shelf,
+.snes-story-gap-filler {
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 18px;
+  background: var(--snes-stage-paper);
+  box-shadow: 0 12px 32px rgba(6, 18, 32, 0.08);
+}
+
+.snes-guided-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+}
+
+.snes-guided-hero h2,
+.snes-guided-card h3,
+.snes-guided-receipt strong,
+.snes-guided-selected-empty strong {
+  margin: 0;
+  color: var(--snes-stage-ink);
+  letter-spacing: 0;
+}
+
+.snes-guided-hero p,
+.snes-guided-card p,
+.snes-guided-receipt p,
+.snes-guided-receipt small,
+.snes-guided-selected-empty p,
+.snes-guided-shelf small,
+.snes-guided-step small,
+.snes-guided-control-bar em,
+.snes-guided-health span,
+.snes-guided-plan__grid small {
+  margin: 0;
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-guided-hero__actions,
+.snes-guided-actions,
+.snes-guided-provider,
+.snes-guided-chips,
+.snes-guided-receipt__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.snes-ai-production-lanes {
+  align-items: flex-start;
+}
+
+.snes-ai-production-lanes small {
+  flex-basis: 100%;
+  color: var(--snes-stage-muted);
+  font-weight: 720;
+  line-height: 1.35;
+}
+
+.snes-ai-production-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.snes-ai-production-card h3,
+.snes-ai-production-card p {
+  margin: 0;
+}
+
+.snes-ai-production-card h3 {
+  color: var(--snes-stage-ink);
+  letter-spacing: 0;
+}
+
+.snes-ai-production-card p,
+.snes-ai-production-card small,
+.snes-ai-production-card li {
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-ai-production-card__steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-ai-production-card__steps article {
+  display: grid;
+  gap: 5px;
+  min-height: 78px;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.snes-ai-production-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.snes-ai-production-route {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.snes-ai-production-route span,
+.snes-ai-production-route small {
+  color: var(--snes-stage-muted);
+}
+
+.snes-ai-production-route strong {
+  color: var(--snes-stage-ink);
+}
+
+.snes-ai-production-route__checks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-ai-production-route__checks article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 9px;
+}
+
+.snes-ai-production-route__state {
+  border-radius: 12px;
+  background: #edf4ff;
+  padding: 9px 10px;
+}
+
+.snes-ai-production-route__review {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(18, 99, 216, 0.22);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.snes-ai-production-route__review p {
+  margin: 0;
+}
+
+.snes-ai-production-route--passed .snes-ai-production-route__state {
+  background: #e8f8ef;
+}
+
+.snes-ai-production-route--needs-setup .snes-ai-production-route__state,
+.snes-ai-production-route--failed .snes-ai-production-route__state {
+  background: #fff3e7;
+}
+
+.snes-ai-production-route__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.snes-guided-hero button,
+.snes-guided-card button,
+.snes-guided-receipt button,
+.snes-guided-selected-empty button,
+.snes-guided-shelf button {
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 12px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  cursor: pointer;
+  font-weight: 860;
+  padding: 10px 12px;
+}
+
+.snes-guided-hero button.primary,
+.snes-guided-card button.primary,
+.snes-guided-receipt button.primary {
+  border-color: transparent;
+  background: var(--snes-stage-action);
+  color: #ffffff;
+  box-shadow: 0 10px 22px rgba(18, 99, 216, 0.22);
+}
+
+.snes-guided-provider button.active,
+.snes-guided-step--current {
+  border-color: transparent;
+  background: #17202a;
+  color: #ffffff;
+}
+
+.snes-guided-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-guided-step {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-height: 86px;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 16px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  cursor: pointer;
+  padding: 10px;
+  text-align: left;
+}
+
+.snes-guided-step span {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #edf4ff;
+  color: var(--snes-stage-action);
+  font-weight: 900;
+}
+
+.snes-guided-step--current span {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.snes-guided-step--current small,
+.snes-guided-control-bar span {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.snes-guided-step--done {
+  background: #effaf5;
+}
+
+.snes-guided-control-bar,
+.snes-guided-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.snes-guided-control-bar {
+  background: #17202a;
+  color: #ffffff;
+}
+
+.snes-guided-control-bar strong {
+  color: #ffffff;
+}
+
+.snes-guided-control-bar em,
+.snes-guided-control-bar span {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 6px 9px;
+  font-style: normal;
+}
+
+.snes-guided-health {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: #ffffff;
+}
+
+.snes-guided-health article {
+  display: grid;
+  gap: 3px;
+  border-radius: 14px;
+  background: #f4f7fb;
+  padding: 10px;
+}
+
+.snes-guided-workspace {
+  display: grid;
+  grid-template-columns: minmax(620px, 1fr) minmax(280px, 360px);
+  gap: 12px;
+  align-items: start;
+}
+
+.snes-guided-workspace__main,
+.snes-guided-workspace__side,
+.snes-guided-card,
+.snes-guided-card__copy,
+.snes-guided-receipt,
+.snes-guided-selected-empty,
+.snes-guided-shelf,
+.snes-guided-shelf__library article,
+.snes-guided-plan__grid article {
+  display: grid;
+  gap: 10px;
+}
+
+.snes-guided-workspace__side {
+  position: sticky;
+  top: 12px;
+}
+
+.snes-guided-card,
+.snes-guided-receipt,
+.snes-guided-selected-empty,
+.snes-guided-shelf,
+.snes-story-gap-filler {
+  padding: 14px;
+}
+
+.snes-guided-card label,
+.snes-guided-thing-prompt {
+  display: grid;
+  gap: 7px;
+  color: var(--snes-stage-ink);
+  font-weight: 850;
+}
+
+.snes-guided-card textarea {
+  width: 100%;
+  min-height: 112px;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 16px;
+  background: #ffffff;
+  color: var(--snes-stage-ink);
+  font: inherit;
+  padding: 12px;
+  resize: vertical;
+}
+
+.snes-guided-chips button {
+  border-radius: 999px;
+  padding: 8px 11px;
+}
+
+.snes-guided-plan__grid,
+.snes-guided-shelf__grid,
+.snes-story-map__grid,
+.snes-level-chapters,
+.snes-story-gap-filler__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-guided-plan__grid article,
+.snes-guided-shelf__library article,
+.snes-story-map__grid article,
+.snes-level-chapter-card,
+.snes-story-gap {
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 11px;
+}
+
+.snes-story-gap-filler {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--snes-stage-line);
+  border-radius: 18px;
+  background: #fffdf7;
+  box-shadow: 0 10px 24px rgba(6, 18, 32, 0.06);
+}
+
+.snes-story-gap-filler__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.snes-story-gap-filler__header strong,
+.snes-level-chapter-card strong,
+.snes-story-map__grid strong {
+  color: var(--snes-stage-ink);
+}
+
+.snes-story-gap-filler button.primary {
+  border-color: transparent;
+  border-radius: 12px;
+  background: var(--snes-stage-action);
+  color: #ffffff;
+}
+
+.snes-story-gap,
+.snes-level-chapter-card {
+  display: grid;
+  gap: 7px;
+}
+
+.snes-story-gap p,
+.snes-story-gap small,
+.snes-level-chapter-card p,
+.snes-level-chapter-card small,
+.snes-level-chapter-card dd,
+.snes-level-chapter-card dt {
+  margin: 0;
+  color: var(--snes-stage-muted);
+  line-height: 1.35;
+}
+
+.snes-story-gap span,
+.snes-level-chapter-card span,
+.snes-story-map__grid span {
+  width: fit-content;
+  border-radius: 999px;
+  background: #eef6ff;
+  color: var(--snes-stage-action);
+  font-size: 0.78rem;
+  font-weight: 900;
+  padding: 4px 8px;
+}
+
+.snes-story-gap--blocker span {
+  background: #ffe8ea;
+  color: #a51f36;
+}
+
+.snes-story-gap--warning span {
+  background: #fff2ce;
+  color: #7b5200;
+}
+
+.snes-level-chapter-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.snes-level-chapter-card dt {
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.snes-level-chapter-card dd {
+  font-weight: 750;
+}
+
+.snes-guided-shelf__grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.snes-guided-shelf__thing {
+  display: grid;
+  gap: 3px;
+  min-height: 72px;
+  text-align: left;
+}
+
+.snes-guided-shelf__library {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-guided-build__canvas,
+.snes-guided-playtest {
+  min-width: 0;
+}
+
+.snes-studio--guided-platformer .snes-playtest {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.34fr);
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.snes-studio--guided-platformer .snes-playtest > .snes-section-header {
+  grid-column: 1 / -1;
+}
+
+.snes-studio--guided-platformer .snes-playtest__stage {
+  grid-column: 1;
+  grid-row: 2 / span 3;
+  min-height: 430px;
+  border-radius: 18px;
+}
+
+.snes-studio--guided-platformer .snes-playtest-feedback {
+  grid-column: 1;
+  grid-row: 5;
+}
+
+.snes-studio--guided-platformer .snes-playtest__quick-actions {
+  grid-column: 1 / -1;
+  grid-row: 6;
+}
+
+.snes-studio--guided-platformer .snes-play-moments {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.snes-studio--guided-platformer .snes-play-moments__grid {
+  grid-template-columns: 1fr;
+}
+
+.snes-studio--guided-platformer .snes-play-controller {
+  grid-column: 2;
+  grid-row: 3;
+  align-self: end;
+  grid-template-columns: 1fr;
+}
+
+.snes-studio--guided-platformer .snes-playtest__hud,
+.snes-studio--guided-platformer .snes-playtest__expert,
+.snes-studio--guided-platformer .snes-play-event-drawer {
+  grid-column: 1 / -1;
+}
+
+.snes-studio--guided-platformer .snes-playtest__hud {
+  grid-row: 7;
+}
+
+.snes-studio--guided-platformer .snes-playtest__expert {
+  grid-row: 8;
+}
+
+.snes-studio--guided-platformer .snes-play-event-drawer {
+  grid-row: 9;
+}
+
+.snes-studio--guided-platformer .snes-playtest__marker {
+  border: 2px solid rgba(255, 255, 255, 0.84);
+  box-shadow: 0 10px 20px rgba(6, 18, 32, 0.18);
+  cursor: grab;
+  padding: 0;
+}
+
+.snes-studio--guided-platformer .snes-playtest__marker.active,
+.snes-studio--guided-platformer .snes-playtest__marker:focus-visible {
+  z-index: 8;
+  outline: 3px solid #ffcf2e;
+  outline-offset: 2px;
+}
+
+@media (max-width: 1080px) {
+  .snes-guided-workspace,
+  .snes-guided-hero,
+  .snes-studio--guided-platformer .snes-playtest,
+  .snes-guided-health {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-guided-steps {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .snes-graphics-style-card {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-ai-production-card__steps {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-graphics-style-card__swatches {
+    grid-template-columns: repeat(8, 22px);
+  }
+
+  .snes-guided-step {
+    flex: 0 0 150px;
+  }
+
+  .snes-guided-workspace__side {
+    position: static;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest > .snes-section-header {
+    order: 2;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__stage {
+    order: 3;
+    min-height: 260px;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest-feedback {
+    order: 1;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__quick-actions {
+    order: 2;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__hud {
+    order: 4;
+  }
+
+  .snes-studio--guided-platformer .snes-play-controller {
+    order: 5;
+  }
+
+  .snes-studio--guided-platformer .snes-play-moments {
+    order: 6;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__expert {
+    order: 7;
+  }
+
+  .snes-studio--guided-platformer .snes-play-event-drawer {
+    order: 8;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__stage,
+  .snes-studio--guided-platformer .snes-play-moments,
+  .snes-studio--guided-platformer .snes-play-controller {
+    grid-column: 1;
+  }
+
+  .snes-arcade-start {
+    min-height: auto;
+  }
+
+  .snes-arcade-start__chips,
+  .snes-arcade-start__promise {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .snes-guided-plan__grid,
+  .snes-story-map__grid,
+  .snes-level-chapters,
+  .snes-story-gap-filler__grid,
+  .snes-ai-production-route__checks,
+  .snes-guided-shelf__grid,
+  .snes-guided-shelf__library {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-guided-step {
+    min-height: auto;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__stage {
+    min-height: 240px;
+  }
+}
+
+.snes-studio--creator-desk {
+  --snes-desk-ink: #17202a;
+  --snes-desk-muted: #607080;
+  --snes-desk-paper: #fbfbf7;
+  --snes-desk-surface: #ffffff;
+  --snes-desk-mint: #dff7ec;
+  --snes-desk-sky: #e3f2ff;
+  --snes-desk-peach: #ffe4d6;
+  --snes-desk-violet: #eee9ff;
+  --snes-desk-line: rgba(23, 32, 42, 0.12);
+  color: var(--snes-desk-ink);
+}
+
+.snes-studio--creator-desk .snes-mode-rail {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 24px;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.snes-studio--creator-desk .snes-mode-rail button {
+  min-height: 54px;
+  min-width: 170px;
+  border-color: var(--snes-desk-line);
+  border-radius: 999px;
+  background: var(--snes-desk-surface);
+  color: var(--snes-desk-ink);
+  box-shadow: 0 8px 24px rgba(4, 14, 28, 0.08);
+  padding: 11px 14px;
+}
+
+.snes-studio--creator-desk .snes-mode-rail button.active {
+  border-color: transparent;
+  background: #1663ff;
+  color: #ffffff;
+  box-shadow: 0 14px 30px rgba(22, 99, 255, 0.28);
+  transform: translateY(-1px);
+}
+
+.snes-studio--creator-desk .snes-mode-rail span {
+  color: currentcolor;
+  opacity: 0.74;
+}
+
+.snes-studio--creator-desk .snes-mode-rail__step {
+  background: rgba(23, 32, 42, 0.08);
+  color: currentcolor;
+  opacity: 1;
+}
+
+.snes-studio--creator-desk .snes-mode-rail button.active .snes-mode-rail__step {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+.snes-studio--creator-desk .snes-mode-rail__copy,
+.snes-studio--creator-desk .snes-mode-rail__copy span,
+.snes-studio--creator-desk .snes-mode-rail__status {
+  opacity: 1;
+}
+
+.snes-studio--creator-desk .snes-mode-rail__status {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+  padding: 3px 8px;
+}
+
+.snes-studio--creator-desk .snes-prompt-hero {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.62fr) minmax(360px, 1fr);
+  gap: 20px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 0;
+  border-radius: 30px;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 228, 214, 0.86),
+      rgba(227, 242, 255, 0.84) 48%,
+      rgba(223, 247, 236, 0.88)
+    ),
+    var(--snes-desk-paper);
+  box-shadow: 0 26px 70px rgba(4, 14, 28, 0.16);
+  padding: 28px;
+}
+
+.snes-studio--creator-desk .snes-prompt-hero__copy {
+  align-content: center;
+  max-width: 620px;
+}
+
+.snes-studio--creator-desk .snes-prompt-hero h2 {
+  max-width: 580px;
+  color: var(--snes-desk-ink);
+  font-size: clamp(2.55rem, 5vw, 5.2rem);
+  line-height: 0.96;
+}
+
+.snes-studio--creator-desk .snes-prompt-hero p {
+  max-width: 560px;
+  color: #34485c;
+  font-size: 1.08rem;
+}
+
+.snes-studio--creator-desk .snes-prompt-hero .snes-create-bar {
+  align-self: center;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 42px rgba(4, 14, 28, 0.12);
+  padding: 18px;
+}
+
+.snes-create-bar__topline,
+.snes-create-bar__actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.snes-create-bar__intro {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px 14px;
+  align-items: baseline;
+  justify-content: space-between;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+}
+
+.snes-create-bar__intro strong {
+  color: var(--fg);
+  font-size: 0.95rem;
+}
+
+.snes-create-bar__intro span {
+  font-size: 0.82rem;
+}
+
+.snes-studio--creator-desk .snes-create-bar label,
+.snes-studio--creator-desk .snes-selected-object-editor label {
+  color: #405266;
+  font-size: 0.82rem;
+}
+
+.snes-studio--creator-desk .snes-create-bar__target {
+  min-width: 210px;
+}
+
+.snes-studio--creator-desk .snes-create-bar__start-scope {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(22, 99, 255, 0.16);
+  border-radius: 18px;
+  background: #f2f7ff;
+  padding: 10px 12px;
+}
+
+.snes-studio--creator-desk .snes-create-bar__start-scope span {
+  color: #405266;
+  font-size: 0.74rem;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.snes-studio--creator-desk .snes-create-bar__start-scope strong {
+  color: #173153;
+  font-size: 1rem;
+}
+
+.snes-studio--creator-desk .snes-create-bar select,
+.snes-studio--creator-desk .snes-create-bar textarea,
+.snes-studio--creator-desk .snes-selected-object-editor input,
+.snes-studio--creator-desk .snes-selected-object-editor textarea {
+  border-color: rgba(23, 32, 42, 0.12);
+  border-radius: 18px;
+  background: #f8fafb;
+  color: var(--snes-desk-ink);
+}
+
+.snes-studio--creator-desk .snes-create-bar textarea {
+  min-height: 156px;
+  font-size: 1.02rem;
+  line-height: 1.48;
+}
+
+.snes-studio--creator-desk .snes-create-bar.compact textarea {
+  min-height: 74px;
+}
+
+.snes-studio--creator-desk .snes-create-bar__provider {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar:not(.compact) .snes-ai-route-badges {
+  grid-template-columns: 1fr;
+}
+
+.snes-studio--creator-desk .snes-create-bar button,
+.snes-studio--creator-desk .snes-start-actions button,
+.snes-studio--creator-desk .snes-game-map button,
+.snes-studio--creator-desk .snes-command-dock button,
+.snes-studio--creator-desk .snes-project-access button,
+.snes-studio--creator-desk .snes-beginner-path button,
+.snes-studio--creator-desk .snes-object-drawer button,
+.snes-studio--creator-desk .snes-quick-change button,
+.snes-studio--creator-desk .snes-version-history button {
+  border-color: rgba(23, 32, 42, 0.14);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--snes-desk-ink);
+  box-shadow: 0 6px 18px rgba(4, 14, 28, 0.07);
+}
+
+.snes-studio--creator-desk .snes-create-bar__provider button.active,
+.snes-studio--creator-desk .snes-create-bar__send,
+.snes-studio--creator-desk .snes-start-actions button.primary {
+  border-color: transparent;
+  background: #1663ff;
+  color: #ffffff;
+}
+
+.snes-studio--creator-desk .snes-create-bar__send {
+  min-height: 52px;
+  padding-inline: 22px;
+}
+
+.snes-studio--creator-desk .snes-create-bar__intro {
+  color: #405266;
+}
+
+.snes-studio--creator-desk .snes-create-bar__intro strong {
+  color: var(--snes-desk-ink);
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar {
+  position: sticky;
+  z-index: 4;
+  top: 8px;
+  display: grid;
+  grid-template-columns: minmax(230px, 300px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 20px 48px rgba(4, 14, 28, 0.15);
+  padding: 14px;
+  backdrop-filter: blur(18px);
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar:not(.compact) .snes-create-bar__topline {
+  display: grid;
+  grid-column: 1;
+  grid-row: 2 / 6;
+  align-self: start;
+  gap: 8px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar:not(.compact) .snes-create-bar__prompt {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar:not(.compact)
+  .snes-create-bar__prompt
+  > span {
+  color: #26384a;
+  font-size: 0.92rem;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar:not(.compact)
+  .snes-create-bar__prompt
+  textarea {
+  min-height: 154px;
+  border-color: rgba(22, 99, 255, 0.2);
+  background: #ffffff;
+  font-size: 1.08rem;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar:not(.compact) .snes-create-bar__actions {
+  grid-column: 2;
+  grid-row: 3;
+  justify-content: start;
+}
+
+.snes-prompt-confirmation {
+  display: grid;
+  grid-column: 2;
+  grid-row: 5;
+  gap: 4px;
+  border: 1px solid rgba(22, 99, 255, 0.14);
+  border-radius: 18px;
+  background: #eef5ff;
+  padding: 10px 12px;
+}
+
+.snes-prompt-confirmation span {
+  color: #526576;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.snes-prompt-confirmation strong {
+  color: #17202a;
+  font-size: 0.9rem;
+  line-height: 1.34;
+}
+
+.snes-prompt-target-shortcuts {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  border: 1px solid rgba(22, 99, 255, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+  padding: 10px;
+}
+
+.snes-prompt-target-shortcuts > span {
+  color: #526576;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.snes-prompt-target-shortcuts > div {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.snes-prompt-target-shortcuts button {
+  min-height: 38px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(22, 99, 255, 0.16);
+  background: #ffffff;
+  color: #26384a;
+  padding-inline: 13px;
+}
+
+.snes-prompt-target-shortcuts button.active {
+  border-color: rgba(22, 99, 255, 0.62);
+  background: #1663ff;
+  color: #ffffff;
+  box-shadow: 0 10px 22px rgba(22, 99, 255, 0.2);
+}
+
+.snes-prompt-target-drawer {
+  display: grid;
+  grid-column: 1 / -1;
+  border: 1px solid rgba(22, 99, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.66);
+  padding: 6px 8px;
+}
+
+.snes-prompt-target-drawer > summary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  color: #26384a;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 850;
+  list-style: none;
+}
+
+.snes-prompt-target-drawer > summary span,
+.snes-prompt-target-drawer > summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snes-prompt-target-drawer > summary small {
+  flex: 0 0 auto;
+  color: #526576;
+  font-size: 0.7rem;
+}
+
+.snes-prompt-target-drawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-prompt-target-drawer[open] {
+  gap: 8px;
+}
+
+.snes-prompt-target-drawer .snes-prompt-target-shortcuts {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.snes-selected-prompt-context {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: center;
+  border: 1px solid rgba(22, 99, 255, 0.16);
+  border-radius: 18px;
+  background: #eef8f3;
+  color: var(--snes-desk-ink);
+  padding: 10px 12px;
+}
+
+.snes-selected-prompt-context.empty {
+  background: #fff8e8;
+}
+
+.snes-selected-prompt-context span {
+  color: #526576;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.snes-selected-prompt-context strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #17202a;
+  font-size: 0.96rem;
+}
+
+.snes-selected-prompt-context small {
+  grid-column: 2;
+  color: #405266;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar > small {
+  grid-column: 1 / -1;
+}
+
+.snes-ai-action-feedback {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 22px;
+  background: #eef8f3;
+  color: var(--snes-desk-ink);
+  padding: 12px 14px;
+}
+
+.snes-ai-action-feedback.review {
+  background: #f4f0ff;
+}
+
+.snes-ai-action-feedback.error {
+  background: #fff0eb;
+}
+
+.snes-ai-action-feedback.working {
+  background: #eef5ff;
+}
+
+.snes-ai-action-feedback span {
+  display: block;
+  color: #526576;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.snes-ai-action-feedback strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 1rem;
+}
+
+.snes-ai-action-feedback p {
+  margin: 3px 0 0;
+  color: #405266;
+  font-size: 0.88rem;
+  line-height: 1.38;
+}
+
+.snes-ai-action-feedback__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: end;
+  flex-wrap: wrap;
+}
+
+.snes-ai-action-feedback__pulse {
+  border-radius: 999px;
+  background: rgba(22, 99, 255, 0.12);
+  color: #104ea9;
+  padding: 9px 12px;
+}
+
+.snes-ai-connection-coach {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(22, 99, 255, 0.14);
+  border-radius: 18px;
+  background: #f7fbff;
+  color: var(--snes-desk-ink);
+  padding: 10px 12px;
+}
+
+.snes-ai-connection-coach.local {
+  background: #fff8e8;
+}
+
+.snes-ai-connection-coach.connected {
+  background: #eef8f3;
+}
+
+.snes-ai-connection-coach span {
+  display: block;
+  color: #526576;
+  font-size: 0.68rem;
+  font-weight: 860;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.snes-ai-connection-coach strong {
+  display: block;
+  margin-top: 2px;
+  color: #17202a;
+  font-size: 0.95rem;
+}
+
+.snes-ai-connection-coach p {
+  margin: 3px 0 0;
+  color: #405266;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.snes-ai-connection-coach__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: end;
+  flex-wrap: wrap;
+}
+
+.snes-ai-connection-coach__actions button {
+  min-height: 36px;
+  border-radius: 13px;
+  padding: 8px 12px;
+}
+
+.snes-ai-connection-coach.compact {
+  gap: 8px;
+  border-radius: 16px;
+  padding: 8px 10px;
+}
+
+.snes-ai-connection-coach.compact p {
+  display: none;
+}
+
+.snes-ai-connection-coach.compact .snes-ai-connection-coach__actions button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.snes-create-bar__actions.start {
+  justify-content: start;
+}
+
+.snes-create-bar__actions.start .snes-create-bar__send {
+  min-width: min(280px, 100%);
+  min-height: 58px;
+  font-size: 1rem;
+}
+
+.snes-start-advanced-actions {
+  grid-column: 1 / -1;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 10px 12px;
+}
+
+.snes-start-advanced-actions summary {
+  cursor: pointer;
+  color: #405266;
+  font-size: 0.78rem;
+  font-weight: 840;
+  list-style: none;
+}
+
+.snes-start-advanced-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-start-advanced-actions summary::before {
+  content: "+";
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: #eaf2ff;
+  color: #1663ff;
+  font-weight: 920;
+}
+
+.snes-start-advanced-actions[open] summary::before {
+  content: "-";
+}
+
+.snes-start-advanced-actions > div {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.snes-ai-action-feedback--mini {
+  min-width: min(360px, 100%);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  border-radius: 14px;
+  padding: 7px 8px 7px 10px;
+}
+
+.snes-ai-action-feedback--mini strong {
+  overflow: hidden;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snes-ai-action-feedback--mini .snes-ai-action-feedback__actions {
+  flex-wrap: nowrap;
+}
+
+.snes-ai-action-feedback--mini .snes-ai-action-feedback__actions button {
+  min-height: 30px;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact {
+  grid-template-columns: minmax(200px, 278px) minmax(280px, 1fr) auto;
+  gap: 8px 10px;
+  border-radius: 22px;
+  padding: 10px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__intro,
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact > small {
+  display: none;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__topline {
+  grid-column: 1;
+  grid-row: 1;
+  gap: 6px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__target {
+  min-width: 0;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__provider {
+  gap: 6px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__provider button {
+  min-height: 34px;
+  padding: 7px 11px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact.canvas-first .snes-ai-route-badges {
+  display: none;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__prompt {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__prompt textarea {
+  min-height: 44px;
+  max-height: 58px;
+  resize: vertical;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__actions {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: end;
+  justify-content: end;
+  gap: 8px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__actions button {
+  min-height: 38px;
+  padding: 8px 13px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-prompt-target-shortcuts {
+  grid-column: 1 / -1;
+  gap: 5px;
+  border-radius: 14px;
+  padding: 6px 8px;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact
+  .snes-prompt-target-shortcuts
+  > span {
+  display: none;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact
+  .snes-prompt-target-shortcuts
+  > div {
+  gap: 6px;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact
+  .snes-prompt-target-shortcuts
+  button {
+  min-height: 28px;
+  padding: 5px 9px;
+  box-shadow: none;
+  font-size: 0.78rem;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-selected-prompt-context {
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 8px;
+  border-radius: 14px;
+  padding: 6px 10px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-selected-prompt-context span {
+  font-size: 0.66rem;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact
+  .snes-selected-prompt-context
+  strong {
+  font-size: 0.86rem;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact
+  .snes-selected-prompt-context
+  small {
+  display: none;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-action-feedback {
+  gap: 8px 10px;
+  border-radius: 16px;
+  padding: 7px 10px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-action-feedback p {
+  display: none;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-action-feedback span {
+  font-size: 0.66rem;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-action-feedback strong {
+  margin-top: 1px;
+  font-size: 0.88rem;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact
+  .snes-ai-action-feedback__actions
+  button {
+  min-height: 34px;
+}
+
+.snes-studio--creator-desk > .snes-president-prompt-bar.compact.canvas-first {
+  position: static;
+  grid-template-columns: minmax(170px, 230px) minmax(260px, 1fr) auto;
+  gap: 6px 9px;
+  border-radius: 20px;
+  margin-bottom: 12px;
+  padding: 8px;
+  box-shadow: 0 12px 30px rgba(4, 14, 28, 0.11);
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact.canvas-first
+  .snes-create-bar__prompt
+  textarea {
+  min-height: 38px;
+  max-height: 46px;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact.canvas-first
+  .snes-create-bar__actions
+  button {
+  min-height: 34px;
+  padding: 7px 11px;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact.canvas-first
+  .snes-prompt-target-drawer {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: stretch;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact.canvas-first.has-selected-context
+  .snes-selected-prompt-context {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact.canvas-first.has-selected-context
+  .snes-ai-action-feedback {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar.compact.canvas-first.no-selected-context
+  .snes-ai-action-feedback {
+  grid-column: 2 / -1;
+  grid-row: 2;
+}
+
+.snes-studio--creator-desk .snes-start-coach {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 16px;
+  padding: 22px;
+}
+
+.snes-studio--creator-desk .snes-start-coach h2 {
+  max-width: 620px;
+  font-size: clamp(1.8rem, 3.1vw, 3.1rem);
+  line-height: 1.04;
+}
+
+.snes-studio--creator-desk .snes-start-coach p {
+  max-width: 620px;
+  font-size: 1rem;
+}
+
+.snes-start-loop-coach {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.72fr) minmax(360px, 1.65fr) minmax(220px, 0.72fr);
+  gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 22px;
+  background: linear-gradient(135deg, #fff7ed, #edf7ff 52%, #effcf5);
+  box-shadow: 0 16px 42px rgba(4, 14, 28, 0.1);
+  padding: 14px;
+}
+
+.snes-start-loop-coach__copy {
+  display: grid;
+  gap: 5px;
+}
+
+.snes-start-loop-coach h2 {
+  margin: 0;
+  color: var(--snes-desk-ink);
+  font-size: clamp(1.55rem, 2.1vw, 2.35rem);
+  line-height: 1.02;
+}
+
+.snes-start-loop-coach p {
+  margin: 0;
+  color: #405266;
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.snes-start-loop {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.snes-start-loop article {
+  display: grid;
+  gap: 4px;
+  min-height: 92px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.76);
+  padding: 12px;
+}
+
+.snes-start-loop span {
+  width: fit-content;
+  border-radius: 999px;
+  background: #17202a;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 880;
+  padding: 5px 8px;
+}
+
+.snes-start-loop strong {
+  color: var(--snes-desk-ink);
+  font-size: 0.96rem;
+}
+
+.snes-start-loop small {
+  color: #405266;
+  font-weight: 720;
+  line-height: 1.28;
+}
+
+.snes-start-loop-coach__side {
+  display: grid;
+  gap: 10px;
+}
+
+.snes-start-loop-coach__status {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 12px;
+}
+
+.snes-start-loop-coach__status span {
+  color: #526576;
+  font-size: 0.68rem;
+  font-weight: 860;
+  text-transform: uppercase;
+}
+
+.snes-start-loop-coach__status strong {
+  overflow: hidden;
+  color: var(--snes-desk-ink);
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .snes-start-loop-coach {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-start-loop {
+    grid-template-columns: 1fr;
+  }
+}
+
+.snes-playbook {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.snes-playbook article {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.62);
+  padding: 12px;
+}
+
+.snes-playbook span {
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #17202a;
+  color: #ffffff;
+  font-weight: 850;
+}
+
+.snes-playbook strong {
+  color: var(--snes-desk-ink);
+}
+
+.snes-playbook small {
+  color: var(--snes-desk-muted);
+}
+
+.snes-studio--creator-desk .snes-prompt-chips,
+.snes-studio--creator-desk .snes-start-actions,
+.snes-studio--creator-desk .snes-prompt-status {
+  grid-column: 1 / -1;
+}
+
+.snes-studio--creator-desk .snes-prompt-chips button {
+  color: var(--snes-desk-ink);
+  opacity: 1;
+}
+
+.snes-studio--creator-desk .snes-prompt-chips button:nth-child(1) {
+  background: var(--snes-desk-sky);
+}
+
+.snes-studio--creator-desk .snes-prompt-chips button:nth-child(2) {
+  background: var(--snes-desk-mint);
+}
+
+.snes-studio--creator-desk .snes-prompt-chips button:nth-child(3) {
+  background: var(--snes-desk-violet);
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar:not(.compact)
+  .snes-prompt-chips--inside-create {
+  grid-column: 2;
+  grid-row: 4;
+  gap: 8px;
+  align-self: start;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar:not(.compact)
+  .snes-prompt-chips--inside-create::before {
+  content: "Try:";
+  align-self: center;
+  color: #405266;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.snes-studio--creator-desk
+  > .snes-president-prompt-bar:not(.compact)
+  .snes-prompt-chips--inside-create
+  button {
+  border-radius: 999px;
+  padding: 8px 12px;
+}
+
+.snes-studio--creator-desk .snes-prompt-status article,
+.snes-studio--creator-desk .snes-game-map,
+.snes-studio--creator-desk .snes-beginner-path,
+.snes-studio--creator-desk .snes-project-access,
+.snes-studio--creator-desk .snes-quick-change,
+.snes-studio--creator-desk .snes-version-history,
+.snes-studio--creator-desk .snes-command-dock,
+.snes-studio--creator-desk .snes-game-map-drawer,
+.snes-studio--creator-desk .snes-build-recovery-drawer,
+.snes-studio--creator-desk .snes-side-editor,
+.snes-studio--creator-desk .snes-scene-builder,
+.snes-studio--creator-desk .snes-sound-desk,
+.snes-studio--creator-desk .snes-scene-more-tools,
+.snes-studio--creator-desk .snes-diff-drawer,
+.snes-studio--creator-desk .snes-play-mode,
+.snes-studio--creator-desk .snes-ship-mode,
+.snes-studio--creator-desk .snes-selected-object-editor,
+.snes-studio--creator-desk .snes-object-cards {
+  border-color: var(--snes-desk-line);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--snes-desk-ink);
+}
+
+.snes-studio--creator-desk .snes-game-map__group {
+  border-color: rgba(23, 32, 42, 0.1);
+  background: #f8fafb;
+}
+
+.snes-studio--creator-desk .snes-scene-builder {
+  gap: 10px;
+  padding: 12px;
+}
+
+.snes-studio--creator-desk .snes-game-map__group button {
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.snes-prompt-hero,
+.snes-command-dock,
+.snes-game-map,
+.snes-beginner-path,
+.snes-project-access,
+.snes-sound-desk,
+.snes-game-map-drawer,
+.snes-object-drawer,
+.snes-object-tray-drawer,
+.snes-build-help-drawer,
+.snes-build-recovery-drawer,
+.snes-side-editor,
+.snes-scene-more-tools,
+.snes-diff-drawer,
+.snes-quick-change,
+.snes-version-history {
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 95%, var(--bg));
+  box-shadow: var(--shadow-sm);
+}
+
+.snes-prompt-hero {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.snes-prompt-hero__copy {
+  display: grid;
+  max-width: 980px;
+  gap: 8px;
+}
+
+.snes-prompt-hero h2 {
+  max-width: 900px;
+  margin: 0;
+  color: var(--fg);
+  font-size: clamp(2rem, 4vw, 3.75rem);
+  line-height: 1.02;
+}
+
+.snes-prompt-hero p {
+  max-width: 820px;
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.snes-prompt-hero .snes-create-bar {
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg) 82%, var(--surface));
+}
+
+.snes-start-actions,
+.snes-game-map__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.snes-start-actions button,
+.snes-game-map button,
+.snes-command-dock button,
+.snes-project-access button,
+.snes-beginner-path button,
+.snes-object-drawer button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 760;
+  padding: 10px 12px;
+}
+
+.snes-start-actions button.primary {
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
+  background: color-mix(in srgb, var(--accent) 24%, var(--surface));
+}
+
+.snes-prompt-status,
+.snes-create-home-grid,
+.snes-arrange-layout,
+.snes-game-map__grid {
+  display: grid;
+  gap: 12px;
+}
+
+.snes-prompt-status {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.snes-prompt-status article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+  padding: 12px;
+}
+
+.snes-prompt-status span,
+.snes-game-map small,
+.snes-game-map header,
+.snes-command-dock span {
+  color: color-mix(in srgb, var(--fg) 68%, var(--muted));
+  font-size: 0.78rem;
+}
+
+.snes-create-home-grid {
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.65fr);
+  align-items: start;
+}
+
+.snes-beginner-path,
+.snes-project-access,
+.snes-game-map,
+.snes-side-editor,
+.snes-quick-change,
+.snes-version-history {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.snes-quick-change__grid,
+.snes-version-history__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.snes-quick-change button,
+.snes-version-history button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 760;
+  padding: 10px 12px;
+}
+
+.snes-command-dock {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.45fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+}
+
+.snes-command-dock .snes-create-bar {
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.snes-arrange-mode .snes-command-dock {
+  display: block;
+  overflow: visible;
+  padding: 10px 12px;
+}
+
+.snes-arrange-mode .snes-command-dock > div:first-child {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.snes-arrange-mode .snes-command-dock > div:first-child strong {
+  font-size: 0.92rem;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar.compact {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(190px, 240px) minmax(0, 1fr);
+  grid-template-areas:
+    "prompt prompt prompt"
+    "target provider actions";
+  min-width: 0;
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar__topline {
+  display: contents;
+  min-width: 0;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar__target {
+  grid-area: target;
+  min-width: 0;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar__provider {
+  grid-area: provider;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar__prompt {
+  grid-area: prompt;
+  min-width: 0;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar__actions {
+  grid-area: actions;
+  align-self: stretch;
+  justify-content: end;
+  flex-wrap: nowrap;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar__actions button {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar small {
+  display: none;
+}
+
+.snes-arrange-mode .snes-command-dock .snes-create-bar.compact textarea {
+  min-height: 66px;
+  max-height: 76px;
+  font-size: 0.92rem;
+  line-height: 1.32;
+}
+
+.snes-game-map__grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.snes-game-map.compact .snes-game-map__grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.snes-game-map__group {
+  display: grid;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 64%, var(--surface));
+  padding: 10px;
+}
+
+.snes-game-map__group button {
+  display: grid;
+  gap: 3px;
+  min-height: 86px;
+  text-align: left;
+}
+
+.snes-game-map__group button.active {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+
+.snes-arrange-layout {
+  grid-template-columns: minmax(760px, 1fr) minmax(220px, 250px);
+  align-items: start;
+  gap: 10px;
+}
+
+.snes-arrange-canvas {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.snes-build-control-strip {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 10px 12px;
+  align-items: center;
+  border-color: rgba(23, 32, 42, 0.1);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 30px rgba(4, 14, 28, 0.1);
+  padding: 10px;
+}
+
+.snes-build-control-strip__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.snes-build-control-strip__copy strong {
+  color: var(--snes-desk-ink, var(--fg));
+  font-size: 0.98rem;
+  line-height: 1.25;
+}
+
+.snes-build-control-strip__copy small {
+  color: #526576;
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+.snes-build-control-strip__actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.snes-build-control-strip__actions button,
+.snes-build-control-strip__actions summary {
+  min-height: 36px;
+  border-radius: 999px;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.snes-build-control-strip__actions button.primary {
+  border-color: transparent;
+  background: #17202a;
+  color: #ffffff;
+}
+
+.snes-build-control-strip .snes-safety-menu {
+  position: relative;
+}
+
+.snes-build-control-strip .snes-safety-menu summary {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 42, 0.14);
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-weight: 800;
+  list-style: none;
+}
+
+.snes-build-control-strip .snes-safety-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-build-control-strip .snes-safety-menu[open] {
+  z-index: 5;
+}
+
+.snes-build-control-strip .snes-safety-menu[open] summary {
+  margin-bottom: 6px;
+}
+
+.snes-build-control-strip .snes-safety-menu button {
+  margin-right: 6px;
+  background: #ffffff;
+}
+
+.snes-side-editor {
+  position: sticky;
+  top: 12px;
+  gap: 8px;
+  border-color: rgba(23, 32, 42, 0.08);
+  background: rgba(248, 250, 252, 0.86);
+  box-shadow: none;
+  padding: 9px;
+}
+
+.snes-side-editor .snes-selected-object-editor {
+  align-content: start;
+  gap: 6px;
+  padding: 8px;
+  box-shadow: none;
+}
+
+.snes-side-editor .snes-selected-object-editor--compact {
+  border-color: rgba(23, 32, 42, 0.08);
+  border-radius: 20px;
+  background: #ffffff;
+  color: #17202a;
+}
+
+.snes-selected-object-editor__summary {
+  display: grid;
+  gap: 2px;
+}
+
+.snes-selected-object-editor__summary h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 1rem;
+  line-height: 1.08;
+}
+
+.snes-selected-object-editor__summary p {
+  margin: 0;
+  color: #405266;
+  font-size: 0.74rem;
+  font-weight: 760;
+  line-height: 1.16;
+}
+
+.snes-selected-object-editor__scope {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 999px;
+  background: #eefcf6;
+  color: #17202a;
+  padding: 4px 8px;
+}
+
+.snes-selected-object-editor__scope span {
+  color: #0f5f57;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.snes-selected-object-editor__scope strong {
+  color: #17202a;
+  font-size: 0.72rem;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snes-selected-object-editor__details {
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 14px;
+  background: rgba(22, 99, 255, 0.05);
+  padding: 5px 8px;
+}
+
+.snes-selected-object-editor__details summary {
+  color: #32465a;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 850;
+  list-style: none;
+}
+
+.snes-selected-object-editor__details summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-selected-object-editor__details p {
+  margin: 5px 0 0;
+  color: #32465a;
+  font-size: 0.76rem;
+  line-height: 1.18;
+}
+
+.snes-selected-object-editor__name {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.snes-selected-object-editor__name input,
+.snes-selected-object-editor__prompt input,
+.snes-selected-object-editor__prompt textarea {
+  border-radius: 14px;
+  padding: 5px 8px;
+}
+
+.snes-selected-object-editor__prompt textarea {
+  min-height: 44px;
+  font-size: 0.78rem;
+  line-height: 1.18;
+  resize: vertical;
+}
+
+.snes-selected-object-editor .snes-selected-object-editor__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.snes-selected-object-editor .snes-selected-object-editor__actions button:first-child {
+  grid-column: 1 / -1;
+  min-height: 36px;
+  font-size: 0.74rem;
+}
+
+.snes-selected-object-editor .snes-selected-object-editor__actions button,
+.snes-selected-object-editor .snes-selected-object-editor__secondary-actions button {
+  min-height: 32px;
+  padding: 5px 8px;
+  overflow: hidden;
+  font-size: 0.7rem;
+  line-height: 1.08;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.snes-selected-object-editor__secondary-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.snes-game-map-drawer,
+.snes-build-help-drawer,
+.snes-build-recovery-drawer {
+  grid-column: 1 / -1;
+  align-self: start;
+  padding: 10px;
+}
+
+.snes-object-drawer {
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: none;
+  padding: 8px 10px;
+}
+
+.snes-game-map-drawer > summary,
+.snes-object-drawer > summary,
+.snes-object-tray-drawer > summary,
+.snes-build-help-drawer > summary,
+.snes-scene-more-tools > summary,
+.snes-build-recovery-drawer > summary,
+.snes-diff-drawer > summary {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  cursor: pointer;
+  font-weight: 840;
+}
+
+.snes-game-map-drawer > summary::-webkit-details-marker,
+.snes-object-drawer > summary::-webkit-details-marker,
+.snes-object-tray-drawer > summary::-webkit-details-marker,
+.snes-build-help-drawer > summary::-webkit-details-marker,
+.snes-scene-more-tools > summary::-webkit-details-marker,
+.snes-build-recovery-drawer > summary::-webkit-details-marker,
+.snes-diff-drawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-game-map-drawer > summary::after,
+.snes-object-drawer > summary::after,
+.snes-object-tray-drawer > summary::after,
+.snes-build-help-drawer > summary::after,
+.snes-scene-more-tools > summary::after,
+.snes-build-recovery-drawer > summary::after,
+.snes-diff-drawer > summary::after {
+  content: "Open";
+  justify-self: start;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+  padding: 6px 10px;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.78rem;
+}
+
+.snes-game-map-drawer[open] > summary::after,
+.snes-object-drawer[open] > summary::after,
+.snes-object-tray-drawer[open] > summary::after,
+.snes-build-help-drawer[open] > summary::after,
+.snes-scene-more-tools[open] > summary::after,
+.snes-build-recovery-drawer[open] > summary::after,
+.snes-diff-drawer[open] > summary::after {
+  content: "Hide";
+}
+
+.snes-game-map-drawer .snes-game-map,
+.snes-object-drawer .snes-object-cards,
+.snes-object-tray-drawer .snes-object-tray,
+.snes-build-help-drawer__content,
+.snes-build-recovery-drawer .snes-version-history,
+.snes-build-recovery-drawer .snes-diff-drawer,
+.snes-diff-drawer .snes-agent-list {
+  margin-top: 10px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.snes-game-map-drawer .snes-game-map {
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+}
+
+.snes-game-map-drawer .snes-section-header,
+.snes-object-drawer .snes-section-header {
+  display: none;
+}
+
+.snes-sound-desk {
+  padding: 18px;
+}
+
+.snes-sound-prompt-grid,
+.snes-sound-bindings,
+.snes-sound-library {
+  display: grid;
+  gap: 12px;
+}
+
+.snes-sound-prompt-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.snes-sound-bindings {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.snes-sound-library {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.snes-sound-prompt-grid button,
+.snes-sound-binding,
+.snes-sound-library button {
+  display: grid;
+  gap: 6px;
+  min-height: 82px;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 20px;
+  background: #ffffff;
+  color: var(--snes-desk-ink, var(--fg));
+  box-shadow: 0 8px 22px rgba(4, 14, 28, 0.07);
+  padding: 12px;
+  text-align: left;
+}
+
+.snes-sound-prompt-grid span,
+.snes-sound-binding span,
+.snes-sound-library span,
+.snes-sound-summary {
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.snes-sound-binding {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 8%, #ffffff);
+}
+
+.snes-sound-library article {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 24px;
+  background: #f8fafb;
+  padding: 12px;
+}
+
+.snes-sound-library header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.snes-diff-drawer {
+  padding: 8px 10px;
+}
+
+.snes-diff-drawer > summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.snes-game-map-drawer > summary,
+.snes-object-drawer > summary,
+.snes-object-tray-drawer > summary,
+.snes-build-help-drawer > summary,
+.snes-scene-more-tools > summary,
+.snes-build-recovery-drawer > summary {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.snes-game-map-drawer > summary strong {
+  font-size: 0.92rem;
+  font-weight: 760;
+}
+
+.snes-object-drawer > summary span {
+  color: #607080;
+  font-size: 0.72rem;
+  font-weight: 840;
+  text-transform: uppercase;
+}
+
+.snes-object-drawer > summary strong {
+  color: #17202a;
+  font-size: 0.92rem;
+}
+
+.snes-game-map-drawer > summary::after,
+.snes-object-drawer > summary::after,
+.snes-object-tray-drawer > summary::after,
+.snes-build-help-drawer > summary::after,
+.snes-scene-more-tools > summary::after {
+  flex: 0 0 auto;
+}
+
+.snes-game-map-drawer:not([open]),
+.snes-object-drawer:not([open]),
+.snes-object-tray-drawer:not([open]),
+.snes-build-help-drawer:not([open]),
+.snes-scene-more-tools:not([open]) {
+  padding-block: 8px;
+}
+
+.snes-build-help-drawer {
+  border-color: rgba(22, 99, 255, 0.14);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: none;
+}
+
+.snes-build-help-drawer > summary span {
+  display: grid;
+  gap: 2px;
+}
+
+.snes-build-help-drawer > summary strong {
+  color: #17202a;
+  font-size: 0.98rem;
+}
+
+.snes-build-help-drawer > summary small {
+  color: #607080;
+  font-weight: 650;
+}
+
+.snes-build-help-drawer__content {
+  display: grid;
+  gap: 12px;
+}
+
+.snes-make-mode__actions,
+.snes-ship-actions,
+.snes-scene-tools,
+.snes-scene-object-palette,
+.snes-object-tray,
+.snes-play-pieces,
+.snes-project-safety-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.snes-scene-more-tools {
+  padding: 10px;
+}
+
+.snes-scene-more-tools .snes-scene-tools {
+  margin-top: 10px;
+}
+
+.snes-level-builder {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 24px;
+  background:
+    linear-gradient(135deg, rgba(227, 242, 255, 0.72), rgba(223, 247, 236, 0.74)), #ffffff;
+  box-shadow: 0 14px 36px rgba(4, 14, 28, 0.1);
+  padding: 14px;
+}
+
+.snes-level-builder__intro {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.snes-level-builder__intro h4 {
+  margin: 0;
+  color: var(--snes-desk-ink, var(--fg));
+  font-size: 1rem;
+}
+
+.snes-level-builder__steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.snes-level-builder__step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 9px;
+  align-items: center;
+  min-height: 86px;
+  border-color: rgba(23, 32, 42, 0.12);
+  border-radius: 20px;
+  background: #ffffff;
+  color: var(--snes-desk-ink, var(--fg));
+  text-align: left;
+}
+
+.snes-level-builder__step span {
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: #17202a;
+  color: #ffffff;
+  font-weight: 860;
+}
+
+.snes-level-builder__step strong {
+  font-size: 0.98rem;
+}
+
+.snes-level-builder__step small {
+  grid-column: 2;
+  color: #607080;
+  line-height: 1.35;
+}
+
+.snes-level-builder__step.active,
+.snes-level-builder__step.primary {
+  border-color: color-mix(in srgb, var(--accent) 62%, rgba(23, 32, 42, 0.12));
+  background: color-mix(in srgb, var(--accent) 18%, #ffffff);
+}
+
+.snes-play-pieces span {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.snes-project-safety-bar,
+.snes-recent-activity {
+  padding: 10px;
+}
+
+.snes-recent-activity {
+  display: grid;
+  gap: 4px;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.82rem;
+}
+
+.snes-recent-activity strong {
+  color: var(--fg);
+}
+
+.snes-make-mode details,
+.snes-make-ai-tools,
+.snes-advanced-details,
+.snes-ship-proof {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  padding: 10px;
+}
+
+.snes-make-mode details[open],
+.snes-advanced-workbench-toggle[open],
+.snes-full-workbench[open] {
+  display: grid;
+  gap: 12px;
+}
+
+.snes-make-mode summary,
+.snes-advanced-workbench-toggle summary,
+.snes-full-workbench summary {
+  cursor: pointer;
+  font-weight: 840;
+}
+
+.snes-file-button input {
+  display: none;
+}
+
+.snes-simple-status {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.snes-make-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.snes-make-steps article,
+.snes-scene-object-palette button {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.snes-make-steps article {
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.snes-scene-object-palette {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.snes-scene-object-palette button {
+  min-height: 76px;
+  border-radius: 18px;
+}
+
+.snes-make-steps span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface));
+  color: var(--accent-strong, var(--accent));
+}
+
+.snes-simple-status article,
+.snes-object-cards article {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  padding: 12px;
+}
+
+.snes-edit-layout {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.snes-editor-panel-rail {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.snes-build-control-strip .snes-editor-panel-rail {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+
+.snes-build-control-strip .snes-editor-panel-rail button {
+  min-height: 34px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 7px 12px;
+}
+
+.snes-editor-panel-rail button.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.snes-scene-stage {
+  display: grid;
+  grid-template-columns: repeat(16, minmax(0, 1fr));
+  gap: 3px;
+  aspect-ratio: 4 / 3;
+  border: 2px solid rgba(23, 32, 42, 0.74);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #a7dcff 0%, #c8efff 50%, #e6f8dc 100%), #dff5ff;
+  background-size: auto;
+  padding: 8px;
+  image-rendering: pixelated;
+}
+
+.snes-scene-canvas {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 24px;
+  background: #f8fafb;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.66);
+  padding: 12px;
+}
+
+.snes-scene-stage-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.snes-scene-entity-layer {
+  position: absolute;
+  inset: 8px;
+  pointer-events: none;
+}
+
+.snes-canvas-object {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: auto;
+  gap: 0;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  border-radius: 999px;
+  background: #17202a;
+  box-shadow: 0 14px 28px rgba(4, 14, 28, 0.24);
+  color: #ffffff;
+  cursor: grab;
+  pointer-events: auto;
+  transform: translate(var(--canvas-object-x, -50%), var(--canvas-object-y, -70%));
+}
+
+.snes-canvas-object:active {
+  cursor: grabbing;
+}
+
+.snes-scene-builder .snes-canvas-object {
+  cursor: grab;
+}
+
+.snes-scene-builder .snes-canvas-object:active {
+  cursor: grabbing;
+}
+
+.snes-canvas-object:hover,
+.snes-canvas-object:focus-visible,
+.snes-canvas-object.active {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 7px;
+  justify-content: start;
+  width: auto;
+  max-width: min(180px, 34%);
+  min-width: 124px;
+  min-height: 54px;
+  box-shadow:
+    0 0 0 4px rgba(250, 204, 21, 0.22),
+    0 18px 34px rgba(4, 14, 28, 0.3);
+  transform: translate(var(--canvas-object-x, -50%), var(--canvas-object-y, -70%));
+}
+
+.snes-canvas-object.active,
+.snes-canvas-object:focus-visible {
+  z-index: 12;
+  outline: 3px solid #facc15;
+  outline-offset: 2px;
+}
+
+.snes-canvas-object__badge {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  font-size: 0.78rem;
+}
+
+.snes-canvas-object__badge .snes-piece-glyph {
+  width: 20px;
+  height: 20px;
+}
+
+.snes-canvas-object .snes-piece-glyph,
+.snes-playtest__marker .snes-piece-glyph {
+  color: #ffffff;
+}
+
+.snes-canvas-piece-shelf__piece--hero .snes-piece-glyph::before,
+.snes-canvas-object--hero .snes-piece-glyph::before,
+.snes-playtest__marker--hero .snes-piece-glyph::before {
+  top: 1px;
+  left: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.snes-canvas-piece-shelf__piece--hero .snes-piece-glyph::after,
+.snes-canvas-object--hero .snes-piece-glyph::after,
+.snes-playtest__marker--hero .snes-piece-glyph::after {
+  bottom: 1px;
+  left: 3px;
+  width: 12px;
+  height: 8px;
+  border-radius: 7px 7px 3px 3px;
+  background: currentColor;
+}
+
+.snes-canvas-piece-shelf__piece--enemy .snes-piece-glyph::before,
+.snes-canvas-object--enemy .snes-piece-glyph::before,
+.snes-playtest__marker--enemy .snes-piece-glyph::before {
+  top: 2px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 4px 4px 7px 7px;
+  background: currentColor;
+  clip-path: polygon(0 22%, 20% 0, 50% 18%, 80% 0, 100% 22%, 92% 100%, 8% 100%);
+}
+
+.snes-canvas-piece-shelf__piece--enemy .snes-piece-glyph::after,
+.snes-canvas-object--enemy .snes-piece-glyph::after,
+.snes-playtest__marker--enemy .snes-piece-glyph::after {
+  top: 7px;
+  left: 6px;
+  width: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 5px 0 0 #ffffff;
+}
+
+.snes-canvas-object--enemy .snes-piece-glyph::after,
+.snes-playtest__marker--enemy .snes-piece-glyph::after {
+  background: #17202a;
+  box-shadow: 5px 0 0 #17202a;
+}
+
+.snes-canvas-piece-shelf__piece--item .snes-piece-glyph::before,
+.snes-canvas-object--item .snes-piece-glyph::before,
+.snes-playtest__marker--item .snes-piece-glyph::before {
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+
+.snes-canvas-piece-shelf__piece--item .snes-piece-glyph::after,
+.snes-canvas-object--item .snes-piece-glyph::after,
+.snes-playtest__marker--item .snes-piece-glyph::after {
+  top: 5px;
+  left: 8px;
+  width: 3px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  transform: rotate(45deg);
+}
+
+.snes-canvas-piece-shelf__piece--door .snes-piece-glyph::before,
+.snes-canvas-object--door .snes-piece-glyph::before,
+.snes-playtest__marker--door .snes-piece-glyph::before {
+  top: 2px;
+  left: 4px;
+  width: 10px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-radius: 2px 2px 1px 1px;
+}
+
+.snes-canvas-piece-shelf__piece--door .snes-piece-glyph::after,
+.snes-canvas-object--door .snes-piece-glyph::after,
+.snes-playtest__marker--door .snes-piece-glyph::after {
+  top: 9px;
+  right: 5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.snes-canvas-piece-shelf__piece--goal .snes-piece-glyph::before,
+.snes-canvas-object--goal .snes-piece-glyph::before,
+.snes-playtest__marker--goal .snes-piece-glyph::before {
+  top: 2px;
+  left: 4px;
+  width: 2px;
+  height: 14px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.snes-canvas-piece-shelf__piece--goal .snes-piece-glyph::after,
+.snes-canvas-object--goal .snes-piece-glyph::after,
+.snes-playtest__marker--goal .snes-piece-glyph::after {
+  top: 2px;
+  left: 6px;
+  width: 10px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
+  clip-path: polygon(0 0, 100% 18%, 76% 52%, 100% 86%, 0 100%);
+}
+
+.snes-canvas-piece-shelf__piece--guide .snes-piece-glyph::before,
+.snes-canvas-object--guide .snes-piece-glyph::before,
+.snes-playtest__marker--guide .snes-piece-glyph::before {
+  top: 3px;
+  left: 2px;
+  width: 14px;
+  height: 10px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.snes-canvas-piece-shelf__piece--guide .snes-piece-glyph::after,
+.snes-canvas-object--guide .snes-piece-glyph::after,
+.snes-playtest__marker--guide .snes-piece-glyph::after {
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.snes-canvas-object strong {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snes-canvas-object small {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.66rem;
+  font-weight: 860;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.snes-canvas-object:hover strong,
+.snes-canvas-object:hover small,
+.snes-canvas-object:focus-visible strong,
+.snes-canvas-object:focus-visible small,
+.snes-canvas-object.active strong,
+.snes-canvas-object.active small {
+  display: block;
+}
+
+.snes-canvas-object--hero {
+  z-index: 8;
+  background: #1663ff;
+}
+
+.snes-canvas-object--enemy {
+  z-index: 7;
+  background: #b42318;
+}
+
+.snes-canvas-object--item {
+  z-index: 6;
+  background: #287a32;
+}
+
+.snes-canvas-object--door,
+.snes-canvas-object--goal {
+  z-index: 5;
+  background: #6d3fd1;
+}
+
+.snes-canvas-object--guide {
+  z-index: 4;
+  background: #8a4b12;
+}
+
+.snes-canvas-inline-review-anchor {
+  position: absolute;
+  z-index: 24;
+  pointer-events: none;
+  transform: translate(var(--inline-review-x, 0%), var(--inline-review-y, 0%));
+}
+
+.snes-inline-ai-review {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(22, 99, 255, 0.24);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(4, 14, 28, 0.2);
+  color: #17202a;
+  pointer-events: auto;
+  padding: 10px;
+}
+
+.snes-inline-ai-review--canvas {
+  width: min(280px, 34vw);
+}
+
+.snes-inline-ai-review--side {
+  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(4, 14, 28, 0.12);
+  padding: 8px;
+}
+
+.snes-inline-ai-review__header {
+  display: grid;
+  gap: 1px;
+}
+
+.snes-inline-ai-review__header span {
+  color: #1663ff;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.snes-inline-ai-review__header strong {
+  color: #17202a;
+  font-size: 0.86rem;
+  line-height: 1.12;
+}
+
+.snes-inline-ai-review p,
+.snes-inline-ai-review small {
+  margin: 0;
+  color: #405266;
+  font-size: 0.74rem;
+  line-height: 1.24;
+}
+
+.snes-inline-ai-review__before-after {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 8px;
+  border-radius: 12px;
+  background: #eef5ff;
+  padding: 7px 8px;
+}
+
+.snes-inline-ai-review__before-after span {
+  color: #526576;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.snes-inline-ai-review__before-after strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #17202a;
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snes-inline-ai-review__actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.78fr);
+  gap: 5px;
+}
+
+.snes-inline-ai-review__actions button {
+  min-height: 30px;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 850;
+  padding: 5px 8px;
+}
+
+.snes-inline-ai-review__actions button.primary {
+  border-color: transparent;
+  background: #1663ff;
+  color: #ffffff;
+}
+
+.snes-scene-builder .snes-section-header {
+  align-items: start;
+}
+
+.snes-scene-builder .snes-section-header .snes-eyebrow {
+  color: #0f766e;
+}
+
+.snes-scene-builder .snes-section-header h3 {
+  color: #17202a;
+}
+
+.snes-scene-builder .snes-section-header p {
+  color: #32465a;
+  font-weight: 650;
+}
+
+.snes-scene-builder .snes-toolbar {
+  justify-content: end;
+}
+
+.snes-canvas-build-tools {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(120px, 0.2fr) minmax(0, 1fr) minmax(0, 0.74fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(22, 99, 255, 0.16);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(22, 99, 255, 0.08), rgba(250, 204, 21, 0.12)), #ffffff;
+  box-shadow: 0 14px 32px rgba(4, 14, 28, 0.18);
+  padding: 7px;
+  backdrop-filter: blur(14px);
+}
+
+.snes-canvas-build-tools__intro,
+.snes-canvas-tool-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.snes-canvas-build-tools__intro strong,
+.snes-canvas-tool-label strong {
+  color: #17202a;
+  font-size: 0.9rem;
+}
+
+.snes-canvas-build-tools__intro span,
+.snes-canvas-tool-label span,
+.snes-canvas-piece-shelf small,
+.snes-canvas-brush-dock small {
+  color: #526576;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.snes-canvas-piece-shelf,
+.snes-canvas-brush-dock {
+  display: grid;
+  grid-template-columns: minmax(62px, auto) minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.snes-canvas-brush-dock {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.snes-canvas-brush-dock .snes-canvas-tool-label {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.snes-canvas-next-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(22, 99, 255, 0.16);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(22, 99, 255, 0.08), rgba(88, 214, 141, 0.08)), #ffffff;
+  padding: 9px 10px;
+}
+
+.snes-canvas-next-step__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.snes-canvas-next-step__copy span {
+  color: #0f766e;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.snes-canvas-next-step__copy strong {
+  color: #17202a;
+  font-size: 0.98rem;
+}
+
+.snes-canvas-next-step__copy small {
+  color: #526576;
+  font-size: 0.76rem;
+  font-weight: 720;
+  line-height: 1.28;
+}
+
+.snes-canvas-next-step__actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.snes-canvas-next-step__actions button {
+  min-height: 36px;
+  border: 1px solid rgba(23, 32, 42, 0.18);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-weight: 850;
+  padding: 7px 10px;
+}
+
+.snes-canvas-next-step__actions button.primary {
+  border-color: transparent;
+  background: #07111d;
+  color: #ffffff;
+}
+
+.snes-canvas-action-loop {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.92fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(7, 17, 29, 0.12);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgba(7, 17, 29, 0.06);
+  padding: 8px;
+}
+
+.snes-canvas-action-loop__intro {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.snes-canvas-action-loop__intro span {
+  color: #0f766e;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.snes-canvas-action-loop__intro strong {
+  color: #07111d;
+  font-size: 0.9rem;
+}
+
+.snes-canvas-action-loop__intro small {
+  color: #526576;
+  font-size: 0.72rem;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+.snes-canvas-action-loop__steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(62px, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.snes-canvas-action-loop__steps article {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(22, 99, 255, 0.13);
+  border-radius: 999px;
+  background: #f7fbff;
+  padding: 5px 7px;
+}
+
+.snes-canvas-action-loop__steps article > span {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #07111d;
+  color: #ffffff;
+  font-size: 0.66rem;
+  font-weight: 900;
+}
+
+.snes-canvas-action-loop__steps strong {
+  color: #17202a;
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snes-canvas-action-loop__actions {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+
+.snes-canvas-action-loop__actions button {
+  min-height: 32px;
+  border: 1px solid rgba(23, 32, 42, 0.18);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-weight: 850;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+
+.snes-canvas-action-loop__actions button.primary {
+  border-color: transparent;
+  background: #07111d;
+  color: #ffffff;
+}
+
+.snes-canvas-piece-shelf__pieces {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(82px, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.snes-canvas-piece-shelf__pieces button {
+  display: flex;
+  gap: 5px;
+  min-height: 34px;
+  align-items: center;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 13px;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgba(4, 14, 28, 0.08);
+  color: #17202a;
+  cursor: grab;
+  justify-content: center;
+  padding: 5px 7px;
+  text-align: center;
+}
+
+.snes-canvas-piece-shelf__pieces button strong {
+  flex: 0 0 auto;
+  overflow: visible;
+  font-size: 0.78rem;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.snes-piece-glyph {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+.snes-piece-glyph::before,
+.snes-piece-glyph::after {
+  position: absolute;
+  content: "";
+}
+
+.snes-canvas-piece-shelf__piece--hero .snes-piece-glyph {
+  color: #1663ff;
+}
+
+.snes-canvas-piece-shelf__piece--enemy .snes-piece-glyph {
+  color: #b42318;
+}
+
+.snes-canvas-piece-shelf__piece--item .snes-piece-glyph {
+  color: #287a32;
+}
+
+.snes-canvas-piece-shelf__piece--door .snes-piece-glyph,
+.snes-canvas-piece-shelf__piece--goal .snes-piece-glyph {
+  color: #6d3fd1;
+}
+
+.snes-canvas-piece-shelf__piece--guide .snes-piece-glyph {
+  color: #8a4b12;
+}
+
+.snes-canvas-piece-shelf__pieces button small,
+.snes-canvas-brush-dock__buttons button small {
+  display: none;
+}
+
+.snes-canvas-piece-shelf__pieces button:hover,
+.snes-canvas-piece-shelf__pieces button:focus-visible {
+  border-color: rgba(22, 99, 255, 0.54);
+  box-shadow:
+    0 0 0 3px rgba(22, 99, 255, 0.14),
+    0 10px 24px rgba(4, 14, 28, 0.12);
+}
+
+.snes-canvas-piece-shelf__pieces button:active {
+  cursor: grabbing;
+}
+
+.snes-canvas-brush-dock__buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.snes-canvas-brush-dock__buttons button {
+  min-height: 38px;
+  border: 1px solid rgba(23, 32, 42, 0.16);
+  border-radius: 13px;
+  background: #ffffff;
+  color: #17202a;
+  box-shadow: 0 8px 16px rgba(4, 14, 28, 0.08);
+  padding: 6px 8px;
+  text-align: center;
+}
+
+.snes-canvas-brush-dock__buttons button strong {
+  display: block;
+  overflow: visible;
+  font-size: 0.78rem;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.snes-canvas-brush-dock__buttons button:hover,
+.snes-canvas-brush-dock__buttons button:focus-visible {
+  border-color: rgba(22, 99, 255, 0.48);
+  box-shadow:
+    0 0 0 3px rgba(22, 99, 255, 0.14),
+    0 12px 22px rgba(4, 14, 28, 0.12);
+  transform: translateY(-1px);
+}
+
+.snes-canvas-brush-dock__buttons button.active {
+  border-color: transparent;
+  background: #17202a;
+  color: #ffffff;
+}
+
+.snes-canvas-brush-dock__buttons button.active small {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.snes-scene-stage.brush-ground .snes-scene-cell:hover,
+.snes-scene-stage.brush-ground .snes-scene-cell:focus-visible {
+  outline: 3px solid rgba(49, 178, 115, 0.8);
+}
+
+.snes-scene-stage.brush-danger .snes-scene-cell:hover,
+.snes-scene-stage.brush-danger .snes-scene-cell:focus-visible {
+  outline: 3px solid rgba(229, 70, 86, 0.82);
+}
+
+.snes-scene-stage.brush-water .snes-scene-cell:hover,
+.snes-scene-stage.brush-water .snes-scene-cell:focus-visible {
+  outline: 3px solid rgba(31, 149, 201, 0.84);
+}
+
+.snes-scene-stage.brush-erase .snes-scene-cell:hover,
+.snes-scene-stage.brush-erase .snes-scene-cell:focus-visible {
+  outline: 3px solid rgba(126, 140, 155, 0.86);
+}
+
+.snes-next-step-coach {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(22, 99, 255, 0.14);
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(22, 99, 255, 0.09), rgba(88, 214, 141, 0.08)), #ffffff;
+  padding: 14px;
+}
+
+.snes-next-step-coach h4 {
+  margin: 3px 0 4px;
+  color: #17202a;
+  font-size: 1.08rem;
+}
+
+.snes-next-step-coach p {
+  margin: 0;
+  color: #405266;
+  line-height: 1.42;
+}
+
+.snes-next-step-coach__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.snes-next-step-coach__actions button {
+  min-height: 40px;
+  border: 1px solid rgba(23, 32, 42, 0.28);
+  background: #ffffff;
+  color: #17202a;
+  box-shadow: 0 8px 18px rgba(4, 14, 28, 0.1);
+  font-weight: 850;
+}
+
+.snes-next-step-coach__actions button:hover,
+.snes-next-step-coach__actions button:focus-visible {
+  border-color: rgba(22, 99, 255, 0.52);
+  box-shadow:
+    0 0 0 3px rgba(22, 99, 255, 0.14),
+    0 12px 24px rgba(4, 14, 28, 0.14);
+  transform: translateY(-1px);
+}
+
+.snes-next-step-coach__actions button.primary {
+  border-color: transparent;
+  background: #17202a;
+  color: #ffffff;
+  box-shadow: 0 12px 26px rgba(4, 14, 28, 0.22);
+}
+
+.snes-build-readiness-coach {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 20px;
+  background: #f8fffd;
+  padding: 12px;
+}
+
+.snes-build-readiness-coach__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.snes-build-readiness-coach__header h4 {
+  margin: 3px 0 3px;
+  color: #17202a;
+  font-size: 1rem;
+}
+
+.snes-build-readiness-coach__header p {
+  margin: 0;
+  color: #32465a;
+  font-weight: 650;
+}
+
+.snes-build-readiness-coach__header > strong {
+  display: grid;
+  place-items: center;
+  min-width: 70px;
+  min-height: 44px;
+  border-radius: 999px;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 1rem;
+}
+
+.snes-build-readiness-coach__checks {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-fit-check {
+  display: grid;
+  gap: 4px;
+  min-height: 86px;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.snes-fit-check > span {
+  width: max-content;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f766e;
+  font-size: 0.68rem;
+  font-weight: 900;
+  padding: 3px 7px;
+  text-transform: uppercase;
+}
+
+.snes-fit-check--watch > span {
+  background: rgba(180, 83, 9, 0.14);
+  color: #92400e;
+}
+
+.snes-fit-check--fix > span {
+  background: rgba(180, 35, 24, 0.13);
+  color: #b42318;
+}
+
+.snes-fit-check strong {
+  color: #17202a;
+}
+
+.snes-fit-check small {
+  color: #405266;
+  font-weight: 650;
+  line-height: 1.32;
+}
+
+.snes-build-readiness-coach__expert {
+  border-top: 1px solid rgba(23, 32, 42, 0.1);
+  padding-top: 8px;
+}
+
+.snes-build-readiness-coach__expert summary {
+  color: #32465a;
+  cursor: pointer;
+  font-weight: 850;
+  list-style: none;
+}
+
+.snes-build-readiness-coach__expert summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-build-readiness-coach__expert p,
+.snes-build-readiness-coach__expert li {
+  color: #405266;
+}
+
+.snes-scene-tools button {
+  min-height: 44px;
+}
+
+.snes-scene-stage.is-dragging {
+  outline: 3px solid color-mix(in srgb, #facc15 70%, var(--accent));
+  outline-offset: 3px;
+}
+
+.snes-scene-drop-hint {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 54%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  padding: 10px 12px;
+}
+
+.snes-scene-drop-hint span,
+.snes-scene-object-palette small,
+.snes-make-steps small {
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+}
+
+.snes-ship-proof__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.snes-ship-proof__grid article {
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  padding: 12px;
+}
+
+.snes-emulator-run-pack {
+  display: grid;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  padding: 10px;
+}
+
+.snes-emulator-run-pack--ready {
+  border-color: color-mix(in srgb, #16a34a 42%, var(--border));
+  background: color-mix(in srgb, #16a34a 9%, var(--surface));
+}
+
+.snes-emulator-run-pack--blocked {
+  border-color: color-mix(in srgb, #d97706 36%, var(--border));
+  background: color-mix(in srgb, #f59e0b 9%, var(--surface));
+}
+
+.snes-emulator-run-pack small {
+  color: color-mix(in srgb, var(--fg) 68%, var(--muted));
+}
+
+.snes-emulator-run-pack code {
+  overflow-x: auto;
+  border-radius: 8px;
+  background: rgba(5, 10, 18, 0.86);
+  color: #f8fafc;
+  font-size: 0.76rem;
+  padding: 8px;
+}
+
+.snes-scene-builder .snes-scene-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(23, 32, 42, 0.12);
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  padding: 0;
+}
+
+.snes-scene-builder .snes-scene-cell__motif,
+.snes-scene-builder .snes-scene-cell::before,
+.snes-scene-builder .snes-scene-cell::after {
+  pointer-events: none;
+}
+
+.snes-scene-builder .snes-scene-cell__motif {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.snes-scene-builder .snes-scene-cell--air {
+  border-color: rgba(55, 112, 148, 0.18);
+  background:
+    radial-gradient(circle at 72% 24%, rgba(255, 255, 255, 0.48) 0 9%, transparent 10%),
+    linear-gradient(180deg, rgba(190, 235, 255, 0.76), rgba(150, 210, 242, 0.62));
+}
+
+.snes-scene-builder .snes-scene-cell--path {
+  border-color: rgba(54, 89, 125, 0.28);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.34) 0 12%,
+      transparent 12% 50%,
+      rgba(255, 255, 255, 0.24) 50% 62%,
+      transparent 62%
+    ),
+    #b8c5d4;
+  background-size:
+    12px 12px,
+    auto;
+}
+
+.snes-scene-builder .snes-scene-cell--ground {
+  border-color: rgba(65, 91, 35, 0.42);
+  background: linear-gradient(180deg, #56c271 0 28%, #8a5c35 29% 100%), #8a5c35;
+}
+
+.snes-scene-builder .snes-scene-cell--ground .snes-scene-cell__motif {
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 16%,
+      rgba(30, 112, 54, 0.32) 16% 23%,
+      transparent 23% 47%,
+      rgba(30, 112, 54, 0.28) 47% 54%,
+      transparent 54% 78%,
+      rgba(30, 112, 54, 0.3) 78% 85%,
+      transparent 85%
+    ),
+    radial-gradient(circle at 30% 72%, rgba(255, 228, 150, 0.3) 0 8%, transparent 9%),
+    radial-gradient(circle at 68% 58%, rgba(70, 40, 23, 0.22) 0 8%, transparent 9%);
+}
+
+.snes-scene-builder .snes-scene-cell--danger {
+  border-color: rgba(139, 33, 45, 0.58);
+  background: linear-gradient(180deg, #ff9c4a 0 38%, #e23445 39% 100%), #e23445;
+}
+
+.snes-scene-builder .snes-scene-cell--danger .snes-scene-cell__motif {
+  background:
+    linear-gradient(135deg, transparent 0 34%, rgba(255, 255, 255, 0.68) 34% 42%, transparent 42%),
+    linear-gradient(225deg, transparent 0 34%, rgba(255, 255, 255, 0.55) 34% 42%, transparent 42%);
+  background-size: 16px 16px;
+}
+
+.snes-scene-builder .snes-scene-cell--water {
+  border-color: rgba(27, 110, 142, 0.42);
+  background: linear-gradient(180deg, #6ae2ff 0%, #148ec5 100%), #22d3ee;
+}
+
+.snes-scene-builder .snes-scene-cell--water .snes-scene-cell__motif {
+  background:
+    radial-gradient(ellipse at 22% 40%, rgba(255, 255, 255, 0.52) 0 11%, transparent 12%),
+    radial-gradient(ellipse at 70% 62%, rgba(255, 255, 255, 0.42) 0 10%, transparent 11%);
+  background-size: 22px 14px;
+}
+
+.snes-scene-builder .snes-scene-cell:hover,
+.snes-scene-builder .snes-scene-cell:focus-visible {
+  outline: 2px solid #facc15;
+}
+
+.snes-object-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.snes-object-tray {
+  align-items: stretch;
+}
+
+.snes-object-tray h4 {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.snes-object-tray button {
+  min-width: 160px;
+}
+
+.snes-object-tray-drawer {
+  padding: 10px;
+}
+
+.snes-safety-menu {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 64%, var(--surface));
+  padding: 4px 8px;
+}
+
+.snes-safety-menu summary {
+  cursor: pointer;
+  font-weight: 840;
+  list-style: none;
+}
+
+.snes-safety-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-ai-review,
+.snes-selected-object-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.snes-ai-review h3,
+.snes-selected-object-editor h3 {
+  margin: 0;
+}
+
+.snes-ai-review p,
+.snes-selected-object-editor p {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 70%, var(--muted));
+}
+
+.snes-selected-object-editor .snes-selected-object-editor__summary p {
+  color: #405266;
+  font-weight: 760;
+}
+
+.snes-ai-review__meta,
+.snes-ai-review__diffs {
+  display: grid;
+  gap: 8px;
+}
+
+.snes-ai-review__meta {
+  grid-template-columns: repeat(3, auto 1fr);
+}
+
+.snes-ai-review__meta span,
+.snes-ai-review__diffs small {
+  color: color-mix(in srgb, var(--fg) 64%, var(--muted));
+}
+
+.snes-ai-review__diffs article {
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  padding: 10px;
+}
+
+.snes-object-card-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  gap: 10px;
+  align-items: end;
+}
+
+.snes-object-card-controls label {
+  display: grid;
+  gap: 6px;
+  color: color-mix(in srgb, var(--fg) 76%, var(--muted));
+  font-size: 0.78rem;
+  font-weight: 840;
+}
+
+.snes-object-card-controls input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 76%, var(--surface));
+  color: var(--fg);
+  padding: 10px 12px;
+}
+
+.snes-object-cards article.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.snes-object-cards article > span {
+  color: color-mix(in srgb, var(--accent) 78%, #2dd4bf);
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.snes-advanced-workbench-toggle {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.snes-pro-drawers {
+  display: grid;
+  gap: 10px;
+}
+
+.snes-pro-drawer {
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  padding: 12px;
+}
+
+.snes-pro-drawer summary {
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.snes-pro-drawer[open] summary {
+  margin-bottom: 10px;
+}
+
+.snes-hero,
+.snes-start-panel,
+.snes-budget-strip,
+.snes-assets,
+.snes-workspace__canvas,
+.snes-inspector,
+.snes-pipeline,
+.snes-console,
+.snes-recovery-panel {
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+  box-shadow: var(--shadow-sm);
+}
+
+.snes-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+
+.snes-eyebrow {
+  color: color-mix(in srgb, var(--accent) 82%, #2dd4bf);
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.snes-hero h2,
+.snes-section-header h3,
+.snes-issues h4 {
+  margin: 0;
+  color: var(--fg);
+}
+
+.snes-hero p,
+.snes-section-header p,
+.snes-pipeline p,
+.snes-muted {
+  margin: 5px 0 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+}
+
+.snes-hero__actions,
+.snes-toolbar,
+.snes-tabs,
+.snes-level-tabs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.snes-hero button,
+.snes-assets button,
+.snes-toolbar button,
+.snes-tabs button,
+.snes-level-tabs button,
+.snes-brush-presets button,
+.snes-generated-filter button,
+.snes-provider-toggle button,
+.snes-agent-proposal button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 750;
+  padding: 9px 11px;
+}
+
+.snes-hero button.primary,
+.snes-toolbar button.primary {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+
+.snes-toolbar button.snes-send-command,
+.snes-command-palette button.snes-send-command {
+  border-color: color-mix(in srgb, var(--accent) 82%, var(--border));
+  background: color-mix(in srgb, var(--accent) 28%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.snes-ai-header {
+  display: grid;
+  gap: 4px;
+}
+
+.snes-ai-header p {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.82rem;
+}
+
+.snes-ai-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.snes-ai-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  padding: 10px;
+}
+
+.snes-ai-card span {
+  display: block;
+  color: color-mix(in srgb, var(--accent) 78%, var(--fg));
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.snes-ai-card p {
+  margin: 3px 0 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.82rem;
+}
+
+.snes-provider-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.snes-provider-toggle button.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--accent) 17%, var(--surface));
+}
+
+.snes-prompt-chips {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.snes-prompt-chips button {
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.snes-start-panel {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.3fr) minmax(210px, 0.65fr) minmax(240px, 0.75fr);
+  gap: 14px;
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.snes-start-panel__create,
+.snes-start-panel__status,
+.snes-start-panel__flow,
+.snes-ai-build-flow,
+.snes-game-parts-map,
+.snes-generated-inspector,
+.snes-kid-wizard,
+.snes-template-gallery,
+.snes-guided-checklist {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.snes-start-panel__create {
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  padding: 12px;
+}
+
+.snes-start-panel h3 {
+  margin: 0;
+}
+
+.snes-start-panel label {
+  display: grid;
+  gap: 7px;
+  color: color-mix(in srgb, var(--fg) 78%, var(--muted));
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.snes-start-panel textarea {
+  width: 100%;
+  min-height: 116px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  padding: 11px 12px;
+  resize: vertical;
+}
+
+.snes-start-panel__status {
+  grid-template-columns: 1fr;
+}
+
+.snes-start-panel__status article,
+.snes-start-panel__flow button {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  color: var(--fg);
+  padding: 11px;
+  text-align: left;
+}
+
+.snes-start-panel__status span,
+.snes-start-panel__flow span {
+  display: block;
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.snes-start-panel__status strong,
+.snes-start-panel__flow strong {
+  display: block;
+  min-width: 0;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.snes-start-panel__flow button {
+  cursor: pointer;
+}
+
+.snes-start-panel__flow button:hover,
+.snes-start-panel__flow button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.snes-template-gallery,
+.snes-ai-build-flow,
+.snes-game-parts-map,
+.snes-generated-inspector,
+.snes-kid-wizard,
+.snes-guided-checklist {
+  grid-column: 1 / -1;
+}
+
+.snes-template-gallery,
+.snes-game-parts-map__grid,
+.snes-kid-wizard__steps,
+.snes-guided-checklist {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.snes-template-gallery .snes-section-header,
+.snes-ai-build-flow .snes-section-header,
+.snes-game-parts-map .snes-section-header,
+.snes-generated-inspector .snes-section-header,
+.snes-kid-wizard .snes-section-header,
+.snes-guided-checklist .snes-section-header {
+  grid-column: 1 / -1;
+}
+
+.snes-ai-build-flow,
+.snes-game-parts-map,
+.snes-generated-inspector {
+  border-top: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  padding-top: 12px;
+}
+
+.snes-kid-wizard {
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  padding: 12px;
+}
+
+.snes-kid-wizard__steps,
+.snes-game-parts-map__grid {
+  display: grid;
+  gap: 10px;
+}
+
+.snes-kid-wizard article,
+.snes-game-parts-map article {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  padding: 11px;
+}
+
+.snes-kid-wizard article > span,
+.snes-game-parts-map article > span {
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.snes-kid-wizard p {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+}
+
+.snes-ai-build-flow .snes-section-header {
+  display: flex;
+  gap: 12px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.snes-ai-build-flow .snes-section-header strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1rem;
+}
+
+.snes-ai-build-flow .snes-section-header button {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 800;
+  padding: 9px 11px;
+}
+
+.snes-ai-stage-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.snes-ai-stage {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  padding: 11px;
+}
+
+.snes-ai-stage--recommended {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.snes-ai-stage--complete {
+  border-color: color-mix(in srgb, #22c55e 32%, var(--border));
+}
+
+.snes-ai-stage span,
+.snes-ai-stage small,
+.snes-ai-stage em {
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.74rem;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.snes-ai-stage span {
+  color: color-mix(in srgb, var(--accent) 78%, var(--fg));
+  text-transform: uppercase;
+}
+
+.snes-ai-stage p {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 74%, var(--muted));
+  font-size: 0.82rem;
+}
+
+.snes-agent-connection {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.snes-agent-connection article {
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  padding: 9px;
+}
+
+.snes-agent-connection span,
+.snes-agent-connection small {
+  display: block;
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.73rem;
+  font-weight: 780;
+}
+
+.snes-agent-proof {
+  display: grid;
+  gap: 7px;
+}
+
+.snes-agent-proof--passed {
+  border-color: rgba(15, 118, 110, 0.3);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.snes-agent-proof--failed {
+  border-color: rgba(185, 28, 28, 0.28);
+  background: rgba(254, 226, 226, 0.7);
+}
+
+.snes-agent-proof button {
+  justify-self: start;
+}
+
+.snes-agent-session {
+  display: grid;
+  gap: 6px;
+}
+
+.snes-agent-session label {
+  display: grid;
+  gap: 5px;
+}
+
+.snes-agent-session input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  padding: 7px 8px;
+}
+
+.snes-button-audit {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.snes-button-audit__title {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 2px;
+  color: var(--fg);
+}
+
+.snes-button-audit__item {
+  display: grid;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  padding: 9px;
+}
+
+.snes-button-audit__item--verified,
+.snes-button-audit__item--tested {
+  border-color: color-mix(in srgb, #22c55e 32%, var(--border));
+}
+
+.snes-button-audit__item--blocked {
+  border-color: color-mix(in srgb, #ef4444 34%, var(--border));
+}
+
+.snes-button-audit span,
+.snes-button-audit small {
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.72rem;
+  font-weight: 780;
+}
+
+.snes-generated-inspector__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.snes-generated-filter,
+.snes-brush-presets {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.snes-generated-filter {
+  margin-bottom: 10px;
+}
+
+.snes-generated-filter button.active,
+.snes-brush-presets button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 68%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+.snes-brush-presets {
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  padding: 8px;
+}
+
+.snes-generated-inspector article {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 56%, var(--surface));
+  padding: 10px;
+}
+
+.snes-generated-inspector article.active,
+.snes-agent-list article.active {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.snes-generated-inspector span {
+  color: color-mix(in srgb, var(--accent) 78%, var(--fg));
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.snes-generated-inspector p {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 70%, var(--muted));
+  font-size: 0.8rem;
+}
+
+.snes-generated-inspector button {
+  justify-self: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 780;
+  padding: 8px 10px;
+}
+
+.snes-template-gallery__detail {
+  grid-column: 1 / -1;
+}
+
+.snes-template-gallery__detail input {
+  width: 100%;
+}
+
+.snes-template-gallery p,
+.snes-guided-checklist p {
+  margin: 3px 0 0;
+  color: color-mix(in srgb, var(--fg) 68%, var(--muted));
+  font-size: 0.8rem;
+}
+
+.snes-template-gallery button,
+.snes-check-item {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  color: var(--fg);
+  padding: 11px;
+  text-align: left;
+}
+
+.snes-template-gallery button {
+  cursor: pointer;
+}
+
+.snes-template-gallery button:hover,
+.snes-template-gallery button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.snes-template-gallery span,
+.snes-template-gallery small,
+.snes-check-item span,
+.snes-check-item small {
+  display: block;
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.snes-check-item--complete {
+  border-color: color-mix(in srgb, #22c55e 38%, var(--border));
+}
+
+.snes-check-item--action-needed {
+  border-color: color-mix(in srgb, #eab308 38%, var(--border));
+}
+
+.snes-check-item--blocked {
+  border-color: color-mix(in srgb, #ef4444 34%, var(--border));
+}
+
+.snes-command-palette {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  padding: 10px;
+}
+
+.snes-command-palette button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  color: var(--fg);
+  padding: 10px;
+  text-align: left;
+}
+
+.snes-command-palette small {
+  color: color-mix(in srgb, var(--fg) 62%, var(--muted));
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.snes-command-palette button:hover,
+.snes-command-palette button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.snes-recovery-panel {
+  display: grid;
+  gap: 12px;
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.snes-recovery-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.snes-recovery-panel article {
+  display: grid;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  padding: 11px;
+}
+
+.snes-recovery-panel span {
+  color: color-mix(in srgb, var(--accent) 76%, var(--fg));
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.snes-recovery-panel button {
+  justify-self: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 780;
+  padding: 8px 10px;
+}
+
+.snes-oam-report {
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  padding: 11px;
+}
+
+.snes-oam-report__rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.snes-oam-row {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  padding: 9px;
+}
+
+.snes-oam-row--large-metasprite {
+  border-color: color-mix(in srgb, #eab308 42%, var(--border));
+}
+
+.snes-oam-row--over-budget {
+  border-color: color-mix(in srgb, #ef4444 48%, var(--border));
+}
+
+.snes-oam-row span,
+.snes-oam-row small {
+  display: block;
+  color: color-mix(in srgb, var(--fg) 66%, var(--muted));
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.snes-assets button.danger {
+  border-color: color-mix(in srgb, #ef4444 58%, var(--border));
+  color: color-mix(in srgb, #ef4444 82%, var(--fg));
+}
+
+.snes-budget-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  border-radius: var(--radius-lg);
+  padding: 12px;
+}
+
+.snes-meter {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.snes-meter__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.snes-meter__track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg) 70%, var(--border));
+}
+
+.snes-meter__track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #14b8a6;
+}
+
+.snes-meter--warning .snes-meter__track span {
+  background: #eab308;
+}
+
+.snes-meter--error .snes-meter__track span {
+  background: #ef4444;
+}
+
+.snes-meter small {
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.snes-workspace {
+  display: grid;
+  grid-template-columns: minmax(190px, 230px) minmax(420px, 1fr) minmax(280px, 360px);
+  gap: 16px;
+  align-items: start;
+}
+
+.snes-assets,
+.snes-workspace__canvas,
+.snes-inspector {
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.snes-assets {
+  display: grid;
+  gap: 9px;
+}
+
+.snes-section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.snes-level-grid {
+  display: grid;
+  grid-template-columns: repeat(16, minmax(0, 1fr));
+  gap: 3px;
+  margin-top: 14px;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #172554;
+  padding: 8px;
+}
+
+.snes-level-grid .tile {
+  min-width: 0;
+  border-radius: 3px;
+  background: #1e3a8a;
+  cursor: pointer;
+}
+
+.snes-level-grid .tile:focus,
+.snes-level-grid .tile:hover {
+  outline: 2px solid #facc15;
+}
+
+.snes-level-grid .solid {
+  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 34%);
+}
+
+.snes-level-grid .collision-2 {
+  box-shadow:
+    inset 0 0 0 2px #ef4444,
+    inset 0 -10px 0 rgb(239 68 68 / 42%);
+}
+
+.snes-level-grid .collision-3 {
+  box-shadow:
+    inset 0 0 0 2px #38bdf8,
+    inset 0 9px 0 rgb(56 189 248 / 40%);
+}
+
+.snes-level-grid .collision-4 {
+  box-shadow:
+    inset 0 0 0 2px #22d3ee,
+    inset 0 0 14px rgb(34 211 238 / 62%);
+}
+
+.snes-level-grid .tile-1 {
+  background: #57534e;
+}
+
+.snes-level-grid .tile-2 {
+  background: #65a30d;
+}
+
+.snes-level-grid .tile-3 {
+  background: #facc15;
+}
+
+.snes-level-grid .tile-4 {
+  background: #f97316;
+}
+
+.snes-level-grid .tile-5 {
+  background: #d1d5db;
+}
+
+.snes-level-grid .tile-6 {
+  background: #38bdf8;
+}
+
+.snes-level-grid .imported {
+  background:
+    linear-gradient(
+      135deg,
+      rgb(15 23 42 / 30%) 25%,
+      transparent 25% 50%,
+      rgb(15 23 42 / 30%) 50% 75%,
+      transparent 75%
+    ),
+    #4f46e5;
+  background-size: 12px 12px;
+  box-shadow: inset 0 0 0 2px #f8fafc;
+}
+
+.snes-playtest {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 58%, var(--surface));
+  padding: 10px;
+}
+
+.snes-play-mode > .snes-section-header .snes-eyebrow {
+  color: #0f766e;
+}
+
+.snes-play-mode > .snes-section-header h3 {
+  color: #17202a;
+}
+
+.snes-play-mode > .snes-section-header p {
+  color: #405266;
+  font-weight: 680;
+}
+
+.snes-play-mode > .snes-section-header > strong {
+  color: #17202a;
+}
+
+.snes-studio--mode-play > .snes-mode-rail {
+  order: 1;
+}
+
+.snes-studio--mode-play > .snes-play-mode {
+  order: 2;
+}
+
+.snes-studio--mode-play > .snes-president-prompt-bar {
+  order: 3;
+}
+
+.snes-studio--mode-play > .snes-learning-drawer {
+  order: 4;
+}
+
+.snes-studio--mode-play > .snes-recovery-panel,
+.snes-studio--mode-play > .snes-advanced-workbench-toggle,
+.snes-studio--mode-play > .snes-advanced-workbench {
+  order: 5;
+}
+
+.snes-play-path {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-play-path span {
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  border-radius: 999px;
+  background: rgba(240, 253, 250, 0.82);
+  color: #115e59;
+  font-size: 0.82rem;
+  font-weight: 900;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.snes-first-minute-guide {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.95fr) minmax(280px, 1.25fr) auto;
+  gap: 10px;
+  align-items: stretch;
+  border: 1px solid rgba(22, 99, 255, 0.2);
+  border-radius: 18px;
+  background: #f6fafe;
+  color: #17202a;
+  padding: 10px;
+}
+
+.snes-first-minute-guide__copy {
+  display: grid;
+  gap: 3px;
+  align-content: center;
+}
+
+.snes-first-minute-guide__copy strong {
+  color: #111827;
+  font-size: 1rem;
+}
+
+.snes-first-minute-guide__copy p {
+  margin: 0;
+  color: #405266;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.snes-first-minute-guide__steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.snes-first-minute-guide__steps article {
+  display: grid;
+  gap: 2px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 8px;
+}
+
+.snes-first-minute-guide__steps span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #07111d;
+  color: #ffffff;
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.snes-first-minute-guide__steps strong {
+  color: #111827;
+  font-size: 0.88rem;
+}
+
+.snes-first-minute-guide__steps small {
+  color: #526576;
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.snes-first-minute-guide__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  justify-content: center;
+}
+
+.snes-first-minute-guide__actions button {
+  min-width: 126px;
+  border: 1px solid rgba(23, 32, 42, 0.14);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-weight: 850;
+  padding: 8px 12px;
+}
+
+.snes-first-minute-guide__actions button.primary {
+  background: #07111d;
+  color: #ffffff;
+}
+
+.snes-play-loop {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.snes-play-now-coach {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  border: 2px solid #ffd43b;
+  border-radius: 18px;
+  background: #fff9db;
+  color: #17202a;
+  padding: 14px;
+  box-shadow: 0 16px 34px rgba(23, 32, 42, 0.12);
+}
+
+.snes-play-now-coach__copy h4 {
+  margin: 2px 0 3px;
+  color: #111827;
+  font-size: clamp(1.05rem, 2vw, 1.28rem);
+}
+
+.snes-play-now-coach__copy p {
+  margin: 0;
+  color: #405266;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.snes-play-now-coach__facts,
+.snes-play-now-coach__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: end;
+}
+
+.snes-play-now-coach__facts article {
+  display: grid;
+  min-width: 74px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 8px 10px;
+}
+
+.snes-play-now-coach__facts span {
+  color: #526576;
+  font-size: 0.66rem;
+  font-weight: 860;
+  text-transform: uppercase;
+}
+
+.snes-play-now-coach__facts strong {
+  color: #111827;
+  font-size: 1rem;
+}
+
+.snes-play-now-coach__actions button {
+  min-height: 38px;
+  border: 1px solid rgba(23, 32, 42, 0.14);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-weight: 850;
+  padding: 8px 12px;
+}
+
+.snes-play-now-coach__actions button.primary {
+  background: #07111d;
+  color: #ffffff;
+}
+
+.snes-play-loop .snes-play-now-coach {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 12px;
+}
+
+.snes-play-loop .snes-play-now-coach__copy {
+  min-width: 0;
+}
+
+.snes-play-loop .snes-play-now-coach__copy p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.snes-play-loop .snes-play-now-coach__facts {
+  justify-content: start;
+}
+
+.snes-play-loop .snes-play-now-coach__actions {
+  grid-column: 1 / -1;
+  justify-content: start;
+}
+
+.snes-playtest-feedback {
+  display: grid;
+  gap: 4px;
+  border: 2px solid rgba(22, 99, 255, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(22, 99, 255, 0.08), rgba(34, 197, 94, 0.1)), #ffffff;
+  color: #17202a;
+  padding: 12px 14px;
+}
+
+.snes-playtest-feedback > span {
+  color: #526576;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.snes-playtest-feedback h4 {
+  margin: 0;
+  color: #111827;
+  font-size: 1.02rem;
+}
+
+.snes-playtest-feedback p {
+  margin: 0;
+  color: #405266;
+  font-size: 0.9rem;
+  font-weight: 680;
+  line-height: 1.42;
+}
+
+.snes-playtest-feedback--reward {
+  border-color: rgba(34, 197, 94, 0.42);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.18), rgba(250, 204, 21, 0.12)), #ffffff;
+}
+
+.snes-playtest-feedback--warning {
+  border-color: rgba(229, 70, 86, 0.42);
+  background: linear-gradient(135deg, rgba(229, 70, 86, 0.14), rgba(250, 204, 21, 0.12)), #ffffff;
+}
+
+.snes-playtest-feedback--event {
+  border-color: rgba(109, 63, 209, 0.34);
+  background: linear-gradient(135deg, rgba(109, 63, 209, 0.13), rgba(56, 189, 248, 0.1)), #ffffff;
+}
+
+.snes-playtest__quick-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  border: 1px solid rgba(7, 17, 29, 0.12);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 12px 26px rgba(7, 17, 29, 0.08);
+  padding: 10px;
+}
+
+.snes-playtest__quick-actions strong {
+  color: #17202a;
+  font-size: 0.88rem;
+}
+
+.snes-playtest__quick-actions button {
+  min-height: 38px;
+  border: 1px solid rgba(7, 17, 29, 0.16);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 8px 12px;
+}
+
+.snes-playtest__quick-actions button.primary {
+  background: #07111d;
+  color: #ffffff;
+}
+
+.snes-play-loop .snes-playtest-feedback {
+  align-content: center;
+  min-height: 0;
+  padding: 10px 12px;
+}
+
+.snes-play-moments {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(7, 17, 29, 0.12);
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 14px 28px rgba(7, 17, 29, 0.08);
+  padding: 12px;
+}
+
+.snes-play-moments__heading {
+  display: grid;
+  gap: 2px;
+}
+
+.snes-play-moments__heading strong {
+  color: #17202a;
+  font-size: 1rem;
+}
+
+.snes-play-moments__heading small {
+  color: #526576;
+  font-size: 0.78rem;
+  font-weight: 740;
+}
+
+.snes-play-moments__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.snes-play-moment {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-height: 132px;
+  border: 1px solid rgba(7, 17, 29, 0.1);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 86%, #ffffff);
+  color: #17202a;
+  padding: 10px;
+}
+
+.snes-play-moment > span {
+  color: #07111d;
+  font-size: 0.82rem;
+  font-weight: 940;
+}
+
+.snes-play-moment p {
+  margin: 0;
+  color: #405266;
+  font-size: 0.82rem;
+  font-weight: 720;
+  line-height: 1.36;
+}
+
+.snes-play-moment button {
+  align-self: end;
+  border: 1px solid rgba(7, 17, 29, 0.16);
+  border-radius: 12px;
+  background: #07111d;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 900;
+  min-height: 36px;
+  padding: 8px 10px;
+}
+
+.snes-play-moment--reward {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.18), rgba(250, 204, 21, 0.12)), #ffffff;
+}
+
+.snes-play-moment--challenge {
+  background: linear-gradient(135deg, rgba(229, 70, 86, 0.13), rgba(255, 156, 74, 0.1)), #ffffff;
+}
+
+.snes-play-moment--goal {
+  background: linear-gradient(135deg, rgba(109, 63, 209, 0.13), rgba(56, 189, 248, 0.1)), #ffffff;
+}
+
+.snes-play-moment--change {
+  background: linear-gradient(135deg, rgba(22, 99, 255, 0.13), rgba(34, 197, 94, 0.1)), #ffffff;
+}
+
+.snes-playtest__hud,
+.snes-runtime-gates,
+.snes-playtest__event-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.snes-play-drawer {
+  border: 1px solid rgba(7, 17, 29, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 8px 10px;
+}
+
+.snes-play-drawer summary {
+  cursor: pointer;
+  color: #17202a;
+  font-size: 0.86rem;
+  font-weight: 900;
+  list-style: none;
+}
+
+.snes-play-drawer summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-play-drawer:not([open]) > :not(summary) {
+  display: none !important;
+}
+
+.snes-play-drawer summary::before {
+  content: "Open ";
+  color: #0f766e;
+  font-weight: 900;
+}
+
+.snes-play-drawer[open] summary::before {
+  content: "Close ";
+}
+
+.snes-play-drawer .snes-playtest__event-controls,
+.snes-play-drawer .snes-recent-activity {
+  margin-top: 8px;
+}
+
+.snes-play-drawer .snes-recent-activity {
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.snes-studio--mode-play .snes-playtest {
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr);
+  align-items: stretch;
+}
+
+.snes-studio--mode-play .snes-playtest > .snes-section-header {
+  display: none;
+}
+
+.snes-studio--mode-play .snes-playtest__stage {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  min-height: 268px;
+}
+
+.snes-studio--mode-play .snes-playtest-feedback {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.snes-studio--mode-play .snes-playtest__quick-actions {
+  grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+.snes-studio--mode-play .snes-play-moments {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: stretch;
+}
+
+.snes-studio--mode-play .snes-play-moments__heading small {
+  display: none;
+}
+
+.snes-studio--mode-play .snes-play-moments__grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.snes-studio--mode-play .snes-play-moment {
+  gap: 6px;
+  min-height: 0;
+  padding: 9px;
+}
+
+.snes-studio--mode-play .snes-play-moment p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.snes-studio--mode-play .snes-play-controller {
+  grid-column: 2;
+  grid-row: 2;
+  grid-template-columns: 1fr;
+  align-self: end;
+}
+
+.snes-studio--mode-play .snes-playtest__hud,
+.snes-studio--mode-play .snes-playtest__expert,
+.snes-studio--mode-play .snes-play-event-drawer {
+  grid-column: 1 / -1;
+}
+
+.snes-studio--mode-play .snes-playtest__hud {
+  grid-row: 5;
+}
+
+.snes-studio--mode-play .snes-playtest__expert {
+  grid-row: 6;
+}
+
+.snes-studio--mode-play .snes-play-event-drawer {
+  grid-row: 7;
+}
+
+.snes-play-controller {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(7, 17, 29, 0.14);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 18% 25%, rgba(22, 99, 255, 0.12), transparent 28%),
+    radial-gradient(circle at 84% 70%, rgba(34, 197, 94, 0.13), transparent 30%), #ffffff;
+  box-shadow: 0 14px 28px rgba(7, 17, 29, 0.1);
+  padding: 10px;
+}
+
+.snes-play-controller__hint {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.snes-play-controller__hint span {
+  color: #0f766e;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.snes-play-controller__hint strong {
+  color: #17202a;
+  font-size: 0.96rem;
+}
+
+.snes-play-controller__hint small {
+  color: #526576;
+  font-size: 0.76rem;
+  font-weight: 730;
+  line-height: 1.28;
+}
+
+.snes-play-controller__pad,
+.snes-play-controller__buttons,
+.snes-play-controller__system {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.snes-play-controller button.active {
+  background: #1663ff;
+  color: #ffffff;
+  transform: translateY(1px);
+}
+
+.snes-runtime-gates__title {
+  display: grid;
+  min-width: 180px;
+  color: var(--fg);
+}
+
+.snes-runtime-gates__title small {
+  color: color-mix(in srgb, var(--fg) 64%, var(--muted));
+  font-size: 0.72rem;
+}
+
+.snes-playtest__hud span,
+.snes-runtime-gates article {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 72%, var(--bg));
+  color: color-mix(in srgb, var(--fg) 74%, var(--muted));
+  font-size: 0.73rem;
+  font-weight: 820;
+  padding: 5px 7px;
+}
+
+.snes-runtime-gates article {
+  display: grid;
+  gap: 2px;
+  min-width: 140px;
+}
+
+.snes-runtime-gates--proof {
+  align-items: stretch;
+}
+
+.snes-runtime-proof--pass {
+  border-color: color-mix(in srgb, #22c55e 42%, var(--border));
+  background: color-mix(in srgb, #22c55e 10%, var(--surface));
+}
+
+.snes-runtime-proof--blocked {
+  border-color: color-mix(in srgb, #f59e0b 42%, var(--border));
+  background: color-mix(in srgb, #f59e0b 10%, var(--surface));
+}
+
+.snes-runtime-gates strong {
+  color: var(--fg);
+  font-size: 0.78rem;
+}
+
+.snes-palette-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14px, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+  max-width: 220px;
+}
+
+.snes-palette-strip span {
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 3px;
+}
+
+.snes-playtest__stage {
+  position: relative;
+  overflow: hidden;
+  min-height: 180px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: var(--radius-md);
+  background: #9edbf5;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.28);
+}
+
+.snes-playtest__stage:focus-visible {
+  outline: 3px solid #1663ff;
+  outline-offset: 3px;
+}
+
+.snes-playtest__stage--running {
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.28),
+    0 0 0 3px rgba(22, 99, 255, 0.22);
+}
+
+.snes-emulator-canvas--direct-drag {
+  cursor: grabbing;
+}
+
+.snes-emulator-canvas--area-drag {
+  cursor: move;
+}
+
+.snes-playtest__live-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 7;
+  display: grid;
+  gap: 1px;
+  max-width: min(220px, calc(100% - 20px));
+  border: 1px solid rgba(7, 17, 29, 0.14);
+  border-radius: 16px;
+  background: rgba(7, 17, 29, 0.76);
+  color: #ffffff;
+  padding: 7px 9px;
+  box-shadow: 0 8px 18px rgba(7, 17, 29, 0.18);
+  backdrop-filter: blur(10px);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.snes-playtest__live-badge strong {
+  font-size: 0.72rem;
+}
+
+.snes-playtest__live-badge span {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.64rem;
+  font-weight: 760;
+}
+
+.snes-playtest__stage-hint {
+  position: absolute;
+  top: auto;
+  bottom: 10px;
+  left: 10px;
+  z-index: 6;
+  max-width: min(360px, calc(100% - 20px));
+  border: 1px solid rgba(7, 17, 29, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #17202a;
+  font-size: 0.7rem;
+  font-weight: 850;
+  line-height: 1.2;
+  padding: 7px 10px;
+  pointer-events: none;
+  box-shadow: 0 6px 14px rgba(7, 17, 29, 0.1);
+  opacity: 0.8;
+  backdrop-filter: blur(10px);
+}
+
+.snes-playtest__stage--running .snes-playtest__stage-hint {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.snes-runtime-canvas {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #8fd3f4;
+}
+
+.snes-playtest__world {
+  position: absolute;
+  z-index: 0;
+  inset: 0 auto 0 0;
+  display: grid;
+  grid-template-columns: repeat(var(--play-columns, 16), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--play-rows, 12), minmax(0, 1fr));
+  height: 100%;
+  min-width: 100%;
+  opacity: 0.18;
+  transform-origin: left center;
+  transition: transform 180ms ease;
+  pointer-events: none;
+}
+
+.snes-playtest__tile {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(7, 17, 29, 0.08);
+  min-width: 0;
+}
+
+.snes-playtest__tile-motif {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.snes-playtest__tile--air {
+  background:
+    radial-gradient(circle at 72% 24%, rgba(255, 255, 255, 0.5) 0 9%, transparent 10%),
+    linear-gradient(180deg, rgba(190, 235, 255, 0.86), rgba(150, 210, 242, 0.72));
+}
+
+.snes-playtest__tile--path {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.32) 0 12%,
+      transparent 12% 50%,
+      rgba(255, 255, 255, 0.22) 50% 62%,
+      transparent 62%
+    ),
+    #b8c5d4;
+  background-size:
+    12px 12px,
+    auto;
+}
+
+.snes-playtest__tile--ground {
+  background: linear-gradient(180deg, #56c271 0 28%, #8a5c35 29% 100%), #8a5c35;
+}
+
+.snes-playtest__tile--ground .snes-playtest__tile-motif {
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 16%,
+      rgba(30, 112, 54, 0.32) 16% 23%,
+      transparent 23% 47%,
+      rgba(30, 112, 54, 0.28) 47% 54%,
+      transparent 54% 78%,
+      rgba(30, 112, 54, 0.3) 78% 85%,
+      transparent 85%
+    ),
+    radial-gradient(circle at 30% 72%, rgba(255, 228, 150, 0.3) 0 8%, transparent 9%),
+    radial-gradient(circle at 68% 58%, rgba(70, 40, 23, 0.22) 0 8%, transparent 9%);
+}
+
+.snes-playtest__tile--danger {
+  background: linear-gradient(180deg, #ff9c4a 0 38%, #e23445 39% 100%), #e23445;
+}
+
+.snes-playtest__tile--danger .snes-playtest__tile-motif {
+  background:
+    linear-gradient(135deg, transparent 0 34%, rgba(255, 255, 255, 0.68) 34% 42%, transparent 42%),
+    linear-gradient(225deg, transparent 0 34%, rgba(255, 255, 255, 0.55) 34% 42%, transparent 42%);
+  background-size: 16px 16px;
+}
+
+.snes-playtest__tile--water {
+  background: linear-gradient(180deg, #6ae2ff 0%, #148ec5 100%), #22d3ee;
+}
+
+.snes-playtest__tile--water .snes-playtest__tile-motif {
+  background:
+    radial-gradient(ellipse at 22% 40%, rgba(255, 255, 255, 0.52) 0 11%, transparent 12%),
+    radial-gradient(ellipse at 70% 62%, rgba(255, 255, 255, 0.42) 0 10%, transparent 11%);
+  background-size: 22px 14px;
+}
+
+.snes-playtest__marker {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  gap: 0;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--fg) 28%, var(--border));
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 0.74rem;
+  font-weight: 900;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  box-shadow:
+    0 0 0 4px rgba(255, 255, 255, 0.18),
+    0 10px 18px rgba(7, 17, 29, 0.18);
+  transition:
+    left 160ms ease,
+    top 160ms ease,
+    transform 120ms ease,
+    box-shadow 120ms ease;
+  overflow: visible;
+}
+
+.snes-playtest__marker:hover,
+.snes-playtest__marker:focus-visible,
+.snes-playtest__marker.active,
+.snes-playtest__marker.dragging {
+  z-index: 7;
+  transform: translate(-50%, -54%);
+  box-shadow:
+    0 0 0 4px rgba(255, 255, 255, 0.45),
+    0 0 0 7px rgba(250, 204, 21, 0.24),
+    0 12px 22px rgba(7, 17, 29, 0.22);
+}
+
+.snes-playtest__marker.dragging {
+  cursor: grabbing;
+  transition: none;
+}
+
+.snes-playtest__marker .snes-piece-glyph {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+}
+
+.snes-playtest__marker-label {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 7px);
+  max-width: 124px;
+  overflow: hidden;
+  border: 1px solid rgba(7, 17, 29, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #17202a;
+  font-size: 0.68rem;
+  line-height: 1;
+  padding: 6px 8px;
+  pointer-events: none;
+  box-shadow: 0 10px 18px rgba(7, 17, 29, 0.16);
+  text-overflow: ellipsis;
+  transform: translateX(-50%) translateY(4px);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 120ms ease;
+}
+
+.snes-playtest__marker:hover .snes-playtest__marker-label,
+.snes-playtest__marker:focus-visible .snes-playtest__marker-label,
+.snes-playtest__marker.active .snes-playtest__marker-label,
+.snes-playtest__marker.dragging .snes-playtest__marker-label {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  visibility: visible;
+}
+
+.snes-playtest__marker--hero {
+  background: linear-gradient(135deg, #1663ff, #17a86b);
+}
+
+.snes-playtest__marker--enemy {
+  background: linear-gradient(135deg, #e23445, #ff7a1a);
+}
+
+.snes-playtest__marker--item {
+  background: linear-gradient(135deg, #d99000, #17a86b);
+}
+
+.snes-playtest__marker--npc {
+  background: linear-gradient(135deg, #0ea5e9, #1663ff);
+}
+
+.snes-playtest__marker--door,
+.snes-playtest__marker--goal {
+  background: linear-gradient(135deg, #6d3fd1, #17202a);
+}
+
+.snes-playtest__marker--guide {
+  background: linear-gradient(135deg, #8a4b12, #d99000);
+}
+
+.snes-playtest__marker.inactive {
+  opacity: 0.38;
+}
+
+.snes-playtest__outcome {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 10;
+  display: grid;
+  gap: 8px;
+  width: min(320px, calc(100% - 28px));
+  border: 1px solid rgba(7, 17, 29, 0.16);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #17202a;
+  padding: 14px;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 24px 48px rgba(7, 17, 29, 0.22);
+}
+
+.snes-playtest__outcome strong {
+  font-size: 1.08rem;
+}
+
+.snes-playtest__outcome span {
+  color: #405266;
+  font-size: 0.86rem;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.snes-playtest__outcome div {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.snes-playtest__outcome button {
+  min-height: 38px;
+  border: 1px solid rgba(7, 17, 29, 0.16);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 8px 12px;
+}
+
+.snes-playtest__outcome button.primary {
+  background: #07111d;
+  color: #ffffff;
+}
+
+.snes-playtest__expert {
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 72%, var(--bg));
+  padding: 8px 10px;
+}
+
+.snes-playtest__expert summary {
+  cursor: pointer;
+  font-weight: 850;
+  list-style: none;
+}
+
+.snes-playtest__expert summary::-webkit-details-marker {
+  display: none;
+}
+
+.snes-playtest__expert .snes-runtime-gates {
+  margin-top: 8px;
+}
+
+.snes-play-controller button,
+.snes-playtest__event-controls button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 780;
+  padding: 8px 10px;
+}
+
+.snes-play-controller button {
+  min-width: 72px;
+  min-height: 42px;
+  background: #07111d;
+  box-shadow: 0 10px 20px rgba(7, 17, 29, 0.16);
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.snes-play-controller button.primary {
+  background: #1663ff;
+}
+
+.snes-play-controller__system button {
+  background: #ffffff;
+  color: #17202a;
+}
+
+.snes-entity-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.snes-entity-strip button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 56%, var(--surface));
+  color: var(--fg);
+  padding: 10px;
+  text-align: left;
+}
+
+.snes-entity-strip span,
+.snes-agent-list span {
+  display: block;
+  color: color-mix(in srgb, var(--fg) 70%, var(--muted));
+  font-size: 0.76rem;
+}
+
+.snes-inspector {
+  display: grid;
+  gap: 12px;
+}
+
+.snes-tabs {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.snes-tabs button.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+}
+
+.snes-level-tabs {
+  margin-top: 12px;
+}
+
+.snes-level-tabs button.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.snes-inspector label {
+  display: grid;
+  gap: 6px;
+  color: color-mix(in srgb, var(--fg) 78%, var(--muted));
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.snes-inspector input,
+.snes-inspector select,
+.snes-inspector textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  color: var(--fg);
+  padding: 9px 10px;
+}
+
+.snes-inspector textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+
+.snes-checkbox {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.snes-checkbox input {
+  width: auto;
+}
+
+.snes-inspector__grid {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) minmax(0, 1fr);
+  gap: 8px;
+  font-size: 0.84rem;
+}
+
+.snes-inspector__grid span {
+  color: color-mix(in srgb, var(--fg) 68%, var(--muted));
+}
+
+.snes-inspector__grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.snes-issues {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.snes-ok,
+.snes-issue {
+  margin: 0;
+  border-radius: var(--radius-md);
+  padding: 9px;
+}
+
+.snes-ok {
+  background: color-mix(in srgb, #22c55e 13%, var(--surface));
+  color: color-mix(in srgb, #22c55e 70%, var(--fg));
+}
+
+.snes-issue {
+  display: grid;
+  gap: 4px;
+  background: color-mix(in srgb, #eab308 13%, var(--surface));
+}
+
+.snes-issue--error {
+  background: color-mix(in srgb, #ef4444 13%, var(--surface));
+}
+
+.snes-issue span,
+.snes-issue small {
+  color: color-mix(in srgb, var(--fg) 74%, var(--muted));
+}
+
+.snes-issue button {
+  justify-self: start;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--fg);
+  cursor: pointer;
+  font-weight: 800;
+  padding: 7px 9px;
+}
+
+.snes-agent-list {
+  display: grid;
+  gap: 8px;
+}
+
+.snes-agent-list article {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+}
+
+.snes-agent-list p {
+  margin: 5px 0 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.82rem;
+}
+
+.snes-drop-zone {
+  display: grid;
+  gap: 9px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 56%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  padding: 12px;
+}
+
+.snes-drop-zone p {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.82rem;
+}
+
+.snes-animation-card {
+  display: grid;
+  gap: 10px;
+}
+
+.snes-animation-timeline {
+  display: grid;
+  gap: 8px;
+}
+
+.snes-animation-frame {
+  display: grid;
+  grid-template-columns: minmax(82px, 0.7fr) repeat(4, minmax(64px, 1fr));
+  gap: 8px;
+  align-items: end;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 54%, var(--surface));
+  padding: 8px;
+}
+
+.snes-animation-frame__preview {
+  display: grid;
+  gap: 5px;
+  align-self: stretch;
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(
+      135deg,
+      rgb(255 255 255 / 12%) 25%,
+      transparent 25% 50%,
+      rgb(255 255 255 / 12%) 50% 75%,
+      transparent 75%
+    ),
+    color-mix(in srgb, #4f46e5 52%, var(--surface));
+  background-size: 10px 10px;
+  padding: 8px;
+}
+
+.snes-animation-frame__preview strong {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.snes-agent-proposal {
+  display: grid;
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  padding: 10px;
+}
+
+.snes-agent-proposal p,
+.snes-agent-proposal small {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+}
+
+.snes-approval-stepper {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.snes-approval-stepper span {
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface));
+  color: color-mix(in srgb, var(--fg) 72%, var(--muted));
+  font-size: 0.76rem;
+  font-weight: 850;
+  padding: 8px;
+  text-align: center;
+}
+
+.snes-approval-stepper span.active {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--fg);
+}
+
+.snes-patch-list {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.6fr) minmax(0, 1fr) auto auto;
+  gap: 6px 8px;
+  align-items: center;
+}
+
+.snes-patch-diff {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.6fr) repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+}
+
+.snes-patch-list code,
+.snes-patch-list span,
+.snes-patch-diff code,
+.snes-patch-diff span,
+.snes-patch-diff strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+}
+
+.snes-patch-list code,
+.snes-patch-diff code {
+  color: color-mix(in srgb, var(--accent) 78%, var(--fg));
+}
+
+.snes-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+}
+
+.snes-pipeline,
+.snes-console {
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.snes-pipeline {
+  display: grid;
+  gap: 10px;
+}
+
+.snes-pipeline article {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.snes-pipeline article > span {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent-strong, var(--accent));
+  font-weight: 850;
+}
+
+.snes-console {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.snes-console code {
+  display: block;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 76%, #111827);
+  color: color-mix(in srgb, var(--fg) 88%, #a7f3d0);
+  padding: 8px 10px;
+  white-space: normal;
+}
+
+@media (max-width: 1100px) {
+  .snes-budget-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .snes-workspace,
+  .snes-bottom,
+  .snes-start-panel,
+  .snes-hero,
+  .snes-create-bar,
+  .snes-create-bar.compact,
+  .snes-ai-action-feedback,
+  .snes-ai-connection-coach,
+  .snes-next-step-coach,
+  .snes-studio--creator-desk > .snes-president-prompt-bar,
+  .snes-edit-layout,
+  .snes-command-dock,
+  .snes-create-home-grid,
+  .snes-arrange-layout,
+  .snes-sound-prompt-grid,
+  .snes-sound-bindings,
+  .snes-sound-library,
+  .snes-studio--creator-desk .snes-prompt-hero,
+  .snes-playbook,
+  .snes-play-now-coach,
+  .snes-first-minute-guide,
+  .snes-canvas-build-tools,
+  .snes-canvas-next-step,
+  .snes-canvas-action-loop,
+  .snes-canvas-piece-shelf,
+  .snes-canvas-brush-dock,
+  .snes-game-map__grid,
+  .snes-game-map.compact .snes-game-map__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-canvas-piece-shelf__pieces {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .snes-canvas-brush-dock__buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .snes-canvas-action-loop__steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .snes-first-minute-guide__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: start;
+  }
+
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__topline,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__prompt,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__actions,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-selected-prompt-context,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-prompt-target-drawer,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-connection-coach,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-action-feedback {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+    max-width: none;
+  }
+
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__topline {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__target,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__prompt,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar select {
+    width: 100%;
+  }
+
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__provider {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact.canvas-first {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact.canvas-first
+    .snes-create-bar__topline,
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact.canvas-first
+    .snes-create-bar__prompt,
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact.canvas-first
+    .snes-create-bar__actions,
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact.canvas-first
+    .snes-selected-prompt-context,
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact.canvas-first
+    .snes-prompt-target-drawer,
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact.canvas-first
+    .snes-ai-connection-coach,
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact.canvas-first
+    .snes-ai-action-feedback {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .snes-studio--creator-desk > .snes-president-prompt-bar:not(.compact) .snes-create-bar__prompt,
+  .snes-studio--creator-desk > .snes-president-prompt-bar:not(.compact) .snes-create-bar__actions,
+  .snes-studio--creator-desk > .snes-president-prompt-bar:not(.compact) .snes-prompt-confirmation {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .snes-canvas-piece-shelf {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-canvas-piece-shelf__pieces {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .snes-level-builder__steps,
+  .snes-scene-object-palette {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .snes-animation-frame {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .snes-studio {
+    gap: 12px;
+  }
+
+  .snes-hero,
+  .snes-start-panel,
+  .snes-make-mode,
+  .snes-scene-builder,
+  .snes-object-cards,
+  .snes-play-mode,
+  .snes-ship-mode,
+  .snes-sound-desk,
+  .snes-ai-review,
+  .snes-selected-object-editor,
+  .snes-ship-proof,
+  .snes-prompt-hero,
+  .snes-command-dock,
+  .snes-game-map,
+  .snes-beginner-path,
+  .snes-project-access,
+  .snes-side-editor,
+  .snes-quick-change,
+  .snes-version-history,
+  .snes-workspace__canvas,
+  .snes-inspector,
+  .snes-recovery-panel,
+  .snes-pipeline,
+  .snes-console {
+    padding: 12px;
+  }
+
+  .snes-hero__actions,
+  .snes-mode-rail,
+  .snes-create-bar__provider,
+  .snes-create-bar__topline,
+  .snes-create-bar__actions,
+  .snes-ai-connection-coach__actions,
+  .snes-scene-tools,
+  .snes-make-mode__actions,
+  .snes-start-actions,
+  .snes-game-map__actions,
+  .snes-quick-change__grid,
+  .snes-version-history__list,
+  .snes-ship-actions,
+  .snes-object-tray,
+  .snes-ai-action-feedback__actions,
+  .snes-first-minute-guide__actions,
+  .snes-next-step-coach__actions,
+  .snes-canvas-next-step__actions,
+  .snes-canvas-action-loop__actions,
+  .snes-play-now-coach__actions,
+  .snes-play-controller,
+  .snes-canvas-piece-shelf__pieces,
+  .snes-canvas-brush-dock__buttons,
+  .snes-toolbar,
+  .snes-tabs,
+  .snes-level-tabs,
+  .snes-brush-presets,
+  .snes-generated-filter {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .snes-hero button,
+  .snes-mode-rail button,
+  .snes-create-bar button,
+  .snes-scene-builder button,
+  .snes-object-cards button,
+  .snes-play-mode button,
+  .snes-ship-mode button,
+  .snes-ai-review button,
+  .snes-selected-object-editor button,
+  .snes-ship-proof button,
+  .snes-assets button,
+  .snes-toolbar button,
+  .snes-tabs button,
+  .snes-level-tabs button,
+  .snes-brush-presets button,
+  .snes-canvas-piece-shelf button,
+  .snes-canvas-next-step button,
+  .snes-canvas-action-loop button,
+  .snes-canvas-brush-dock button,
+  .snes-generated-filter button,
+  .snes-command-palette button {
+    width: 100%;
+    min-width: 0;
+    text-align: center;
+  }
+
+  .snes-first-minute-guide__steps {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-section-header {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .snes-section-header > strong {
+    justify-self: start;
+  }
+
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact > *,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__topline,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__target,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__provider,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-connection-coach,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__prompt,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-create-bar__actions,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-prompt-target-drawer,
+  .snes-studio--creator-desk > .snes-president-prompt-bar.compact .snes-ai-action-feedback {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+  }
+
+  .snes-studio--creator-desk
+    > .snes-president-prompt-bar.compact
+    .snes-create-bar__prompt
+    textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 82px;
+    max-height: none;
+  }
+
+  .snes-budget-strip,
+  .snes-simple-status,
+  .snes-prompt-status,
+  .snes-make-steps,
+  .snes-ship-proof__grid,
+  .snes-object-card-grid,
+  .snes-object-card-controls,
+  .snes-command-palette,
+  .snes-sound-prompt-grid,
+  .snes-sound-bindings,
+  .snes-sound-library,
+  .snes-start-panel__status,
+  .snes-start-panel__flow,
+  .snes-agent-connection,
+  .snes-button-audit,
+  .snes-play-now-coach__facts,
+  .snes-play-moments__grid,
+  .snes-ai-review__meta,
+  .snes-kid-wizard__steps,
+  .snes-game-parts-map__grid,
+  .snes-ai-stage-list,
+  .snes-generated-inspector__grid,
+  .snes-template-gallery,
+  .snes-recovery-panel__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-level-builder__steps,
+  .snes-scene-object-palette,
+  .snes-canvas-piece-shelf__pieces {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-studio--mode-play > .snes-mode-rail {
+    order: 1;
+  }
+
+  .snes-studio--mode-play > .snes-play-mode {
+    order: 2;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .snes-studio--mode-play > .snes-president-prompt-bar {
+    order: 3;
+  }
+
+  .snes-studio--mode-play > .snes-learning-drawer {
+    order: 4;
+  }
+
+  .snes-studio--mode-play > .snes-recovery-panel,
+  .snes-studio--mode-play > .snes-advanced-workbench-toggle,
+  .snes-studio--mode-play > .snes-advanced-workbench {
+    order: 5;
+  }
+
+  .snes-studio--mode-play .snes-play-mode > .snes-section-header {
+    gap: 6px;
+    padding: 0;
+  }
+
+  .snes-studio--mode-play .snes-play-mode > .snes-section-header p,
+  .snes-studio--mode-play .snes-play-mode > .snes-section-header > strong {
+    display: none;
+  }
+
+  .snes-studio--mode-play .snes-play-path {
+    order: 1;
+  }
+
+  .snes-studio--mode-play .snes-playtest-feedback {
+    order: 1;
+    padding: 10px 12px;
+  }
+
+  .snes-studio--mode-play .snes-play-path,
+  .snes-studio--mode-play .snes-play-loop,
+  .snes-studio--mode-play .snes-playtest {
+    grid-template-columns: 1fr;
+  }
+
+  .snes-studio--mode-play .snes-playtest {
+    order: 2;
+    margin-top: 0;
+    padding: 8px;
+  }
+
+  .snes-studio--mode-play .snes-play-loop {
+    order: 3;
+  }
+
+  .snes-studio--mode-play .snes-first-minute-guide {
+    order: 4;
+  }
+
+  .snes-studio--mode-play .snes-playtest__stage {
+    grid-column: 1;
+    grid-row: auto;
+    order: 1;
+    min-height: 170px;
+  }
+
+  .snes-studio--mode-play .snes-playtest__controls {
+    grid-column: 1;
+    grid-row: auto;
+    order: 3;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .snes-studio--mode-play .snes-play-moments {
+    grid-column: 1;
+    grid-row: auto;
+    order: 2;
+  }
+
+  .snes-studio--mode-play .snes-play-controller__pad,
+  .snes-studio--mode-play .snes-play-controller__buttons,
+  .snes-studio--mode-play .snes-play-controller__system {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .snes-studio--mode-play .snes-playtest > .snes-section-header {
+    order: 3;
+    display: none;
+  }
+
+  .snes-studio--mode-play .snes-playtest__hud,
+  .snes-studio--mode-play .snes-playtest__expert {
+    order: 4;
+  }
+
+  .snes-studio--mode-play .snes-playtest__hud {
+    display: none;
+  }
+
+  .snes-studio--mode-play .snes-play-now-coach {
+    order: 3;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .snes-studio--mode-play .snes-play-now-coach__facts {
+    display: none;
+  }
+
+  .snes-studio--mode-play .snes-play-pieces,
+  .snes-studio--mode-play .snes-recent-activity,
+  .snes-studio--mode-play .snes-advanced-details {
+    order: 5;
+  }
+
+  .snes-canvas-piece-shelf {
+    position: static;
+  }
+
+  .snes-level-grid {
+    grid-template-columns: repeat(16, minmax(12px, 1fr));
+    max-width: 100%;
+  }
+
+  .snes-patch-list,
+  .snes-patch-diff,
+  .snes-animation-frame,
+  .snes-sprite-frame,
+  .snes-music-track,
+  .snes-event-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .snes-studio--ai-stage .snes-ai-stage-ask {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .snes-studio--ai-stage .snes-ai-stage-ask h2 {
+    font-size: 1.15rem;
+  }
+
+  .snes-studio--ai-stage .snes-ai-stage-ask__copy p,
+  .snes-studio--ai-stage .snes-ai-stage-chips,
+  .snes-studio--ai-stage .snes-ai-stage-ask > small {
+    display: none;
+  }
+
+  .snes-studio--ai-stage .snes-ai-stage-ask textarea {
+    min-height: 62px;
+    padding: 9px 10px;
+  }
+
+  .snes-studio--ai-stage .snes-ai-stage-provider,
+  .snes-studio--ai-stage .snes-ai-stage-ask__actions {
+    gap: 6px;
+  }
+
+  .snes-studio--ai-stage .snes-ai-stage-provider button,
+  .snes-studio--ai-stage .snes-ai-stage-ask__actions button {
+    flex: 1 1 auto;
+    padding: 8px 9px;
+  }
+
+  .snes-studio--ai-stage .snes-ai-game-stage__play-header p {
+    display: none;
+  }
+
+  .snes-studio--ai-stage .snes-ai-game-stage__play {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .snes-studio--ai-stage .snes-playtest {
+    order: 1;
+  }
+
+  .snes-studio--ai-stage .snes-ai-game-stage__play-header {
+    order: 2;
+  }
+
+  .snes-studio--ai-stage .snes-ai-piece-dock {
+    order: 3;
+  }
+
+  .snes-studio--ai-stage .snes-playtest {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .snes-studio--ai-stage .snes-playtest__stage {
+    grid-column: 1;
+    order: 1;
+    min-height: 220px;
+  }
+
+  .snes-studio--ai-stage .snes-play-moments {
+    grid-column: 1;
+    order: 2;
+  }
+
+  .snes-studio--ai-stage .snes-play-controller {
+    grid-column: 1;
+    order: 3;
+  }
+
+  .snes-studio--ai-stage .snes-playtest__hud {
+    order: 4;
+  }
+
+  .snes-studio--ai-stage .snes-playtest__expert,
+  .snes-studio--ai-stage .snes-play-event-drawer {
+    order: 5;
+  }
+}
+
+@media (max-width: 860px) {
+  .snes-studio--guided-platformer .snes-guided-hero {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-hero p,
+  .snes-studio--guided-platformer .snes-guided-health,
+  .snes-studio--guided-platformer .snes-playtest > .snes-section-header p {
+    display: none;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-steps {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-step {
+    flex: 0 0 138px;
+    min-height: auto;
+    padding: 8px;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-control-bar {
+    padding: 8px;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-control-bar em:nth-of-type(n + 4) {
+    display: none;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-card {
+    padding: 10px;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-card__copy p {
+    display: none;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-playtest > .snes-guided-card__copy {
+    order: -2;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-playtest > .snes-guided-actions {
+    order: -1;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-playtest > .snes-playtest {
+    order: 0;
+  }
+
+  .snes-studio--guided-platformer .snes-guided-playtest > .snes-guided-shelf {
+    order: 1;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__stage {
+    grid-column: 1;
+    order: -1;
+    min-height: 260px;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest > .snes-section-header {
+    order: 0;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__hud {
+    order: 1;
+  }
+
+  .snes-studio--guided-platformer .snes-play-controller {
+    grid-column: 1;
+    order: 2;
+  }
+
+  .snes-studio--guided-platformer .snes-play-moments {
+    grid-column: 1;
+    order: 3;
+  }
+
+  .snes-studio--guided-platformer .snes-playtest__expert,
+  .snes-studio--guided-platformer .snes-play-event-drawer {
+    order: 4;
+  }
+}

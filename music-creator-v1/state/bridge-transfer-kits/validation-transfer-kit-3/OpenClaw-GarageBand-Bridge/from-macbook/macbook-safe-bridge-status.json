@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "status": "safe_bridge_ran_once",
+  "updatedAt": "2026-05-19T18:59:32Z",
+  "remoteLoginUsed": false,
+  "arbitraryCommandsAllowed": false,
+  "detail": "Sync check completed and one signed pull-agent cycle ran.",
+  "nextAction": "On the Mac Studio, run bridge-sync-status and bridge-status."
+}

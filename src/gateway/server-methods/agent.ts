@@ -76,8 +76,15 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { createRunningTaskRun, finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
-import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import {
+  collectArtifactIdsFromAgentResult,
+  collectFinalTextFromAgentResult,
+  createUserVisibleWorkRun,
+  finalizeUserVisibleWorkRun,
+  inferExpectedDeliverableFromUserRequest,
+  resolveFailedUserVisibleWorkStatus,
+  type UserVisibleWorkTerminalStatus,
+} from "../../tasks/user-visible-work-run.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -373,13 +380,10 @@ function emitSessionsChanged(
   );
 }
 
-type GatewayAgentTaskTerminalStatus = Extract<
-  TaskStatus,
-  "succeeded" | "failed" | "timed_out" | "cancelled"
->;
+type GatewayAgentTaskTerminalStatus = UserVisibleWorkTerminalStatus;
 
 function resolveFailedTrackedAgentTaskStatus(error: unknown): GatewayAgentTaskTerminalStatus {
-  return isAbortError(error) || isTimeoutError(error) ? "timed_out" : "failed";
+  return resolveFailedUserVisibleWorkStatus(error);
 }
 
 function tryFinalizeTrackedAgentTask(params: {
@@ -387,19 +391,12 @@ function tryFinalizeTrackedAgentTask(params: {
   status: GatewayAgentTaskTerminalStatus;
   error?: string;
   terminalSummary?: string;
+  finalText?: string;
+  userRequest?: string;
+  expectedDeliverable?: string;
+  artifactIds?: string[];
 }): void {
-  try {
-    finalizeTaskRunByRunId({
-      runId: params.runId,
-      runtime: "cli",
-      status: params.status,
-      endedAt: Date.now(),
-      ...(params.error !== undefined ? { error: params.error } : {}),
-      ...(params.terminalSummary !== undefined ? { terminalSummary: params.terminalSummary } : {}),
-    });
-  } catch {
-    // Best-effort only: background task tracking must not block agent runs.
-  }
+  finalizeUserVisibleWorkRun(params);
 }
 
 function dispatchAgentRunFromGateway(params: {
@@ -418,9 +415,10 @@ function dispatchAgentRunFromGateway(params: {
   const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
   const shouldTrackTask =
     params.ingressOpts.sessionKey?.trim() && inputProvenance?.kind !== "inter_session";
+  let trackedTaskId: string | undefined;
   if (shouldTrackTask) {
     try {
-      createRunningTaskRun({
+      const task = createUserVisibleWorkRun({
         runtime: "cli",
         sourceId: params.runId,
         ownerKey: params.ingressOpts.sessionKey,
@@ -434,9 +432,15 @@ function dispatchAgentRunFromGateway(params: {
         childSessionKey: params.ingressOpts.sessionKey,
         runId: params.runId,
         task: params.ingressOpts.message,
-        deliveryStatus: "not_applicable",
+        label: "Assistant work item",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        userVisible: true,
+        expectedDeliverable: inferExpectedDeliverableFromUserRequest(params.ingressOpts.message),
         startedAt: Date.now(),
+        progressSummary: "Assistant accepted the request and is working on it.",
       });
+      trackedTaskId = task.taskId;
     } catch {
       // Best-effort only: background task tracking must not block agent runs.
     }
@@ -445,16 +449,23 @@ function dispatchAgentRunFromGateway(params: {
     .then((result) => {
       const aborted = result?.meta?.aborted === true;
       if (shouldTrackTask) {
+        const finalText = collectFinalTextFromAgentResult(result);
+        const artifactIds = collectArtifactIdsFromAgentResult(result);
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
           status: aborted ? "timed_out" : "succeeded",
           terminalSummary: aborted ? "aborted" : "completed",
+          finalText,
+          userRequest: params.ingressOpts.message,
+          expectedDeliverable: inferExpectedDeliverableFromUserRequest(params.ingressOpts.message),
+          artifactIds,
         });
       }
       const payload = {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("ok" as const),
         summary: aborted ? "aborted" : "completed",
+        ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
         ...(aborted ? { stopReason: result?.meta?.stopReason ?? "rpc" } : {}),
         result,
       };
@@ -480,6 +491,8 @@ function dispatchAgentRunFromGateway(params: {
           status: resolveFailedTrackedAgentTaskStatus(err),
           error,
           terminalSummary: error,
+          userRequest: params.ingressOpts.message,
+          expectedDeliverable: inferExpectedDeliverableFromUserRequest(params.ingressOpts.message),
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
@@ -487,6 +500,7 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
         summary: aborted ? "aborted" : String(err),
+        ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
         ...(aborted ? { stopReason: "rpc" } : {}),
       };
       setGatewayDedupeEntry({

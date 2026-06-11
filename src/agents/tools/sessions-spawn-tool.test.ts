@@ -292,6 +292,76 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("rejects Judge handoffs that omit required packet fields", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterAgentIdOverride: "main",
+    });
+
+    const result = await tool.execute("call-judge-missing-packet", {
+      task: [
+        'gate="completion_declaration";',
+        'claim_or_action="Approve completion";',
+        'evidence="direct command output: pnpm test exited 0";',
+      ].join(" "),
+      agentId: "judge",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      errorCode: "judge_handoff_packet_invalid",
+      role: "judge",
+      missingFields: ["scope", "instructions", "risk", "requested_verdict"],
+    });
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("adds deterministic preflight metadata to valid Judge handoffs", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterAgentIdOverride: "main",
+    });
+    const packet = [
+      'gate="completion_declaration";',
+      'claim_or_action="Approve completion for the Judge runtime gate";',
+      'scope="src/agents/tools/sessions-spawn-tool.ts";',
+      'evidence="direct command output: pnpm test src/agents/tools/sessions-spawn-tool.test.ts exited 0";',
+      'instructions="low-risk internal runtime guard, no Human approval required";',
+      'risk="low";',
+      'requested_verdict="approve";',
+    ].join(" ");
+
+    const result = await tool.execute("call-judge-valid-packet", {
+      task: packet,
+      agentId: "judge",
+      model: "ollama/openclaw-judge-qwen35-27b-q8:latest",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      judgePreflight: {
+        gate: "completion_declaration",
+        verdict: "APPROVE",
+        risk: "low",
+        evidenceTier: 3,
+      },
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "judge",
+        task: expect.stringContaining("Deterministic Judge handoff preflight"),
+      }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:main",
+        requesterAgentIdOverride: "main",
+      }),
+    );
+    const spawnedTask = hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]?.task;
+    expect(spawnedTask).toContain("packet_schema: ok");
+    expect(spawnedTask).toContain("Original Judge packet:");
+    expect(spawnedTask).toContain(packet);
+  });
+
   it.each([
     { status: "error" as const, error: "spawn failed" },
     { status: "forbidden" as const, error: "not allowed" },

@@ -1,6 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import {
+  readTailscaleWhoisIdentity,
+  type TailscaleClientOptions,
+  type TailscaleWhoisIdentity,
+} from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -55,7 +59,7 @@ type ConnectAuth = {
   password?: string;
 };
 
-export type GatewayAuthSurface = "http" | "ws-control-ui";
+export type GatewayAuthSurface = "http" | "ws-control-ui" | "control-ui-read";
 
 export type AuthorizeGatewayConnectParams = {
   auth: ResolvedGatewayAuth;
@@ -63,6 +67,7 @@ export type AuthorizeGatewayConnectParams = {
   req?: IncomingMessage;
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
+  tailscaleClientOptions?: TailscaleClientOptions;
   /**
    * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
    * WS Control UI enables it intentionally for tokenless trusted-host login.
@@ -310,14 +315,14 @@ function authorizeTrustedProxy(params: {
 }
 
 function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
-  return authSurface === "ws-control-ui";
+  return authSurface === "ws-control-ui" || authSurface === "control-ui-read";
 }
 
 function authorizeTrustedProxyBrowserOrigin(params: {
   authSurface: GatewayAuthSurface;
   browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
 }): { ok: false; reason: string } | null {
-  if (params.authSurface !== "http") {
+  if (params.authSurface === "ws-control-ui") {
     return null;
   }
 
@@ -424,7 +429,9 @@ async function authorizeGatewayConnectCore(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
-  const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
+  const tailscaleWhois =
+    params.tailscaleWhois ??
+    ((ip: string) => readTailscaleWhoisIdentity(ip, undefined, params.tailscaleClientOptions));
   const authSurface = params.authSurface ?? "http";
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
   const limiter = params.rateLimiter;
@@ -535,6 +542,15 @@ export async function authorizeHttpGatewayConnect(
   return authorizeGatewayConnect({
     ...params,
     authSurface: "http",
+  });
+}
+
+export async function authorizeControlUiReadGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "control-ui-read",
   });
 }
 

@@ -531,6 +531,92 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("completed successfully");
   });
 
+  it("parses Judge completion verdicts into structured internal events", async () => {
+    const judgeReply = [
+      "VERDICT: REJECT",
+      "SCOPE: build completion claim",
+      "EVIDENCE: direct command output shows pnpm build exited 1",
+      "RISK: low",
+      "REASON: success claim contradicts failed command evidence",
+      "CONDITIONS: rerun build successfully",
+    ].join("\n");
+    readLatestAssistantReplyMock.mockResolvedValue(judgeReply);
+    sessionStore = {
+      "agent:judge:subagent:test": {
+        sessionId: "judge-child-session",
+        inputTokens: 2,
+        outputTokens: 3,
+        totalTokens: 5,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:judge:subagent:test",
+      childRunId: "run-judge-verdict",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+        internalEvents?: Array<{
+          judgeVerdict?: {
+            status?: string;
+            verdict?: string;
+            conditions?: string;
+          };
+          replyInstruction?: string;
+        }>;
+      };
+    };
+    const msg = call?.params?.message as string;
+    const event = call?.params?.internalEvents?.[0];
+    expect(event?.judgeVerdict).toMatchObject({
+      status: "parsed",
+      verdict: "REJECT",
+      conditions: "rerun build successfully",
+    });
+    expect(event?.replyInstruction).toContain("Judge verdict is not an approval");
+    expect(msg).toContain("[Judge verdict]");
+    expect(msg).toContain("verdict: REJECT");
+    expect(msg).toContain("Do not claim the reviewed gate is approved, complete, or safe");
+  });
+
+  it("marks malformed Judge completion verdicts as invalid and not approved", async () => {
+    readLatestAssistantReplyMock.mockResolvedValue("Looks good to me.");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:judge:subagent:malformed",
+      childRunId: "run-judge-malformed",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+        internalEvents?: Array<{
+          judgeVerdict?: {
+            status?: string;
+            errors?: string[];
+          };
+          replyInstruction?: string;
+        }>;
+      };
+    };
+    const msg = call?.params?.message as string;
+    const event = call?.params?.internalEvents?.[0];
+    expect(event?.judgeVerdict?.status).toBe("invalid");
+    expect(event?.judgeVerdict?.errors?.[0]).toContain("expected 6 non-empty lines");
+    expect(event?.replyInstruction).toContain("Judge verdict is not an approval");
+    expect(msg).toContain("[Judge verdict status]");
+    expect(msg).toContain("status: invalid");
+    expect(msg).toContain("not approved until a valid six-line verdict is obtained");
+  });
+
   it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
     const waitStatuses = [
       { status: "timeout", startedAt: 10, endedAt: 20 },

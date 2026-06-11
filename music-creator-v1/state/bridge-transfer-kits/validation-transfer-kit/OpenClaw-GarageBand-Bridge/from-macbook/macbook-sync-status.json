@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "status": "reply_written",
+  "probeId": "validation-safe-start-sync",
+  "updatedAt": "2026-05-19T18:57:28Z",
+  "remoteLoginUsed": false,
+  "replyFile": "sync/macbook/validation-safe-start-sync.json",
+  "nextAction": "On the Mac Studio, run bridge-sync-status to verify the reply synced back."
+}

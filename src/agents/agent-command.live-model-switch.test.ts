@@ -266,7 +266,7 @@ vi.mock("../utils/message-channel.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: () => [],
-  listAgentIds: () => ["default"],
+  listAgentIds: () => ["default", "main"],
   resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
   resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
@@ -668,6 +668,80 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         ],
       }),
     );
+  });
+
+  it("auto-escalates Control Director CLI implementation turns to one-shot thinking", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/openclaw-control-qwen36-27b:latest" },
+        },
+      },
+    };
+    state.resolveThinkingDefaultMock.mockReturnValue("off");
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(
+      makeSuccessResult("ollama", "openclaw-control-qwen36-27b:latest"),
+    );
+
+    await agentCommand({
+      message: "Implement the plan, verify it, and report the next build gap.",
+      to: "+1234567890",
+      senderIsOwner: true,
+      agentId: "main",
+    });
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedThinkLevel: "medium",
+      }),
+    );
+    expect(state.resolveThinkingDefaultMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit Control Director CLI thinking overrides ahead of auto-escalation", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/openclaw-control-qwen36-27b:latest" },
+        },
+      },
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(
+      makeSuccessResult("ollama", "openclaw-control-qwen36-27b:latest"),
+    );
+
+    await agentCommand({
+      message: "Implement the plan and debug the failed production runtime.",
+      to: "+1234567890",
+      senderIsOwner: true,
+      agentId: "main",
+      thinking: "off",
+    });
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedThinkLevel: "off",
+      }),
+    );
+    expect(state.resolveThinkingDefaultMock).not.toHaveBeenCalled();
   });
 
   it("validates explicit thinking against allowlisted configured model compat when manifest catalog is empty", async () => {

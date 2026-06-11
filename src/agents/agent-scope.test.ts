@@ -10,6 +10,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
+  resolveAgentSelector,
   resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
@@ -24,6 +25,97 @@ import {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe("resolveAgentSelector", () => {
+  it("resolves direct agent ids", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", name: "Control Director" }, { id: "ops" }],
+      },
+    };
+
+    expect(resolveAgentSelector(cfg, "main")).toEqual({
+      ok: true,
+      agentId: "main",
+      selector: "main",
+      source: "id",
+    });
+    expect(resolveAgentSelector(cfg, "ops")).toEqual({
+      ok: true,
+      agentId: "ops",
+      selector: "ops",
+      source: "id",
+    });
+  });
+
+  it("resolves an unambiguous configured agent name slug", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", name: "Control Director" },
+          { id: "ops", name: "Ops" },
+        ],
+      },
+    };
+
+    expect(resolveAgentSelector(cfg, "control-director")).toEqual({
+      ok: true,
+      agentId: "main",
+      selector: "control-director",
+      source: "name",
+    });
+  });
+
+  it("prefers direct ids over display-name slugs", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", name: "Control Director" },
+          { id: "control-director", name: "Worker" },
+        ],
+      },
+    };
+
+    expect(resolveAgentSelector(cfg, "control-director")).toEqual({
+      ok: true,
+      agentId: "control-director",
+      selector: "control-director",
+      source: "id",
+    });
+  });
+
+  it("fails ambiguous configured agent name slugs", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "ops-a", name: "Ops" },
+          { id: "ops-b", name: "ops" },
+        ],
+      },
+    };
+
+    expect(resolveAgentSelector(cfg, "ops")).toEqual({
+      ok: false,
+      reason: "ambiguous",
+      selector: "ops",
+      agentIds: ["ops-a", "ops-b"],
+    });
+  });
+
+  it("fails unknown selectors", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", name: "Control Director" }],
+      },
+    };
+
+    expect(resolveAgentSelector(cfg, "ghost")).toEqual({
+      ok: false,
+      reason: "unknown",
+      selector: "ghost",
+    });
+  });
 });
 
 describe("resolveAgentConfig", () => {

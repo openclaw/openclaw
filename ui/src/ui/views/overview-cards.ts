@@ -3,10 +3,13 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
+import { pathForTab } from "../navigation.ts";
 import { formatNextRun } from "../presenter.ts";
 import type {
   SessionsUsageResult,
   SessionsListResult,
+  GatewaySessionRow,
+  SessionJudgeGuardAuditEntry,
   SkillStatusReport,
   CronJob,
   CronStatus,
@@ -21,6 +24,7 @@ export type OverviewCardsProps = {
   cronStatus: CronStatus | null;
   modelAuthStatus: ModelAuthStatusResult | null;
   presenceCount: number;
+  basePath?: string;
   onNavigate: (tab: string) => void;
 };
 
@@ -67,6 +71,92 @@ function renderSkeletonCards() {
           </div>
         `,
       )}
+    </section>
+  `;
+}
+
+type JudgeGuardDisplayEntry = {
+  session: GatewaySessionRow;
+  audit: SessionJudgeGuardAuditEntry;
+};
+
+function resolveJudgeGuardEntries(
+  sessionsResult: SessionsListResult | null,
+): JudgeGuardDisplayEntry[] {
+  return (sessionsResult?.sessions ?? [])
+    .flatMap((session) =>
+      (session.judgeGuardAudit ?? []).map((audit) => ({
+        session,
+        audit,
+      })),
+    )
+    .toSorted((a, b) => b.audit.ts - a.audit.ts)
+    .slice(0, 3);
+}
+
+function renderJudgeGuardPanel(params: {
+  entries: JudgeGuardDisplayEntry[];
+  basePath?: string;
+  onNavigate: (tab: string) => void;
+}) {
+  if (params.entries.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    <section class="ov-judge-guard">
+      <div class="ov-judge-guard__header">
+        <div>
+          <h3 class="ov-judge-guard__title">${t("overview.cards.judgeGuard")}</h3>
+          <div class="ov-judge-guard__subtitle">${t("overview.cards.judgeGuardSubtitle")}</div>
+        </div>
+        <button class="btn btn--sm" type="button" @click=${() => params.onNavigate("sessions")}>
+          ${t("overview.cards.judgeGuardOpenSessions")}
+        </button>
+      </div>
+      <div class="ov-judge-guard__list">
+        ${params.entries.map(({ session, audit }) => {
+          const sessionLabel = session.displayName || session.label || session.key;
+          const sessionParams = new URLSearchParams({ session: session.key });
+          if (audit.runId) {
+            sessionParams.set("runId", audit.runId);
+          }
+          sessionParams.set("auditTs", String(audit.ts));
+          const sessionHref = `${pathForTab("chat", params.basePath)}?${sessionParams.toString()}`;
+          const verdictLabel =
+            audit.verdictStatus === "invalid"
+              ? t("overview.cards.judgeGuardInvalid")
+              : (audit.verdict ?? t("common.na"));
+          const riskLabel = audit.risk
+            ? t("overview.cards.judgeGuardRisk", { risk: audit.risk })
+            : "";
+          return html`
+            <div class="ov-judge-guard__row">
+              <div class="ov-judge-guard__main">
+                <span class="ov-judge-guard__verdict">${verdictLabel}</span>
+                <a
+                  class="ov-judge-guard__session session-link"
+                  href=${sessionHref}
+                  title=${t("overview.cards.judgeGuardOpenSession")}
+                  >${blurDigits(sessionLabel)}</a
+                >
+              </div>
+              <div class="ov-judge-guard__meta">
+                <span>${formatRelativeTimestamp(audit.ts)}</span>
+                ${riskLabel ? html`<span>${riskLabel}</span>` : nothing}
+                <span>
+                  ${t("overview.cards.judgeGuardRewrites", {
+                    count: String(audit.payloadsRewritten),
+                  })}
+                </span>
+              </div>
+              ${audit.conditions
+                ? html`<div class="ov-judge-guard__conditions">${audit.conditions}</div>`
+                : nothing}
+            </div>
+          `;
+        })}
+      </div>
     </section>
   `;
 }
@@ -231,10 +321,16 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   }
 
   const sessions = props.sessionsResult?.sessions.slice(0, 5) ?? [];
+  const judgeGuardEntries = resolveJudgeGuardEntries(props.sessionsResult);
 
   return html`
     <section class="ov-cards">${cards.map((c) => renderStatCard(c, props.onNavigate))}</section>
 
+    ${renderJudgeGuardPanel({
+      entries: judgeGuardEntries,
+      basePath: props.basePath,
+      onNavigate: props.onNavigate,
+    })}
     ${sessions.length > 0
       ? html`
           <section class="ov-recent">

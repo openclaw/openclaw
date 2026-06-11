@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -143,6 +144,44 @@ async function prepareMainHistoryHarness(params: {
 }
 
 describe("gateway server chat", () => {
+  test("chat.history can return a bounded window around a targeted Judge Guard run", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const baseTs = Date.now();
+      const lines = Array.from({ length: 20 }, (_, index) => {
+        const messageIndex = index + 1;
+        return JSON.stringify({
+          type: "message",
+          id: `m${messageIndex}`,
+          parentId: index === 0 ? null : `m${index}`,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `reply-${messageIndex}` }],
+            timestamp: baseTs + messageIndex,
+            ...(messageIndex === 10 ? { __openclaw: { runId: "run-judge-guard-target" } } : {}),
+          },
+        });
+      });
+      await writeMainSessionTranscript(sessionDir, lines);
+
+      const historyRes = await rpcReq<{ messages?: unknown[]; targetStatus?: string }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: "main",
+          limit: 5,
+          targetRunId: "run-judge-guard-target",
+        },
+      );
+
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.targetStatus).toBe("exact-run");
+      const texts = (historyRes.payload?.messages ?? []).map(extractFirstTextBlock);
+      expect(texts).toContain("reply-10");
+      expect(texts).not.toContain("reply-20");
+    });
+  });
+
   test("chat.history does not wait for model catalog discovery to return history", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {

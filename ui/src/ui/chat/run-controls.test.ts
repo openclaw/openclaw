@@ -145,6 +145,33 @@ describe("chat run controls", () => {
     stopButton.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps secondary desktop actions available in the mobile actions menu", () => {
+    const container = document.createElement("div");
+    const onNewSession = vi.fn();
+    const onExport = vi.fn();
+    render(
+      renderChatRunControls(
+        createProps({
+          hasMessages: true,
+          onNewSession,
+          onExport,
+        }),
+      ),
+      container,
+    );
+
+    const mobileActions = container.querySelector("details.agent-chat__mobile-actions");
+    expect(mobileActions).toBeInstanceOf(HTMLDetailsElement);
+    const mobileMenuButtons = container.querySelectorAll(
+      ".agent-chat__mobile-actions-sheet button",
+    );
+    expect(mobileMenuButtons).toHaveLength(2);
+    mobileMenuButtons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    mobileMenuButtons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(onExport).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("chat status indicators", () => {

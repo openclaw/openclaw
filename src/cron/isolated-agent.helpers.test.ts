@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { detectCronDenialToken, resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import {
+  detectCronBenignSkipReason,
+  detectCronDenialToken,
+  resolveCronPayloadOutcome,
+} from "./isolated-agent/helpers.js";
 
 describe("detectCronDenialToken", () => {
   it("matches host denial markers case-sensitively", () => {
@@ -17,6 +21,67 @@ describe("detectCronDenialToken", () => {
     expect(detectCronDenialToken("I could not run the script.")).toBe("could not run");
     expect(detectCronDenialToken("The command did not run to completion.")).toBe("did not run");
     expect(detectCronDenialToken("The request was denied by policy.")).toBe("was denied");
+  });
+
+  it("matches concrete operational failure phrases without flagging domain blockers", () => {
+    expect(detectCronDenialToken("Blocker: script missing at work/scripts/job.py")).toBe(
+      "script missing",
+    );
+    expect(detectCronDenialToken("Command failed with exit code 2")).toBe("command failed");
+    expect(detectCronDenialToken("Process exited with exit code 2")).toBe("exit code");
+    expect(detectCronDenialToken('{"ok": false, "error": "missing output"}')).toBe("ok:false");
+    expect(detectCronDenialToken("Traceback (most recent call last):")).toBe("traceback");
+    expect(detectCronDenialToken("No blockers found; the job succeeded.")).toBeUndefined();
+    expect(detectCronDenialToken("Launchd State: not running (last exit code 1)")).toBeUndefined();
+    expect(detectCronDenialToken("Last Exit: OK (exit code 0)")).toBeUndefined();
+    expect(detectCronDenialToken("If a command failed, include the raw JSON.")).toBeUndefined();
+    expect(detectCronDenialToken("If any command failed, report blocked.")).toBeUndefined();
+    expect(detectCronDenialToken("Top reasons: market fetch failed: 1")).toBeUndefined();
+    expect(
+      detectCronDenialToken("Expected safety blockers: human approval is not recorded."),
+    ).toBeUndefined();
+  });
+
+  it("does not classify scheduled lock contention as a fatal denial", () => {
+    const text =
+      'The instructions say reports ok:false should stop, but the command returned ok: true with status: "SKIPPED_LOCK_ACTIVE" because a scheduled learning lock is active.';
+
+    expect(detectCronBenignSkipReason(text)).toBe("scheduled learning lock active");
+    expect(detectCronDenialToken(text)).toBe("ok:false");
+
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text }],
+      finalAssistantVisibleText: text,
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.benignSkipReason).toBe("scheduled learning lock active");
+  });
+
+  it("does not treat healthy status bridge lock reporting as a skipped cron run", () => {
+    const text = [
+      "Kalshi Bridge Status Summary",
+      "All three launchd services are loaded and operational with no critical failures.",
+      "Latest Run: SKIPPED_LOCK_ACTIVE",
+      "Reason: Scheduled learning lock is active.",
+    ].join("\n");
+
+    expect(detectCronBenignSkipReason(text)).toBeUndefined();
+    expect(detectCronDenialToken(text)).toBeUndefined();
+  });
+
+  it("does not treat healthy launchd status reports as skipped when they mention lock-active services", () => {
+    const text = [
+      "Kalshi Dashboard Launchd Status Summary",
+      "Dashboard Server Status: RUNNING",
+      "All services report OK status with no critical failures.",
+      "The paper-learning service is not running due to an active learning lock.",
+      "Weather learning is running and healthy.",
+    ].join("\n");
+
+    expect(detectCronBenignSkipReason(text)).toBeUndefined();
+    expect(detectCronDenialToken(text)).toBeUndefined();
   });
 
   it("ignores empty and non-token text", () => {
@@ -362,6 +427,23 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.embeddedRunError).toBeUndefined();
+  });
+
+  it("treats concrete missing-script text as a fatal cron failure", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Blocker: script missing at work/scripts/kalshi/missing.py" }],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      'cron classifier: denial token "script missing" detected in summary',
+    );
+    expect(result.deliveryPayloads).toEqual([
+      {
+        text: "Blocker: script missing at work/scripts/kalshi/missing.py",
+        isError: true,
+      },
+    ]);
   });
 
   it("keeps structured error payload reasons ahead of denial-token reasons", () => {

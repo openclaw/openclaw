@@ -79,6 +79,7 @@ export type GatewaySessionRow = {
   runtimeMs?: number;
   parentSessionKey?: string;
   childSessions?: string[];
+  projectId?: string;
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
@@ -91,6 +92,7 @@ export type GatewaySessionRow = {
   lastThreadId?: SessionEntry["lastThreadId"];
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  judgeGuardAudit?: SessionEntry["judgeGuardAudit"];
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 

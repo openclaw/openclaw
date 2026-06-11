@@ -357,6 +357,10 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
   return Array.from(out);
 }
 
+function isAllowlistedGroupTargetSignal(signal: string): boolean {
+  return signal.endsWith('.groupPolicy="allowlist" with configured group targets');
+}
+
 function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
   riskyContexts: string[];
   hasRuntimeRisk: boolean;
@@ -1066,6 +1070,10 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
   }
 
   const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const onlyAllowlistedGroupTargets = signals.every(isAllowlistedGroupTargetSignal);
+  if (onlyAllowlistedGroupTargets && riskyContexts.length === 0) {
+    return findings;
+  }
   const impactLine = hasRuntimeRisk
     ? "Runtime/process tools are exposed without full sandboxing in at least one context."
     : "No unguarded runtime/process tools were detected by this heuristic.";

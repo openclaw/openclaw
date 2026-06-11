@@ -164,8 +164,16 @@ const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@vitest/expect",
+  "@whiskeysockets/baileys",
+  "axios",
+  "fast-uri",
   "matrix-js-sdk",
+  "pino",
+  "prism-media",
+  "@discordjs/voice",
   "qrcode-terminal",
+  "vitest",
 ].toSorted((left, right) => left.localeCompare(right));
 
 function shouldNeverBundleDependency(id: string): boolean {

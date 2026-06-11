@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "jobId": "2026-05-14-validation-happy-path-candidate-01-1778968638557",
+  "status": "exported_to_macbook",
+  "createdAt": "2026-05-16T21:57:18.558Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "project": {
+    "runId": "2026-05-14-validation-happy-path",
+    "request": "Warm instrumental ambient piano cue for deep focus",
+    "artist": "Validation Artist",
+    "platform": "youtube",
+    "durationSeconds": 60,
+    "instrumental": true
+  },
+  "candidate": {
+    "candidateId": "candidate-01",
+    "sourcePath": "music-creator-v1/projects/2026-05-14-validation-happy-path/selected/candidate-01.wav",
+    "bridgeAudioPath": "to-macbook/2026-05-14-validation-happy-path-candidate-01-1778968638557/audio/candidate-01.wav",
+    "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+    "qa": {
+      "schemaVersion": 1,
+      "candidateId": "candidate-01",
+      "checkedAt": "2026-05-14T21:37:04.206Z",
+      "technical": {
+        "passed": true,
+        "ffprobeAvailable": true,
+        "manualOverride": false
+      },
+      "creative": {
+        "total": 90
+      },
+      "draftReady": true
+    }
+  },
+  "prompt": {
+    "candidateId": "candidate-01",
+    "model": "google/lyria-3-clip-preview",
+    "prompt": "Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.",
+    "instrumental": true,
+    "durationSeconds": 60,
+    "format": "wav",
+    "filename": "2026-05-14-validation-happy-path-candidate-01"
+  },
+  "macBookInstructions": [
+    "Open open-in-garageband.command on the MacBook.",
+    "GarageBand will open and Finder will reveal the audio file.",
+    "Drag the file into GarageBand, edit/arrange with local AU plugins, then bounce/export audio into from-macbook/<job-id>/.",
+    "Run bridge-ingest on the Mac Studio to pull the returned audio back into Music Creator V1."
+  ]
+}

@@ -27,7 +27,10 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     .requiredOption("-m, --message <text>", "Message body for the agent")
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-id <id>", "Use an explicit session id")
-    .option("--agent <id>", "Agent id (overrides routing bindings)")
+    .option(
+      "--agent <selector>",
+      "Agent id or unambiguous agent-name slug (overrides routing bindings)",
+    )
     .option("--model <id>", "Model override for this run (provider/model or model id)")
     .option(
       "--thinking <level>",

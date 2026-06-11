@@ -4,7 +4,7 @@ import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { icons } from "../icons.ts";
-import { normalizeBasePath } from "../navigation.ts";
+import { normalizeBasePath, pathForTab } from "../navigation.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { agentLogoUrl } from "./agents-utils.ts";
 import { renderConnectCommand } from "./connect-command.ts";
@@ -269,6 +269,37 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
   `;
 }
 
+export function shouldShowConnectionLoader(
+  state: Pick<AppViewState, "client" | "connected" | "connectionAttemptStarted" | "lastError">,
+): boolean {
+  if (state.connected || state.lastError) {
+    return false;
+  }
+  return Boolean(state.connectionAttemptStarted || state.client);
+}
+
+export function renderConnectionLoader(state: AppViewState) {
+  const basePath = normalizeBasePath(state.basePath ?? "");
+  const faviconSrc = agentLogoUrl(basePath);
+  return html`
+    <div class="connection-loader" role="status" aria-live="polite">
+      <div class="connection-loader__card">
+        <div class="connection-loader__eyebrow">Mission Link</div>
+        <div class="connection-loader__logo-wrap" aria-hidden="true">
+          <img class="connection-loader__logo" src=${faviconSrc} alt="" />
+        </div>
+        <div class="connection-loader__title">Opening OpenClaw</div>
+        <div class="connection-loader__sub">Secure connection in progress...</div>
+        <div class="connection-loader__telemetry" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 export function renderLoginGate(state: AppViewState) {
   const basePath = normalizeBasePath(state.basePath ?? "");
   const faviconSrc = agentLogoUrl(basePath);
@@ -371,6 +402,28 @@ export function renderLoginGate(state: AppViewState) {
           <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
             ${t("common.connect")}
           </button>
+        </div>
+        <div class="login-gate__local-tool">
+          <div>
+            <div class="login-gate__local-tool-title">Music Studio</div>
+            <div class="login-gate__local-tool-copy">
+              Local-first music creation works before Gateway auth.
+            </div>
+          </div>
+          <a class="btn login-gate__local-tool-link" href=${pathForTab("musicStudio", basePath)}>
+            Open
+          </a>
+        </div>
+        <div class="login-gate__local-tool">
+          <div>
+            <div class="login-gate__local-tool-title">SNES Studio</div>
+            <div class="login-gate__local-tool-copy">
+              Local-first SNES project tooling works before Gateway auth.
+            </div>
+          </div>
+          <a class="btn login-gate__local-tool-link" href=${pathForTab("snesStudio", basePath)}>
+            Open
+          </a>
         </div>
         ${failure ? renderLoginFailure(failure) : ""}
         <div class="login-gate__help">

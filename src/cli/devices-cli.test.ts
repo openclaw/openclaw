@@ -493,6 +493,96 @@ describe("devices cli clear", () => {
   });
 });
 
+describe("devices cli prune-smoke", () => {
+  it("previews only labeled stale Control UI smoke-test devices", async () => {
+    const now = Date.now();
+    callGateway.mockResolvedValueOnce({
+      paired: [
+        {
+          deviceId: "smoke-old",
+          displayName: "OpenClaw smoke iPhone profile",
+          clientId: "openclaw-control-ui",
+          clientMode: "webchat",
+          platform: "iPhone",
+          approvedAtMs: now - 8 * 24 * 60 * 60 * 1000,
+        },
+        {
+          deviceId: "real-phone",
+          displayName: "Matthew iPhone",
+          clientId: "openclaw-control-ui",
+          clientMode: "webchat",
+          platform: "iPhone",
+          approvedAtMs: now - 30 * 24 * 60 * 60 * 1000,
+        },
+        {
+          deviceId: "smoke-recent",
+          displayName: "OpenClaw smoke iPhone profile",
+          clientId: "openclaw-control-ui",
+          clientMode: "webchat",
+          platform: "iPhone",
+          approvedAtMs: now,
+        },
+      ],
+    });
+
+    await runDevicesCommand(["prune-smoke", "--older-than", "7d"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(readRuntimeOutput()).toContain("smoke-old");
+    expect(readRuntimeOutput()).not.toContain("real-phone");
+    expect(readRuntimeOutput()).not.toContain("smoke-recent");
+  });
+
+  it("removes labeled stale Control UI smoke-test devices only after --yes", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        paired: [
+          {
+            deviceId: "smoke-old",
+            displayName: "OpenClaw smoke iPhone profile",
+            clientId: "openclaw-control-ui",
+            clientMode: "webchat",
+            approvedAtMs: 1,
+          },
+          {
+            deviceId: "unlabeled-old",
+            clientId: "openclaw-control-ui",
+            clientMode: "webchat",
+            approvedAtMs: 1,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ deviceId: "smoke-old" });
+
+    await runDevicesCommand(["prune-smoke", "--older-than", "0", "--yes", "--json"]);
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "device.pair.remove",
+        params: { deviceId: "smoke-old" },
+      }),
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dryRun: false,
+        matched: [expect.objectContaining({ deviceId: "smoke-old" })],
+        removedDevices: ["smoke-old"],
+      }),
+    );
+  });
+
+  it("rejects malformed prune durations", async () => {
+    await runDevicesCommand(["prune-smoke", "--older-than", "forever"]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Invalid --older-than duration. Use values like 0, 30m, 12h, or 7d.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
+
 describe("devices cli tokens", () => {
   it.each([
     {

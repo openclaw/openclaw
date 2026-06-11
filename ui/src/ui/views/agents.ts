@@ -1,28 +1,125 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { until } from "lit/directives/until.js";
+import "../../styles/agents.css";
 import { t } from "../../i18n/index.ts";
+import type { KalshiDashboardSnapshot } from "../controllers/kalshi-dashboard.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
+  AgentsRuntimeStatusResult,
   ChannelsStatusSnapshot,
   CronJob,
   CronStatus,
   ModelCatalogEntry,
+  OpsSummaryResult,
+  SelfImprovementRecommendationGroup,
+  SelfImprovementRecommendation,
+  SelfImprovementAuditEvent,
+  SelfImprovementAnalysisRunResult,
+  SelfImprovementModelPreflightResult,
+  SelfImprovementProductionCheckResult,
+  SelfImprovementMaintenanceResult,
+  SelfImprovementOperationalHealthResult,
+  SelfImprovementDailyScorecard,
+  SelfImprovementProposal,
+  SelfImprovementScanResult,
+  SelfImprovementScorecard,
   SkillStatusReport,
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../types.ts";
-import { renderAgentOverview } from "./agents-panels-overview.ts";
-import {
-  renderAgentFiles,
-  renderAgentChannels,
-  renderAgentCron,
-} from "./agents-panels-status-files.ts";
 export type { AgentsPanel } from "./agents.types.ts";
-import { renderAgentTools, renderAgentSkills } from "./agents-panels-tools-skills.ts";
+import {
+  renderAgentRoom,
+  renderAgentRoomMemoryFixture,
+  type AttentionTarget,
+  type AgentRoomSessionsState,
+} from "./agents-room.ts";
 import { agentBadgeText, buildAgentContext, normalizeAgentLabel } from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.types.ts";
+import type { AgentWorkflowMapsState, AgentsPanel } from "./agents.types.ts";
+
+type AgentOverviewModule = typeof import("./agents-panels-overview.ts");
+type AgentStatusFilesModule = typeof import("./agents-panels-status-files.ts");
+type AgentSelfImprovementModule = typeof import("./agents-self-improvement.ts");
+type AgentToolsSkillsModule = typeof import("./agents-panels-tools-skills.ts");
+type AgentWorkflowsModule = typeof import("./agents-workflows.ts");
+
+let agentOverviewModulePromise: Promise<AgentOverviewModule> | null = null;
+let agentStatusFilesModulePromise: Promise<AgentStatusFilesModule> | null = null;
+let agentSelfImprovementModulePromise: Promise<AgentSelfImprovementModule> | null = null;
+let agentToolsSkillsModulePromise: Promise<AgentToolsSkillsModule> | null = null;
+let agentWorkflowsModulePromise: Promise<AgentWorkflowsModule> | null = null;
+let agentOverviewModule: AgentOverviewModule | null = null;
+let agentStatusFilesModule: AgentStatusFilesModule | null = null;
+let agentSelfImprovementModule: AgentSelfImprovementModule | null = null;
+let agentToolsSkillsModule: AgentToolsSkillsModule | null = null;
+let agentWorkflowsModule: AgentWorkflowsModule | null = null;
+
+function loadAgentOverviewModule() {
+  return (agentOverviewModulePromise ??= import("./agents-panels-overview.ts").then((module) => {
+    agentOverviewModule = module;
+    return module;
+  }));
+}
+
+function loadAgentStatusFilesModule() {
+  return (agentStatusFilesModulePromise ??= import("./agents-panels-status-files.ts").then(
+    (module) => {
+      agentStatusFilesModule = module;
+      return module;
+    },
+  ));
+}
+
+function loadAgentSelfImprovementModule() {
+  return (agentSelfImprovementModulePromise ??= import("./agents-self-improvement.ts").then(
+    (module) => {
+      agentSelfImprovementModule = module;
+      return module;
+    },
+  ));
+}
+
+function loadAgentToolsSkillsModule() {
+  return (agentToolsSkillsModulePromise ??= import("./agents-panels-tools-skills.ts").then(
+    (module) => {
+      agentToolsSkillsModule = module;
+      return module;
+    },
+  ));
+}
+
+function loadAgentWorkflowsModule() {
+  return (agentWorkflowsModulePromise ??= import("./agents-workflows.ts").then((module) => {
+    agentWorkflowsModule = module;
+    return module;
+  }));
+}
+
+function renderAgentPanelLoading(label: string) {
+  return html`
+    <section class="card agent-panel-loading" aria-busy="true">
+      <div class="card-title">${label}</div>
+      <div class="card-sub">${t("common.loading")}</div>
+    </section>
+  `;
+}
+
+function renderLazyAgentPanel<TModule>(
+  module: TModule | null,
+  load: () => Promise<TModule>,
+  render: (module: TModule) => unknown,
+  loadingLabel: string,
+) {
+  return module
+    ? render(module)
+    : until(
+        load().then((loaded) => render(loaded)),
+        renderAgentPanelLoading(loadingLabel),
+      );
+}
 
 export type ConfigState = {
   form: Record<string, unknown> | null;
@@ -75,10 +172,46 @@ export type ToolsEffectiveState = {
   result: ToolsEffectiveResult | null;
 };
 
+export type AgentRuntimeStatusState = {
+  loading: boolean;
+  error: string | null;
+  result: AgentsRuntimeStatusResult | null;
+};
+
+export type OpsSummaryState = {
+  loading: boolean;
+  error: string | null;
+  result: OpsSummaryResult | null;
+};
+
+export type SelfImprovementState = {
+  loading: boolean;
+  error: string | null;
+  recommendations: SelfImprovementRecommendation[];
+  groups: SelfImprovementRecommendationGroup[];
+  scorecard: SelfImprovementScorecard | null;
+  scorecards: SelfImprovementDailyScorecard[];
+  health: SelfImprovementOperationalHealthResult | null;
+  proposals: SelfImprovementProposal[];
+  auditEvents: SelfImprovementAuditEvent[];
+  total: number;
+  scanLoading: boolean;
+  lastScan: SelfImprovementScanResult["scan"] | null;
+  analysisLoading: boolean;
+  lastAnalysis: SelfImprovementAnalysisRunResult | null;
+  modelPreflightLoading: boolean;
+  lastModelPreflight: SelfImprovementModelPreflightResult | null;
+  productionCheckLoading: boolean;
+  lastProductionCheck: SelfImprovementProductionCheckResult | null;
+  maintenanceLoading: boolean;
+  lastMaintenance: SelfImprovementMaintenanceResult | null;
+};
+
 export type AgentsProps = {
   basePath: string;
   loading: boolean;
   error: string | null;
+  connected: boolean;
   agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
   activePanel: AgentsPanel;
@@ -92,8 +225,16 @@ export type AgentsProps = {
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
   toolsEffective: ToolsEffectiveState;
+  sessions: AgentRoomSessionsState;
+  runtimeStatus: AgentRuntimeStatusState;
+  opsSummary: OpsSummaryState;
+  selfImprovement: SelfImprovementState;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
+  workflowMaps: AgentWorkflowMapsState;
+  kalshiDashboard?: KalshiDashboardSnapshot | null;
+  kalshiDashboardLoading?: boolean;
+  kalshiDashboardError?: string | null;
   modelCatalog: ModelCatalogEntry[];
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
@@ -112,12 +253,51 @@ export type AgentsProps = {
   onChannelsRefresh: () => void;
   onCronRefresh: () => void;
   onCronRunNow: (jobId: string) => void;
+  onSelfImprovementRefresh: () => void;
+  onSelfImprovementScan: () => void;
+  onSelfImprovementAnalysis: () => void;
+  onSelfImprovementModelPreflight: () => void;
+  onSelfImprovementProductionCheck: () => void;
+  onSelfImprovementMaintenanceDryRun: () => void;
+  onSelfImprovementRecommendationUpdate: (input: {
+    id: string;
+    status: string;
+    note?: string;
+    assignedTargetAgentId?: string;
+    claimedBy?: string;
+    resolutionProof?: string;
+    dismissalReason?: string;
+  }) => void;
+  onSelfImprovementGroupUpdate: (input: {
+    id: string;
+    status: string;
+    note?: string;
+    assignedTargetAgentId?: string;
+    claimedBy?: string;
+    resolutionProof?: string;
+    dismissalReason?: string;
+  }) => void;
+  onSelfImprovementCuratorUpdate: (input: {
+    id: string;
+    curatorStatus: string;
+    proof?: string;
+    reason?: string;
+    workshopProposalId?: string;
+    workshopProposalStatus?: string;
+    note?: string;
+  }) => void;
   onSkillsFilterChange: (next: string) => void;
   onSkillsRefresh: () => void;
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
+  onAssignAgentRoom: (agentId: string, roomId: string) => void;
+  onWorkflowRoomSelect: (roomId: string) => void;
+  onWorkflowStepSelect: (stepId: string) => void;
+  onWorkflowOrderChange: (roomId: string, order: string[]) => void;
+  onWorkflowResetRoom: (roomId: string) => void;
+  onAttentionAction?: (target: AttentionTarget) => void;
 };
 
 export function renderAgents(props: AgentsProps) {
@@ -143,6 +323,7 @@ export function renderAgents(props: AgentsProps) {
     skills: selectedSkillCount,
     channels: channelEntryCount,
     cron: cronJobCount || null,
+    "self-improvement": props.selfImprovement.total > 0 ? props.selfImprovement.total : null,
   };
 
   return html`
@@ -222,125 +403,277 @@ export function renderAgents(props: AgentsProps) {
                 (panel) => props.onSelectPanel(panel),
                 tabCounts,
               )}
+              <!-- Keep the RAM monitor as a permanent Agents dashboard fixture.
+              It should only be removed when the operator explicitly asks for that removal. -->
+              ${renderAgentRoomMemoryFixture({
+                agents,
+                defaultId,
+                selectedAgentId: selectedAgent.id,
+                sessions: props.sessions,
+                runtimeStatus: props.runtimeStatus,
+                kalshiDashboard: props.kalshiDashboard,
+                connected: props.connected,
+              })}
+              ${props.activePanel === "room"
+                ? renderAgentRoom({
+                    agents,
+                    defaultId,
+                    selectedAgentId: selectedAgent.id,
+                    sessions: props.sessions,
+                    runtimeStatus: props.runtimeStatus,
+                    opsSummary: props.opsSummary,
+                    cron: props.cron,
+                    channels: props.channels,
+                    kalshiDashboard: props.kalshiDashboard,
+                    kalshiDashboardLoading: props.kalshiDashboardLoading,
+                    kalshiDashboardError: props.kalshiDashboardError,
+                    connected: props.connected,
+                    onSelectAgent: props.onSelectAgent,
+                    onRefresh: props.onRefresh,
+                    onOpenAgent: () => props.onSelectPanel("overview"),
+                    onAssignAgentRoom: props.onAssignAgentRoom,
+                    onInspectAttention: (target) => {
+                      if (target.kind === "agent") {
+                        props.onSelectAgent(target.agentId);
+                        return;
+                      }
+                      if (target.kind === "agentsPanel") {
+                        props.onSelectPanel(target.panel);
+                        return;
+                      }
+                      if (target.kind === "cronRun") {
+                        const confirmed =
+                          typeof globalThis.confirm === "function"
+                            ? globalThis.confirm(
+                                `Run this scheduled job once now?\n\n${target.jobId}`,
+                              )
+                            : true;
+                        if (!confirmed) {
+                          return;
+                        }
+                        props.onCronRunNow(target.jobId);
+                        props.onSelectPanel("cron");
+                        return;
+                      }
+                      props.onAttentionAction?.(target);
+                    },
+                  })
+                : nothing}
+              ${props.activePanel === "workflows"
+                ? renderLazyAgentPanel(
+                    agentWorkflowsModule,
+                    loadAgentWorkflowsModule,
+                    (module) =>
+                      module.renderAgentWorkflows({
+                        agents,
+                        workflowMaps: props.workflowMaps,
+                        sessions: props.sessions,
+                        runtimeStatus: props.runtimeStatus,
+                        cron: props.cron,
+                        kalshiDashboard: props.kalshiDashboard,
+                        onSelectRoom: props.onWorkflowRoomSelect,
+                        onSelectStep: props.onWorkflowStepSelect,
+                        onOrderChange: props.onWorkflowOrderChange,
+                        onResetRoom: props.onWorkflowResetRoom,
+                      }),
+                    "Loading Agent Workflow Maps",
+                  )
+                : nothing}
               ${props.activePanel === "overview"
-                ? keyed(
-                    selectedAgent.id,
-                    renderAgentOverview({
-                      agent: selectedAgent,
-                      basePath: props.basePath,
-                      defaultId,
-                      configForm: props.config.form,
-                      agentFilesList: props.agentFiles.list,
-                      agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
-                      agentIdentityError: props.agentIdentityError,
-                      agentIdentityLoading: props.agentIdentityLoading,
-                      configLoading: props.config.loading,
-                      configSaving: props.config.saving,
-                      configDirty: props.config.dirty,
-                      modelCatalog: props.modelCatalog,
-                      onConfigReload: props.onConfigReload,
-                      onConfigSave: props.onConfigSave,
-                      onModelChange: props.onModelChange,
-                      onModelFallbacksChange: props.onModelFallbacksChange,
-                      onSelectPanel: props.onSelectPanel,
-                    }),
+                ? renderLazyAgentPanel(
+                    agentOverviewModule,
+                    loadAgentOverviewModule,
+                    (module) =>
+                      keyed(
+                        selectedAgent.id,
+                        module.renderAgentOverview({
+                          agent: selectedAgent,
+                          basePath: props.basePath,
+                          defaultId,
+                          configForm: props.config.form,
+                          agentFilesList: props.agentFiles.list,
+                          agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
+                          agentIdentityError: props.agentIdentityError,
+                          agentIdentityLoading: props.agentIdentityLoading,
+                          configLoading: props.config.loading,
+                          configSaving: props.config.saving,
+                          configDirty: props.config.dirty,
+                          modelCatalog: props.modelCatalog,
+                          onConfigReload: props.onConfigReload,
+                          onConfigSave: props.onConfigSave,
+                          onModelChange: props.onModelChange,
+                          onModelFallbacksChange: props.onModelFallbacksChange,
+                          onSelectPanel: props.onSelectPanel,
+                        }),
+                      ),
+                    "Loading Agent Overview",
                   )
                 : nothing}
               ${props.activePanel === "files"
-                ? renderAgentFiles({
-                    agentId: selectedAgent.id,
-                    agentFilesList: props.agentFiles.list,
-                    agentFilesLoading: props.agentFiles.loading,
-                    agentFilesError: props.agentFiles.error,
-                    agentFileActive: props.agentFiles.active,
-                    agentFileContents: props.agentFiles.contents,
-                    agentFileDrafts: props.agentFiles.drafts,
-                    agentFileSaving: props.agentFiles.saving,
-                    onLoadFiles: props.onLoadFiles,
-                    onSelectFile: props.onSelectFile,
-                    onFileDraftChange: props.onFileDraftChange,
-                    onFileReset: props.onFileReset,
-                    onFileSave: props.onFileSave,
-                  })
+                ? renderLazyAgentPanel(
+                    agentStatusFilesModule,
+                    loadAgentStatusFilesModule,
+                    (module) =>
+                      module.renderAgentFiles({
+                        agentId: selectedAgent.id,
+                        agentFilesList: props.agentFiles.list,
+                        agentFilesLoading: props.agentFiles.loading,
+                        agentFilesError: props.agentFiles.error,
+                        agentFileActive: props.agentFiles.active,
+                        agentFileContents: props.agentFiles.contents,
+                        agentFileDrafts: props.agentFiles.drafts,
+                        agentFileSaving: props.agentFiles.saving,
+                        onLoadFiles: props.onLoadFiles,
+                        onSelectFile: props.onSelectFile,
+                        onFileDraftChange: props.onFileDraftChange,
+                        onFileReset: props.onFileReset,
+                        onFileSave: props.onFileSave,
+                      }),
+                    "Loading Agent Files",
+                  )
                 : nothing}
               ${props.activePanel === "tools"
-                ? renderAgentTools({
-                    agentId: selectedAgent.id,
-                    configForm: props.config.form,
-                    configLoading: props.config.loading,
-                    configSaving: props.config.saving,
-                    configDirty: props.config.dirty,
-                    toolsCatalogLoading: props.toolsCatalog.loading,
-                    toolsCatalogError: props.toolsCatalog.error,
-                    toolsCatalogResult: props.toolsCatalog.result,
-                    toolsEffectiveLoading: props.toolsEffective.loading,
-                    toolsEffectiveError: props.toolsEffective.error,
-                    toolsEffectiveResult: props.toolsEffective.result,
-                    runtimeSessionKey: props.runtimeSessionKey,
-                    runtimeSessionMatchesSelectedAgent: props.runtimeSessionMatchesSelectedAgent,
-                    onProfileChange: props.onToolsProfileChange,
-                    onOverridesChange: props.onToolsOverridesChange,
-                    onConfigReload: props.onConfigReload,
-                    onConfigSave: props.onConfigSave,
-                  })
+                ? renderLazyAgentPanel(
+                    agentToolsSkillsModule,
+                    loadAgentToolsSkillsModule,
+                    (module) =>
+                      module.renderAgentTools({
+                        agentId: selectedAgent.id,
+                        configForm: props.config.form,
+                        configLoading: props.config.loading,
+                        configSaving: props.config.saving,
+                        configDirty: props.config.dirty,
+                        toolsCatalogLoading: props.toolsCatalog.loading,
+                        toolsCatalogError: props.toolsCatalog.error,
+                        toolsCatalogResult: props.toolsCatalog.result,
+                        toolsEffectiveLoading: props.toolsEffective.loading,
+                        toolsEffectiveError: props.toolsEffective.error,
+                        toolsEffectiveResult: props.toolsEffective.result,
+                        runtimeSessionKey: props.runtimeSessionKey,
+                        runtimeSessionMatchesSelectedAgent:
+                          props.runtimeSessionMatchesSelectedAgent,
+                        onProfileChange: props.onToolsProfileChange,
+                        onOverridesChange: props.onToolsOverridesChange,
+                        onConfigReload: props.onConfigReload,
+                        onConfigSave: props.onConfigSave,
+                      }),
+                    "Loading Agent Tools",
+                  )
                 : nothing}
               ${props.activePanel === "skills"
-                ? renderAgentSkills({
-                    agentId: selectedAgent.id,
-                    report: props.agentSkills.report,
-                    loading: props.agentSkills.loading,
-                    error: props.agentSkills.error,
-                    activeAgentId: props.agentSkills.agentId,
-                    configForm: props.config.form,
-                    configLoading: props.config.loading,
-                    configSaving: props.config.saving,
-                    configDirty: props.config.dirty,
-                    filter: props.agentSkills.filter,
-                    onFilterChange: props.onSkillsFilterChange,
-                    onRefresh: props.onSkillsRefresh,
-                    onToggle: props.onAgentSkillToggle,
-                    onClear: props.onAgentSkillsClear,
-                    onDisableAll: props.onAgentSkillsDisableAll,
-                    onConfigReload: props.onConfigReload,
-                    onConfigSave: props.onConfigSave,
-                  })
+                ? renderLazyAgentPanel(
+                    agentToolsSkillsModule,
+                    loadAgentToolsSkillsModule,
+                    (module) =>
+                      module.renderAgentSkills({
+                        agentId: selectedAgent.id,
+                        report: props.agentSkills.report,
+                        loading: props.agentSkills.loading,
+                        error: props.agentSkills.error,
+                        activeAgentId: props.agentSkills.agentId,
+                        configForm: props.config.form,
+                        configLoading: props.config.loading,
+                        configSaving: props.config.saving,
+                        configDirty: props.config.dirty,
+                        filter: props.agentSkills.filter,
+                        onFilterChange: props.onSkillsFilterChange,
+                        onRefresh: props.onSkillsRefresh,
+                        onToggle: props.onAgentSkillToggle,
+                        onClear: props.onAgentSkillsClear,
+                        onDisableAll: props.onAgentSkillsDisableAll,
+                        onConfigReload: props.onConfigReload,
+                        onConfigSave: props.onConfigSave,
+                      }),
+                    "Loading Agent Skills",
+                  )
                 : nothing}
               ${props.activePanel === "channels"
-                ? renderAgentChannels({
-                    context: buildAgentContext(
-                      selectedAgent,
-                      props.config.form,
-                      props.agentFiles.list,
-                      defaultId,
-                      props.agentIdentityById[selectedAgent.id] ?? null,
-                    ),
-                    configForm: props.config.form,
-                    snapshot: props.channels.snapshot,
-                    loading: props.channels.loading,
-                    error: props.channels.error,
-                    lastSuccess: props.channels.lastSuccess,
-                    onRefresh: props.onChannelsRefresh,
-                    onSelectPanel: props.onSelectPanel,
-                  })
+                ? renderLazyAgentPanel(
+                    agentStatusFilesModule,
+                    loadAgentStatusFilesModule,
+                    (module) =>
+                      module.renderAgentChannels({
+                        context: buildAgentContext(
+                          selectedAgent,
+                          props.config.form,
+                          props.agentFiles.list,
+                          defaultId,
+                          props.agentIdentityById[selectedAgent.id] ?? null,
+                        ),
+                        configForm: props.config.form,
+                        snapshot: props.channels.snapshot,
+                        loading: props.channels.loading,
+                        error: props.channels.error,
+                        lastSuccess: props.channels.lastSuccess,
+                        onRefresh: props.onChannelsRefresh,
+                        onSelectPanel: props.onSelectPanel,
+                      }),
+                    "Loading Agent Channels",
+                  )
                 : nothing}
               ${props.activePanel === "cron"
-                ? renderAgentCron({
-                    context: buildAgentContext(
-                      selectedAgent,
-                      props.config.form,
-                      props.agentFiles.list,
-                      defaultId,
-                      props.agentIdentityById[selectedAgent.id] ?? null,
-                    ),
-                    agentId: selectedAgent.id,
-                    jobs: props.cron.jobs,
-                    status: props.cron.status,
-                    loading: props.cron.loading,
-                    error: props.cron.error,
-                    onRefresh: props.onCronRefresh,
-                    onRunNow: props.onCronRunNow,
-                    onSelectPanel: props.onSelectPanel,
-                  })
+                ? renderLazyAgentPanel(
+                    agentStatusFilesModule,
+                    loadAgentStatusFilesModule,
+                    (module) =>
+                      module.renderAgentCron({
+                        context: buildAgentContext(
+                          selectedAgent,
+                          props.config.form,
+                          props.agentFiles.list,
+                          defaultId,
+                          props.agentIdentityById[selectedAgent.id] ?? null,
+                        ),
+                        agentId: selectedAgent.id,
+                        jobs: props.cron.jobs,
+                        status: props.cron.status,
+                        loading: props.cron.loading,
+                        error: props.cron.error,
+                        onRefresh: props.onCronRefresh,
+                        onRunNow: props.onCronRunNow,
+                        onSelectPanel: props.onSelectPanel,
+                      }),
+                    "Loading Agent Cron Jobs",
+                  )
+                : nothing}
+              ${props.activePanel === "self-improvement"
+                ? renderLazyAgentPanel(
+                    agentSelfImprovementModule,
+                    loadAgentSelfImprovementModule,
+                    (module) =>
+                      module.renderSelfImprovementPanel({
+                        loading: props.selfImprovement.loading,
+                        error: props.selfImprovement.error,
+                        recommendations: props.selfImprovement.recommendations,
+                        groups: props.selfImprovement.groups,
+                        scorecard: props.selfImprovement.scorecard,
+                        scorecards: props.selfImprovement.scorecards,
+                        health: props.selfImprovement.health,
+                        proposals: props.selfImprovement.proposals,
+                        auditEvents: props.selfImprovement.auditEvents,
+                        total: props.selfImprovement.total,
+                        scanLoading: props.selfImprovement.scanLoading,
+                        lastScan: props.selfImprovement.lastScan,
+                        analysisLoading: props.selfImprovement.analysisLoading,
+                        lastAnalysis: props.selfImprovement.lastAnalysis,
+                        modelPreflightLoading: props.selfImprovement.modelPreflightLoading,
+                        lastModelPreflight: props.selfImprovement.lastModelPreflight,
+                        productionCheckLoading: props.selfImprovement.productionCheckLoading,
+                        lastProductionCheck: props.selfImprovement.lastProductionCheck,
+                        maintenanceLoading: props.selfImprovement.maintenanceLoading,
+                        lastMaintenance: props.selfImprovement.lastMaintenance,
+                        onRefresh: props.onSelfImprovementRefresh,
+                        onScan: props.onSelfImprovementScan,
+                        onAnalyze: props.onSelfImprovementAnalysis,
+                        onModelPreflight: props.onSelfImprovementModelPreflight,
+                        onProductionCheck: props.onSelfImprovementProductionCheck,
+                        onMaintenanceDryRun: props.onSelfImprovementMaintenanceDryRun,
+                        onRecommendationUpdate: props.onSelfImprovementRecommendationUpdate,
+                        onGroupUpdate: props.onSelfImprovementGroupUpdate,
+                        onCuratorUpdate: props.onSelfImprovementCuratorUpdate,
+                      }),
+                    "Loading Self-Improvement Recommendations",
+                  )
                 : nothing}
             `}
       </section>
@@ -354,12 +687,15 @@ function renderAgentTabs(
   counts: Record<string, number | null>,
 ) {
   const tabs: Array<{ id: AgentsPanel; label: string }> = [
-    { id: "overview", label: t("agents.tabs.overview") },
-    { id: "files", label: t("agents.tabs.files") },
-    { id: "tools", label: t("agents.tabs.tools") },
-    { id: "skills", label: t("agents.tabs.skills") },
-    { id: "channels", label: t("agents.tabs.channels") },
-    { id: "cron", label: t("agents.tabs.cronJobs") },
+    { id: "room", label: "Live Agent Workspace" },
+    { id: "workflows", label: "Agent Workflow Maps" },
+    { id: "overview", label: "Overview" },
+    { id: "files", label: "Files" },
+    { id: "tools", label: "Tools" },
+    { id: "skills", label: "Skills" },
+    { id: "channels", label: "Channels" },
+    { id: "cron", label: "Cron Jobs" },
+    { id: "self-improvement", label: "Self-Improvement" },
   ];
   return html`
     <div class="agent-tabs">

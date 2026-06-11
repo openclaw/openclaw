@@ -79,6 +79,8 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Optional Control UI workspace room id for grouping this agent in the Live Agent Workspace. */
+  roomId?: string;
   workspace?: string;
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */

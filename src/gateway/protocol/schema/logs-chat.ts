@@ -28,6 +28,8 @@ export const ChatHistoryParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
+    targetRunId: Type.Optional(NonEmptyString),
+    auditTs: Type.Optional(Type.Number({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

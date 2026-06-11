@@ -126,6 +126,13 @@ struct MenuContent: View {
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
+            Button {
+                Task { @MainActor in
+                    await self.openSNESStudio()
+                }
+            } label: {
+                Label("Open SNES Studio", systemImage: "gamecontroller")
+            }
             if self.state.canvasEnabled {
                 Button {
                     Task { @MainActor in
@@ -351,6 +358,23 @@ struct MenuContent: View {
         } catch {
             let alert = NSAlert()
             alert.messageText = "Dashboard unavailable"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
+
+    @MainActor
+    private func openSNESStudio() async {
+        do {
+            let config = try await GatewayEndpointStore.shared.requireConfig()
+            let url = try GatewayEndpointStore.dashboardURL(
+                for: config,
+                mode: self.state.connectionMode,
+                routePath: "snes-studio")
+            SNESStudioWindowManager.shared.show(url: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "SNES Studio unavailable"
             alert.informativeText = error.localizedDescription
             alert.runModal()
         }

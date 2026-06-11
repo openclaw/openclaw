@@ -20,6 +20,7 @@ import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configur
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
+import { maybeRepairTailscaleRemoteHealth } from "./shared/tailscale-remote-health.js";
 
 const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
 
@@ -102,6 +103,13 @@ export async function runDoctorRepairSequence(params: {
   }
   applyMutation(maybeRepairInvalidPluginConfig(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
+  applyMutation(
+    await maybeRepairTailscaleRemoteHealth({
+      cfg: state.candidate,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,

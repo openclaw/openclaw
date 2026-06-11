@@ -87,6 +87,47 @@ describe("gateway startup log", () => {
     );
   });
 
+  it("logs the default agent primary model instead of the global fallback model", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    logGatewayStartup({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "ollama/openclaw-control-qwen25-32b:latest",
+          },
+          list: [
+            {
+              id: "main",
+              default: true,
+              name: "Control Director",
+              model: {
+                primary: "ollama/openclaw-control-qwen36-27b:latest",
+                fallbacks: ["ollama/openclaw-control-qwen25-32b:latest"],
+              },
+              thinkingDefault: "off",
+            },
+          ],
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(info).toHaveBeenCalledWith(
+      "agent model: ollama/openclaw-control-qwen36-27b:latest (thinking=off, fast=off)",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "agent model: ollama/openclaw-control-qwen36-27b:latest (thinking=off, fast=off)",
+        ),
+      }),
+    );
+  });
+
   it("defaults unset startup thinking to medium", () => {
     expect(
       formatAgentModelStartupDetails({

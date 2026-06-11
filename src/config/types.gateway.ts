@@ -206,6 +206,12 @@ export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
+  /** Explicit Tailscale CLI path to use for status, serve/funnel, and whois. */
+  binaryPath?: string;
+  /** Explicit tailscaled socket path. Use for standalone/userspace daemons. */
+  socketPath?: string;
+  /** Fail Gateway startup when configured Tailscale exposure cannot be applied. */
+  required?: boolean;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
   /**
@@ -234,6 +240,10 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
+  /** SSH target used to verify the remote Codex app-server daemon. */
+  codexSshTarget?: string;
+  /** Command run on the remote host to verify the Codex app-server daemon. */
+  codexDaemonCommand?: string;
 };
 
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-05-16T23:57:56.432Z",
+  "providerReady": false,
+  "providers": [
+    {
+      "name": "GEMINI_API_KEY",
+      "present": false
+    },
+    {
+      "name": "GOOGLE_API_KEY",
+      "present": false
+    },
+    {
+      "name": "MINIMAX_API_KEY",
+      "present": false
+    },
+    {
+      "name": "COMFY_API_KEY",
+      "present": false
+    },
+    {
+      "name": "COMFY_CLOUD_API_KEY",
+      "present": false
+    },
+    {
+      "name": "KITS_API_KEY",
+      "present": false
+    }
+  ],
+  "ffprobeAvailable": true,
+  "ffmpegAvailable": true,
+  "publicPublishingAllowed": false
+}

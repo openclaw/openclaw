@@ -1255,6 +1255,7 @@
                   "automation/index",
                   "automation/cron-jobs",
                   "automation/tasks",
+                  "automation/self-improvement-governor",
                   "automation/taskflow",
                   "automation/standing-orders",
                   "automation/hooks"
@@ -1600,7 +1601,7 @@
               },
               {
                 "group": "Web interfaces",
-                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "web/tui"]
+                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/app-studio", "web/music-studio", "web/snes-studio", "web/webchat", "web/tui"]
               }
             ]
           },
@@ -1638,12 +1639,15 @@
                       "cli/agent",
                       "cli/agents",
                       "cli/hooks",
+                      "cli/books",
                       "cli/infer",
                       "cli/memory",
                       "cli/commitments",
+                      "cli/courses",
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
+                      "cli/self-improvement",
                       "cli/system",
                       "cli/tasks"
                     ]

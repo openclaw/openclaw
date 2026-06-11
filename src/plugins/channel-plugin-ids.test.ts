@@ -450,6 +450,7 @@ function expectStartupPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  extraAgentHarnessRuntimes?: readonly string[];
   expected: readonly string[];
 }) {
   const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
@@ -462,6 +463,9 @@ function expectStartupPluginIds(params: {
       env: createPluginPlanningTestEnv(params.env),
       index: createInstalledPluginIndexFixture(manifestRegistry),
       manifestRegistry,
+      ...(params.extraAgentHarnessRuntimes !== undefined
+        ? { extraAgentHarnessRuntimes: params.extraAgentHarnessRuntimes }
+        : {}),
     }),
   ).toEqual(params.expected);
 }
@@ -470,6 +474,7 @@ function expectStartupPluginIdsCase(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  extraAgentHarnessRuntimes?: readonly string[];
   expected: readonly string[];
 }) {
   expectStartupPluginIds(params);
@@ -1441,6 +1446,14 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: createStartupConfig({
         modelId: "openai/gpt-5.5",
       }),
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
+    });
+  });
+
+  it("includes persisted session agent harness owner plugins", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({}),
+      extraAgentHarnessRuntimes: ["codex-app-server"],
       expected: ["demo-channel", "browser", "codex", "memory-core"],
     });
   });

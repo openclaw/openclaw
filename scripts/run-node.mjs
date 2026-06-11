@@ -278,6 +278,68 @@ const hasRuntimePostBuildInputMtimeChanged = (stampMtime, deps) => {
 
 const resolveRuntimePostBuildDistRoot = (deps) => deps.distRoot ?? path.join(deps.cwd, "dist");
 const resolveRuntimePostBuildRuntimeRoot = (deps) => path.join(deps.cwd, "dist-runtime");
+const GATEWAY_RUNTIME_SNAPSHOT_RELATIVE_DIR = path.join(".artifacts", "openclaw-gateway-runtime");
+const GATEWAY_RUNTIME_SNAPSHOT_LATEST_FILE = "latest.json";
+const GATEWAY_RUNTIME_SNAPSHOT_RELEASES_DIR = "releases";
+const GATEWAY_RUNTIME_SNAPSHOT_ROOT_ENV = "OPENCLAW_RUNTIME_SNAPSHOT_ROOT";
+const GATEWAY_RUNTIME_SNAPSHOT_PLUGINS_ENV = "OPENCLAW_BUNDLED_PLUGINS_DIR";
+
+const isPathInsideOrEqual = (parentPath, childPath) => {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+};
+
+const safeRealpath = (targetPath, deps) => {
+  try {
+    return deps.fs.realpathSync.native?.(targetPath) ?? deps.fs.realpathSync(targetPath);
+  } catch {
+    return null;
+  }
+};
+
+export const resolveGatewayRuntimeSnapshotCliEntrypoint = (deps) => {
+  const snapshotDir = path.join(deps.cwd, GATEWAY_RUNTIME_SNAPSHOT_RELATIVE_DIR);
+  const latestPath = path.join(snapshotDir, GATEWAY_RUNTIME_SNAPSHOT_LATEST_FILE);
+  let parsed;
+  try {
+    parsed = JSON.parse(deps.fs.readFileSync(latestPath, "utf8"));
+  } catch {
+    return null;
+  }
+
+  const root = typeof parsed?.root === "string" && parsed.root.trim() ? parsed.root.trim() : null;
+  if (!root) {
+    return null;
+  }
+
+  const snapshotRoot = path.resolve(deps.cwd, root);
+  const releasesDir = path.join(snapshotDir, GATEWAY_RUNTIME_SNAPSHOT_RELEASES_DIR);
+  const realReleasesDir = safeRealpath(releasesDir, deps);
+  const realSnapshotRoot = safeRealpath(snapshotRoot, deps);
+  if (
+    !realReleasesDir ||
+    !realSnapshotRoot ||
+    !isPathInsideOrEqual(realReleasesDir, realSnapshotRoot)
+  ) {
+    return null;
+  }
+
+  const entrypoint = path.join(snapshotRoot, "dist", "entry.js");
+  const bundledPluginsDir = path.join(snapshotRoot, "dist-runtime", "extensions");
+  if (
+    statMtime(entrypoint, deps.fs) == null ||
+    statMtime(path.join(snapshotRoot, "dist", "control-ui", "index.html"), deps.fs) == null ||
+    statMtime(bundledPluginsDir, deps.fs) == null
+  ) {
+    return null;
+  }
+
+  return {
+    entrypoint,
+    snapshotRoot,
+    bundledPluginsDir,
+  };
+};
 
 const collectRunNodeBundledPluginBuildEntries = (deps) => {
   if (!deps.fs.existsSync(path.join(deps.cwd, BUNDLED_PLUGIN_ROOT_DIR))) {
@@ -503,6 +565,12 @@ export const resolveBuildRequirement = (deps) => {
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
     if (dirty === true) {
+      if (hasMissingBuiltBundledPluginRuntimeEntryOutput(deps)) {
+        return { shouldBuild: true, reason: "dirty_watched_tree" };
+      }
+      if (!hasSourceMtimeChanged(stamp.mtime, deps)) {
+        return { shouldBuild: false, reason: "clean" };
+      }
       return { shouldBuild: true, reason: "dirty_watched_tree" };
     }
     if (dirty === false) {
@@ -795,7 +863,8 @@ const getInterruptedSpawnExitCode = (res) => {
 
 const runOpenClaw = async (deps) => {
   const diagnosticArgs = resolveRunNodeDiagnosticArgs(deps);
-  const nodeProcess = deps.spawn(deps.execPath, [...diagnosticArgs, "openclaw.mjs", ...deps.args], {
+  const entrypoint = deps.openClawEntrypoint ?? "openclaw.mjs";
+  const nodeProcess = deps.spawn(deps.execPath, [...diagnosticArgs, entrypoint, ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
@@ -1091,11 +1160,45 @@ const shouldSkipWatchRuntimeSync = (deps, requirement) =>
 const isGatewayClientCommand = (args) =>
   args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
 
-const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
-  buildRequirement.reason === "dirty_watched_tree" &&
-  isGatewayClientCommand(deps.args) &&
+const isHelpCommand = (args) =>
+  args.length === 0 || args.some((arg) => arg === "--help" || arg === "-h");
+
+const isReadOnlyCronCommand = (args) =>
+  args[0] === "cron" && ["list", "runs", "show", "status"].includes(args[1] ?? "");
+
+const isReadOnlyChannelCommand = (args) => args[0] === "channels" && args[1] === "status";
+
+const isReadOnlyDiagnosticCommand = (args) =>
+  isHelpCommand(args) ||
+  isGatewayClientCommand(args) ||
+  isReadOnlyCronCommand(args) ||
+  isReadOnlyChannelCommand(args);
+
+const canBypassBuildForReadOnlyDiagnostic = (deps, buildRequirement) =>
+  [
+    "dirty_watched_tree",
+    "missing_build_stamp",
+    "missing_dist_entry",
+    "source_mtime_newer",
+  ].includes(buildRequirement.reason) &&
+  isReadOnlyDiagnosticCommand(deps.args) &&
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
-  statMtime(deps.distEntry, deps.fs) != null;
+  (resolveGatewayRuntimeSnapshotCliEntrypoint(deps) !== null ||
+    statMtime(deps.distEntry, deps.fs) != null);
+
+const configureReadOnlyDiagnosticRuntime = (deps) => {
+  const snapshot = resolveGatewayRuntimeSnapshotCliEntrypoint(deps);
+  if (snapshot) {
+    deps.openClawEntrypoint = snapshot.entrypoint;
+    deps.env[GATEWAY_RUNTIME_SNAPSHOT_ROOT_ENV] = snapshot.snapshotRoot;
+    deps.env[GATEWAY_RUNTIME_SNAPSHOT_PLUGINS_ENV] = snapshot.bundledPluginsDir;
+    return "runtime_snapshot";
+  }
+  if (statMtime(deps.distEntry, deps.fs) != null) {
+    return "existing_dist";
+  }
+  return null;
+};
 
 const isQaParityReportCommand = (args) => args[0] === "qa" && args[1] === "parity-report";
 const isQaCoverageReportCommand = (args) => args[0] === "qa" && args[1] === "coverage";
@@ -1186,14 +1289,13 @@ export async function runNodeMain(params = {}) {
   try {
     let exitCode = 1;
     let buildRequirement = resolveBuildRequirement(deps);
-    const useExistingGatewayClientDist = shouldUseExistingDistForGatewayClient(
-      deps,
-      buildRequirement,
-    );
+    const readOnlyDiagnosticRuntime = canBypassBuildForReadOnlyDiagnostic(deps, buildRequirement)
+      ? configureReadOnlyDiagnosticRuntime(deps)
+      : null;
     const useQaParityReportSource = shouldRunQaParityReportFromSource(deps, buildRequirement);
     const useQaCoverageReportSource = shouldRunQaCoverageReportFromSource(deps, buildRequirement);
-    if (useExistingGatewayClientDist) {
-      buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
+    if (readOnlyDiagnosticRuntime) {
+      buildRequirement = { shouldBuild: false, reason: readOnlyDiagnosticRuntime };
     }
     if (useQaParityReportSource) {
       logRunner("Running QA parity report from source without rebuilding private QA dist.", deps);
@@ -1206,7 +1308,7 @@ export async function runNodeMain(params = {}) {
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     if (!buildRequirement.shouldBuild) {
-      if (!useExistingGatewayClientDist) {
+      if (!readOnlyDiagnosticRuntime) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
         if (
           runtimePostBuildRequirement.shouldSync &&

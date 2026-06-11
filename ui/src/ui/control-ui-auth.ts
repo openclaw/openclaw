@@ -39,13 +39,25 @@ export function resolveControlUiAuthHeader(source: ControlUiAuthSource): string 
 // when the first returns 401 — for example, recovering from a stale
 // `settings.token` when the live session is authenticated via `password`.
 export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of [
+  return resolveUniqueAuthCandidates([
     normalizeOptionalString(source.hello?.auth?.deviceToken),
     normalizeOptionalString(source.settings?.token),
     normalizeOptionalString(source.password),
-  ]) {
+  ]);
+}
+
+export function resolveControlUiSharedFirstAuthCandidates(source: ControlUiAuthSource): string[] {
+  return resolveUniqueAuthCandidates([
+    normalizeOptionalString(source.settings?.token),
+    normalizeOptionalString(source.password),
+    normalizeOptionalString(source.hello?.auth?.deviceToken),
+  ]);
+}
+
+function resolveUniqueAuthCandidates(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
     const sanitized = sanitizeHeaderToken(raw ?? null);
     if (sanitized && !seen.has(sanitized)) {
       seen.add(sanitized);

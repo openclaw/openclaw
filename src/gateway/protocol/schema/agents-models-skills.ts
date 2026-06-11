@@ -17,6 +17,7 @@ export const AgentSummarySchema = Type.Object(
   {
     id: NonEmptyString,
     name: Type.Optional(NonEmptyString),
+    roomId: Type.Optional(NonEmptyString),
     identity: Type.Optional(
       Type.Object(
         {
@@ -62,6 +63,127 @@ export const AgentSummarySchema = Type.Object(
 
 export const AgentsListParamsSchema = Type.Object({}, { additionalProperties: false });
 
+export const AgentsRuntimeStatusParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const AgentsRuntimeModelStatusSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    name: NonEmptyString,
+    model: NonEmptyString,
+    sizeBytes: Type.Integer({ minimum: 0 }),
+    sizeVramBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+    contextLength: Type.Optional(Type.Integer({ minimum: 1 })),
+    processor: Type.Optional(NonEmptyString),
+    expiresAt: Type.Optional(NonEmptyString),
+    parameterSize: Type.Optional(NonEmptyString),
+    quantization: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsInstalledModelStatusSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    name: NonEmptyString,
+    model: NonEmptyString,
+    sizeBytes: Type.Integer({ minimum: 0 }),
+    parameterSize: Type.Optional(NonEmptyString),
+    quantization: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsRuntimeStatusResultSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    system: Type.Object(
+      {
+        totalBytes: Type.Integer({ minimum: 0 }),
+        freeBytes: Type.Integer({ minimum: 0 }),
+        usedBytes: Type.Integer({ minimum: 0 }),
+        usedRatio: Type.Number({ minimum: 0 }),
+        macosMemory: Type.Optional(
+          Type.Object(
+            {
+              available: Type.Boolean(),
+              pageSizeBytes: Type.Integer({ minimum: 0 }),
+              freeBytes: Type.Integer({ minimum: 0 }),
+              speculativeBytes: Type.Integer({ minimum: 0 }),
+              purgeableBytes: Type.Integer({ minimum: 0 }),
+              fileBackedBytes: Type.Integer({ minimum: 0 }),
+              anonymousBytes: Type.Integer({ minimum: 0 }),
+              wiredBytes: Type.Integer({ minimum: 0 }),
+              compressedBytes: Type.Integer({ minimum: 0 }),
+              reclaimableBytes: Type.Integer({ minimum: 0 }),
+              availabilityEstimateBytes: Type.Integer({ minimum: 0 }),
+              error: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+        processes: Type.Optional(
+          Type.Object(
+            {
+              available: Type.Boolean(),
+              totalRssBytes: Type.Integer({ minimum: 0 }),
+              openclawRssBytes: Type.Integer({ minimum: 0 }),
+              ollamaRssBytes: Type.Integer({ minimum: 0 }),
+              otherRssBytes: Type.Integer({ minimum: 0 }),
+              error: Type.Optional(Type.String()),
+              top: Type.Array(
+                Type.Object(
+                  {
+                    pid: Type.Integer({ minimum: 0 }),
+                    name: NonEmptyString,
+                    command: NonEmptyString,
+                    rssBytes: Type.Integer({ minimum: 0 }),
+                    category: Type.Union([
+                      Type.Literal("openclaw"),
+                      Type.Literal("ollama"),
+                      Type.Literal("other"),
+                    ]),
+                  },
+                  { additionalProperties: false },
+                ),
+              ),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    localModels: Type.Object(
+      {
+        provider: NonEmptyString,
+        available: Type.Boolean(),
+        error: Type.Optional(Type.String()),
+        totalLoadedBytes: Type.Integer({ minimum: 0 }),
+        totalLoadedVramBytes: Type.Integer({ minimum: 0 }),
+        count: Type.Integer({ minimum: 0 }),
+        models: Type.Array(AgentsRuntimeModelStatusSchema),
+        installedAvailable: Type.Optional(Type.Boolean()),
+        installedError: Type.Optional(Type.String()),
+        installedModels: Type.Optional(Type.Array(AgentsInstalledModelStatusSchema)),
+        process: Type.Optional(
+          Type.Object(
+            {
+              available: Type.Boolean(),
+              rssBytes: Type.Integer({ minimum: 0 }),
+              processCount: Type.Integer({ minimum: 0 }),
+              error: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    warnings: Type.Array(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentsListResultSchema = Type.Object(
   {
     defaultId: NonEmptyString,
@@ -98,6 +220,7 @@ export const AgentsUpdateParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
     name: Type.Optional(NonEmptyString),
+    roomId: Type.Optional(NonEmptyString),
     workspace: Type.Optional(NonEmptyString),
     model: Type.Optional(NonEmptyString),
     emoji: Type.Optional(Type.String()),

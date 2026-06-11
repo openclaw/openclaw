@@ -91,6 +91,12 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   );
 }
 
+const LOCAL_PROVIDER_APIS = new Set(["ollama", "lmstudio", "llamacpp", "llama.cpp"]);
+
+function isLocalProviderApi(value: unknown): boolean {
+  return typeof value === "string" && LOCAL_PROVIDER_APIS.has(value.trim().toLowerCase());
+}
+
 /**
  * Resolves the LLM idle timeout from configuration.
  * @returns Idle timeout in milliseconds, or 0 to disable
@@ -100,7 +106,8 @@ export function resolveLlmIdleTimeoutMs(params?: {
   trigger?: EmbeddedRunTrigger;
   runTimeoutMs?: number;
   modelRequestTimeoutMs?: number;
-  model?: { baseUrl?: string };
+  providerApi?: string;
+  model?: { api?: string; baseUrl?: string; provider?: string };
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
   const clampImplicitTimeoutMs = (valueMs: number) =>
@@ -155,8 +162,19 @@ export function resolveLlmIdleTimeoutMs(params?: {
   // The default watchdog is a network-silence-as-hang guard for cloud providers.
   // Local providers can legitimately stream nothing for many minutes during
   // prompt evaluation or thinking, so falling back to the default would abort
-  // valid local runs. Honor it only when the user has not opted out via the
-  // baseUrl pointing at loopback / private-network / `.local`.
+  // valid local runs. Disable it when the provider API is known-local even if
+  // the resolved model came from an implicit provider and did not carry a
+  // baseUrl into this hot path.
+  if (
+    isLocalProviderApi(params?.providerApi) ||
+    isLocalProviderApi(params?.model?.api) ||
+    isLocalProviderApi(params?.model?.provider)
+  ) {
+    return 0;
+  }
+
+  // A custom provider id can point at a local endpoint even when the API value
+  // is generic, so also honor loopback / private-network / `.local` base URLs.
   const baseUrl = params?.model?.baseUrl;
   if (typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl)) {
     return 0;

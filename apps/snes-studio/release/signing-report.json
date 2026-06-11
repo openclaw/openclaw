@@ -1,0 +1,10 @@
+{
+  "appBundle": "SNES Studio.app",
+  "notarizationRequired": true,
+  "signingIdentity": null,
+  "status": "unsigned-blocked",
+  "blockers": [
+    "Developer ID signing identity was not provided.",
+    "Apple notarization proof is required before distributing to other MacBooks."
+  ]
+}

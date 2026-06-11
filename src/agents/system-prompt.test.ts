@@ -115,6 +115,27 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("injects the Control Director operating contract only for the main director", () => {
+    const controlPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "main",
+        model: "ollama/openclaw-control-qwen36-27b:latest",
+      },
+    });
+    const workerPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "builder",
+        model: "ollama/openclaw-control-qwen36-27b:latest",
+      },
+    });
+
+    expect(controlPrompt).toContain("## Control Director Operating Contract");
+    expect(controlPrompt).toContain("Status: complete");
+    expect(workerPrompt).not.toContain("## Control Director Operating Contract");
+  });
+
   it("omits extended sections in minimal prompt mode", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

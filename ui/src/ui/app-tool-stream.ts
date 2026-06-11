@@ -1,5 +1,6 @@
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
+import type { ChatRunStatus } from "./chat/run-status.ts";
 import { formatUnknownText, truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -31,6 +32,8 @@ export type ToolStreamEntry = {
 type ToolStreamHost = {
   sessionKey: string;
   chatRunId: string | null;
+  chatTaskId?: string | null;
+  chatRunStatus?: ChatRunStatus | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatStreamSegments: Array<{ text: string; ts: number }>;
@@ -503,6 +506,17 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "lifecycle") {
+    const phase = typeof payload.data?.phase === "string" ? payload.data.phase : "";
+    if (
+      phase === "start" &&
+      (host.chatRunId === payload.runId || payload.sessionKey === host.sessionKey)
+    ) {
+      host.chatRunStatus = {
+        phase: "thinking",
+        runId: host.chatRunId ?? payload.runId,
+        updatedAt: Date.now(),
+      };
+    }
     handleLifecycleCompactionEvent(host as CompactionHost, payload);
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
     return;
@@ -532,6 +546,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
+  if (phase === "start") {
+    host.chatRunStatus = {
+      phase: "using_tool",
+      runId: host.chatRunId ?? payload.runId,
+      detail: name.replace(/[_-]+/g, " "),
+      updatedAt: Date.now(),
+    };
+  }
   const args = phase === "start" ? data.args : undefined;
   const output =
     phase === "update"

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "requestId": "validation-health-check",
+  "action": "health-check",
+  "status": "queued",
+  "createdAt": "2026-05-17T21:40:11.296Z",
+  "expiresAt": "2026-05-17T21:50:11.297Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "target": {},
+  "safety": {
+    "remoteLoginUsed": false,
+    "arbitraryCommandsAllowed": false,
+    "arbitraryPathsAllowed": false,
+    "allowedActions": [
+      "health-check",
+      "garageband-status",
+      "list-bridge-files",
+      "open-latest-bridge-job",
+      "open-bridge-job"
+    ],
+    "operatorNote": "The MacBook pull agent validates this signature and action whitelist before doing anything."
+  }
+}

@@ -37,7 +37,6 @@ type LoadSessionsOverrides = {
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   showArchived?: boolean;
-  configuredAgentsOnly?: boolean;
 };
 
 type CreateSessionParams = {
@@ -45,6 +44,7 @@ type CreateSessionParams = {
   label?: string;
   model?: string;
   parentSessionKey?: string;
+  projectId?: string;
   emitCommandHooks?: boolean;
 };
 
@@ -71,12 +71,14 @@ const SESSION_EVENT_ROW_FIELDS = [
   "fastMode",
   "hasActiveRun",
   "inputTokens",
+  "judgeGuardAudit",
   "kind",
   "label",
   "latestCompactionCheckpoint",
   "model",
   "modelProvider",
   "outputTokens",
+  "projectId",
   "reasoningLevel",
   "runtimeMs",
   "sessionId",
@@ -428,11 +430,11 @@ async function loadSessionsOnce(
       ? 0
       : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
-    const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
-      configuredAgentsOnly,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     };
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;

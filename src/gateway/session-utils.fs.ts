@@ -39,6 +39,21 @@ const MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES = 5000;
 const TRANSCRIPT_ASYNC_READ_CHUNK_BYTES = 64 * 1024;
 type TranscriptFileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
 
+export type TargetedSessionMessagesStatus = "exact-run" | "timestamp-fallback" | "not-found";
+
+export type ReadTargetedSessionMessagesAsyncOptions = {
+  maxMessages: number;
+  targetRunId?: string;
+  auditTs?: number;
+};
+
+export type TargetedSessionMessagesResult = {
+  messages: unknown[];
+  targetStatus: TargetedSessionMessagesStatus;
+};
+
+const TARGETED_SESSION_AUDIT_WINDOW_MS = 15 * 60 * 1000;
+
 function readSessionTitleFieldsCacheKey(
   filePath: string,
   opts?: { includeInterSession?: boolean },
@@ -749,6 +764,148 @@ function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown
 function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
   const message = indexedTranscriptEntryToMessage(entry);
   return message ? [message] : [];
+}
+
+function normalizeTargetRunId(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function indexedEntryMessage(entry: IndexedTranscriptEntry): Record<string, unknown> | null {
+  const message = (entry.record as { message?: unknown }).message;
+  return message && typeof message === "object" && !Array.isArray(message)
+    ? (message as Record<string, unknown>)
+    : null;
+}
+
+function indexedEntryMatchesRunId(entry: IndexedTranscriptEntry, targetRunId: string): boolean {
+  const message = indexedEntryMessage(entry);
+  const meta = message?.__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return false;
+  }
+  return normalizeTargetRunId((meta as { runId?: unknown }).runId) === targetRunId;
+}
+
+function isIndexedAssistantEntry(entry: IndexedTranscriptEntry): boolean {
+  return indexedEntryMessage(entry)?.role === "assistant";
+}
+
+function resolveIndexedEntryTimestamp(entry: IndexedTranscriptEntry): number | null {
+  const timestamp = indexedEntryMessage(entry)?.timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+  if (typeof timestamp === "string") {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function resolveTargetedSessionEntryIndex(params: {
+  entries: IndexedTranscriptEntry[];
+  targetRunId?: string;
+  auditTs?: number;
+}): { status: TargetedSessionMessagesStatus; index: number | null } {
+  const targetRunId = normalizeTargetRunId(params.targetRunId);
+  if (targetRunId) {
+    const assistantMatch = params.entries.findIndex(
+      (entry) => isIndexedAssistantEntry(entry) && indexedEntryMatchesRunId(entry, targetRunId),
+    );
+    if (assistantMatch >= 0) {
+      return { status: "exact-run", index: assistantMatch };
+    }
+    const anyMatch = params.entries.findIndex((entry) =>
+      indexedEntryMatchesRunId(entry, targetRunId),
+    );
+    if (anyMatch >= 0) {
+      return { status: "exact-run", index: anyMatch };
+    }
+  }
+
+  const auditTs =
+    typeof params.auditTs === "number" && Number.isFinite(params.auditTs) ? params.auditTs : null;
+  if (auditTs === null) {
+    return { status: "not-found", index: null };
+  }
+  let best: { index: number; delta: number; before: boolean } | null = null;
+  for (const [index, entry] of params.entries.entries()) {
+    if (!isIndexedAssistantEntry(entry)) {
+      continue;
+    }
+    const timestamp = resolveIndexedEntryTimestamp(entry);
+    if (timestamp === null) {
+      continue;
+    }
+    const delta = Math.abs(auditTs - timestamp);
+    if (delta > TARGETED_SESSION_AUDIT_WINDOW_MS) {
+      continue;
+    }
+    const before = timestamp <= auditTs;
+    if (
+      !best ||
+      (before && !best.before) ||
+      (before === best.before && delta < best.delta) ||
+      (before === best.before && delta === best.delta && index > best.index)
+    ) {
+      best = { index, delta, before };
+    }
+  }
+  return best
+    ? { status: "timestamp-fallback", index: best.index }
+    : { status: "not-found", index: null };
+}
+
+function selectTargetedSessionEntries(params: {
+  entries: IndexedTranscriptEntry[];
+  limit: number;
+  targetRunId?: string;
+  auditTs?: number;
+}): { entries: IndexedTranscriptEntry[]; targetStatus: TargetedSessionMessagesStatus } {
+  const match = resolveTargetedSessionEntryIndex(params);
+  if (match.index === null) {
+    return {
+      entries: params.entries.slice(-params.limit),
+      targetStatus: match.status,
+    };
+  }
+  const halfWindow = Math.max(1, Math.floor(params.limit / 2));
+  const start = Math.max(0, match.index - halfWindow);
+  const end = Math.min(params.entries.length, start + params.limit);
+  return {
+    entries: params.entries.slice(Math.max(0, end - params.limit), end),
+    targetStatus: match.status,
+  };
+}
+
+export async function readTargetedSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadTargetedSessionMessagesAsyncOptions,
+): Promise<TargetedSessionMessagesResult> {
+  const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
+  if (maxMessages === 0) {
+    return { messages: [], targetStatus: "not-found" };
+  }
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return { messages: [], targetStatus: "not-found" };
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { messages: [], targetStatus: "not-found" };
+  }
+  const selected = selectTargetedSessionEntries({
+    entries: index.entries,
+    limit: maxMessages,
+    targetRunId: opts.targetRunId,
+    auditTs: opts.auditTs,
+  });
+  return {
+    messages: selected.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)),
+    targetStatus: selected.targetStatus,
+  };
 }
 
 export {

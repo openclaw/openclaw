@@ -215,6 +215,36 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("session defaults use the configured default agent primary before the global model default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "ollama/openclaw-control-qwen25-32b:latest",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            name: "Control Director",
+            model: {
+              primary: "ollama/openclaw-control-qwen36-27b:latest",
+              fallbacks: ["ollama/openclaw-control-qwen25-32b:latest"],
+            },
+            thinkingDefault: "off",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(getSessionDefaults(cfg)).toMatchObject({
+      modelProvider: "ollama",
+      model: "openclaw-control-qwen36-27b:latest",
+      thinkingDefault: "off",
+    });
+  });
+
   test("session defaults and rows use catalog reasoning metadata for provider thinking options", () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
@@ -1057,13 +1087,14 @@ describe("gateway session utils", () => {
             fallbacks: ["openai-codex/gpt-5.4"],
           },
         },
-        list: [{ id: "main", default: true }],
+        list: [{ id: "main", default: true, roomId: "core" }],
       },
     } as OpenClawConfig;
 
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]).toMatchObject({
       id: "main",
+      roomId: "core",
       workspace: "/tmp/default-workspace",
       model: {
         primary: "openai/gpt-5.4",
@@ -1071,6 +1102,84 @@ describe("gateway session utils", () => {
       },
       agentRuntime: {
         id: "codex",
+        source: "implicit",
+      },
+    });
+  });
+
+  test("listAgentsForGateway keeps Control Director Qwen3.6 primary ahead of Qwen2.5 rollback", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "ollama/openclaw-control-qwen25-32b:latest",
+            fallbacks: [],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            name: "Control Director",
+            model: {
+              primary: "openclaw-control-qwen36-27b",
+              fallbacks: ["ollama/openclaw-control-qwen25-32b:latest"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: "Control Director",
+      model: {
+        primary: "openclaw-control-qwen36-27b",
+        fallbacks: ["ollama/openclaw-control-qwen25-32b:latest"],
+      },
+    });
+  });
+
+  test("listAgentsForGateway uses static model parsing on the dashboard hot path", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "slow-normalizer",
+      source: "test",
+      provider: {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        normalizeModelId: () => {
+          throw new Error("provider model normalization should not run for agents.list");
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          workspace: "/tmp/default-workspace",
+          model: {
+            primary: "ollama/qwen3.5:4b",
+            fallbacks: [],
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      model: {
+        primary: "ollama/qwen3.5:4b",
+      },
+      agentRuntime: {
+        id: "auto",
         source: "implicit",
       },
     });

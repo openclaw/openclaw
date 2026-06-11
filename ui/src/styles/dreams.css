@@ -29,7 +29,7 @@
   font-family: inherit;
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   text-transform: uppercase;
   cursor: pointer;
   transition:
@@ -188,7 +188,7 @@
 .dreams__bubble-label {
   font-size: 11px;
   color: var(--accent-muted);
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
   font-weight: 600;
 }
@@ -323,7 +323,7 @@
   font-weight: 600;
   color: var(--text);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 
 .dreams__phase-next {
@@ -345,7 +345,7 @@
   color: var(--muted);
   font-size: 11px;
   font-family: inherit;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   text-transform: uppercase;
   cursor: pointer;
   transition:
@@ -402,7 +402,7 @@
 .dreams__status-label {
   font-size: 13px;
   color: var(--muted);
-  letter-spacing: 0.1em;
+  letter-spacing: 0;
   text-transform: uppercase;
   font-weight: 500;
 }
@@ -481,7 +481,7 @@
   display: block;
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--accent-muted);
   margin-bottom: 10px;
@@ -550,7 +550,7 @@
 .dreams-advanced__section-title {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -637,7 +637,7 @@
   color: var(--accent);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -716,7 +716,7 @@
   font-size: 10px;
   font-weight: 500;
   color: var(--muted);
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
   text-transform: uppercase;
   opacity: 0.7;
   flex: 1;
@@ -927,7 +927,7 @@
   padding: 3px 8px;
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
 }
 
@@ -964,7 +964,7 @@
   display: block;
   margin-bottom: 6px;
   font-size: 11px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--muted);
 }

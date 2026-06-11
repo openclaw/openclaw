@@ -132,6 +132,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
   Restrict which tools the job can use, for example `--tools exec,read`.
 </ParamField>
 
+Use `--command` for deterministic local work that should run as a process instead of asking an agent to run a script. Command payloads run without a shell, support `command`, `args`, `cwd`, `env`, `timeoutSeconds`, `successExitCodes`, and `outputLimitBytes`, and record stdout/stderr tails in cron diagnostics. Use command payloads for scheduled status bridges, paper-only audits, and other repeatable local scripts where the important guarantee is "run this exact executable." Direct API/config callers can set the same shape with `payload.kind: "command"`.
+
 `--model` uses the selected allowed model as that job's primary model. It is not the same as a chat-session `/model` override: configured fallback chains still apply when the job primary fails. If the requested model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of silently falling back to the job's agent/default model selection.
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
@@ -212,6 +214,19 @@ Failure notifications follow a separate destination path:
       --model "opus" \
       --thinking high \
       --announce
+    ```
+  </Tab>
+  <Tab title="Shell-free command job">
+    ```bash
+    openclaw cron add \
+      --name "Paper audit" \
+      --every 15m \
+      --command /usr/bin/python3 \
+      --command-arg work/scripts/audit.py \
+      --command-arg --paper-only \
+      --command-cwd /path/to/workspace \
+      --timeout-seconds 180 \
+      --no-deliver
     ```
   </Tab>
 </Tabs>

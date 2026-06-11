@@ -34,6 +34,8 @@ const mocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry:
     vi.fn<typeof import("../plugins/loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../plugins/runtime.js").getActivePluginRegistry>(),
+  getActivePluginRuntimeSubagentMode:
+    vi.fn<typeof import("../plugins/runtime.js").getActivePluginRuntimeSubagentMode>(),
   resolveConfiguredChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
   resolveDiscoverableScopedChannelPluginIds:
@@ -64,6 +66,9 @@ vi.mock("../plugins/loader.js", () => ({
 vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRegistry: (...args: Parameters<typeof mocks.getActivePluginRegistry>) =>
     mocks.getActivePluginRegistry(...args),
+  getActivePluginRuntimeSubagentMode: (
+    ...args: Parameters<typeof mocks.getActivePluginRuntimeSubagentMode>
+  ) => mocks.getActivePluginRuntimeSubagentMode(...args),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -138,6 +143,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
+    mocks.getActivePluginRuntimeSubagentMode.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
     mocks.resolveDiscoverableScopedChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
@@ -146,6 +152,7 @@ describe("ensurePluginRegistryLoaded", () => {
     resetPluginRegistryLoadedForTests();
 
     mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
     mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.resolveDiscoverableScopedChannelPluginIds.mockReturnValue([]);

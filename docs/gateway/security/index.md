@@ -698,6 +698,7 @@ Recommendations:
 - **Do not use older/weaker/smaller tiers** for tool-enabled agents or untrusted inboxes; the prompt-injection risk is too high.
 - If you must use a smaller model, **reduce blast radius** (read-only tools, strong sandboxing, minimal filesystem access, strict allowlists).
 - When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
+- To keep web/browser capability without giving it to small local models, deny `group:web` and `browser` globally in `tools.sandbox.tools.deny`, then re-grant those tools only on explicit specialist agents that run in the sandbox on a stronger non-small model.
 - For chat-only personal assistants with trusted input and no tools, smaller models are usually fine.
 
 ## Reasoning and verbose output in groups
@@ -1113,6 +1114,46 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "ro"` mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`)
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 - Extra `sandbox.docker.binds` are validated against normalized and canonicalized source paths. Parent-symlink tricks and canonical home aliases still fail closed if they resolve into blocked roots such as `/etc`, `/var/run`, or credential directories under the OS home.
+
+For local-first deployments that still need live research or browser automation,
+use a capability split instead of giving every local model the same tool
+surface:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: { mode: "all", workspaceAccess: "none" },
+    },
+    list: [
+      {
+        id: "market-research",
+        model: { primary: "openai/gpt-5.5" },
+        tools: {
+          sandbox: {
+            tools: {
+              deny: [],
+              alsoAllow: ["group:web", "browser"],
+            },
+          },
+        },
+      },
+    ],
+  },
+  tools: {
+    fs: { workspaceOnly: true },
+    sandbox: {
+      tools: {
+        deny: ["group:web", "browser"],
+      },
+    },
+  },
+}
+```
+
+That pattern keeps the default local-model lane sandboxed with web/browser off,
+while explicit specialist lanes can perform live research or browser work under
+a stronger model and a sandbox boundary.
 
 <Warning>
 `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated mode](/tools/elevated).

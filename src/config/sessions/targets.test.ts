@@ -139,6 +139,21 @@ describe("resolveSessionStoreTargets", () => {
     expect(() => resolveSessionStoreTargets(cfg, { agent: "ghost" })).toThrow(/Unknown agent id/);
   });
 
+  it("resolves an unambiguous configured agent name slug", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", name: "Control Director", default: true }, { id: "work" }],
+      },
+    };
+
+    expect(resolveSessionStoreTargets(cfg, { agent: "control-director" })).toEqual([
+      {
+        agentId: "main",
+        storePath: resolveStorePath(cfg.session?.store, { agentId: "main" }),
+      },
+    ]);
+  });
+
   it("rejects conflicting selectors", () => {
     expect(() => resolveSessionStoreTargets({}, { agent: "main", allAgents: true })).toThrow(
       /cannot be used together/i,

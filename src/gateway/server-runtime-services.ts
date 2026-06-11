@@ -70,6 +70,10 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   if (maintenance.mediaCleanup) {
     clearInterval(maintenance.mediaCleanup);
   }
+  if (maintenance.selfImprovement) {
+    clearInterval(maintenance.selfImprovement.interval);
+    clearTimeout(maintenance.selfImprovement.initial);
+  }
 }
 
 export async function runGatewayPostReadyMaintenance(params: {

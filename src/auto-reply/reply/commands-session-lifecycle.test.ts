@@ -187,6 +187,7 @@ const hoisted = vi.hoisted(() => {
 vi.mock("../../plugins/runtime.js", () => {
   return {
     getActivePluginRegistry: () => hoisted.runtimeChannelRegistry,
+    getActivePluginRuntimeSubagentMode: () => "default",
     requireActivePluginRegistry: () => hoisted.runtimeChannelRegistry,
     getActivePluginChannelRegistry: () => hoisted.runtimeChannelRegistry,
     requireActivePluginChannelRegistry: () => hoisted.runtimeChannelRegistry,

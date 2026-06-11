@@ -15,6 +15,7 @@ import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/st
 export type AgentSummary = {
   id: string;
   name?: string;
+  roomId?: string;
   identityName?: string;
   identityEmoji?: string;
   identitySource?: "identity" | "config";
@@ -90,6 +91,9 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       name: normalizeOptionalString(
         configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.name,
       ),
+      roomId: normalizeOptionalString(
+        configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.roomId,
+      ),
       identityName,
       identityEmoji,
       identitySource,
@@ -107,6 +111,7 @@ export function applyAgentConfig(
   params: {
     agentId: string;
     name?: string;
+    roomId?: string;
     workspace?: string;
     agentDir?: string;
     model?: string;
@@ -115,6 +120,7 @@ export function applyAgentConfig(
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
   const name = params.name?.trim();
+  const roomId = params.roomId?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = index >= 0 ? list[index] : { id: agentId };
@@ -122,6 +128,7 @@ export function applyAgentConfig(
   const nextEntry: AgentEntry = {
     ...base,
     ...(name ? { name } : {}),
+    ...(roomId ? { roomId } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.model ? { model: params.model } : {}),

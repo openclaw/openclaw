@@ -8,6 +8,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
+import { collectGatewayStartupSessionAgentHarnessRuntimes } from "./startup-agent-harness-runtimes.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -90,6 +91,13 @@ export async function prepareGatewayPluginBootstrap(params: {
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
+  const sessionAgentHarnessRuntimes =
+    params.minimalTestGateway || pluginsGloballyDisabled
+      ? []
+      : collectGatewayStartupSessionAgentHarnessRuntimes({
+          config: gatewayPluginConfig,
+          env: process.env,
+        });
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
@@ -99,6 +107,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
+          extraAgentHarnessRuntimes: sessionAgentHarnessRuntimes,
         });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),

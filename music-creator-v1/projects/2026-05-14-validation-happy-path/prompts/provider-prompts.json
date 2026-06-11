@@ -1,0 +1,29 @@
+[
+  {
+    "candidateId": "candidate-01",
+    "model": "google/lyria-3-clip-preview",
+    "prompt": "Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.",
+    "instrumental": true,
+    "durationSeconds": 60,
+    "format": "wav",
+    "filename": "2026-05-14-validation-happy-path-candidate-01"
+  },
+  {
+    "candidateId": "candidate-02",
+    "model": "minimax/music-2.6",
+    "prompt": "Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.",
+    "instrumental": true,
+    "durationSeconds": 60,
+    "format": "mp3",
+    "filename": "2026-05-14-validation-happy-path-candidate-02"
+  },
+  {
+    "candidateId": "candidate-03",
+    "model": "comfy/workflow",
+    "prompt": "Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.",
+    "instrumental": true,
+    "durationSeconds": 60,
+    "format": "wav",
+    "filename": "2026-05-14-validation-happy-path-candidate-03"
+  }
+]

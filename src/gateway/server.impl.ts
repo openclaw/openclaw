@@ -56,6 +56,7 @@ import {
 } from "../secrets/runtime.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { registerPatternLabDiscordInteractiveHandler } from "./pattern-lab-discord-interactions.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
@@ -668,6 +669,7 @@ export async function startGatewayServer(
     ]);
   }
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
+  registerPatternLabDiscordInteractiveHandler();
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -1000,6 +1002,7 @@ export async function startGatewayServer(
           removeChatRun,
           agentRunSeq,
           nodeSendToSession,
+          cron: runtimeState.cronState.cron,
           ...(typeof cfgAtStart.media?.ttlHours === "number"
             ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
             : {}),
@@ -1080,6 +1083,7 @@ export async function startGatewayServer(
       attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
       pinActivePluginHttpRouteRegistry(pluginRegistry);
       pinActivePluginChannelRegistry(pluginRegistry);
+      registerPatternLabDiscordInteractiveHandler();
     };
     const refreshAttachedGatewayDiscovery = async (nextPluginRegistry: typeof pluginRegistry) => {
       if (minimalTestGateway) {
@@ -1129,17 +1133,26 @@ export async function startGatewayServer(
     }): Promise<GatewayPluginReloadResult> => {
       const beforeChannelTargets = listAttachedChannelConfigTargets();
       const beforeChannelIds = new Set(beforeChannelTargets.keys());
-      const [{ loadPluginLookUpTable }, { prepareGatewayPluginLoad }, { startPluginServices }] =
-        await Promise.all([
-          import("../plugins/plugin-lookup-table.js"),
-          import("./server-plugin-bootstrap.js"),
-          import("../plugins/services.js"),
-        ]);
+      const [
+        { loadPluginLookUpTable },
+        { prepareGatewayPluginLoad },
+        { startPluginServices },
+        { collectGatewayStartupSessionAgentHarnessRuntimes },
+      ] = await Promise.all([
+        import("../plugins/plugin-lookup-table.js"),
+        import("./server-plugin-bootstrap.js"),
+        import("../plugins/services.js"),
+        import("./startup-agent-harness-runtimes.js"),
+      ]);
       const nextPluginLookUpTable = loadPluginLookUpTable({
         config: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
         activationSourceConfig: params.nextConfig,
+        extraAgentHarnessRuntimes: collectGatewayStartupSessionAgentHarnessRuntimes({
+          config: params.nextConfig,
+          env: process.env,
+        }),
       });
       const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
       const nextStartupChannelIds = new Set<ChannelId>();
@@ -1392,6 +1405,7 @@ export async function startGatewayServer(
           startupStartedAt: opts.startupStartedAt,
           broadcast,
           tailscaleMode,
+          tailscaleConfig,
           resetOnExit: tailscaleConfig.resetOnExit ?? false,
           preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
           controlUiBasePath,

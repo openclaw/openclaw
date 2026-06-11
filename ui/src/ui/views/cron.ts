@@ -251,6 +251,15 @@ function inputIdForField(key: CronFieldKey) {
   if (key === "payloadText") {
     return "cron-payload-text";
   }
+  if (key === "commandEnvText") {
+    return "cron-command-env";
+  }
+  if (key === "commandSuccessExitCodes") {
+    return "cron-command-success-exit-codes";
+  }
+  if (key === "commandOutputLimitBytes") {
+    return "cron-command-output-limit-bytes";
+  }
   if (key === "payloadModel") {
     return "cron-payload-model";
   }
@@ -277,7 +286,9 @@ function fieldLabelForKey(
   if (key === "payloadText") {
     return form.payloadKind === "systemEvent"
       ? t("cron.form.mainTimelineMessage")
-      : t("cron.form.assistantTaskPrompt");
+      : form.payloadKind === "command"
+        ? "Command executable"
+        : t("cron.form.assistantTaskPrompt");
   }
   if (key === "deliveryTo") {
     return deliveryMode === "webhook" ? t("cron.form.webhookUrl") : t("cron.form.to");
@@ -289,6 +300,9 @@ function fieldLabelForKey(
     cronExpr: t("cron.form.expression"),
     staggerAmount: t("cron.form.staggerWindow"),
     payloadText: t("cron.form.assistantTaskPrompt"),
+    commandEnvText: "Command environment",
+    commandSuccessExitCodes: "Command success exit codes",
+    commandOutputLimitBytes: "Command output limit",
     payloadModel: t("cron.form.model"),
     payloadThinking: t("cron.form.thinking"),
     timeoutSeconds: t("cron.form.timeoutSeconds"),
@@ -311,6 +325,9 @@ function collectBlockingFields(
     "cronExpr",
     "staggerAmount",
     "payloadText",
+    "commandEnvText",
+    "commandSuccessExitCodes",
+    "commandOutputLimitBytes",
     "payloadModel",
     "payloadThinking",
     "timeoutSeconds",
@@ -357,9 +374,263 @@ function renderFieldLabel(text: string, required = false) {
   </span>`;
 }
 
+type CronJobHealthTone = "healthy" | "review" | "watching" | "idle";
+
+type CronJobHealth = {
+  tone: CronJobHealthTone;
+  title: string;
+  plainSummary: string;
+  whyItMatters: string;
+  recommendedAction: string;
+  confidence: string;
+  lastError?: string;
+};
+
+type CronRecoverySummary = {
+  verdict: string;
+  explanation: string;
+  tone: CronJobHealthTone;
+  failedJobs: CronJob[];
+  runningJobs: CronJob[];
+  skippedJobs: CronJob[];
+};
+
+function normalizeCronText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getCronJobLastError(job: CronJob): string {
+  const state = job.state as
+    | {
+        lastError?: unknown;
+        lastDiagnosticSummary?: unknown;
+        lastDiagnostics?: { summary?: unknown };
+      }
+    | undefined;
+  return (
+    normalizeCronText(state?.lastError) ||
+    normalizeCronText(state?.lastDiagnosticSummary) ||
+    normalizeCronText(state?.lastDiagnostics?.summary)
+  );
+}
+
+function isDockerSandboxFailure(text: string): boolean {
+  const lower = text.toLowerCase();
+  return lower.includes("sandbox mode requires docker") || lower.includes("docker daemon");
+}
+
+function hasRunningCronSignal(job: CronJob): boolean {
+  const runningAtMs = job.state?.runningAtMs;
+  return typeof runningAtMs === "number" && Number.isFinite(runningAtMs);
+}
+
+export function describeCronJobHealth(job: CronJob): CronJobHealth {
+  if (hasRunningCronSignal(job)) {
+    return {
+      tone: "watching",
+      title: "Running now",
+      plainSummary: `${job.name} is working right now.`,
+      whyItMatters:
+        "OpenClaw is actively running this automation, so the newest result is not final yet.",
+      recommendedAction: "Open history to watch the latest run finish.",
+      confidence: "Live",
+    };
+  }
+
+  const lastStatus = job.state?.lastStatus;
+  const lastError = getCronJobLastError(job);
+  if (lastStatus === "error") {
+    if (isDockerSandboxFailure(lastError)) {
+      return {
+        tone: "review",
+        title: "Docker sandbox unavailable",
+        plainSummary: `${job.name} could not run because Docker sandboxing was unavailable.`,
+        whyItMatters:
+          "The scheduled work did not complete, so any report or automation result may be stale.",
+        recommendedAction:
+          "Use Run now after Docker is started, or use local execution for this trusted Mac setup.",
+        confidence: "Live",
+        lastError,
+      };
+    }
+    return {
+      tone: "review",
+      title: "Run failed",
+      plainSummary: `${job.name} failed on its last run.`,
+      whyItMatters: "This automation may not have produced the update it is responsible for.",
+      recommendedAction:
+        "Open history, inspect the newest error, then run it again after the cause is fixed.",
+      confidence: "Live",
+      lastError,
+    };
+  }
+
+  if (lastStatus === "skipped") {
+    return {
+      tone: "watching",
+      title: "Skipped by design",
+      plainSummary: `${job.name} skipped its last run.`,
+      whyItMatters:
+        "Skipped runs can be normal when another learning cycle or lock is already active.",
+      recommendedAction: "Review history only if this keeps happening or the next run is overdue.",
+      confidence: "Recent",
+      lastError,
+    };
+  }
+
+  if (lastStatus === "ok") {
+    return {
+      tone: "healthy",
+      title: "Healthy",
+      plainSummary: `${job.name} completed successfully last time.`,
+      whyItMatters: "The latest known run completed without an error.",
+      recommendedAction: "No action needed.",
+      confidence: "Recent",
+    };
+  }
+
+  return {
+    tone: "idle",
+    title: "No run yet",
+    plainSummary: `${job.name} has no completed run recorded yet.`,
+    whyItMatters: "There is not enough history to prove this automation is producing results.",
+    recommendedAction: "Run it once when you want to validate it.",
+    confidence: "Inferred",
+  };
+}
+
+function buildCronRecoverySummary(jobs: CronJob[]): CronRecoverySummary {
+  const enabledJobs = jobs.filter((job) => job.enabled);
+  const failedJobs = enabledJobs.filter((job) => job.state?.lastStatus === "error");
+  const runningJobs = enabledJobs.filter(hasRunningCronSignal);
+  const skippedJobs = enabledJobs.filter((job) => job.state?.lastStatus === "skipped");
+  if (failedJobs.length > 0) {
+    return {
+      verdict: "Review recommended",
+      explanation:
+        failedJobs.length === 1
+          ? "One automation needs attention before relying on its result."
+          : `${failedJobs.length} automations need attention before relying on their results.`,
+      tone: "review",
+      failedJobs,
+      runningJobs,
+      skippedJobs,
+    };
+  }
+  if (runningJobs.length > 0) {
+    return {
+      verdict: "Watching",
+      explanation:
+        runningJobs.length === 1
+          ? "One automation is running right now."
+          : `${runningJobs.length} automations are running right now.`,
+      tone: "watching",
+      failedJobs,
+      runningJobs,
+      skippedJobs,
+    };
+  }
+  return {
+    verdict: "All clear",
+    explanation: "Scheduled automations are running normally. No action is needed right now.",
+    tone: "healthy",
+    failedJobs,
+    runningJobs,
+    skippedJobs,
+  };
+}
+
+function confirmCronManualRun(job: CronJob, mode: "force" | "due"): boolean {
+  const confirm = (globalThis as { confirm?: (message: string) => boolean | undefined }).confirm;
+  if (typeof confirm !== "function") {
+    return true;
+  }
+  const modeLabel = mode === "due" ? "run if due" : "run now";
+  return (
+    confirm(
+      `Run "${job.name}" ${modeLabel}? This can start real automation work, but it will not publish or trade unless the job itself is configured to do so.`,
+    ) ?? true
+  );
+}
+
+function renderCronRecoveryPanel(props: CronProps) {
+  const summary = buildCronRecoverySummary(props.jobs);
+  const topJobs =
+    summary.failedJobs.length > 0
+      ? summary.failedJobs.slice(0, 3)
+      : summary.runningJobs.slice(0, 3);
+  return html`
+    <section class=${`card cron-recovery-panel cron-recovery-panel--${summary.tone}`}>
+      <div class="cron-recovery-panel__header">
+        <div>
+          <div class="eyebrow">Automation Recovery</div>
+          <h2>${summary.verdict}</h2>
+          <p>${summary.explanation}</p>
+        </div>
+        <div class="cron-recovery-panel__stats" aria-label="Automation counts">
+          <span>${summary.failedJobs.length} failed</span>
+          <span>${summary.runningJobs.length} running</span>
+          <span>${summary.skippedJobs.length} skipped</span>
+        </div>
+      </div>
+      ${topJobs.length > 0
+        ? html`<div class="cron-recovery-actions">
+            ${topJobs.map((job) => renderCronRecoveryAction(job, props))}
+          </div>`
+        : html`<div class="cron-recovery-empty">
+            No urgent automation action is needed. Use the job list below for routine inspection.
+          </div>`}
+    </section>
+  `;
+}
+
+function renderCronRecoveryAction(job: CronJob, props: CronProps) {
+  const health = describeCronJobHealth(job);
+  return html`
+    <article class=${`cron-recovery-action cron-recovery-action--${health.tone}`}>
+      <div>
+        <div class="cron-recovery-action__title">${health.title}: ${job.name}</div>
+        <p>${health.whyItMatters}</p>
+        <p class="cron-recovery-action__step">${health.recommendedAction}</p>
+        <span class="chip">${health.confidence}</span>
+      </div>
+      <div class="cron-recovery-action__buttons">
+        <button
+          class="btn"
+          type="button"
+          ?disabled=${props.busy}
+          @click=${(event: Event) => {
+            event.stopPropagation();
+            props.onLoadRuns(job.id);
+          }}
+        >
+          View history
+        </button>
+        ${health.tone === "review"
+          ? html`<button
+              class="btn btn--primary"
+              type="button"
+              ?disabled=${props.busy}
+              @click=${(event: Event) => {
+                event.stopPropagation();
+                if (confirmCronManualRun(job, "force")) {
+                  props.onLoadRuns(job.id);
+                  props.onRun(job, "force");
+                }
+              }}
+            >
+              Run now
+            </button>`
+          : nothing}
+      </div>
+    </article>
+  `;
+}
+
 export function renderCron(props: CronProps) {
   const isEditing = Boolean(props.editingJobId);
   const isAgentTurn = props.form.payloadKind === "agentTurn";
+  const isCommand = props.form.payloadKind === "command";
   const isCronSchedule = props.form.scheduleKind === "cron";
   const channelOptions = buildChannelOptions(props);
   const selectedJob =
@@ -441,6 +712,8 @@ export function renderCron(props: CronProps) {
         ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
       </div>
     </section>
+
+    ${renderCronRecoveryPanel(props)}
 
     <section class=${`cron-workspace ${formCollapsed ? "cron-workspace--form-collapsed" : ""}`}>
       <div class="cron-workspace-main">
@@ -860,7 +1133,7 @@ export function renderCron(props: CronProps) {
                 </select>
                 <div class="cron-help">${t("cron.form.wakeModeHelp")}</div>
               </label>
-              <label class="field ${isAgentTurn ? "" : "cron-span-2"}">
+              <label class="field ${isAgentTurn || isCommand ? "" : "cron-span-2"}">
                 ${renderFieldLabel(t("cron.form.payloadKind"))}
                 <select
                   id="cron-payload-kind"
@@ -873,14 +1146,17 @@ export function renderCron(props: CronProps) {
                 >
                   <option value="systemEvent">${t("cron.form.systemEvent")}</option>
                   <option value="agentTurn">${t("cron.form.agentTurn")}</option>
+                  <option value="command">Command</option>
                 </select>
                 <div class="cron-help">
                   ${props.form.payloadKind === "systemEvent"
                     ? t("cron.form.systemEventHelp")
-                    : t("cron.form.agentTurnHelp")}
+                    : props.form.payloadKind === "command"
+                      ? "Run a local executable directly, without an agent promise or shell."
+                      : t("cron.form.agentTurnHelp")}
                 </div>
               </label>
-              ${isAgentTurn
+              ${isAgentTurn || isCommand
                 ? html`
                     <label class="field">
                       ${renderFieldLabel(t("cron.form.timeoutSeconds"))}
@@ -912,7 +1188,9 @@ export function renderCron(props: CronProps) {
               ${renderFieldLabel(
                 props.form.payloadKind === "systemEvent"
                   ? t("cron.form.mainTimelineMessage")
-                  : t("cron.form.assistantTaskPrompt"),
+                  : props.form.payloadKind === "command"
+                    ? "Command"
+                    : t("cron.form.assistantTaskPrompt"),
                 true,
               )}
               <textarea
@@ -930,6 +1208,115 @@ export function renderCron(props: CronProps) {
               ></textarea>
               ${renderFieldError(props.fieldErrors.payloadText, errorIdForField("payloadText"))}
             </label>
+            ${isCommand
+              ? html`
+                  <div class="form-grid cron-form-grid cron-span-2">
+                    <label class="field">
+                      ${renderFieldLabel("Arguments")}
+                      <textarea
+                        id="cron-command-args"
+                        .value=${props.form.commandArgsText}
+                        rows="3"
+                        placeholder="One argument per line"
+                        @input=${(e: Event) =>
+                          props.onFormChange({
+                            commandArgsText: (e.target as HTMLTextAreaElement).value,
+                          })}
+                      ></textarea>
+                      <div class="cron-help">
+                        Arguments are passed directly without a shell, in this exact order.
+                      </div>
+                    </label>
+                    <label class="field">
+                      ${renderFieldLabel("Working directory")}
+                      <input
+                        id="cron-command-cwd"
+                        .value=${props.form.commandCwd}
+                        placeholder="/path/to/workdir"
+                        @input=${(e: Event) =>
+                          props.onFormChange({
+                            commandCwd: (e.target as HTMLInputElement).value,
+                          })}
+                      />
+                      <div class="cron-help">Optional. Leave blank to use the Gateway process.</div>
+                    </label>
+                    <label class="field">
+                      ${renderFieldLabel("Environment")}
+                      <textarea
+                        id="cron-command-env"
+                        .value=${props.form.commandEnvText}
+                        rows="3"
+                        placeholder="KEY=value"
+                        aria-invalid=${props.fieldErrors.commandEnvText ? "true" : "false"}
+                        aria-describedby=${ifDefined(
+                          props.fieldErrors.commandEnvText
+                            ? errorIdForField("commandEnvText")
+                            : undefined,
+                        )}
+                        @input=${(e: Event) =>
+                          props.onFormChange({
+                            commandEnvText: (e.target as HTMLTextAreaElement).value,
+                          })}
+                      ></textarea>
+                      <div class="cron-help">One KEY=VALUE line per variable.</div>
+                      ${renderFieldError(
+                        props.fieldErrors.commandEnvText,
+                        errorIdForField("commandEnvText"),
+                      )}
+                    </label>
+                    <div class="form-grid cron-form-grid">
+                      <label class="field">
+                        ${renderFieldLabel("Success exit codes")}
+                        <input
+                          id="cron-command-success-exit-codes"
+                          .value=${props.form.commandSuccessExitCodes}
+                          placeholder="0"
+                          aria-invalid=${props.fieldErrors.commandSuccessExitCodes
+                            ? "true"
+                            : "false"}
+                          aria-describedby=${ifDefined(
+                            props.fieldErrors.commandSuccessExitCodes
+                              ? errorIdForField("commandSuccessExitCodes")
+                              : undefined,
+                          )}
+                          @input=${(e: Event) =>
+                            props.onFormChange({
+                              commandSuccessExitCodes: (e.target as HTMLInputElement).value,
+                            })}
+                        />
+                        ${renderFieldError(
+                          props.fieldErrors.commandSuccessExitCodes,
+                          errorIdForField("commandSuccessExitCodes"),
+                        )}
+                      </label>
+                      <label class="field">
+                        ${renderFieldLabel("Output limit bytes")}
+                        <input
+                          id="cron-command-output-limit-bytes"
+                          .value=${props.form.commandOutputLimitBytes}
+                          placeholder="16000"
+                          aria-invalid=${props.fieldErrors.commandOutputLimitBytes
+                            ? "true"
+                            : "false"}
+                          aria-describedby=${ifDefined(
+                            props.fieldErrors.commandOutputLimitBytes
+                              ? errorIdForField("commandOutputLimitBytes")
+                              : undefined,
+                          )}
+                          @input=${(e: Event) =>
+                            props.onFormChange({
+                              commandOutputLimitBytes: (e.target as HTMLInputElement).value,
+                            })}
+                        />
+                        ${renderFieldError(
+                          props.fieldErrors.commandOutputLimitBytes,
+                          errorIdForField("commandOutputLimitBytes"),
+                        )}
+                      </label>
+                    </div>
+                  </div>
+                `
+              : nothing}
           </section>
 
           <section class="cron-form-section">
@@ -1513,9 +1900,16 @@ function renderFieldError(message?: string, id?: string) {
 function renderJob(job: CronJob, props: CronProps) {
   const isSelected = props.runsJobId === job.id;
   const itemClass = `list-item list-item-clickable cron-job${isSelected ? " list-item-selected" : ""}`;
+  const health = describeCronJobHealth(job);
   const selectAnd = (action: () => void) => {
     props.onLoadRuns(job.id);
     action();
+  };
+  const runAfterConfirm = (mode: "force" | "due") => {
+    if (!confirmCronManualRun(job, mode)) {
+      return;
+    }
+    selectAnd(() => props.onRun(job, mode));
   };
   return html`
     <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
@@ -1531,6 +1925,7 @@ function renderJob(job: CronJob, props: CronProps) {
         </div>
         <div class="list-meta">${renderJobState(job)}</div>
       </div>
+      ${health.tone === "review" ? renderCronJobGuidance(job, health, props) : nothing}
       ${renderJobPayload(job)}
       <div class="cron-job-footer">
         <div class="chip-row cron-job-chips">
@@ -1576,17 +1971,17 @@ function renderJob(job: CronJob, props: CronProps) {
             ?disabled=${props.busy}
             @click=${(event: Event) => {
               event.stopPropagation();
-              selectAnd(() => props.onRun(job, "force"));
+              runAfterConfirm("force");
             }}
           >
-            ${t("cron.jobList.run")}
+            Run now
           </button>
           <button
             class="btn"
             ?disabled=${props.busy}
             @click=${(event: Event) => {
               event.stopPropagation();
-              selectAnd(() => props.onRun(job, "due"));
+              runAfterConfirm("due");
             }}
           >
             Run if due
@@ -1617,6 +2012,47 @@ function renderJob(job: CronJob, props: CronProps) {
   `;
 }
 
+function renderCronJobGuidance(job: CronJob, health: CronJobHealth, props: CronProps) {
+  return html`
+    <div class="cron-job-guidance" @click=${(event: Event) => event.stopPropagation()}>
+      <div>
+        <strong>${health.title}</strong>
+        <p>${health.plainSummary}</p>
+        <p>${health.recommendedAction}</p>
+        ${health.lastError
+          ? html`<details>
+              <summary>Error detail</summary>
+              <pre>${health.lastError}</pre>
+            </details>`
+          : nothing}
+      </div>
+      <div class="cron-job-guidance__actions">
+        <button
+          class="btn"
+          type="button"
+          ?disabled=${props.busy}
+          @click=${() => props.onLoadRuns(job.id)}
+        >
+          View history
+        </button>
+        <button
+          class="btn btn--primary"
+          type="button"
+          ?disabled=${props.busy}
+          @click=${() => {
+            if (confirmCronManualRun(job, "force")) {
+              props.onLoadRuns(job.id);
+              props.onRun(job, "force");
+            }
+          }}
+        >
+          Run now
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function renderJobPayload(job: CronJob) {
   const payload = getCronJobPayload(job);
   if (!payload) {
@@ -1626,6 +2062,21 @@ function renderJobPayload(job: CronJob) {
     return html`<div class="cron-job-detail">
       <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>
       <span class="muted cron-job-detail-value">${payload.text}</span>
+    </div>`;
+  }
+  if (payload.kind === "command") {
+    const commandLine = [payload.command, ...(payload.args ?? [])].join(" ");
+    return html`<div class="cron-job-detail">
+      <div class="cron-job-detail-section">
+        <span class="cron-job-detail-label">Command</span>
+        <span class="muted cron-job-detail-value">${commandLine}</span>
+      </div>
+      ${payload.cwd
+        ? html`<div class="cron-job-detail-section">
+            <span class="cron-job-detail-label">Working directory</span>
+            <span class="muted cron-job-detail-value">${payload.cwd}</span>
+          </div>`
+        : nothing}
     </div>`;
   }
 

@@ -39,8 +39,26 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
 }
 
 describe("renderChatAvatar", () => {
+  it("renders Todd Stanski's assistant chat avatar at half the previous profile size", () => {
+    const avatar = renderAvatar(["assistant", { avatar: "blob:todd", name: "Todd Stanski" }]);
+
+    expect(avatar?.classList.contains("chat-avatar--todd-stanski")).toBe(true);
+    expect(avatar?.getAttribute("style")).toContain("width:54px");
+    expect(avatar?.getAttribute("style")).toContain("height:54px");
+    expect(avatar?.getAttribute("style")).toContain("min-width:54px");
+    expect(avatar?.getAttribute("style")).toContain("max-height:54px");
+  });
+
+  it("keeps non-Todd assistant chat avatars at the default profile size", () => {
+    const avatar = renderAvatar(["assistant", { avatar: "blob:agent", name: "Other Agent" }]);
+
+    expect(avatar?.classList.contains("chat-avatar--todd-stanski")).toBe(false);
+    expect(avatar?.getAttribute("style")).toContain("width:216px");
+  });
+
   it("renders assistant fallback, blob image, and text avatars", () => {
     const defaultAvatar = renderAvatar(["assistant"]);
+    expect(defaultAvatar).not.toBeNull();
     expect(defaultAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
 
     const remoteAvatar = renderAvatar([
@@ -71,13 +89,30 @@ describe("renderChatAvatar", () => {
     expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
   });
 
+  it("does not render protected assistant avatar routes without an authenticated blob URL", () => {
+    const avatar = renderAvatar([
+      "assistant",
+      { avatar: "/avatar/main:0", name: "OpenClaw" },
+      undefined,
+      "",
+      null,
+    ]);
+
+    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+  });
+
   it("renders local user image and text avatars", () => {
     const imageAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "/avatar/user" }]);
     expect(imageAvatar?.getAttribute("src")).toBe("/avatar/user");
     expect(imageAvatar?.getAttribute("alt")).toBe("Buns");
+    expect(imageAvatar?.getAttribute("style")).toContain("width:54px");
+    expect(imageAvatar?.getAttribute("style")).toContain("height:54px");
+    expect(imageAvatar?.getAttribute("style")).toContain("min-width:54px");
+    expect(imageAvatar?.getAttribute("style")).toContain("max-height:54px");
 
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent).toContain("AB");
+    expect(textAvatar?.getAttribute("style")).toContain("width:54px");
   });
 });

@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import type { TailscaleClientOptions } from "../../../infra/tailscale.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -76,6 +77,7 @@ export async function resolveConnectAuthState(params: {
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
+  tailscaleClientOptions?: TailscaleClientOptions;
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
@@ -94,6 +96,7 @@ export async function resolveConnectAuthState(params: {
     rateLimiter: sharedAuthProvided ? params.rateLimiter : undefined,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    tailscaleClientOptions: params.tailscaleClientOptions,
   });
 
   const sharedAuthResult =

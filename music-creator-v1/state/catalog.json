@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-05-19T18:59:37.454Z",
+  "projects": [
+    {
+      "runId": "2026-05-14-validation-happy-path",
+      "status": "candidate_ingested",
+      "request": "Warm instrumental ambient piano cue for deep focus",
+      "artist": "Validation Artist",
+      "platform": "youtube",
+      "projectPath": "music-creator-v1/projects/2026-05-14-validation-happy-path",
+      "candidateCount": 2,
+      "sourceCount": 1,
+      "vocalCount": 1,
+      "selectedCandidateId": "candidate-01",
+      "selectedScore": 90,
+      "liveGenerationStatus": "ingested",
+      "latestBridgeJobId": "2026-05-14-validation-happy-path-vocal-validation-cloud-vocal-1778969134425",
+      "blockers": [],
+      "nextAction": "Run qa.",
+      "updatedAt": "2026-05-16T22:12:00.732Z"
+    }
+  ]
+}

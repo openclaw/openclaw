@@ -89,6 +89,12 @@ export const updateHandlers: GatewayRequestHandlers = {
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
+          preserveDirty: config.update?.preserveDirty === true,
+          sourceRoot:
+            typeof config.update?.sourceRoot === "string" ? config.update.sourceRoot : undefined,
+          requiredPaths: Array.isArray(config.update?.requiredPaths)
+            ? config.update.requiredPaths
+            : undefined,
         });
       }
     } catch {

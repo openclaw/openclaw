@@ -31,17 +31,34 @@ describe("method scope resolution", () => {
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
+    ["selfImprovement.auditEvents.list", ["operator.read"]],
+    ["selfImprovement.scorecard", ["operator.read"]],
+    ["selfImprovement.health", ["operator.read"]],
+    ["selfImprovement.productionCheck", ["operator.read"]],
+    ["selfImprovement.proposals.list", ["operator.read"]],
+    ["selfImprovement.proposals.get", ["operator.read"]],
+    ["selfImprovement.curator.list", ["operator.read"]],
+    ["selfImprovement.curator.get", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
+    ["selfImprovement.maintenance.run", ["operator.write"]],
+    ["selfImprovement.models.preflight", ["operator.write"]],
+    ["selfImprovement.analysis.run", ["operator.write"]],
+    ["selfImprovement.evals.run", ["operator.write"]],
+    ["selfImprovement.groups.update", ["operator.write"]],
+    ["selfImprovement.proposals.update", ["operator.write"]],
+    ["selfImprovement.curator.update", ["operator.write"]],
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
+    ["patternLab.dashboard.snapshot", ["operator.read"]],
+    ["patternLab.assets.approve", ["operator.approvals"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
@@ -223,6 +240,12 @@ describe("plugin approval method registration", () => {
 });
 
 describe("core gateway method classification", () => {
+  it("mounts task ledger RPC handlers", () => {
+    expect(Object.keys(coreGatewayHandlers)).toEqual(
+      expect.arrayContaining(["tasks.list", "tasks.get", "tasks.cancel"]),
+    );
+  });
+
   it("treats node-role methods as classified even without operator scopes", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);

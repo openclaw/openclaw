@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "requestId": "validation-garageband-status-2",
+  "action": "garageband-status",
+  "status": "done",
+  "updatedAt": "2026-05-17T21:41:24Z",
+  "remoteLoginUsed": false,
+  "arbitraryCommandsAllowed": false,
+  "detail": "GarageBand: missing; Valhalla AU: valhalla_au_missing_or_failed."
+}

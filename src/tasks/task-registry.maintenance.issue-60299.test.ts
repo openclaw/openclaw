@@ -406,6 +406,41 @@ describe("task-registry maintenance issue #60299", () => {
     expect(storedTask.terminalSummary).toBe("done");
   });
 
+  it("recovers finished cron tasks when the task run id is a few milliseconds after the cron run log", async () => {
+    const runAtMs = Date.now() - GRACE_EXPIRED_MS;
+    const taskStartedAt = runAtMs + 3;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-run-log-skew",
+      runId: `cron:cron-job-run-log-skew:${taskStartedAt}`,
+      startedAt: taskStartedAt,
+      lastEventAt: taskStartedAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-run-log-skew": [
+          {
+            ts: runAtMs + 1250,
+            jobId: "cron-job-run-log-skew",
+            action: "finished",
+            status: "error",
+            error: "cron: job interrupted by gateway restart",
+            runAtMs,
+            durationMs: 1250,
+          },
+        ],
+      },
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0, recovered: 1 });
+    const storedTask = requireTaskRecord(currentTasks, task.taskId);
+    expect(storedTask.status).toBe("failed");
+    expect(storedTask.endedAt).toBe(runAtMs + 1250);
+    expect(storedTask.error).toBe("cron: job interrupted by gateway restart");
+  });
+
   it("recovers interrupted cron tasks from durable cron job state when run logs are absent", async () => {
     const startedAt = Date.now() - GRACE_EXPIRED_MS;
     const task = makeStaleTask({

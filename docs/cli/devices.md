@@ -48,6 +48,24 @@ openclaw devices clear --yes --pending
 openclaw devices clear --yes --pending --json
 ```
 
+### `openclaw devices prune-smoke [--older-than <duration>] [--yes]`
+
+Preview or remove old Control UI smoke-test pairings.
+
+Only devices explicitly labeled by OpenClaw smoke validation, such as
+`OpenClaw smoke iPhone profile`, are eligible. Ordinary Control UI browser and
+iPhone pairings are not pruned even if they are old.
+
+```
+openclaw devices prune-smoke
+openclaw devices prune-smoke --older-than 14d
+openclaw devices prune-smoke --older-than 14d --yes
+openclaw devices prune-smoke --older-than 14d --yes --json
+```
+
+Durations accept `ms`, `s`, `m`, `h`, or `d`. The default is `7d`. Without
+`--yes`, the command is preview-only.
+
 ### `openclaw devices approve [requestId] [--latest]`
 
 Approve a pending device pairing request by exact `requestId`. If `requestId`
@@ -152,6 +170,8 @@ When you set `--url`, the CLI does not fall back to config or environment creden
   rotate or revoke a token that currently carries `operator.admin` or
   `operator.write`.
 - `devices clear` is intentionally gated by `--yes`.
+- `devices prune-smoke` only targets labeled Control UI smoke-test pairings; it
+  does not guess or remove ordinary browser/iPhone pairings.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
 - `devices approve` requires an explicit request ID before minting tokens; omitting `requestId` or passing `--latest` only previews the newest pending request.
 

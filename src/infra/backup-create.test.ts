@@ -21,11 +21,13 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
     archivePath: "/tmp/openclaw-backup.tar.gz",
     dryRun: false,
     includeWorkspace: true,
+    includeSessionTranscripts: false,
     onlyConfig: false,
     verified: false,
     assets: [],
     skipped: [],
     skippedVolatileCount: 0,
+    sessionTranscriptSnapshotCount: 0,
     ...overrides,
   };
 }

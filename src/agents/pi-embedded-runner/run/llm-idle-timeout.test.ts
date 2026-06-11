@@ -119,6 +119,17 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
   });
 
+  it.each(["ollama", "lmstudio", "llamacpp", "llama.cpp", " OLLAMA "])(
+    "disables the default idle watchdog for local provider API %s without requiring baseUrl",
+    (providerApi) => {
+      expect(resolveLlmIdleTimeoutMs({ providerApi })).toBe(0);
+    },
+  );
+
+  it("disables the default idle watchdog when the model carries a local API", () => {
+    expect(resolveLlmIdleTimeoutMs({ model: { api: "ollama" } })).toBe(0);
+  });
+
   it.each([
     "http://172.32.0.1:11434",
     "http://192.169.1.1:11434",

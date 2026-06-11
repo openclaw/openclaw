@@ -61,6 +61,7 @@ const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
+const CRON_RUN_LOG_STARTED_AT_TOLERANCE_MS = 5_000;
 
 /**
  * Number of tasks to process before yielding to the event loop.
@@ -367,17 +368,19 @@ function resolveCronRunLogRecovery(
     (candidate) =>
       candidate.jobId === execution.jobId &&
       candidate.action === "finished" &&
-      candidate.runAtMs === execution.startedAt &&
+      typeof candidate.runAtMs === "number" &&
+      Math.abs(candidate.runAtMs - execution.startedAt) <= CRON_RUN_LOG_STARTED_AT_TOLERANCE_MS &&
       (candidate.status === "ok" || candidate.status === "skipped" || candidate.status === "error"),
   );
   if (!entry) {
     return undefined;
   }
+  const runAtMs = typeof entry.runAtMs === "number" ? entry.runAtMs : execution.startedAt;
   const durationMs =
     typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
       ? Math.max(0, entry.durationMs)
       : undefined;
-  const endedAt = durationMs === undefined ? entry.ts : execution.startedAt + durationMs;
+  const endedAt = durationMs === undefined ? entry.ts : runAtMs + durationMs;
   return {
     status: mapCronTerminalStatus(entry.status, entry.error),
     endedAt,

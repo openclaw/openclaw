@@ -23,6 +23,7 @@ import {
   readSessionMessageCount,
   readSessionMessagesAsync,
   readSessionMessages,
+  readTargetedSessionMessagesAsync,
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
@@ -889,6 +890,63 @@ describe("readSessionMessages", () => {
     const openSpy = vi.spyOn(fs.promises, "open");
     try {
       expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("reads targeted session windows from the cached transcript index", async () => {
+    const sessionId = "test-session-targeted-index-window";
+    const baseTs = Date.now();
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      ...Array.from({ length: 18 }, (_, index) => {
+        const seq = index + 1;
+        return {
+          type: "message",
+          id: `m${seq}`,
+          parentId: index === 0 ? null : `m${index}`,
+          message: {
+            role: "assistant",
+            content: `reply-${seq}`,
+            timestamp: baseTs + seq,
+            ...(seq === 9 ? { __openclaw: { runId: "run-target-index" } } : {}),
+          },
+        };
+      }),
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const first = await readTargetedSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      targetRunId: "run-target-index",
+    });
+
+    expect(first.targetStatus).toBe("exact-run");
+    expect(first.messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "reply-7",
+      "reply-8",
+      "reply-9",
+      "reply-10",
+      "reply-11",
+    ]);
+
+    const openSpy = vi.spyOn(fs.promises, "open");
+    try {
+      const second = await readTargetedSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 5,
+        auditTs: baseTs + 13,
+      });
+
+      expect(second.targetStatus).toBe("timestamp-fallback");
+      expect(second.messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+        "reply-11",
+        "reply-12",
+        "reply-13",
+        "reply-14",
+        "reply-15",
+      ]);
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();

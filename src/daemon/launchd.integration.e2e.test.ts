@@ -174,6 +174,36 @@ async function expectRuntimePidReplaced(params: {
   await fs.access(resolveLaunchAgentPlistPath(params.env));
 }
 
+function signalLaunchAgentRuntime(params: {
+  env: GatewayServiceEnv;
+  pid: number;
+  signal: NodeJS.Signals;
+}): void {
+  try {
+    process.kill(params.pid, params.signal);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") {
+      throw error;
+    }
+  }
+
+  const label = params.env.OPENCLAW_LAUNCHD_LABEL;
+  if (!label) {
+    throw new Error("Cannot signal launchd runtime without OPENCLAW_LAUNCHD_LABEL");
+  }
+  const launchctl = spawnSync(
+    "launchctl",
+    ["kill", params.signal.replace(/^SIG/, ""), `${resolveGuiDomain()}/${label}`],
+    { encoding: "utf8" },
+  );
+  if (launchctl.status !== 0) {
+    throw new Error(
+      `launchctl kill fallback failed with status ${launchctl.status}: ${launchctl.stderr}`,
+    );
+  }
+}
+
 describeLaunchdIntegration("launchd integration", () => {
   let env: GatewayServiceEnv | undefined;
   let homeDir = "";
@@ -224,7 +254,7 @@ describeLaunchdIntegration("launchd integration", () => {
     }
 
     const before = await waitForRunningRuntime({ env: launchEnv });
-    process.kill(before.pid, "SIGTERM");
+    signalLaunchAgentRuntime({ env: launchEnv, pid: before.pid, signal: "SIGTERM" });
     await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
   }, 60_000);
 

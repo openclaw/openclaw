@@ -9,6 +9,7 @@ type LazyState<T> = {
 };
 
 export type LazyView<T> = {
+  preload: () => void;
   read: () => T | null;
   retry: () => void;
   error: () => unknown;
@@ -20,6 +21,9 @@ export function createLazyView<T>(loader: () => Promise<T>, onChange?: () => voi
   const state: LazyState<T> = { mod: null, promise: null, error: undefined, hasError: false };
 
   const load = () => {
+    if (state.mod !== null || state.promise || state.hasError) {
+      return;
+    }
     state.promise = loader()
       .then(
         (mod) => {
@@ -34,11 +38,15 @@ export function createLazyView<T>(loader: () => Promise<T>, onChange?: () => voi
         },
       )
       .finally(() => {
+        state.promise = null;
         onChange?.();
       });
   };
 
   return {
+    preload: () => {
+      load();
+    },
     read: () => {
       if (state.mod !== null) {
         return state.mod;

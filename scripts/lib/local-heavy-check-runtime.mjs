@@ -189,9 +189,7 @@ export function acquireLocalHeavyCheckLockSync(params) {
   }
 
   const commonDir = resolveGitCommonDir(params.cwd);
-  const locksDir = path.join(commonDir, "openclaw-local-checks");
-  const lockDir = path.join(locksDir, `${params.lockName ?? "heavy-check"}.lock`);
-  const ownerPath = path.join(lockDir, "owner.json");
+  let locksDir = path.join(commonDir, "openclaw-local-checks");
   const timeoutMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS,
     DEFAULT_LOCK_TIMEOUT_MS,
@@ -208,16 +206,28 @@ export function acquireLocalHeavyCheckLockSync(params) {
   const startedAt = Date.now();
   let waitingLogged = false;
   let lastProgressAt = 0;
+  let usingFallbackLocksDir = false;
 
-  fs.mkdirSync(locksDir, { recursive: true });
+  try {
+    fs.mkdirSync(locksDir, { recursive: true });
+  } catch (error) {
+    if (error?.code !== "EPERM" && error?.code !== "EACCES" && error?.code !== "EROFS") {
+      throw error;
+    }
+    locksDir = path.join(params.cwd, ".artifacts", "openclaw-local-checks");
+    usingFallbackLocksDir = true;
+    fs.mkdirSync(locksDir, { recursive: true });
+  }
   if (!params.lockName) {
     cleanupLegacyLockDirs(locksDir, staleLockMs);
   }
 
   for (;;) {
+    const activeLockDir = path.join(locksDir, `${params.lockName ?? "heavy-check"}.lock`);
+    const activeOwnerPath = path.join(activeLockDir, "owner.json");
     try {
-      fs.mkdirSync(lockDir);
-      writeOwnerFile(ownerPath, {
+      fs.mkdirSync(activeLockDir);
+      writeOwnerFile(activeOwnerPath, {
         pid: process.pid,
         tool: params.toolName,
         cwd: params.cwd,
@@ -225,16 +235,28 @@ export function acquireLocalHeavyCheckLockSync(params) {
         createdAt: new Date().toISOString(),
       });
       return () => {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+        fs.rmSync(activeLockDir, { recursive: true, force: true });
       };
     } catch (error) {
+      if (
+        !usingFallbackLocksDir &&
+        (error?.code === "EPERM" || error?.code === "EACCES" || error?.code === "EROFS")
+      ) {
+        locksDir = path.join(params.cwd, ".artifacts", "openclaw-local-checks");
+        usingFallbackLocksDir = true;
+        fs.mkdirSync(locksDir, { recursive: true });
+        if (!params.lockName) {
+          cleanupLegacyLockDirs(locksDir, staleLockMs);
+        }
+        continue;
+      }
       if (!isAlreadyExistsError(error)) {
         throw error;
       }
 
-      const owner = readOwnerFile(ownerPath);
-      if (shouldReclaimLock({ owner, lockDir, staleLockMs })) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+      const owner = readOwnerFile(activeOwnerPath);
+      if (shouldReclaimLock({ owner, lockDir: activeLockDir, staleLockMs })) {
+        fs.rmSync(activeLockDir, { recursive: true, force: true });
         continue;
       }
 
@@ -242,7 +264,7 @@ export function acquireLocalHeavyCheckLockSync(params) {
       if (elapsedMs >= timeoutMs) {
         const ownerLabel = describeOwner(owner);
         throw new Error(
-          `[${params.toolName}] timed out waiting for the local heavy-check lock at ${lockDir}${
+          `[${params.toolName}] timed out waiting for the local heavy-check lock at ${activeLockDir}${
             ownerLabel ? ` (${ownerLabel})` : ""
           }. If no local heavy checks are still running, remove the stale lock and retry.`,
           { cause: error },

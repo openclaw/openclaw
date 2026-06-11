@@ -73,12 +73,14 @@ function isResolvedSessionKeyVisible(params: {
 }
 
 function findVisibleSessionIdMatches(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   p: SessionsResolveParams;
   sessionId: string;
 }): Array<[string, SessionEntry]> {
   const now = Date.now();
   const entries = filterAndSortSessionEntries({
+    cfg: params.cfg,
     store: params.store,
     now,
     opts: resolveSessionVisibilityFilterOptions(params.p),
@@ -167,7 +169,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
 
   if (hasSessionId) {
     const { store } = loadCombinedSessionStoreForGateway(cfg);
-    const matches = findVisibleSessionIdMatches({ store, p, sessionId });
+    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
       return {

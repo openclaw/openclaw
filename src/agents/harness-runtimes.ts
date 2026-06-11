@@ -6,7 +6,7 @@ import { modelSelectionShouldEnsureCodexPlugin } from "./openai-codex-routing.js
 import { normalizeEmbeddedAgentRuntime } from "./pi-embedded-runner/runtime.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-function normalizeRuntimeId(value: unknown): string | undefined {
+export function normalizeAgentHarnessRuntimeId(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -67,19 +67,19 @@ function hasOpenAIModelRef(config: OpenClawConfig, value: unknown, agentId?: str
       modelId: parsed?.modelId,
       agentId,
     });
-    const runtime = normalizeRuntimeId(policy.policy?.id);
+    const runtime = normalizeAgentHarnessRuntimeId(policy.policy?.id);
     return !runtime || runtime === "auto" || runtime === "codex";
   });
 }
 
 function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
   for (const providerConfig of Object.values(config.models?.providers ?? {})) {
-    const providerRuntime = normalizeRuntimeId(providerConfig?.agentRuntime?.id);
+    const providerRuntime = normalizeAgentHarnessRuntimeId(providerConfig?.agentRuntime?.id);
     if (providerRuntime && providerRuntime !== "auto" && providerRuntime !== "pi") {
       runtimes.add(providerRuntime);
     }
     for (const modelConfig of providerConfig?.models ?? []) {
-      const modelRuntime = normalizeRuntimeId(modelConfig?.agentRuntime?.id);
+      const modelRuntime = normalizeAgentHarnessRuntimeId(modelConfig?.agentRuntime?.id);
       if (modelRuntime && modelRuntime !== "auto" && modelRuntime !== "pi") {
         runtimes.add(modelRuntime);
       }
@@ -93,7 +93,7 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
       if (!isRecord(entry)) {
         continue;
       }
-      const runtime = normalizeRuntimeId(
+      const runtime = normalizeAgentHarnessRuntimeId(
         isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
       );
       if (runtime && runtime !== "auto" && runtime !== "pi") {
@@ -109,7 +109,7 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
 
 function pushLegacyAgentRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
   const pushRuntimeId = (value: unknown) => {
-    const runtime = normalizeRuntimeId(value);
+    const runtime = normalizeAgentHarnessRuntimeId(value);
     if (runtime && runtime !== "auto" && runtime !== "pi") {
       runtimes.add(runtime);
     }
@@ -141,7 +141,7 @@ export function collectConfiguredAgentHarnessRuntimes(
   };
 
   if (includeEnvRuntime) {
-    const envRuntime = normalizeRuntimeId(env.OPENCLAW_AGENT_RUNTIME);
+    const envRuntime = normalizeAgentHarnessRuntimeId(env.OPENCLAW_AGENT_RUNTIME);
     if (envRuntime && envRuntime !== "auto" && envRuntime !== "pi") {
       runtimes.add(envRuntime);
     }

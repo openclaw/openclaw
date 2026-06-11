@@ -1,6 +1,9 @@
 import type { HealthSummary } from "../commands/health.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronJob } from "../cron/types.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
+import { startSelfImprovementGovernorBackgroundTask } from "../self-improvement/background.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -45,11 +48,14 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   mediaCleanupTtlMs?: number;
+  getRuntimeConfig?: () => OpenClawConfig;
+  listCronJobs?: () => Promise<CronJob[]>;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  selfImprovement: ReturnType<typeof startSelfImprovementGovernorBackgroundTask> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -183,8 +189,16 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
+  const selfImprovement = params.getRuntimeConfig
+    ? startSelfImprovementGovernorBackgroundTask({
+        getRuntimeConfig: params.getRuntimeConfig,
+        listCronJobs: params.listCronJobs,
+        log: params.logHealth,
+      })
+    : null;
+
   if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null, selfImprovement };
   }
 
   let mediaCleanupInFlight: Promise<void> | null = null;
@@ -211,5 +225,5 @@ export function startGatewayMaintenanceTimers(params: {
 
   void runMediaCleanup();
 
-  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup, selfImprovement };
 }

@@ -16,9 +16,11 @@ import {
   modelSupportsInput,
   type ModelCatalogEntry,
 } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
+  type ModelRef,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -112,6 +114,7 @@ export {
   readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,
   readRecentSessionUsageFromTranscript,
+  readTargetedSessionMessagesAsync,
   readSessionMessageCountAsync,
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
@@ -120,7 +123,12 @@ export {
   visitSessionMessagesAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
-export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
+export type {
+  ReadSessionMessagesAsyncOptions,
+  ReadTargetedSessionMessagesAsyncOptions,
+  TargetedSessionMessagesResult,
+  TargetedSessionMessagesStatus,
+} from "./session-utils.fs.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,
@@ -133,6 +141,14 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
+
+type IdentityAvatarUrlCacheEntry = {
+  size: number;
+  mtimeMs: number;
+  avatarUrl: string;
+};
+
+const identityAvatarUrlCache = new Map<string, IdentityAvatarUrlCacheEntry>();
 
 function tryResolveExistingPath(value: string): string | null {
   try {
@@ -166,6 +182,23 @@ function resolveIdentityAvatarUrl(
   if (!isPathWithinRoot(workspaceRoot, resolvedCandidate)) {
     return undefined;
   }
+  let cacheStat: fs.Stats | null = null;
+  try {
+    const candidateStat = fs.lstatSync(resolvedCandidate);
+    if (candidateStat.isFile() && candidateStat.nlink <= 1) {
+      cacheStat = candidateStat;
+    } else if (!candidateStat.isSymbolicLink()) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  const cacheKey = `${agentId}\0${trimmed}\0${resolvedCandidate}`;
+  const cached = identityAvatarUrlCache.get(cacheKey);
+  const mtimeMs = cacheStat ? Math.floor(cacheStat.mtimeMs) : 0;
+  if (cacheStat && cached && cached.size === cacheStat.size && cached.mtimeMs === mtimeMs) {
+    return cached.avatarUrl;
+  }
   try {
     const opened = openRootFileSync({
       absolutePath: resolvedCandidate,
@@ -181,7 +214,15 @@ function resolveIdentityAvatarUrl(
     try {
       const buffer = fs.readFileSync(opened.fd);
       const mime = resolveAvatarMime(resolvedCandidate);
-      return `data:${mime};base64,${buffer.toString("base64")}`;
+      const avatarUrl = `data:${mime};base64,${buffer.toString("base64")}`;
+      if (cacheStat) {
+        identityAvatarUrlCache.set(cacheKey, {
+          size: cacheStat.size,
+          mtimeMs,
+          avatarUrl,
+        });
+      }
+      return avatarUrl;
     } finally {
       fs.closeSync(opened.fd);
     }
@@ -961,6 +1002,27 @@ function resolveGatewayAgentModel(
   };
 }
 
+function resolveGatewayAgentRuntimeModelRef(cfg: OpenClawConfig, agentId: string): ModelRef {
+  const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+  if (primary) {
+    const { model } = splitTrailingAuthProfile(primary);
+    if (model.includes("/")) {
+      const parsed = parseModelRef(model, DEFAULT_PROVIDER, {
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      });
+      if (parsed) {
+        return parsed;
+      }
+    }
+  }
+  return resolveDefaultModelForAgent({
+    cfg,
+    agentId,
+    allowPluginNormalization: false,
+  });
+}
+
 export function listAgentsForGateway(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;
@@ -972,7 +1034,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const scope = cfg.session?.scope ?? "per-sender";
   const configuredById = new Map<
     string,
-    { name?: string; identity?: GatewayAgentRow["identity"] }
+    { name?: string; roomId?: string; identity?: GatewayAgentRow["identity"] }
   >();
   for (const entry of cfg.agents?.list ?? []) {
     if (!entry?.id) {
@@ -993,6 +1055,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
       name: normalizeOptionalString(entry.name),
+      roomId: normalizeOptionalString(entry.roomId),
       identity,
     });
   }
@@ -1011,11 +1074,12 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
-    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+    const resolvedModel = resolveGatewayAgentRuntimeModelRef(cfg, id);
     return Object.assign(
       {
         id,
         name: meta?.name,
+        roomId: meta?.roomId,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
         agentRuntime: resolveModelAgentRuntimeMetadata({
@@ -1299,10 +1363,10 @@ export function getSessionDefaults(
   modelCatalog?: ModelCatalogEntry[],
   options?: { allowPluginNormalization?: boolean },
 ): GatewaySessionsDefaults {
-  const resolved = resolveConfiguredModelRef({
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const resolved = resolveDefaultModelForAgent({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    agentId: defaultAgentId,
     allowPluginNormalization: options?.allowPluginNormalization,
   });
   const contextTokens =
@@ -1320,6 +1384,7 @@ export function getSessionDefaults(
       cfg,
       provider: resolved.provider,
       model: resolved.model,
+      agentId: defaultAgentId,
       modelCatalog,
     }),
   };
@@ -1835,6 +1900,7 @@ export function buildGatewaySessionRow(params: {
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
+    projectId: entry?.projectId,
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
     model: rowModel,
@@ -1847,6 +1913,7 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
+    judgeGuardAudit: entry?.judgeGuardAudit,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
 }
@@ -1962,18 +2029,21 @@ function sortAndLimitSessionEntries(
 }
 
 function filterSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
 }): SessionEntryPair[] {
-  const { store, opts, now } = params;
+  const { cfg, store, opts, now } = params;
   const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
+  const configuredAgentIds = opts.configuredAgentsOnly === true ? new Set(listAgentIds(cfg)) : null;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
+  const projectId = normalizeOptionalString(opts.projectId) ?? "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
@@ -2000,6 +2070,13 @@ function filterSessionEntries(params: {
           return false;
         }
         return normalizeAgentId(parsed.agentId) === agentId;
+      }
+      if (configuredAgentIds) {
+        if (key === "global" || key === "unknown") {
+          return true;
+        }
+        const parsed = parseAgentSessionKey(key);
+        return Boolean(parsed && configuredAgentIds.has(normalizeAgentId(parsed.agentId)));
       }
       return true;
     })
@@ -2037,6 +2114,12 @@ function filterSessionEntries(params: {
         return true;
       }
       return entry?.label === label;
+    })
+    .filter(([, entry]) => {
+      if (!projectId) {
+        return true;
+      }
+      return normalizeOptionalString(entry?.projectId) === projectId;
     });
 
   if (search) {
@@ -2063,6 +2146,7 @@ function filterSessionEntries(params: {
 }
 
 function selectSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2080,6 +2164,7 @@ function selectSessionEntries(params: {
 }
 
 export function filterAndSortSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2109,6 +2194,7 @@ export function listSessionsFromStore(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,
@@ -2178,6 +2264,7 @@ export async function listSessionsFromStoreAsync(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,

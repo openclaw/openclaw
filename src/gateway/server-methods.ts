@@ -20,7 +20,6 @@ import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { diagnosticsHandlers } from "./server-methods/diagnostics.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
-import { environmentsHandlers } from "./server-methods/environments.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { kalshiDashboardHandlers } from "./server-methods/kalshi-dashboard.js";
@@ -30,9 +29,13 @@ import { modelsHandlers } from "./server-methods/models.js";
 import { nativeHookRelayHandlers } from "./server-methods/native-hook-relay.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { opsSummaryHandlers } from "./server-methods/ops-summary.js";
+import { patternLabDashboardHandlers } from "./server-methods/pattern-lab-dashboard.js";
 import { pluginHostHookHandlers } from "./server-methods/plugin-host-hooks.js";
+import { projectsHandlers } from "./server-methods/projects.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { restartHandlers } from "./server-methods/restart.js";
+import { selfImprovementHandlers } from "./server-methods/self-improvement.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
@@ -100,13 +103,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...deviceHandlers,
   ...diagnosticsHandlers,
   ...doctorHandlers,
-  ...environmentsHandlers,
   ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,
   ...modelsAuthStatusHandlers,
   ...nativeHookRelayHandlers,
+  ...opsSummaryHandlers,
+  ...patternLabDashboardHandlers,
   ...pluginHostHookHandlers,
+  ...projectsHandlers,
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,
@@ -117,6 +122,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...ttsHandlers,
   ...skillsHandlers,
   ...sessionsHandlers,
+  ...selfImprovementHandlers,
   ...systemHandlers,
   ...updateHandlers,
   ...nodeHandlers,

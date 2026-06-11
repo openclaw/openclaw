@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/snes-studio-standalone",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "package:mac": "node scripts/package-mac.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 4174",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@openclaw/snes-studio-core": "workspace:*"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "vite": "8.0.11",
+    "vitest": "4.1.5"
+  }
+}

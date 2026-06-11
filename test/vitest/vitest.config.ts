@@ -13,6 +13,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.unit.config.ts",
   "test/vitest/vitest.unit-ui.config.ts",
   "test/vitest/vitest.infra.config.ts",
+  "test/vitest/vitest.apps-snes-studio.config.ts",
   "test/vitest/vitest.boundary.config.ts",
   "test/vitest/vitest.contracts-channel-surface.config.ts",
   "test/vitest/vitest.contracts-channel-config.config.ts",

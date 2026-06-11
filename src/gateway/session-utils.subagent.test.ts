@@ -12,6 +12,7 @@ import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/a
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  buildGatewaySessionRow,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   resolveGatewayModelSupportsImages,
@@ -31,6 +32,42 @@ describe("listSessionsFromStore subagent metadata", () => {
     session: { mainKey: "main" },
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
+
+  test("projects Judge guard audit entries into dashboard session rows", () => {
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 10,
+        judgeGuardAudit: [
+          {
+            ts: 9,
+            runId: "run-judge-guard",
+            action: "rewrote_final_success_claim",
+            verdictStatus: "parsed",
+            verdict: "REJECT",
+            scope: "build completion",
+            risk: "medium",
+            conditions: "rerun build",
+            payloadsChecked: 1,
+            payloadsRewritten: 1,
+          },
+        ],
+      } as SessionEntry,
+    });
+
+    expect(row.judgeGuardAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-judge-guard",
+        verdict: "REJECT",
+        scope: "build completion",
+        payloadsRewritten: 1,
+      }),
+    ]);
+  });
 
   test("searches channel-derived display names before row enrichment", () => {
     const result = listSessionsFromStore({

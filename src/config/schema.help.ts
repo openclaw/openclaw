@@ -55,6 +55,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
+  "update.preserveDirty":
+    "When enabled, operator-triggered git updates temporarily preserve local tracked and untracked source changes, update the checkout, restore those changes, then build and validate before accepting the update.",
+  "update.sourceRoot":
+    "Optional local OpenClaw source checkout used as the customization-preserving update source for managed or custom dashboard installs.",
+  "update.requiredPaths":
+    "Relative paths that must still exist after an update before OpenClaw accepts the updated build. Use this to guard custom dashboard modules and local feature surfaces.",
   "update.auto.enabled": "Enable background auto-update for package installs (default: false).",
   "update.auto.stableDelayHours":
     "Minimum delay before stable-channel auto-apply starts (default: 6).",
@@ -107,6 +113,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
     'Tailscale publish mode: "off", "serve", or "funnel" for private or public exposure paths. Use "serve" for tailnet-only access and "funnel" only when public internet reachability is required.',
+  "gateway.tailscale.binaryPath":
+    "Explicit Tailscale CLI path for status, Serve/Funnel, and whois checks. Use when PATH resolves the wrong install.",
+  "gateway.tailscale.socketPath":
+    "Explicit tailscaled socket path. Required for userspace or non-default Tailscale daemons.",
+  "gateway.tailscale.required":
+    "When true, gateway startup fails if configured Tailscale Serve/Funnel exposure cannot be verified. Defaults to true for serve/funnel modes.",
   "gateway.tailscale.resetOnExit":
     "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
   "gateway.tailscale.preserveFunnel":
@@ -147,6 +159,10 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "gateway.remote.codexSshTarget":
+    "SSH target used by health/doctor to verify the remote Codex app-server daemon. Example: openclaw-studio.",
+  "gateway.remote.codexDaemonCommand":
+    "Remote command used to verify Codex app-server health. Defaults to the standalone Codex daemon version command.",
   "talk.provider": 'Active Talk provider id (for example "acme-speech").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
@@ -243,6 +259,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.list[].roomId":
+    "Optional Control UI Live Agent Workspace room id for this agent. The dashboard uses this canonical config value to group agents instead of a browser-local override.",
   "agents.list[].skillsLimits":
     "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
   "agents.list[].skillsLimits.maxSkillsPromptChars":
@@ -418,9 +436,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.subagents.tools":
     "Allow/deny tool policy applied to spawned subagent runtimes for per-subagent hardening. Keep this narrower than parent scope when subagents run semi-autonomous workflows.",
   "tools.sandbox":
-    "Tool policy wrapper for sandboxed agent executions so sandbox runs can have distinct capability boundaries. Use this to enforce stronger safety in sandbox contexts.",
+    "Tool policy wrapper for sandboxed agent executions so sandbox runs can have distinct capability boundaries. Use this to enforce stronger safety in sandbox contexts, especially for small local models.",
   "tools.sandbox.tools":
-    "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
+    "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions. For small local models, deny web/browser tools globally and re-grant them only to explicit specialist agents that use a stronger model and sandboxed runtime.",
   web: "Web channel runtime settings for heartbeat and reconnect behavior when operating web-based chat surfaces. Use reconnect values tuned to your network reliability profile and expected uptime needs.",
   "web.enabled":
     "Enables the web channel runtime and related websocket lifecycle behavior. Keep disabled when web chat is unused to reduce active connection management overhead.",
@@ -1285,6 +1303,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
+  "agents.list.*.roomId":
+    "Optional Control UI Live Agent Workspace room id for this agent. The dashboard uses this canonical config value to group agents instead of a browser-local override.",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",

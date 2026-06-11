@@ -12,12 +12,18 @@ import {
 } from "../views/agents-utils.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 
+const CHAT_PROFILE_AVATAR_STYLE =
+  "width:216px;height:216px;min-width:216px;min-height:216px;max-width:216px;max-height:216px;";
+const COMPACT_CHAT_PROFILE_AVATAR_STYLE =
+  "width:54px;height:54px;min-width:54px;min-height:54px;max-width:54px;max-height:54px;";
+const TODD_STANSKI_CHAT_PROFILE_AVATAR_STYLE = COMPACT_CHAT_PROFILE_AVATAR_STYLE;
+
 export function renderChatAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   user?: { name?: string | null; avatar?: string | null },
   basePath?: string,
-  authToken?: string | null,
+  _authToken?: string | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
@@ -72,39 +78,65 @@ export function renderChatAvatar(
         : normalized === "tool"
           ? "tool"
           : "other";
+  const isToddStanskiAssistant =
+    normalized === "assistant" && /\btodd\s+stanski\b/iu.test(assistantName);
+  const avatarClassName = isToddStanskiAssistant
+    ? `${className} chat-avatar--todd-stanski`
+    : className;
+  const avatarStyle = isToddStanskiAssistant
+    ? TODD_STANSKI_CHAT_PROFILE_AVATAR_STYLE
+    : normalized === "user"
+      ? COMPACT_CHAT_PROFILE_AVATAR_STYLE
+    : CHAT_PROFILE_AVATAR_STYLE;
 
   if (normalized === "user" && userAvatarUrl) {
-    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
+    return html`<img
+      class="chat-avatar ${avatarClassName}"
+      style=${avatarStyle}
+      src="${userAvatarUrl}"
+      alt="${userName}"
+    />`;
   }
 
   if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
+    return html`<div
+      class="chat-avatar ${avatarClassName}"
+      style=${avatarStyle}
+      aria-label="${userName}"
+    >
       ${userAvatarText}
     </div>`;
   }
 
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
-      if (authToken?.trim() && assistantAvatar.startsWith("/")) {
+      if (assistantAvatar.startsWith("/")) {
         return html`<img
-          class="chat-avatar ${className} chat-avatar--logo"
+          class="chat-avatar ${avatarClassName} chat-avatar--logo"
+          style=${avatarStyle}
           src="${assistantFallbackAvatar}"
           alt="${assistantName}"
         />`;
       }
       return html`<img
-        class="chat-avatar ${className}"
+        class="chat-avatar ${avatarClassName}"
+        style=${avatarStyle}
         src="${assistantAvatar}"
         alt="${assistantName}"
       />`;
     }
     if (assistantAvatarText) {
-      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
+      return html`<div
+        class="chat-avatar ${avatarClassName}"
+        style=${avatarStyle}
+        aria-label="${assistantName}"
+      >
         ${assistantAvatarText}
       </div>`;
     }
     return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
+      class="chat-avatar ${avatarClassName} chat-avatar--logo"
+      style=${avatarStyle}
       src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
@@ -112,13 +144,16 @@ export function renderChatAvatar(
 
   if (normalized === "assistant") {
     return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
+      class="chat-avatar ${avatarClassName} chat-avatar--logo"
+      style=${avatarStyle}
       src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
   }
 
-  return html`<div class="chat-avatar ${className}">${initial}</div>`;
+  return html`<div class="chat-avatar ${avatarClassName}" style=${avatarStyle}>
+    ${initial}
+  </div>`;
 }
 
 function isAvatarUrl(value: string): boolean {

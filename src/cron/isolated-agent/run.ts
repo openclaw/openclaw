@@ -906,6 +906,7 @@ async function finalizeCronRun(params: {
     deliveryPayloads,
     deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
+    benignSkipReason,
     embeddedRunError,
     pendingPresentationWarningError,
   } = resolveCronPayloadOutcome({
@@ -917,19 +918,27 @@ async function finalizeCronRun(params: {
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
     ).preferFinalAssistantVisibleText,
   });
-  const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
-    finalStatus: hasFatalErrorPayload ? "error" : "ok",
-  });
+  let finalStatus: RunCronAgentTurnResult["status"] = hasFatalErrorPayload
+    ? "error"
+    : benignSkipReason
+      ? "skipped"
+      : "ok";
+  const agentDiagnostics = () =>
+    createCronRunDiagnosticsFromAgentResult(finalRunResult, {
+      finalStatus,
+    });
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
     delivery?: CronDeliveryTrace;
   }) =>
     prepared.withRunSession({
-      status: hasFatalErrorPayload ? "error" : "ok",
+      status: finalStatus,
       ...(hasFatalErrorPayload
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
-        : {}),
+        : benignSkipReason
+          ? { error: benignSkipReason }
+          : {}),
       summary,
       outputText,
       delivered: result?.delivered,
@@ -937,19 +946,20 @@ async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: hasFatalErrorPayload
         ? mergeCronRunDiagnostics(
-            agentDiagnostics,
+            agentDiagnostics(),
             createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
             ),
           )
-        : agentDiagnostics,
+        : agentDiagnostics(),
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
     if (pendingPresentationWarningError && delivered !== true) {
       hasFatalErrorPayload = true;
       embeddedRunError = pendingPresentationWarningError;
+      finalStatus = "error";
     }
   };
 
@@ -1023,7 +1033,7 @@ async function finalizeCronRun(params: {
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       delivery: deliveryTrace,
       diagnostics: mergeCronRunDiagnostics(
-        agentDiagnostics,
+        agentDiagnostics(),
         deliveryResult.result.diagnostics,
         deliveryResult.result.status === "error" && deliveryResult.result.error
           ? createCronRunDiagnosticsFromError("delivery", deliveryResult.result.error)

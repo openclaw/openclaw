@@ -667,7 +667,8 @@ extension GatewayEndpointStore {
     static func dashboardURL(
         for config: GatewayConnection.Config,
         mode: AppState.ConnectionMode,
-        localBasePath: String? = nil) throws -> URL
+        localBasePath: String? = nil,
+        routePath: String? = nil) throws -> URL
     {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "Dashboard", code: 1, userInfo: [
@@ -693,6 +694,13 @@ extension GatewayEndpointStore {
             components.path = "/"
         }
 
+        let normalizedRoutePath = self.normalizeDashboardRoutePath(routePath)
+        if !normalizedRoutePath.isEmpty {
+            components.path = self.appendDashboardRoute(
+                normalizedRoutePath,
+                to: components.path)
+        }
+
         var fragmentItems: [URLQueryItem] = []
         if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
@@ -713,6 +721,24 @@ extension GatewayEndpointStore {
             ])
         }
         return url
+    }
+
+    private static func normalizeDashboardRoutePath(_ rawPath: String?) -> String {
+        let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return trimmed
+            .split(separator: "/")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+            .joined(separator: "/")
+    }
+
+    private static func appendDashboardRoute(_ routePath: String, to basePath: String) -> String {
+        let normalizedBase = self.normalizeDashboardPath(basePath)
+        if normalizedBase == "/" {
+            return "/" + routePath
+        }
+        return normalizedBase + routePath
     }
 }
 

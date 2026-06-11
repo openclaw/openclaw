@@ -272,6 +272,34 @@ struct GatewayEndpointStoreTests {
         #expect(url.query == nil)
     }
 
+    @Test func `dashboard URL appends route path after local base path`() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: "abc123",
+            password: nil)
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: "/control",
+            routePath: "/snes-studio")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/snes-studio#token=abc123")
+    }
+
+    @Test func `dashboard URL appends route path at root`() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: nil,
+            password: nil)
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: "/",
+            routePath: "snes-studio")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/snes-studio")
+    }
+
     @Test func `normalize gateway url adds default port for loopback ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)

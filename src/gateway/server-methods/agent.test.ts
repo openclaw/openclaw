@@ -1630,9 +1630,83 @@ describe("gateway agent handler", () => {
         expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
           runtime: "cli",
           childSessionKey: "agent:main:main",
+          userVisible: true,
           status: "succeeded",
           terminalSummary: "completed",
+          judgeStatus: "approved",
+          judgeVerdict: "APPROVE",
         });
+      });
+    });
+  });
+
+  it("blocks async gateway agent artifact requests when no artifact is delivered", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-judge-artifact-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      mocks.agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "Done." }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "create a video game",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-missing-artifact",
+        },
+        { reqId: "task-registry-agent-run-missing-artifact" },
+      );
+
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run-missing-artifact")).toMatchObject({
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "succeeded",
+          terminalOutcome: "blocked",
+          expectedDeliverable: "requested artifact",
+          judgeStatus: "rejected",
+          judgeVerdict: "REQUEST_MORE_EVIDENCE",
+        });
+        expect(
+          findTaskByRunId("task-registry-agent-run-missing-artifact")?.blockedReason,
+        ).toContain("no artifact was recorded");
+      });
+    });
+  });
+
+  it("blocks async gateway agent runs that end with only working-on-it text", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-judge-working-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      mocks.agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "I am working on it and will check." }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "check the OpenClaw project",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-working-only",
+        },
+        { reqId: "task-registry-agent-run-working-only" },
+      );
+
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run-working-only")).toMatchObject({
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "succeeded",
+          terminalOutcome: "blocked",
+          judgeStatus: "rejected",
+          judgeVerdict: "REQUEST_MORE_EVIDENCE",
+        });
+        expect(findTaskByRunId("task-registry-agent-run-working-only")?.blockedReason).toContain(
+          "future work",
+        );
       });
     });
   });

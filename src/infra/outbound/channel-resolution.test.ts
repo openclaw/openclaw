@@ -31,6 +31,7 @@ vi.mock("../../plugins/loader.js", () => ({
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginRuntimeSubagentMode: () => "default",
   getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
   getActivePluginChannelRegistry: (...args: unknown[]) =>
     getActivePluginChannelRegistryMock(...args),

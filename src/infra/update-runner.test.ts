@@ -211,6 +211,8 @@ describe("runGatewayUpdate", () => {
       tag?: string;
       cwd?: string;
       devTargetRef?: string;
+      preserveDirty?: boolean;
+      requiredPaths?: string[];
     },
   ) {
     return runGatewayUpdate({
@@ -220,6 +222,8 @@ describe("runGatewayUpdate", () => {
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
       ...(options?.devTargetRef ? { devTargetRef: options.devTargetRef } : {}),
+      ...(options?.preserveDirty ? { preserveDirty: options.preserveDirty } : {}),
+      ...(options?.requiredPaths ? { requiredPaths: options.requiredPaths } : {}),
     });
   }
 
@@ -230,6 +234,8 @@ describe("runGatewayUpdate", () => {
       tag?: string;
       cwd?: string;
       devTargetRef?: string;
+      preserveDirty?: boolean;
+      requiredPaths?: string[];
     },
   ) {
     return runWithCommand(runner, options);
@@ -324,6 +330,55 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("dirty");
     expect(calls).not.toEqual(expect.arrayContaining([expect.stringContaining("rebase")]));
+  });
+
+  it("preserves dirty custom source changes before a guarded update", async () => {
+    await setupGitCheckout();
+    await setupUiIndex();
+    const requiredPath = "ui/src/ui/views/agents-room.ts";
+    await fs.mkdir(path.dirname(path.join(tempDir, requiredPath)), { recursive: true });
+    await fs.writeFile(path.join(tempDir, requiredPath), "export {};\n", "utf-8");
+    const stableTag = "v1.0.1-1";
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses(stableTag),
+      [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: {
+        stdout: " M ui/src/ui/views/agents-room.ts\n?? youtube-v1/",
+      },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "stable",
+      preserveDirty: true,
+      requiredPaths: [requiredPath],
+    });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("stash push --include-untracked"),
+        expect.stringContaining("stash apply --index"),
+        expect.stringContaining("stash drop"),
+      ]),
+    );
+    expect(result.steps.map((step) => step.name)).toContain(
+      "customization guard required paths",
+    );
+  });
+
+  it("blocks an updated build when required custom dashboard paths are missing", async () => {
+    await setupGitCheckout();
+    await setupUiIndex();
+    const stableTag = "v1.0.1-1";
+    const { runner, calls } = createRunner(buildStableTagResponses(stableTag));
+
+    const result = await runWithRunner(runner, {
+      channel: "stable",
+      requiredPaths: ["ui/src/ui/views/agents-room.ts"],
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("required-paths-missing");
+    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
   });
 
   it.each([

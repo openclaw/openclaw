@@ -13,6 +13,8 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
+const FULL_TOUCH_TARGET_MIN_PX = 44;
+const LAYOUT_ROUNDING_TOLERANCE_PX = 0.01;
 const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
 
 let browser: Browser;
@@ -30,6 +32,10 @@ function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height"
   for (const key of ["x", "y", "width", "height"] as const) {
     expect(Number.isFinite(rect[key])).toBe(true);
   }
+}
+
+function expectAtLeastFullTouchTargetPx(value: number) {
+  expect(value).toBeGreaterThanOrEqual(FULL_TOUCH_TARGET_MIN_PX - LAYOUT_ROUNDING_TOLERANCE_PX);
 }
 
 async function getBoundingBox(page: Page, selector: string) {
@@ -61,7 +67,11 @@ function readUiCss(): string {
     "ui/src/styles/chat/tool-cards.css",
     "ui/src/styles/chat/sidebar.css",
   ];
-  return files.map((file) => readStyleSheet(file)).join("\n");
+  return `${files.map((file) => readStyleSheet(file)).join("\n")}
+*, *::before, *::after {
+  animation: none !important;
+  transition: none !important;
+}`;
 }
 
 function iconSvg() {
@@ -202,14 +212,76 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
                 <span class="agent-chat__token-count">8</span>
               </div>
               <div class="agent-chat__toolbar-right">
-                <button class="btn btn--ghost">${iconSvg()}</button>
-                <button class="btn btn--ghost">${iconSvg()}</button>
+                <button class="btn btn--ghost agent-chat__desktop-run-control">${iconSvg()}</button>
+                <button class="btn btn--ghost agent-chat__desktop-run-control">${iconSvg()}</button>
+                <details class="agent-chat__mobile-actions">
+                  <summary class="agent-chat__input-btn agent-chat__mobile-actions-toggle">${iconSvg()}</summary>
+                  <div class="agent-chat__mobile-actions-sheet" role="menu">
+                    <button type="button" role="menuitem">${iconSvg()}<span>New session</span></button>
+                    <button type="button" role="menuitem">${iconSvg()}<span>Export chat</span></button>
+                  </div>
+                </details>
                 <button class="chat-send-btn">${iconSvg()}</button>
               </div>
             </div>
           </div>
         </section>
       </main>
+    </div>
+  `;
+}
+
+function nonChatComposerHtml() {
+  return `
+    <div class="shell" data-chat-responsive-fixture>
+      <main class="content">
+        <section class="card chat">
+          <div class="agent-chat__input">
+            <div class="agent-chat__composer-combobox">
+              <textarea rows="1">This composer fixture is outside the Chat tab.</textarea>
+            </div>
+            <div class="agent-chat__toolbar">
+              <div class="agent-chat__toolbar-left">
+                <button class="agent-chat__input-btn">${iconSvg()}</button>
+              </div>
+              <div class="agent-chat__toolbar-right">
+                <button class="chat-send-btn">${iconSvg()}</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  `;
+}
+
+function mobileShellNavHtml() {
+  return `
+    <div class="shell shell--nav-collapsed" data-mobile-safe-area-fixture>
+      <aside class="shell-nav">
+        <nav class="sidebar sidebar--collapsed">
+          <div class="sidebar-shell">
+            <div class="sidebar-shell__header">
+              <a class="sidebar-brand" href="#">
+                <span class="sidebar-brand__logo">${iconSvg()}</span>
+                <span class="sidebar-brand__copy">
+                  <span class="sidebar-brand__eyebrow">Control</span>
+                  <strong class="sidebar-brand__title">OpenClaw</strong>
+                </span>
+              </a>
+            </div>
+          </div>
+        </nav>
+      </aside>
+      <header class="topbar">
+        <div class="topnav-shell">
+          <div class="topnav-shell__actions">
+            <button class="topbar-nav-toggle">${iconSvg()}</button>
+            <button class="topbar-search"><span class="topbar-search__label">Search</span></button>
+          </div>
+        </div>
+      </header>
+      <main class="content content--chat"></main>
     </div>
   `;
 }
@@ -222,6 +294,22 @@ async function openFixture(
   const page = await browser.newPage({ viewport: { width, height } });
   await page.setContent(
     `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
+  );
+  return page;
+}
+
+async function openMobileShellNavFixture(width: number, height: number) {
+  const page = await browser.newPage({ viewport: { width, height } });
+  await page.setContent(
+    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${mobileShellNavHtml()}</body></html>`,
+  );
+  return page;
+}
+
+async function openNonChatComposerFixture(width: number, height: number) {
+  const page = await browser.newPage({ viewport: { width, height } });
+  await page.setContent(
+    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${nonChatComposerHtml()}</body></html>`,
   );
   return page;
 }
@@ -398,16 +486,263 @@ describeBrowserLayout("chat responsive browser layout", () => {
       const sizes = await page
         .locator(".agent-chat__input-btn, .agent-chat__toolbar .btn--ghost, .chat-send-btn")
         .evaluateAll((nodes) =>
-          nodes.map((node) => {
-            const rect = (node as HTMLElement).getBoundingClientRect();
-            return { width: rect.width, height: rect.height };
-          }),
+          nodes
+            .filter((node) => getComputedStyle(node as HTMLElement).display !== "none")
+            .map((node) => {
+              const rect = (node as HTMLElement).getBoundingClientRect();
+              return { width: rect.width, height: rect.height };
+            }),
         );
       expect(sizes.length).toBeGreaterThan(0);
       for (const size of sizes) {
         expect(size.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps the composer above the iOS safe area on phones", async () => {
+    const page = await openFixture(320, 568);
+    try {
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--safe-area-bottom", "34px"),
+      );
+      const composer = await getBoundingBox(page, ".agent-chat__input");
+      const send = await getBoundingBox(page, ".chat-send-btn");
+      expect(composer.x).toBeGreaterThanOrEqual(8);
+      expect(composer.x + composer.width).toBeLessThanOrEqual(312);
+      expect(composer.y + composer.height).toBeGreaterThanOrEqual(568 - 34 - 1);
+      expect(composer.y + composer.height).toBeLessThanOrEqual(568 - 34 + 1);
+      expect(send.y + send.height).toBeLessThanOrEqual(568 - 34 + 1);
+      expectAtLeastFullTouchTargetPx(send.width);
+      expectAtLeastFullTouchTargetPx(send.height);
+      const textareaFontSize = await page
+        .locator(".agent-chat__composer-combobox > textarea")
+        .evaluate((node) => Number.parseFloat(getComputedStyle(node).fontSize));
+      expect(textareaFontSize).toBeGreaterThanOrEqual(16);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("does not pin a composer outside the Chat tab", async () => {
+    const page = await openNonChatComposerFixture(320, 568);
+    try {
+      const position = await page
+        .locator(".agent-chat__input")
+        .evaluate((node) => getComputedStyle(node).position);
+      const composer = await getBoundingBox(page, ".agent-chat__input");
+      expect(position).not.toBe("fixed");
+      expect(composer.y + composer.height).toBeLessThan(220);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("hides the mobile composer while the left navigation drawer is open", async () => {
+    const page = await openFixture(320, 568);
+    try {
+      await page.locator(".shell").evaluate((node) => {
+        node.classList.add("shell--nav-drawer-open");
+      });
+      const composerState = await page.locator(".agent-chat__input").evaluate((node) => {
+        const style = getComputedStyle(node as HTMLElement);
+        return {
+          opacity: style.opacity,
+          pointerEvents: style.pointerEvents,
+          visibility: style.visibility,
+          zIndex: Number.parseInt(style.zIndex, 10),
+        };
+      });
+
+      expect(composerState.visibility).toBe("hidden");
+      expect(composerState.opacity).toBe("0");
+      expect(composerState.pointerEvents).toBe("none");
+      expect(composerState.zIndex).toBeLessThan(70);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps the composer docked near the bottom when the mobile keyboard inset is reported", async () => {
+    const page = await openFixture(320, 568);
+    try {
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--mobile-keyboard-inset", "260px"),
+      );
+      await page.locator(".agent-chat__composer-combobox > textarea").focus();
+      const composer = await getBoundingBox(page, ".agent-chat__input");
+      const send = await getBoundingBox(page, ".chat-send-btn");
+      const keyboardTop = 568 - 260;
+      expect(composer.y).toBeGreaterThan(96);
+      expect(composer.y + composer.height).toBeLessThanOrEqual(keyboardTop + 1);
+      expect(send.y + send.height).toBeLessThanOrEqual(keyboardTop + 1);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps the full composer controls visible while focused on mobile", async () => {
+    const page = await openFixture(320, 568);
+    try {
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--mobile-keyboard-inset", "260px"),
+      );
+      await page.locator(".agent-chat__composer-combobox > textarea").focus();
+      const composer = await getBoundingBox(page, ".agent-chat__input");
+      const controls = await getBoundingBox(page, ".agent-chat__toolbar-right");
+      const send = await getBoundingBox(page, ".chat-send-btn");
+      const primaryTool = await getBoundingBox(
+        page,
+        ".agent-chat__toolbar-left .agent-chat__input-btn:first-of-type",
+      );
+      const mobileActions = await getBoundingBox(page, ".agent-chat__mobile-actions-toggle");
+      const composerPosition = await page
+        .locator(".agent-chat__input")
+        .evaluate((node) => getComputedStyle(node).position);
+      const controlsPosition = await page
+        .locator(".agent-chat__toolbar-right")
+        .evaluate((node) => getComputedStyle(node).position);
+      const desktopControlDisplay = await page
+        .locator(".agent-chat__desktop-run-control")
+        .first()
+        .evaluate((node) => getComputedStyle(node).display);
+      const keyboardTop = 568 - 260;
+
+      expect(composerPosition).toBe("fixed");
+      expect(controlsPosition).not.toBe("fixed");
+      expect(desktopControlDisplay).toBe("none");
+      expect(composer.y).toBeGreaterThan(96);
+      expect(composer.y + composer.height).toBeLessThanOrEqual(keyboardTop + 1);
+      expect(controls.y + controls.height).toBeLessThanOrEqual(composer.y + composer.height + 1);
+      expect(send.y + send.height).toBeLessThanOrEqual(composer.y + composer.height + 1);
+      expectAtLeastFullTouchTargetPx(send.width);
+      expect(send.width).toBeLessThan(52);
+      expectAtLeastFullTouchTargetPx(send.height);
+      expectAtLeastFullTouchTargetPx(primaryTool.width);
+      expectAtLeastFullTouchTargetPx(primaryTool.height);
+      expectAtLeastFullTouchTargetPx(mobileActions.width);
+      expectAtLeastFullTouchTargetPx(mobileActions.height);
+      const rowCenters = [
+        primaryTool.y + primaryTool.height / 2,
+        mobileActions.y + mobileActions.height / 2,
+        send.y + send.height / 2,
+      ];
+      expect(Math.max(...rowCenters) - Math.min(...rowCenters)).toBeLessThanOrEqual(8);
+      expect(controls.x + controls.width).toBeLessThanOrEqual(composer.x + composer.width + 1);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("opens the mobile chat action sheet inside the visible viewport", async () => {
+    const page = await openFixture(320, 568);
+    try {
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--mobile-keyboard-inset", "260px"),
+      );
+      await page.locator(".agent-chat__composer-combobox > textarea").focus();
+      await page.locator(".agent-chat__mobile-actions-toggle").click();
+      const sheet = await getBoundingBox(page, ".agent-chat__mobile-actions-sheet");
+      const keyboardTop = 568 - 260;
+      expect(sheet.x).toBeGreaterThanOrEqual(8);
+      expect(sheet.x + sheet.width).toBeLessThanOrEqual(312);
+      expect(sheet.y).toBeGreaterThan(56);
+      expect(sheet.y + sheet.height).toBeLessThanOrEqual(keyboardTop + 1);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("lifts the complete composer above taller iPhone keyboards", async () => {
+    const page = await openFixture(393, 852);
+    try {
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--mobile-keyboard-inset", "420px"),
+      );
+      await page.locator(".agent-chat__composer-combobox > textarea").focus();
+      const composer = await getBoundingBox(page, ".agent-chat__input");
+      const primaryTool = await getBoundingBox(
+        page,
+        ".agent-chat__toolbar-left .agent-chat__input-btn:first-of-type",
+      );
+      const moreActions = await getBoundingBox(page, ".agent-chat__mobile-actions-toggle");
+      const send = await getBoundingBox(page, ".chat-send-btn");
+      const keyboardTop = 852 - 420;
+
+      expect(composer.y).toBeGreaterThan(96);
+      expect(composer.y + composer.height).toBeLessThanOrEqual(keyboardTop + 1);
+      expect(primaryTool.y + primaryTool.height).toBeLessThanOrEqual(
+        composer.y + composer.height + 1,
+      );
+      expect(moreActions.y + moreActions.height).toBeLessThanOrEqual(
+        composer.y + composer.height + 1,
+      );
+      expect(send.y + send.height).toBeLessThanOrEqual(keyboardTop + 1);
+      expectAtLeastFullTouchTargetPx(send.width);
+      expectAtLeastFullTouchTargetPx(send.height);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("expands multiline mobile text upward without hiding composer actions", async () => {
+    const page = await openFixture(393, 852);
+    try {
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--mobile-keyboard-inset", "360px"),
+      );
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      await textarea.focus();
+      const before = await getBoundingBox(page, ".agent-chat__input");
+      await textarea.fill(["Line one", "Line two", "Line three", "Line four"].join("\n"));
+      await textarea.evaluate((node) => {
+        const textareaNode = node as HTMLTextAreaElement;
+        textareaNode.style.height = "auto";
+        textareaNode.style.height = `${textareaNode.scrollHeight}px`;
+      });
+      await page.waitForTimeout(50);
+      const after = await getBoundingBox(page, ".agent-chat__input");
+      const primaryTool = await getBoundingBox(
+        page,
+        ".agent-chat__toolbar-left .agent-chat__input-btn:first-of-type",
+      );
+      const moreActions = await getBoundingBox(page, ".agent-chat__mobile-actions-toggle");
+      const send = await getBoundingBox(page, ".chat-send-btn");
+      const keyboardTop = 852 - 360;
+
+      expect(after.height).toBeGreaterThan(before.height);
+      expect(after.y).toBeLessThan(before.y);
+      expect(after.y + after.height).toBeLessThanOrEqual(keyboardTop + 1);
+      expect(primaryTool.y + primaryTool.height).toBeLessThanOrEqual(after.y + after.height + 1);
+      expect(moreActions.y + moreActions.height).toBeLessThanOrEqual(after.y + after.height + 1);
+      expect(send.y + send.height).toBeLessThanOrEqual(after.y + after.height + 1);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps the collapsed mobile OpenClaw logo below the iOS status area", async () => {
+    const page = await openMobileShellNavFixture(375, 812);
+    try {
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--safe-area-top", "47px"),
+      );
+      const nav = await getBoundingBox(page, ".shell-nav");
+      const logo = await getBoundingBox(page, ".sidebar-brand__logo");
+      expect(nav.y).toBeGreaterThanOrEqual(47);
+      expect(logo.y).toBeGreaterThanOrEqual(47);
+      await expectNoHorizontalOverflow(page);
     } finally {
       await page.close();
     }

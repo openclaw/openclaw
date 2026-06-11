@@ -10,6 +10,17 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: apps":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apps/**"
+          - "docs/cli/apps.md"
+          - "docs/web/app-studio.md"
+"plugin: book-writer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/book-writer/**"
+          - "docs/cli/books.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -172,7 +183,9 @@
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:
+          - "apps/snes-studio/**"
           - "ui/**"
+          - "packages/snes-studio-core/**"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
           - "src/gateway/protocol/**"

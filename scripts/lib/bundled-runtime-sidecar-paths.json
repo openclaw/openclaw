@@ -1,4 +1,5 @@
 [
+  "dist/extensions/book-writer/runtime-api.js",
   "dist/extensions/browser/runtime-api.js",
   "dist/extensions/canvas/runtime-api.js",
   "dist/extensions/clickclack/runtime-api.js",

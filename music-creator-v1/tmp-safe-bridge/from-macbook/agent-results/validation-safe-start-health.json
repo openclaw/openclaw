@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "requestId": "validation-safe-start-health",
+  "action": "health-check",
+  "status": "done",
+  "updatedAt": "2026-05-18T14:24:21Z",
+  "remoteLoginUsed": false,
+  "arbitraryCommandsAllowed": false,
+  "detail": "MacBook pull agent healthy on Matthew’s Mac Studio. Remote Login is not used."
+}

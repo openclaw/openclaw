@@ -2,10 +2,15 @@
   "name": "OpenClaw Control",
   "short_name": "OpenClaw",
   "description": "Multi-channel AI gateway control panel",
+  "id": "./",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
+  "display_override": ["standalone", "browser"],
+  "orientation": "any",
   "theme_color": "#0a0a0a",
   "background_color": "#0a0a0a",
+  "categories": ["productivity", "utilities"],
   "icons": [
     {
       "src": "./favicon.svg",

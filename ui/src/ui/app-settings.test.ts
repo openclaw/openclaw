@@ -5,6 +5,7 @@ import {
   applySettings,
   applySettingsFromUrl,
   setTabFromRoute,
+  syncUrlWithSessionKey,
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { normalizeImportedCustomTheme } from "./custom-theme.ts";
@@ -12,6 +13,7 @@ import type { ThemeMode, ThemeName } from "./theme.ts";
 
 type Tab =
   | "agents"
+  | "kalshi"
   | "overview"
   | "channels"
   | "instances"
@@ -56,6 +58,8 @@ type SettingsHost = {
   tab: Tab;
   connected: boolean;
   chatHasAutoScrolled: boolean;
+  chatTargetRunId?: string | null;
+  chatTargetAuditTs?: number | null;
   logsAtBottom: boolean;
   eventLog: unknown[];
   eventLogBuffer: unknown[];
@@ -64,6 +68,19 @@ type SettingsHost = {
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  kalshiDashboardPollInterval: number | null;
+  dashboardPollInterval: number | null;
+  dashboardPollInFlight: boolean;
+  refreshActiveDashboardTab: (() => void | Promise<void>) & ReturnType<typeof vi.fn>;
+  agentsPanel:
+    | "overview"
+    | "channels"
+    | "room"
+    | "workflows"
+    | "cron"
+    | "skills"
+    | "tools"
+    | "self-improvement";
   pendingGatewayUrl?: string | null;
   pendingGatewayToken?: string | null;
   dreamingStatusLoading: boolean;
@@ -161,6 +178,11 @@ const createHost = (tab: Tab): SettingsHost => ({
   themeMediaHandler: null,
   logsPollInterval: null,
   debugPollInterval: null,
+  kalshiDashboardPollInterval: null,
+  dashboardPollInterval: null,
+  dashboardPollInFlight: false,
+  refreshActiveDashboardTab: vi.fn<() => void | Promise<void>>(),
+  agentsPanel: "overview",
   pendingGatewayUrl: null,
   pendingGatewayToken: null,
   dreamingStatusLoading: false,
@@ -256,8 +278,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "logs");
+    expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
-    expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
@@ -267,11 +289,84 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "debug");
+    expect(host.debugPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
-    expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
+  });
+
+  it("starts and stops Kalshi dashboard polling based on the tab", () => {
+    const host = createHost("chat");
+
+    setTabFromRoute(host, "kalshi");
+    expect(host.kalshiDashboardPollInterval).not.toBeNull();
+    expect(host.logsPollInterval).toBeNull();
+    expect(host.debugPollInterval).toBeNull();
+
+    setTabFromRoute(host, "overview");
+    expect(host.kalshiDashboardPollInterval).toBeNull();
+  });
+
+  it("keeps Kalshi learning data live in agent workspace views", () => {
+    const host = createHost("chat");
+    host.agentsPanel = "room";
+
+    setTabFromRoute(host, "agents");
+    expect(host.kalshiDashboardPollInterval).not.toBeNull();
+
+    host.agentsPanel = "overview";
+    setTabFromRoute(host, "overview");
+    setTabFromRoute(host, "agents");
+    expect(host.kalshiDashboardPollInterval).toBeNull();
+
+    host.agentsPanel = "workflows";
+    setTabFromRoute(host, "overview");
+    setTabFromRoute(host, "agents");
+    expect(host.kalshiDashboardPollInterval).not.toBeNull();
+  });
+
+  it("keeps connected dashboard tabs refreshing on a visible-tab poller", async () => {
+    vi.useFakeTimers();
+    const host = createHost("chat");
+    host.connected = true;
+
+    setTabFromRoute(host, "overview");
+    expect(host.dashboardPollInterval).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(host.refreshActiveDashboardTab).toHaveBeenCalledOnce();
+
+    host.tab = "chat";
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(host.refreshActiveDashboardTab).toHaveBeenCalledOnce();
+    expect(host.dashboardPollInterval).not.toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("skips overlapping dashboard poll refreshes", async () => {
+    vi.useFakeTimers();
+    const host = createHost("overview");
+    host.connected = true;
+    let resolveRefresh!: () => void;
+    host.refreshActiveDashboardTab.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveRefresh = resolve;
+      }),
+    );
+
+    setTabFromRoute(host, "overview");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(host.refreshActiveDashboardTab).toHaveBeenCalledOnce();
+
+    resolveRefresh();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(host.refreshActiveDashboardTab).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
   });
 
   it("re-resolves the active palette when only themeMode changes", () => {
@@ -431,6 +526,47 @@ describe("applySettingsFromUrl", () => {
     expect(host.sessionKey).toBe("main");
     expect(host.settings.sessionKey).toBe("main");
     expect(host.settings.lastActiveSessionKey).toBe("main");
+  });
+
+  it("hydrates a target run id from dashboard deep links without stripping it", () => {
+    setTestWindowUrl(
+      "https://control.example/chat?session=agent%3Amain%3Amain&runId=run-judge-guard",
+    );
+    const host = createHost("chat");
+
+    applySettingsFromUrl(host);
+
+    expect(host.sessionKey).toBe("agent:main:main");
+    expect(host.chatTargetRunId).toBe("run-judge-guard");
+    expect(host.chatTargetAuditTs).toBeNull();
+    expect(window.location.search).toBe("?session=agent%3Amain%3Amain&runId=run-judge-guard");
+  });
+
+  it("hydrates a target audit timestamp for historical dashboard deep links", () => {
+    setTestWindowUrl(
+      "https://control.example/chat?session=agent%3Amain%3Amain&runId=run-judge-guard&auditTs=1710000000000",
+    );
+    const host = createHost("chat");
+
+    applySettingsFromUrl(host);
+
+    expect(host.sessionKey).toBe("agent:main:main");
+    expect(host.chatTargetRunId).toBe("run-judge-guard");
+    expect(host.chatTargetAuditTs).toBe(1710000000000);
+    expect(window.location.search).toBe(
+      "?session=agent%3Amain%3Amain&runId=run-judge-guard&auditTs=1710000000000",
+    );
+  });
+
+  it("clears target run ids when syncing a new active chat session", () => {
+    setTestWindowUrl(
+      "https://control.example/chat?session=agent%3Amain%3Amain&runId=run-judge-guard&auditTs=1710000000000",
+    );
+    const host = createHost("chat");
+
+    syncUrlWithSessionKey(host, "agent:main:next", true);
+
+    expect(window.location.search).toBe("?session=agent%3Amain%3Anext");
   });
 
   it("characterizes token, session, and gateway URL combinations", () => {

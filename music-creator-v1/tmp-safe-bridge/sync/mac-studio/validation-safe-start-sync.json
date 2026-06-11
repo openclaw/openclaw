@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "probeId": "validation-safe-start-sync",
+  "status": "mac_studio_probe_written",
+  "createdAt": "2026-05-18T14:24:17.888Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "remoteLoginUsed": false,
+  "expectedReply": "sync/macbook/validation-safe-start-sync.json",
+  "nextAction": "On the MacBook, run macbook-sync-check.command from the same bridge folder. Then run bridge-sync-status on the Mac Studio."
+}

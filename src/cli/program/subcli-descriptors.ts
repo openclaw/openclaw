@@ -23,6 +23,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "self-improvement",
+    description: "Inspect Self-Improvement Governor recommendations",
+    hasSubcommands: true,
+  },
+  {
     name: "models",
     description: "List, scan, and set model providers",
     hasSubcommands: true,
@@ -85,6 +90,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "cron",
     description: "Schedule and inspect Gateway background jobs",
+    hasSubcommands: true,
+  },
+  {
+    name: "courses",
+    description: "Create local Course Creator packages from topic-only input",
     hasSubcommands: true,
   },
   {

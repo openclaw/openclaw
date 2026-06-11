@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Music Creator V1 Project Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "status",
+    "request",
+    "artist",
+    "platform",
+    "projectPath",
+    "providerAttempts",
+    "candidates",
+    "releaseGates",
+    "auditLog",
+    "liveGeneration"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft_created",
+        "generation_planned",
+        "candidate_ingested",
+        "qa_failed",
+        "qa_passed",
+        "selected",
+        "publish_blocked",
+        "publish_ready"
+      ]
+    },
+    "request": { "type": "string", "minLength": 1 },
+    "artist": { "type": "string", "minLength": 1 },
+    "platform": { "type": "string", "minLength": 1 },
+    "projectPath": { "type": "string", "minLength": 1 },
+    "providerAttempts": { "type": "array" },
+    "candidates": { "type": "array" },
+    "releaseGates": { "type": "object" },
+    "auditLog": { "type": "array" },
+    "liveGeneration": { "type": "object" }
+  }
+}

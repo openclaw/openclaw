@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
-  applySettingsFromUrlMock: vi.fn(),
-  connectGatewayMock: vi.fn(),
-  loadBootstrapMock: vi.fn(),
-}));
+const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock, refreshChatMock } =
+  vi.hoisted(() => ({
+    applySettingsFromUrlMock: vi.fn(),
+    connectGatewayMock: vi.fn(),
+    loadBootstrapMock: vi.fn(),
+    refreshChatMock: vi.fn(),
+  }));
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
@@ -13,6 +15,10 @@ vi.mock("./app-gateway.ts", () => ({
 
 vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadBootstrapMock,
+}));
+
+vi.mock("./app-chat.ts", () => ({
+  refreshChat: refreshChatMock,
 }));
 
 vi.mock("./app-settings.ts", () => ({
@@ -31,6 +37,11 @@ vi.mock("./app-polling.ts", () => ({
   stopNodesPolling: vi.fn(),
   startDebugPolling: vi.fn(),
   stopDebugPolling: vi.fn(),
+  startKalshiDashboardPolling: vi.fn(),
+  shouldPollKalshiDashboard: vi.fn((host: { tab: string }) => host.tab === "kalshi"),
+  stopKalshiDashboardPolling: vi.fn(),
+  startDashboardPolling: vi.fn(),
+  stopDashboardPolling: vi.fn(),
 }));
 
 vi.mock("./app-scroll.ts", () => ({
@@ -40,17 +51,6 @@ vi.mock("./app-scroll.ts", () => ({
 }));
 
 import { handleConnected } from "./app-lifecycle.ts";
-
-function createDeferred() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected bootstrap deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 function createHost() {
   return {
@@ -82,28 +82,40 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
+    refreshChatMock.mockReset();
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
     });
   });
 
   it("waits for bootstrap load before first gateway connect", async () => {
-    const bootstrap = createDeferred();
-    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
+    let resolveBootstrap!: () => void;
+    loadBootstrapMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveBootstrap = resolve;
+      }),
+    );
     connectGatewayMock.mockReset();
     const host = createHost();
 
     handleConnected(host as never);
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
-    bootstrap.resolve();
+    resolveBootstrap();
     await Promise.resolve();
     expect(connectGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips deferred connect when disconnected before bootstrap resolves", async () => {
-    const bootstrap = createDeferred();
-    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
+    let resolveBootstrap!: () => void;
+    loadBootstrapMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveBootstrap = resolve;
+      }),
+    );
     connectGatewayMock.mockReset();
     const host = createHost();
 
@@ -111,7 +123,7 @@ describe("handleConnected", () => {
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
     host.connectGeneration += 1;
-    bootstrap.resolve();
+    resolveBootstrap();
     await Promise.resolve();
 
     expect(connectGatewayMock).not.toHaveBeenCalled();
@@ -128,5 +140,49 @@ describe("handleConnected", () => {
     expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
+  });
+
+  it("reconciles chat history when a connected mobile browser resumes", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, Array<() => void>>();
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn((event: string, listener: () => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      }),
+      removeEventListener: vi.fn(),
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+    vi.stubGlobal("document", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      visibilityState: "visible",
+    });
+    loadBootstrapMock.mockResolvedValueOnce(undefined);
+    refreshChatMock.mockResolvedValueOnce(undefined);
+    const requestUpdate = vi.fn();
+    const host = {
+      ...createHost(),
+      client: { stop: vi.fn(), connected: true },
+      connected: true,
+      requestUpdate,
+    };
+
+    try {
+      handleConnected(host as never);
+      listeners.get("pageshow")?.[0]?.();
+      await vi.advanceTimersByTimeAsync(350);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(refreshChatMock).toHaveBeenCalledWith(host, {
+        awaitHistory: true,
+        scheduleScroll: false,
+      });
+      expect(requestUpdate).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 });

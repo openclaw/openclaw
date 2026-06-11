@@ -83,7 +83,7 @@ async function expectRedirectSaveResult(params: {
   expect(path.extname(saved.path)).toBe(params.expectedExtension);
   expect(await fs.readFile(saved.path, "utf8")).toBe(params.expectedText);
   const stat = await fs.stat(saved.path);
-  const expectedMode = process.platform === "win32" ? 0o666 : 0o644 & ~process.umask();
+  const expectedMode = process.platform === "win32" ? 0o666 : 0o644;
   expect(stat.mode & 0o777).toBe(expectedMode);
 }
 

@@ -31,9 +31,11 @@ export {
   resolveAgentConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
+  resolveAgentSelector,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  type AgentSelectorResolution,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 

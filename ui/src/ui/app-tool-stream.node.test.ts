@@ -242,6 +242,26 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     });
   });
 
+  it("surfaces a visible using-tool status for the active chat run", () => {
+    const host = createHost({ chatRunId: "client-run", sessionKey: "main" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("client-run", 1, "tool", {
+        phase: "start",
+        toolCallId: "tool-1",
+        name: "read_file",
+        args: {},
+      }),
+    );
+
+    expect(host.chatRunStatus).toMatchObject({
+      phase: "using_tool",
+      runId: "client-run",
+      detail: "read file",
+    });
+  });
+
   it("clears the chat model cache from session_status default resets", () => {
     const host = createHost({
       chatModelOverrides: {

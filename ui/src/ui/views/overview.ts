@@ -5,6 +5,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts"
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
+import { pathForTab, subtitleForTab, titleForTab } from "../navigation.ts";
 import type { UiSettings } from "../storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
@@ -51,6 +52,7 @@ export type OverviewProps = {
   attentionItems: AttentionItem[];
   eventLog: EventLogEntry[];
   overviewLogLines: string[];
+  basePath?: string;
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
   onSettingsChange: (next: UiSettings) => void;
@@ -447,6 +449,57 @@ export function renderOverview(props: OverviewProps) {
               </div>
             `}
       </div>
+
+      <div class="card">
+        <div class="card-title">Creative Studios</div>
+        <div class="card-sub">
+          Prompt-first local creative tooling stays available before Gateway auth.
+        </div>
+        <div class="grid two" style="margin-top: 14px">
+          <article class="callout">
+            <strong>${titleForTab("appStudio")}</strong>
+            <div>${subtitleForTab("appStudio")}</div>
+            <div class="row" style="margin-top: 12px;">
+              <button
+                class="btn primary"
+                type="button"
+                @click=${() => props.onNavigate("appStudio")}
+              >
+                Open App Studio
+              </button>
+              <a class="btn" href=${pathForTab("appStudio", props.basePath)}> Open route </a>
+            </div>
+          </article>
+          <article class="callout">
+            <strong>${titleForTab("musicStudio")}</strong>
+            <div>${subtitleForTab("musicStudio")}</div>
+            <div class="row" style="margin-top: 12px;">
+              <button
+                class="btn primary"
+                type="button"
+                @click=${() => props.onNavigate("musicStudio")}
+              >
+                Open Music Studio
+              </button>
+              <a class="btn" href=${pathForTab("musicStudio", props.basePath)}> Open route </a>
+            </div>
+          </article>
+          <article class="callout">
+            <strong>${titleForTab("snesStudio")}</strong>
+            <div>${subtitleForTab("snesStudio")}</div>
+            <div class="row" style="margin-top: 12px;">
+              <button
+                class="btn primary"
+                type="button"
+                @click=${() => props.onNavigate("snesStudio")}
+              >
+                Open SNES Studio
+              </button>
+              <a class="btn" href=${pathForTab("snesStudio", props.basePath)}> Open route </a>
+            </div>
+          </article>
+        </div>
+      </div>
     </section>
 
     <div class="ov-section-divider"></div>
@@ -459,6 +512,7 @@ export function renderOverview(props: OverviewProps) {
       cronStatus: props.cronStatus,
       modelAuthStatus: props.modelAuthStatus,
       presenceCount: props.presenceCount,
+      basePath: props.basePath,
       onNavigate: props.onNavigate,
     })}
     ${renderOverviewAttention({ items: props.attentionItems })}

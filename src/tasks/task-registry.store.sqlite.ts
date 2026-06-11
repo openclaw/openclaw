@@ -34,6 +34,15 @@ type TaskRegistryRow = {
   progress_summary: string | null;
   terminal_summary: string | null;
   terminal_outcome: TaskRecord["terminalOutcome"] | null;
+  user_visible: number | bigint | null;
+  expected_deliverable: string | null;
+  acceptance_criteria_json: string | null;
+  artifact_ids_json: string | null;
+  judge_status: TaskRecord["judgeStatus"] | null;
+  judge_verdict: string | null;
+  judge_reason: string | null;
+  judge_run_id: string | null;
+  blocked_reason: string | null;
 };
 
 type TaskDeliveryStateRow = {
@@ -126,6 +135,19 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.progress_summary ? { progressSummary: row.progress_summary } : {}),
     ...(row.terminal_summary ? { terminalSummary: row.terminal_summary } : {}),
     ...(row.terminal_outcome ? { terminalOutcome: row.terminal_outcome } : {}),
+    ...(normalizeNumber(row.user_visible) === 1 ? { userVisible: true } : {}),
+    ...(row.expected_deliverable ? { expectedDeliverable: row.expected_deliverable } : {}),
+    ...(parseJsonValue<string[]>(row.acceptance_criteria_json)
+      ? { acceptanceCriteria: parseJsonValue<string[]>(row.acceptance_criteria_json) }
+      : {}),
+    ...(parseJsonValue<string[]>(row.artifact_ids_json)
+      ? { artifactIds: parseJsonValue<string[]>(row.artifact_ids_json) }
+      : {}),
+    ...(row.judge_status ? { judgeStatus: row.judge_status } : {}),
+    ...(row.judge_verdict ? { judgeVerdict: row.judge_verdict } : {}),
+    ...(row.judge_reason ? { judgeReason: row.judge_reason } : {}),
+    ...(row.judge_run_id ? { judgeRunId: row.judge_run_id } : {}),
+    ...(row.blocked_reason ? { blockedReason: row.blocked_reason } : {}),
   };
 }
 
@@ -167,6 +189,15 @@ function bindTaskRecordBase(record: TaskRecord) {
     progress_summary: record.progressSummary ?? null,
     terminal_summary: record.terminalSummary ?? null,
     terminal_outcome: record.terminalOutcome ?? null,
+    user_visible: record.userVisible === true ? 1 : null,
+    expected_deliverable: record.expectedDeliverable ?? null,
+    acceptance_criteria_json: serializeJson(record.acceptanceCriteria),
+    artifact_ids_json: serializeJson(record.artifactIds),
+    judge_status: record.judgeStatus ?? null,
+    judge_verdict: record.judgeVerdict ?? null,
+    judge_reason: record.judgeReason ?? null,
+    judge_run_id: record.judgeRunId ?? null,
+    blocked_reason: record.blockedReason ?? null,
   };
 }
 
@@ -207,7 +238,16 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         error,
         progress_summary,
         terminal_summary,
-        terminal_outcome
+        terminal_outcome,
+        user_visible,
+        expected_deliverable,
+        acceptance_criteria_json,
+        artifact_ids_json,
+        judge_status,
+        judge_verdict,
+        judge_reason,
+        judge_run_id,
+        blocked_reason
       FROM task_runs
       ORDER BY created_at ASC, task_id ASC
     `),
@@ -246,7 +286,16 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         error,
         progress_summary,
         terminal_summary,
-        terminal_outcome
+        terminal_outcome,
+        user_visible,
+        expected_deliverable,
+        acceptance_criteria_json,
+        artifact_ids_json,
+        judge_status,
+        judge_verdict,
+        judge_reason,
+        judge_run_id,
+        blocked_reason
       ) VALUES (
         @task_id,
         @runtime,
@@ -273,7 +322,16 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         @error,
         @progress_summary,
         @terminal_summary,
-        @terminal_outcome
+        @terminal_outcome,
+        @user_visible,
+        @expected_deliverable,
+        @acceptance_criteria_json,
+        @artifact_ids_json,
+        @judge_status,
+        @judge_verdict,
+        @judge_reason,
+        @judge_run_id,
+        @blocked_reason
       )
       ON CONFLICT(task_id) DO UPDATE SET
         runtime = excluded.runtime,
@@ -300,7 +358,16 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         error = excluded.error,
         progress_summary = excluded.progress_summary,
         terminal_summary = excluded.terminal_summary,
-        terminal_outcome = excluded.terminal_outcome
+        terminal_outcome = excluded.terminal_outcome,
+        user_visible = excluded.user_visible,
+        expected_deliverable = excluded.expected_deliverable,
+        acceptance_criteria_json = excluded.acceptance_criteria_json,
+        artifact_ids_json = excluded.artifact_ids_json,
+        judge_status = excluded.judge_status,
+        judge_verdict = excluded.judge_verdict,
+        judge_reason = excluded.judge_reason,
+        judge_run_id = excluded.judge_run_id,
+        blocked_reason = excluded.blocked_reason
     `),
     replaceDeliveryState: db.prepare(`
       INSERT OR REPLACE INTO task_delivery_state (
@@ -395,7 +462,16 @@ function ensureSchema(db: DatabaseSync) {
       error TEXT,
       progress_summary TEXT,
       terminal_summary TEXT,
-      terminal_outcome TEXT
+      terminal_outcome TEXT,
+      user_visible INTEGER,
+      expected_deliverable TEXT,
+      acceptance_criteria_json TEXT,
+      artifact_ids_json TEXT,
+      judge_status TEXT,
+      judge_verdict TEXT,
+      judge_reason TEXT,
+      judge_run_id TEXT,
+      blocked_reason TEXT
     );
   `);
   migrateLegacyOwnerColumns(db);
@@ -404,6 +480,21 @@ function ensureSchema(db: DatabaseSync) {
   }
   if (!hasTaskRunsColumn(db, "parent_flow_id")) {
     db.exec(`ALTER TABLE task_runs ADD COLUMN parent_flow_id TEXT;`);
+  }
+  for (const [column, type] of [
+    ["user_visible", "INTEGER"],
+    ["expected_deliverable", "TEXT"],
+    ["acceptance_criteria_json", "TEXT"],
+    ["artifact_ids_json", "TEXT"],
+    ["judge_status", "TEXT"],
+    ["judge_verdict", "TEXT"],
+    ["judge_reason", "TEXT"],
+    ["judge_run_id", "TEXT"],
+    ["blocked_reason", "TEXT"],
+  ] as const) {
+    if (!hasTaskRunsColumn(db, column)) {
+      db.exec(`ALTER TABLE task_runs ADD COLUMN ${column} ${type};`);
+    }
   }
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_delivery_state (

@@ -1,4 +1,5 @@
 import { nothing } from "lit";
+import "../styles/usage.css";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
 import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";

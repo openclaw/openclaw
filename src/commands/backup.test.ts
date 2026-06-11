@@ -417,6 +417,8 @@ describe("backup commands", () => {
       if (!capturedManifest || !capturedOnWriteEntry || !capturedFilter) {
         throw new Error("Expected backup test to capture archive callbacks");
       }
+      const filter = capturedFilter as (entryPath: string) => boolean;
+      const onWriteEntry = capturedOnWriteEntry as (entry: { path: string }) => void;
 
       const manifest = capturedManifest as CapturedBackupManifest;
       expect(manifest.options.includeSessionTranscripts).toBe(true);
@@ -437,7 +439,7 @@ describe("backup commands", () => {
         ),
       ).toBe(true);
 
-      expect(capturedFilter(stagedTranscriptPaths[0] ?? "")).toBe(true);
+      expect(filter(stagedTranscriptPaths[0] ?? "")).toBe(true);
       expect(result.skippedVolatileCount).toBe(1);
 
       const stagedPath = stagedTranscriptPaths[0];
@@ -452,7 +454,7 @@ describe("backup commands", () => {
         throw new Error("Expected staged transcript path and manifest snapshot");
       }
       const remappedTranscriptEntry = { path: stagedPath };
-      capturedOnWriteEntry(remappedTranscriptEntry);
+      onWriteEntry(remappedTranscriptEntry);
       expect(manifest.sessionTranscriptSnapshots?.map((entry) => entry.archivePath)).toContain(
         remappedTranscriptEntry.path,
       );

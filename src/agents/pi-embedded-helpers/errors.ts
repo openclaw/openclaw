@@ -851,6 +851,9 @@ function classifyFailoverClassificationFromMessage(
   if (isOpenRouterProviderReturnedError(raw, provider)) {
     return toReasonClassification("timeout");
   }
+  if (isDnsTransportErrorMessage(raw) || isTimeoutTransportErrorMessage(raw)) {
+    return toReasonClassification("timeout");
+  }
   if (isServerErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }

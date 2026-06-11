@@ -117,11 +117,13 @@ async function resolveHelloWithModelDefaults(params: {
   defaultThinking: "off" | "low";
   defaultReasoning: "on";
   body?: string;
+  agentId?: string;
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
   commandAuthorized?: boolean;
   ctx?: Parameters<typeof buildTestCtx>[0];
 }) {
+  const agentId = params.agentId ?? "worker";
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
   mocks.createModelSelectionState.mockResolvedValueOnce({
@@ -141,8 +143,8 @@ async function resolveHelloWithModelDefaults(params: {
       ...params.ctx,
     }),
     cfg: {},
-    agentId: "main",
-    agentDir: "/tmp/main-agent",
+    agentId,
+    agentDir: `/tmp/${agentId}-agent`,
     workspaceDir: "/tmp",
     agentCfg: params.agentCfg ?? {},
     sessionCtx: {
@@ -154,7 +156,7 @@ async function resolveHelloWithModelDefaults(params: {
     } as TemplateContext,
     sessionEntry: params.sessionEntry ?? makeSessionEntry(),
     sessionStore: {},
-    sessionKey: "agent:main:whatsapp:+2000",
+    sessionKey: `agent:${agentId}:whatsapp:+2000`,
     storePath: "/tmp/sessions.json",
     sessionScope: "per-sender",
     groupResolution: undefined,
@@ -173,7 +175,7 @@ async function resolveHelloWithModelDefaults(params: {
     skillFilter: undefined,
   });
 
-  return { result, resolveDefaultReasoningLevel };
+  return { result, resolveDefaultThinkingLevel, resolveDefaultReasoningLevel };
 }
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -462,6 +464,44 @@ describe("resolveReplyDirectives", () => {
       }),
     });
     expect(resolveDefaultReasoningLevel).toHaveBeenCalledOnce();
+  });
+
+  it("auto-escalates Control Director implementation turns without enabling model reasoning", async () => {
+    const { result, resolveDefaultThinkingLevel, resolveDefaultReasoningLevel } =
+      await resolveHelloWithModelDefaults({
+        agentId: "main",
+        body: "Implement the plan, verify it, and report the next build gap.",
+        defaultThinking: "off",
+        defaultReasoning: "on",
+      });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedThinkLevel: "medium",
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultThinkingLevel).not.toHaveBeenCalled();
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit session thinking overrides ahead of Control Director auto-escalation", async () => {
+    const { result, resolveDefaultThinkingLevel } = await resolveHelloWithModelDefaults({
+      agentId: "main",
+      body: "Implement the plan and debug the failed production runtime.",
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: makeSessionEntry({ thinkingLevel: "off" }),
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedThinkLevel: "off",
+      }),
+    });
+    expect(resolveDefaultThinkingLevel).not.toHaveBeenCalled();
   });
 
   it("does not re-enable model reasoning when thinking was explicitly disabled", async () => {

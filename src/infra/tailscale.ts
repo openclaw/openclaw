@@ -21,6 +21,225 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
+export type TailscaleBackendState = "Running" | "Stopped" | "NeedsLogin" | "Unknown";
+
+export type TailscaleInstallKind = "standalone" | "homebrew" | "app-store" | "path";
+
+export type ResolvedTailscaleClient = {
+  binary: string;
+  socketPath?: string;
+  backendState: TailscaleBackendState;
+  dnsName?: string;
+  ips: string[];
+  installKind: TailscaleInstallKind;
+  warnings: string[];
+};
+
+export type TailscaleClientOptions = {
+  binaryPath?: string | null;
+  socketPath?: string | null;
+  env?: NodeJS.ProcessEnv;
+  allowUnsafeServeReset?: boolean;
+};
+
+function normalizePathOption(value: string | null | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function dedupeStrings(values: (string | undefined)[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizePathOption(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function classifyTailscaleInstallKind(binary: string): TailscaleInstallKind {
+  if (binary.includes("/opt/homebrew/") || binary.includes("/usr/local/")) {
+    return "homebrew";
+  }
+  if (binary.includes("/Tailscale.app/Contents/MacOS/Tailscale")) {
+    return "app-store";
+  }
+  return binary.includes("/") ? "path" : "standalone";
+}
+
+function defaultUserspaceSocketPath(env: NodeJS.ProcessEnv): string | undefined {
+  const home = normalizePathOption(env.HOME);
+  return home ? `${home}/.local/share/tailscale-userspace/tailscaled.sock` : undefined;
+}
+
+function buildTailscaleBinaryCandidates(opts: TailscaleClientOptions): string[] {
+  const env = opts.env ?? process.env;
+  const forcedTestBinary = getTestTailscaleBinaryOverride(env) ?? undefined;
+  return dedupeStrings([
+    opts.binaryPath ?? undefined,
+    env.OPENCLAW_TAILSCALE_BIN,
+    forcedTestBinary,
+    "tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  ]);
+}
+
+function buildTailscaleSocketCandidates(opts: TailscaleClientOptions): (string | undefined)[] {
+  const env = opts.env ?? process.env;
+  const explicitSocket =
+    normalizePathOption(opts.socketPath) ?? normalizePathOption(env.OPENCLAW_TAILSCALE_SOCKET);
+  const userspaceSocket = defaultUserspaceSocketPath(env);
+  const out: (string | undefined)[] = [];
+  if (explicitSocket) {
+    out.push(explicitSocket);
+  }
+  out.push(undefined);
+  if (userspaceSocket && existsSync(userspaceSocket)) {
+    out.push(userspaceSocket);
+  }
+  const seen = new Set<string>();
+  return out.filter((value) => {
+    const key = value ?? "<default>";
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+export function tailscaleClientArgs(
+  client: Pick<ResolvedTailscaleClient, "socketPath">,
+  args: string[],
+): string[] {
+  return client.socketPath ? ["--socket", client.socketPath, ...args] : args;
+}
+
+function readTailscaleBackendState(value: unknown): TailscaleBackendState {
+  if (value === "Running" || value === "Stopped" || value === "NeedsLogin") {
+    return value;
+  }
+  return "Unknown";
+}
+
+function readStatusSelf(parsed: Record<string, unknown>): Record<string, unknown> | undefined {
+  return typeof parsed.Self === "object" && parsed.Self !== null
+    ? (parsed.Self as Record<string, unknown>)
+    : undefined;
+}
+
+function readStatusDnsName(parsed: Record<string, unknown>): string | undefined {
+  const dns = normalizeOptionalString(readStatusSelf(parsed)?.DNSName);
+  return dns ? dns.replace(/\.$/, "") : undefined;
+}
+
+function readStatusIps(parsed: Record<string, unknown>): string[] {
+  const topLevelIps = Array.isArray(parsed.TailscaleIPs) ? parsed.TailscaleIPs : undefined;
+  const selfIps = Array.isArray(readStatusSelf(parsed)?.TailscaleIPs)
+    ? (readStatusSelf(parsed)?.TailscaleIPs as unknown[])
+    : undefined;
+  return [...(topLevelIps ?? []), ...(selfIps ?? [])]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter(Boolean);
+}
+
+function parseTailscaleIpOutput(stdout: string): string[] {
+  return stdout
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function formatTailscaleAttempt(binary: string, socketPath: string | undefined): string {
+  return socketPath ? `${binary} --socket ${socketPath}` : `${binary} (default socket)`;
+}
+
+export async function resolveTailscaleClient(
+  exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
+): Promise<ResolvedTailscaleClient> {
+  const binaryCandidates = buildTailscaleBinaryCandidates(opts);
+  const socketCandidates = buildTailscaleSocketCandidates(opts);
+  const warnings: string[] = [];
+  const failures: string[] = [];
+
+  for (const binary of binaryCandidates) {
+    if (binary.startsWith("/") && !existsSync(binary)) {
+      failures.push(`${binary}: not found`);
+      continue;
+    }
+    for (const socketPath of socketCandidates) {
+      if (socketPath && !existsSync(socketPath)) {
+        failures.push(`${formatTailscaleAttempt(binary, socketPath)}: socket not found`);
+        continue;
+      }
+      const attempt = formatTailscaleAttempt(binary, socketPath);
+      try {
+        const statusResult = await exec(
+          binary,
+          tailscaleClientArgs({ socketPath }, ["status", "--json"]),
+          { timeoutMs: 5_000, maxBuffer: 400_000 },
+        );
+        const status = statusResult.stdout ? parsePossiblyNoisyJsonObject(statusResult.stdout) : {};
+        const backendState = readTailscaleBackendState(status.BackendState);
+        const authUrl = normalizeOptionalString(status.AuthURL);
+        if (backendState !== "Running") {
+          const loginHint =
+            backendState === "NeedsLogin" || authUrl
+              ? "login required"
+              : `backend state ${backendState}`;
+          failures.push(`${attempt}: ${loginHint}`);
+          continue;
+        }
+
+        const ipResult = await exec(binary, tailscaleClientArgs({ socketPath }, ["ip", "-4"]), {
+          timeoutMs: 5_000,
+          maxBuffer: 100_000,
+        });
+        const ips = parseTailscaleIpOutput(ipResult.stdout);
+        if (ips.length === 0) {
+          failures.push(`${attempt}: no IPv4 address from tailscale ip -4`);
+          continue;
+        }
+
+        if (failures.length > 0) {
+          warnings.push(...failures);
+        }
+        return {
+          binary,
+          socketPath,
+          backendState,
+          dnsName: readStatusDnsName(status),
+          ips,
+          installKind: classifyTailscaleInstallKind(binary),
+          warnings,
+        };
+      } catch (err) {
+        const { stderr, stdout, message } = extractExecErrorText(err);
+        const detail = (stderr || stdout || message || "failed").trim();
+        failures.push(`${attempt}: ${detail}`);
+      }
+    }
+  }
+
+  throw new Error(
+    [
+      "No usable Tailscale client found.",
+      "OpenClaw requires a Tailscale CLI connected to a running tailscaled daemon.",
+      "Set gateway.tailscale.binaryPath / OPENCLAW_TAILSCALE_BIN and gateway.tailscale.socketPath / OPENCLAW_TAILSCALE_SOCKET when using a non-default daemon socket.",
+      failures.length > 0 ? `Attempts: ${failures.join("; ")}` : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
 /**
  * Locate Tailscale binary using multiple strategies:
  * 1. PATH lookup (via which command)
@@ -107,44 +326,21 @@ export async function findTailscaleBinary(): Promise<string | null> {
   return null;
 }
 
-export async function getTailnetHostname(exec: typeof runExec = runExec, detectedBinary?: string) {
+export async function getTailnetHostname(
+  exec: typeof runExec = runExec,
+  detectedBinary?: string | TailscaleClientOptions,
+) {
   // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
-  const candidates = detectedBinary
-    ? [detectedBinary]
-    : ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
-  let lastError: unknown;
-
-  for (const candidate of candidates) {
-    if (candidate.startsWith("/") && !existsSync(candidate)) {
-      continue;
-    }
-    try {
-      const { stdout } = await exec(candidate, ["status", "--json"], {
-        timeoutMs: 5000,
-        maxBuffer: 400_000,
-      });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-      const self =
-        typeof parsed.Self === "object" && parsed.Self !== null
-          ? (parsed.Self as Record<string, unknown>)
-          : undefined;
-      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
-      const ips = Array.isArray(self?.TailscaleIPs)
-        ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
-        : [];
-      if (dns && dns.length > 0) {
-        return dns.replace(/\.$/, "");
-      }
-      if (ips.length > 0) {
-        return ips[0];
-      }
-      throw new Error("Could not determine Tailscale DNS or IP");
-    } catch (err) {
-      lastError = err;
-    }
+  const opts =
+    typeof detectedBinary === "string" ? { binaryPath: detectedBinary } : (detectedBinary ?? {});
+  const client = await resolveTailscaleClient(exec, opts);
+  if (client.dnsName) {
+    return client.dnsName;
   }
-
-  throw lastError ?? new Error("Could not determine Tailscale DNS or IP");
+  if (client.ips.length > 0) {
+    return client.ips[0];
+  }
+  throw new Error("Could not determine Tailscale DNS or IP");
 }
 
 /**
@@ -309,11 +505,14 @@ export async function ensureFunnel(
   exec: typeof runExec = runExec,
   runtime: RuntimeEnv = defaultRuntime,
   prompt: typeof promptYesNo = promptYesNo,
+  opts: TailscaleClientOptions = {},
 ) {
   // Ensure Funnel is enabled and publish the webhook port.
   try {
-    const tailscaleBin = await getTailscaleBinary();
-    const statusOut = (await exec(tailscaleBin, ["funnel", "status", "--json"])).stdout.trim();
+    const client = await resolveTailscaleClient(exec, opts);
+    const statusOut = (
+      await exec(client.binary, tailscaleClientArgs(client, ["funnel", "status", "--json"]))
+    ).stdout.trim();
     const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
     if (!parsed || Object.keys(parsed).length === 0) {
       runtime.error(danger("Tailscale Funnel is not enabled on this tailnet/device."));
@@ -340,8 +539,8 @@ export async function ensureFunnel(
     // Attempt with fallback
     const { stdout } = await execWithSudoFallback(
       exec,
-      tailscaleBin,
-      ["funnel", "--yes", "--bg", `${port}`],
+      client.binary,
+      tailscaleClientArgs(client, ["funnel", "--yes", "--bg", `${port}`]),
       {
         maxBuffer: 200_000,
         timeoutMs: 15_000,
@@ -394,29 +593,188 @@ export async function ensureFunnel(
   }
 }
 
-export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+export async function enableTailscaleServe(
+  port: number,
+  exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
+) {
+  const client = await resolveTailscaleClient(exec, opts);
+  await execWithSudoFallback(
+    exec,
+    client.binary,
+    tailscaleClientArgs(client, [
+      "serve",
+      "--bg",
+      "--yes",
+      "--https=443",
+      `http://127.0.0.1:${port}`,
+    ]),
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function hasTailscaleFunnelRouteForPort(
   port: number,
   exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
 ): Promise<boolean> {
   try {
-    const tailscaleBin = await getTailscaleBinary();
-    const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
-      maxBuffer: 200_000,
-      timeoutMs: 5_000,
-    });
+    const client = await resolveTailscaleClient(exec, opts);
+    const { stdout } = await exec(
+      client.binary,
+      tailscaleClientArgs(client, ["funnel", "status", "--json"]),
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 5_000,
+      },
+    );
     const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
     return tailscaleFunnelStatusCoversPort(parsed, port);
   } catch {
     return false;
   }
+}
+
+export async function hasTailscaleServeRouteForPort(
+  port: number,
+  exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
+): Promise<boolean> {
+  try {
+    const client = await resolveTailscaleClient(exec, opts);
+    const { stdout } = await exec(
+      client.binary,
+      tailscaleClientArgs(client, ["serve", "status", "--json"]),
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 5_000,
+      },
+    );
+    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    return tailscaleServeStatusCoversPort(parsed, port);
+  } catch {
+    return false;
+  }
+}
+
+export type TailscaleServeRouteVerification = {
+  ok: boolean;
+  host?: string;
+  routeKey?: string;
+  path?: string;
+  proxy?: string;
+  reason?: string;
+};
+
+function normalizeTailscaleServeHost(value: string): string {
+  const trimmed = value.trim().replace(/\.$/, "");
+  if (trimmed.endsWith(":443")) {
+    return trimmed.slice(0, -4).replace(/\.$/, "");
+  }
+  return trimmed;
+}
+
+function readTailscaleServeHandlers(
+  status: Record<string, unknown>,
+): Record<string, Record<string, unknown>> {
+  const web = (status as { Web?: Record<string, unknown> }).Web;
+  if (!web || typeof web !== "object") {
+    return {};
+  }
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [routeKey, value] of Object.entries(web)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const handlers = (value as { Handlers?: Record<string, unknown> }).Handlers;
+    if (handlers && typeof handlers === "object") {
+      out[routeKey] = handlers;
+    }
+  }
+  return out;
+}
+
+export function verifyTailscaleServeRoute(
+  status: Record<string, unknown>,
+  expected: { host: string; port: number; path?: string },
+): TailscaleServeRouteVerification {
+  const host = normalizeTailscaleServeHost(expected.host);
+  const path = expected.path ?? "/";
+  const handlersByRoute = readTailscaleServeHandlers(status);
+  if (Object.keys(handlersByRoute).length === 0) {
+    return { ok: false, host, path, reason: "serve status has no Web handlers" };
+  }
+
+  const routeKey = Object.keys(handlersByRoute).find((key) => {
+    const routeHost = normalizeTailscaleServeHost(key);
+    return routeHost === host || key === `${host}:443`;
+  });
+  if (!routeKey) {
+    return {
+      ok: false,
+      host,
+      path,
+      reason: `serve status has no HTTPS 443 route for ${host}`,
+    };
+  }
+
+  const routeHandlers = handlersByRoute[routeKey] ?? {};
+  const handler = routeHandlers[path];
+  if (!handler || typeof handler !== "object") {
+    return {
+      ok: false,
+      host,
+      routeKey,
+      path,
+      reason: `serve route ${routeKey} has no handler for ${path}`,
+    };
+  }
+  const proxy = (handler as { Proxy?: unknown }).Proxy;
+  if (typeof proxy !== "string" || proxy.length === 0) {
+    return {
+      ok: false,
+      host,
+      routeKey,
+      path,
+      reason: `serve route ${routeKey}${path} has no proxy backend`,
+    };
+  }
+  if (!tailscaleProxyMatchesLoopbackPort(proxy, expected.port)) {
+    return {
+      ok: false,
+      host,
+      routeKey,
+      path,
+      proxy,
+      reason: `serve route ${routeKey}${path} points at ${proxy}, expected http://127.0.0.1:${expected.port}`,
+    };
+  }
+  return { ok: true, host, routeKey, path, proxy };
+}
+
+export async function verifyTailscaleServeRouteForPort(
+  port: number,
+  exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
+): Promise<TailscaleServeRouteVerification> {
+  const client = await resolveTailscaleClient(exec, opts);
+  const host = client.dnsName ?? client.ips[0];
+  if (!host) {
+    return { ok: false, reason: "selected Tailscale client has no DNS name or IP" };
+  }
+  const { stdout } = await exec(
+    client.binary,
+    tailscaleClientArgs(client, ["serve", "status", "--json"]),
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 5_000,
+    },
+  );
+  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+  return verifyTailscaleServeRoute(parsed, { host, port, path: "/" });
 }
 
 const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
@@ -426,6 +784,18 @@ export function tailscaleFunnelStatusCoversPort(
   port: number,
 ): boolean {
   for (const proxy of funnelStatusBackendsForPort(status)) {
+    if (tailscaleProxyMatchesLoopbackPort(proxy, port)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function tailscaleServeStatusCoversPort(
+  status: Record<string, unknown>,
+  port: number,
+): boolean {
+  for (const proxy of tailscaleWebStatusBackends(status)) {
     if (tailscaleProxyMatchesLoopbackPort(proxy, port)) {
       return true;
     }
@@ -455,6 +825,30 @@ function tailscaleProxyMatchesLoopbackPort(proxy: string, port: number): boolean
     return false;
   }
   return TAILSCALE_LOOPBACK_PROXY_HOSTS.has(host);
+}
+
+function tailscaleWebStatusBackends(status: Record<string, unknown>): Set<string> {
+  const backends = new Set<string>();
+  const web = (status as { Web?: Record<string, unknown> }).Web;
+  if (!web || typeof web !== "object") {
+    return backends;
+  }
+  for (const handlers of Object.values(web)) {
+    if (!handlers || typeof handlers !== "object") {
+      continue;
+    }
+    const handlerEntries = (handlers as { Handlers?: Record<string, unknown> }).Handlers;
+    if (!handlerEntries || typeof handlerEntries !== "object") {
+      continue;
+    }
+    for (const handler of Object.values(handlerEntries)) {
+      const proxy = (handler as { Proxy?: unknown })?.Proxy;
+      if (typeof proxy === "string" && proxy.length > 0) {
+        backends.add(proxy);
+      }
+    }
+  }
+  return backends;
 }
 
 function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<string> {
@@ -493,28 +887,53 @@ function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<strin
   return backends;
 }
 
-export async function disableTailscaleServe(exec: typeof runExec = runExec) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "reset"], {
+export async function disableTailscaleServe(
+  exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
+) {
+  if (opts.allowUnsafeServeReset !== true) {
+    throw new Error(
+      "Refusing to run broad `tailscale serve reset` without explicit allowUnsafeServeReset=true. Clear the owned Serve route manually after confirming route ownership.",
+    );
+  }
+  const client = await resolveTailscaleClient(exec, opts);
+  await execWithSudoFallback(exec, client.binary, tailscaleClientArgs(client, ["serve", "reset"]), {
     maxBuffer: 200_000,
     timeoutMs: 15_000,
   });
 }
 
-export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["funnel", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+export async function enableTailscaleFunnel(
+  port: number,
+  exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
+) {
+  const client = await resolveTailscaleClient(exec, opts);
+  await execWithSudoFallback(
+    exec,
+    client.binary,
+    tailscaleClientArgs(client, ["funnel", "--bg", "--yes", `${port}`]),
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
-export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["funnel", "reset"], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+export async function disableTailscaleFunnel(
+  exec: typeof runExec = runExec,
+  opts: TailscaleClientOptions = {},
+) {
+  const client = await resolveTailscaleClient(exec, opts);
+  await execWithSudoFallback(
+    exec,
+    client.binary,
+    tailscaleClientArgs(client, ["funnel", "reset"]),
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -558,17 +977,29 @@ function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlM
   whoisCache.set(ip, { value, expiresAt: Date.now() + ttlMs });
 }
 
+function tailscaleWhoisCacheKey(ip: string, opts?: TailscaleClientOptions): string {
+  const env = opts?.env ?? process.env;
+  const binary =
+    normalizePathOption(opts?.binaryPath) ?? normalizePathOption(env.OPENCLAW_TAILSCALE_BIN) ?? "";
+  const socket =
+    normalizePathOption(opts?.socketPath) ??
+    normalizePathOption(env.OPENCLAW_TAILSCALE_SOCKET) ??
+    "";
+  return `${binary}\0${socket}\0${ip}`;
+}
+
 export async function readTailscaleWhoisIdentity(
   ip: string,
   exec: typeof runExec = runExec,
-  opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number },
+  opts?: TailscaleClientOptions & { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number },
 ): Promise<TailscaleWhoisIdentity | null> {
   const normalized = ip.trim();
   if (!normalized) {
     return null;
   }
+  const cacheKey = tailscaleWhoisCacheKey(normalized, opts);
   const now = Date.now();
-  const cached = readCachedWhois(normalized, now);
+  const cached = readCachedWhois(cacheKey, now);
   if (cached !== undefined) {
     return cached;
   }
@@ -576,17 +1007,21 @@ export async function readTailscaleWhoisIdentity(
   const cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
   try {
-    const tailscaleBin = await getTailscaleBinary();
-    const { stdout } = await exec(tailscaleBin, ["whois", "--json", normalized], {
-      timeoutMs: opts?.timeoutMs ?? 5_000,
-      maxBuffer: 200_000,
-    });
+    const client = await resolveTailscaleClient(exec, opts);
+    const { stdout } = await exec(
+      client.binary,
+      tailscaleClientArgs(client, ["whois", "--json", normalized]),
+      {
+        timeoutMs: opts?.timeoutMs ?? 5_000,
+        maxBuffer: 200_000,
+      },
+    );
     const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
     const identity = parseWhoisIdentity(parsed);
-    writeCachedWhois(normalized, identity, cacheTtlMs);
+    writeCachedWhois(cacheKey, identity, cacheTtlMs);
     return identity;
   } catch {
-    writeCachedWhois(normalized, null, errorTtlMs);
+    writeCachedWhois(cacheKey, null, errorTtlMs);
     return null;
   }
 }

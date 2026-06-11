@@ -19,6 +19,7 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import { buildGatewayRemoteAccessHealth } from "../gateway/remote-access-health.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -47,6 +48,7 @@ export type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
+  GatewayRemoteAccessHealthSummary,
   HealthSummary,
 } from "./health.types.js";
 
@@ -109,6 +111,18 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
     eventLoop.cpuCoreRatio
   }`;
+}
+
+function formatRemoteAccessHealthLine(summary: HealthSummary): string | null {
+  const remoteAccess = summary.remoteAccess;
+  if (!remoteAccess) {
+    return null;
+  }
+  const reasons =
+    remoteAccess.degradedReasons.length > 0
+      ? ` reasons=${remoteAccess.degradedReasons.join(" | ")}`
+      : "";
+  return `Gateway remote access: ${remoteAccess.status} required=${remoteAccess.required}${reasons}`;
 }
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
@@ -508,12 +522,19 @@ export async function getHealthSnapshot(params?: {
   }
 
   const pluginHealth = buildPluginHealthSummary();
+  const remoteAccess = await buildGatewayRemoteAccessHealth({ cfg }).catch((error) => ({
+    status: "failed" as const,
+    required: true,
+    degradedReasons: [`remote access health check failed: ${formatErrorMessage(error)}`],
+    repairCommands: ["openclaw doctor --fix"],
+  }));
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
+    ...(remoteAccess ? { remoteAccess } : {}),
     channels,
     channelOrder,
     channelLabels,
@@ -700,6 +721,10 @@ export async function healthCommand(
     const eventLoopLine = formatEventLoopHealthLine(summary);
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
+    }
+    const remoteAccessLine = formatRemoteAccessHealthLine(summary);
+    if (remoteAccessLine) {
+      runtime.log(styleHealthChannelLine(remoteAccessLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

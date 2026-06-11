@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-05-19T18:59:05.493Z",
+  "bridgeRoot": "/Users/openclaw/Library/Mobile Documents/com~apple~CloudDocs/OpenClaw-GarageBand-Bridge",
+  "bridgeRootExists": true,
+  "toMacBookJobs": 2,
+  "fromMacBookEntries": 2,
+  "garageBandInboxEntries": 1,
+  "pullAgentRequests": {
+    "queued": 3,
+    "processed": 0,
+    "rejected": 0
+  },
+  "syncHandshake": {
+    "latestProbeId": "transfer-1779217140079-25543a98",
+    "replySeen": false,
+    "verified": false,
+    "macBookStatus": null,
+    "macBookUpdatedAt": null
+  },
+  "currentMachine": "Matthew’s Mac Studio",
+  "garageBandInstalled": false,
+  "valhallaSupermassive": {
+    "userAuInstalled": true,
+    "systemAuInstalled": true,
+    "auvalPassed": false,
+    "auvalSummary": "* * FAIL -------------------------------------------------- TESTING OPEN TIMES: FATAL ERROR: didn't find the component"
+  },
+  "macBookPrereqStatus": null,
+  "macBookNodeStatus": null,
+  "macBookNodeWindowStatus": null,
+  "macBookRemoteExecStatus": null,
+  "macBookPullAgentStatus": null,
+  "nodeEnrollmentWindow": {
+    "status": "closed",
+    "updatedAt": "2026-05-17T14:55:29Z",
+    "durationSeconds": 1
+  }
+}

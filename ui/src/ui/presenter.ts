@@ -73,6 +73,10 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
   }
+  if (p.kind === "command") {
+    const args = p.args?.length ? ` ${p.args.join(" ")}` : "";
+    return `Command: ${p.command}${args}`;
+  }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;
   if (delivery && delivery.mode !== "none") {

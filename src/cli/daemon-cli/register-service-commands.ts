@@ -5,6 +5,7 @@ import type { DaemonInstallOptions, DaemonLifecycleOptions, GatewayRpcOpts } fro
 
 const daemonInstallModuleLoader = createLazyImportLoader(() => import("./install.runtime.js"));
 const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
+const daemonSnapshotModuleLoader = createLazyImportLoader(() => import("./snapshot.runtime.js"));
 const daemonStatusModuleLoader = createLazyImportLoader(() => import("./status.runtime.js"));
 
 function loadDaemonInstallModule() {
@@ -17,6 +18,10 @@ function loadDaemonLifecycleModule() {
 
 function loadDaemonStatusModule() {
   return daemonStatusModuleLoader.load();
+}
+
+function loadDaemonSnapshotModule() {
+  return daemonSnapshotModuleLoader.load();
 }
 
 function resolveInstallOptions(
@@ -138,5 +143,44 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .action(async (cmdOpts, command) => {
       const { runDaemonRestart } = await loadDaemonLifecycleModule();
       await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
+    });
+
+  const snapshot = parent
+    .command("snapshot")
+    .description("Inspect and manage promoted Gateway runtime snapshots");
+
+  snapshot
+    .command("status")
+    .description("Show promoted Gateway runtime snapshots and active protection")
+    .option("--json", "Output JSON", false)
+    .action(async (cmdOpts) => {
+      const { runGatewaySnapshotStatus } = await loadDaemonSnapshotModule();
+      await runGatewaySnapshotStatus({ json: Boolean(cmdOpts.json) });
+    });
+
+  snapshot
+    .command("prune")
+    .description("Remove older unprotected Gateway runtime snapshots")
+    .option("--keep <count>", "Number of newest snapshots to retain", undefined)
+    .option("--json", "Output JSON", false)
+    .action(async (cmdOpts) => {
+      const { runGatewaySnapshotPrune } = await loadDaemonSnapshotModule();
+      await runGatewaySnapshotPrune({
+        keep: cmdOpts.keep,
+        json: Boolean(cmdOpts.json),
+      });
+    });
+
+  snapshot
+    .command("rollback")
+    .description("Point latest snapshot at a retained release; restart separately to activate")
+    .argument("<releaseId>", "Snapshot release id")
+    .option("--json", "Output JSON", false)
+    .action(async (releaseId: string, cmdOpts) => {
+      const { runGatewaySnapshotRollback } = await loadDaemonSnapshotModule();
+      await runGatewaySnapshotRollback({
+        releaseId,
+        json: Boolean(cmdOpts.json),
+      });
     });
 }

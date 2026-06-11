@@ -7,12 +7,40 @@ const {
   ensureTailscaledInstalled,
   getTailnetHostname,
   getTestTailscaleBinaryOverride,
+  resolveTailscaleClient,
   enableTailscaleServe,
   disableTailscaleServe,
   ensureFunnel,
+  tailscaleServeStatusCoversPort,
   tailscaleFunnelStatusCoversPort,
+  verifyTailscaleServeRoute,
 } = tailscale;
 const tailscaleBin = expect.stringMatching(/tailscale$/i);
+
+function createTailscaleExec(params?: {
+  status?: Record<string, unknown>;
+  ip?: string;
+  commandResult?: { stdout: string; stderr?: string };
+}) {
+  const status =
+    params?.status ??
+    ({
+      BackendState: "Running",
+      Self: { DNSName: "host.tailnet.ts.net.", TailscaleIPs: ["100.1.1.1"] },
+      TailscaleIPs: ["100.1.1.1"],
+    } as Record<string, unknown>);
+  return vi.fn(async (_cmd: string, args: string[]) => {
+    if (args.includes("status") && args.includes("--json")) {
+      return { stdout: JSON.stringify(status), stderr: "" };
+    }
+    if (args.includes("ip") && args.includes("-4")) {
+      return { stdout: params?.ip ?? "100.1.1.1\n", stderr: "" };
+    }
+    return params?.commandResult
+      ? { stdout: params.commandResult.stdout, stderr: params.commandResult.stderr ?? "" }
+      : { stdout: "", stderr: "" };
+  });
+}
 
 function createRuntimeWithExitError() {
   return {
@@ -46,30 +74,70 @@ describe("tailscale helpers", () => {
   });
 
   it("parses DNS name from tailscale status", async () => {
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({
+    const exec = createTailscaleExec({
+      status: {
+        BackendState: "Running",
         Self: { DNSName: "host.tailnet.ts.net.", TailscaleIPs: ["100.1.1.1"] },
-      }),
+      },
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("host.tailnet.ts.net");
   });
 
   it("falls back to IP when DNS missing", async () => {
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({ Self: { TailscaleIPs: ["100.2.2.2"] } }),
+    const exec = createTailscaleExec({
+      status: { BackendState: "Running", Self: { TailscaleIPs: ["100.2.2.2"] } },
+      ip: "100.2.2.2\n",
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("100.2.2.2");
   });
 
   it("parses noisy JSON output from tailscale status", async () => {
-    const exec = vi.fn().mockResolvedValue({
-      stdout:
-        'warning: stale state\n{"Self":{"DNSName":"noisy.tailnet.ts.net.","TailscaleIPs":["100.9.9.9"]}}\n',
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args.includes("status")) {
+        return {
+          stdout:
+            'warning: stale state\n{"BackendState":"Running","Self":{"DNSName":"noisy.tailnet.ts.net.","TailscaleIPs":["100.9.9.9"]}}\n',
+          stderr: "",
+        };
+      }
+      return { stdout: "100.9.9.9\n", stderr: "" };
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("noisy.tailnet.ts.net");
+  });
+
+  it("resolves explicit socket before default daemon", async () => {
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      const socketIndex = args.indexOf("--socket");
+      const socket = socketIndex >= 0 ? args[socketIndex + 1] : undefined;
+      if (!socket) {
+        throw Object.assign(new Error("dial unix /var/run/tailscaled.socket: no such file"), {
+          stderr: "dial unix /var/run/tailscaled.socket: no such file",
+        });
+      }
+      if (args.includes("status")) {
+        return {
+          stdout: JSON.stringify({
+            BackendState: "Running",
+            Self: { DNSName: "userspace.tailnet.ts.net.", TailscaleIPs: ["100.9.9.9"] },
+          }),
+          stderr: "",
+        };
+      }
+      return { stdout: "100.9.9.9\n", stderr: "" };
+    });
+
+    const client = await resolveTailscaleClient(exec as never, { socketPath: "/tmp" });
+
+    expect(client.socketPath).toBe("/tmp");
+    expect(client.dnsName).toBe("userspace.tailnet.ts.net");
+    expect(exec).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.not.arrayContaining(["--socket"]),
+      expect.any(Object),
+    );
   });
 
   it("allows the test binary override in explicit test environments", () => {
@@ -135,45 +203,87 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
+    let serveAttempts = 0;
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args.includes("status")) {
+        return {
+          stdout: JSON.stringify({
+            BackendState: "Running",
+            Self: { TailscaleIPs: ["100.1.1.1"] },
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("ip")) {
+        return { stdout: "100.1.1.1\n", stderr: "" };
+      }
+      if (args.includes("serve")) {
+        serveAttempts += 1;
+        if (serveAttempts === 1) {
+          throw new Error("permission denied");
+        }
+      }
+      return { stdout: "", stderr: "" };
+    });
 
     await enableTailscaleServe(3000, exec as never);
 
     const [firstCall, secondCall] = expectServeFallbackCommand({
-      callArgs: ["serve", "--bg", "--yes", "3000"],
-      sudoArgs: ["serve", "--bg", "--yes", "3000"],
+      callArgs: ["serve", "--bg", "--yes", "--https=443", "http://127.0.0.1:3000"],
+      sudoArgs: ["serve", "--bg", "--yes", "--https=443", "http://127.0.0.1:3000"],
     });
-    expect(exec).toHaveBeenNthCalledWith(1, firstCall[0], firstCall[1], expect.any(Object));
-    expect(exec).toHaveBeenNthCalledWith(2, secondCall[0], secondCall[1], expect.any(Object));
+    expect(exec).toHaveBeenNthCalledWith(3, firstCall[0], firstCall[1], expect.any(Object));
+    expect(exec).toHaveBeenNthCalledWith(4, secondCall[0], secondCall[1], expect.any(Object));
   });
 
   it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+    const exec = createTailscaleExec();
 
     await enableTailscaleServe(3000, exec as never);
 
-    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledTimes(3);
     expect(exec).toHaveBeenCalledWith(
       tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
+      expect.arrayContaining(["serve", "--bg", "--yes", "--https=443", "http://127.0.0.1:3000"]),
       expect.any(Object),
     );
   });
 
-  it("disableTailscaleServe uses fallback", async () => {
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
+  it("disableTailscaleServe refuses broad reset unless explicitly allowed", async () => {
+    const exec = createTailscaleExec();
 
-    await disableTailscaleServe(exec as never);
+    await expect(disableTailscaleServe(exec as never)).rejects.toThrow(/Refusing/);
+  });
 
-    expect(exec).toHaveBeenCalledTimes(2);
+  it("disableTailscaleServe uses fallback when explicitly allowed", async () => {
+    let resetAttempts = 0;
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args.includes("status")) {
+        return {
+          stdout: JSON.stringify({
+            BackendState: "Running",
+            Self: { TailscaleIPs: ["100.1.1.1"] },
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("ip")) {
+        return { stdout: "100.1.1.1\n", stderr: "" };
+      }
+      if (args.includes("reset")) {
+        resetAttempts += 1;
+        if (resetAttempts === 1) {
+          throw new Error("permission denied");
+        }
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await disableTailscaleServe(exec as never, { allowUnsafeServeReset: true });
+
+    expect(exec).toHaveBeenCalledTimes(4);
     expect(exec).toHaveBeenNthCalledWith(
-      2,
+      4,
       "sudo",
       expect.arrayContaining(["-n", tailscaleBin, "serve", "reset"]),
       expect.any(Object),
@@ -181,11 +291,31 @@ describe("tailscale helpers", () => {
   });
 
   it("ensureFunnel uses fallback for enabling", async () => {
-    const exec = vi
-      .fn()
-      .mockResolvedValueOnce({ stdout: JSON.stringify({ BackendState: "Running" }) }) // status
-      .mockRejectedValueOnce(new Error("permission denied")) // enable normal
-      .mockResolvedValueOnce({ stdout: "" }); // enable sudo
+    let enableAttempts = 0;
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args.includes("status") && args.includes("--json") && !args.includes("funnel")) {
+        return {
+          stdout: JSON.stringify({
+            BackendState: "Running",
+            Self: { TailscaleIPs: ["100.1.1.1"] },
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("ip")) {
+        return { stdout: "100.1.1.1\n", stderr: "" };
+      }
+      if (args.includes("funnel") && args.includes("status")) {
+        return { stdout: JSON.stringify({ BackendState: "Running" }), stderr: "" };
+      }
+      if (args.includes("funnel")) {
+        enableAttempts += 1;
+        if (enableAttempts === 1) {
+          throw new Error("permission denied");
+        }
+      }
+      return { stdout: "", stderr: "" };
+    });
 
     const runtime = {
       error: vi.fn(),
@@ -197,18 +327,18 @@ describe("tailscale helpers", () => {
     await ensureFunnel(8080, exec as never, runtime, prompt);
 
     expect(exec).toHaveBeenNthCalledWith(
-      1,
+      3,
       tailscaleBin,
       expect.arrayContaining(["funnel", "status", "--json"]),
     );
     expect(exec).toHaveBeenNthCalledWith(
-      2,
+      4,
       tailscaleBin,
       expect.arrayContaining(["funnel", "--yes", "--bg", "8080"]),
       expect.any(Object),
     );
     expect(exec).toHaveBeenNthCalledWith(
-      3,
+      5,
       "sudo",
       expect.arrayContaining(["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"]),
       expect.any(Object),
@@ -216,25 +346,53 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args.includes("status")) {
+        return {
+          stdout: JSON.stringify({
+            BackendState: "Running",
+            Self: { TailscaleIPs: ["100.1.1.1"] },
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("ip")) {
+        return { stdout: "100.1.1.1\n", stderr: "" };
+      }
+      throw new Error("boom");
+    });
 
     await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow("boom");
 
-    expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledTimes(3);
   });
 
   it("enableTailscaleServe rethrows original error if sudo fails", async () => {
     const originalError = Object.assign(new Error("permission denied"), {
       stderr: "permission denied",
     });
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(originalError)
-      .mockRejectedValueOnce(new Error("sudo: a password is required"));
+    const exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args.includes("status")) {
+        return {
+          stdout: JSON.stringify({
+            BackendState: "Running",
+            Self: { TailscaleIPs: ["100.1.1.1"] },
+          }),
+          stderr: "",
+        };
+      }
+      if (args.includes("ip")) {
+        return { stdout: "100.1.1.1\n", stderr: "" };
+      }
+      if (_cmd === "sudo") {
+        throw new Error("sudo: a password is required");
+      }
+      throw originalError;
+    });
 
     await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(originalError);
 
-    expect(exec).toHaveBeenCalledTimes(2);
+    expect(exec).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -324,5 +482,60 @@ describe("tailscaleFunnelStatusCoversPort", () => {
 
   it("returns false on an empty status payload", () => {
     expect(tailscaleFunnelStatusCoversPort({}, 18789)).toBe(false);
+  });
+});
+
+describe("tailscaleServeStatusCoversPort", () => {
+  it("matches Serve handlers that point at the gateway port", () => {
+    const status = {
+      Web: {
+        "host.tailnet.ts.net:443": {
+          Handlers: {
+            "/": { Proxy: "http://127.0.0.1:18789" },
+          },
+        },
+      },
+    } as Record<string, unknown>;
+
+    expect(tailscaleServeStatusCoversPort(status, 18789)).toBe(true);
+    expect(tailscaleServeStatusCoversPort(status, 3000)).toBe(false);
+  });
+
+  it("strictly verifies host, HTTPS 443, root path, and backend", () => {
+    const status = {
+      Web: {
+        "host.tailnet.ts.net:443": {
+          Handlers: {
+            "/": { Proxy: "http://127.0.0.1:18789" },
+          },
+        },
+      },
+    } as Record<string, unknown>;
+
+    expect(
+      verifyTailscaleServeRoute(status, {
+        host: "host.tailnet.ts.net.",
+        port: 18789,
+        path: "/",
+      }),
+    ).toMatchObject({
+      ok: true,
+      routeKey: "host.tailnet.ts.net:443",
+      proxy: "http://127.0.0.1:18789",
+    });
+    expect(
+      verifyTailscaleServeRoute(status, {
+        host: "old.tailnet.ts.net",
+        port: 18789,
+        path: "/",
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining("old.tailnet.ts.net") });
+    expect(
+      verifyTailscaleServeRoute(status, {
+        host: "host.tailnet.ts.net",
+        port: 3000,
+        path: "/",
+      }),
+    ).toMatchObject({ ok: false, proxy: "http://127.0.0.1:18789" });
   });
 });

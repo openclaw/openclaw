@@ -1,0 +1,398 @@
+{
+  "name": "OpenClaw Dashboard Customizations",
+  "generatedAtUtc": "2026-05-23T01:48:27.616Z",
+  "patch": "customizations/dashboard/openclaw-dashboard-customizations.patch",
+  "fileCount": 64,
+  "files": [
+    {
+      "path": "scripts/dev/control-ui-attention-smoke.ts",
+      "tracked": false,
+      "bytes": 23863,
+      "sha256": "5b137f0c4f8c68f8a9e49c00b33a65f3e302d3e31a7bc028ee25ea4e79a2c2e9"
+    },
+    {
+      "path": "scripts/dev/control-ui-freshness-smoke.ts",
+      "tracked": false,
+      "bytes": 8744,
+      "sha256": "c9f188dbab5294bd10655a3df87f3a3236866b6934d9c20c38d722b882367f6b"
+    },
+    {
+      "path": "scripts/dev/control-ui-mobile-chat-visual-smoke.ts",
+      "tracked": false,
+      "bytes": 26952,
+      "sha256": "06f01471255c6f60d55c587f87da5da4614c6d2e430c838d09442b186001c466"
+    },
+    {
+      "path": "scripts/dev/control-ui-mobile-safari-smoke.ts",
+      "tracked": false,
+      "bytes": 14006,
+      "sha256": "80acb253eacf3c5de4e9e36bbc72d6b314120115d0f30abdb6fd6ed640c48ed8"
+    },
+    {
+      "path": "scripts/dev/control-ui-projects-smoke.ts",
+      "tracked": false,
+      "bytes": 19974,
+      "sha256": "26e0967d1f414a90cb0fcba84d220aa7b9e7d6b1eda2fa9554bfa2fac0c63545"
+    },
+    {
+      "path": "scripts/dev/export-dashboard-customizations.mjs",
+      "tracked": false,
+      "bytes": 5613,
+      "sha256": "9cf3d1aa2cf68dca2cc966e3b2c2b42e4e24842b719e7c81a17de9c2a81730d3"
+    },
+    {
+      "path": "src/gateway/method-scopes.ts",
+      "tracked": true,
+      "bytes": 8500,
+      "sha256": "02490c10e28026d6cc5ba39d9ebea01b3da7f015e7b67a8faf5979e8412ba3fb"
+    },
+    {
+      "path": "src/gateway/pattern-lab-dashboard-data.test.ts",
+      "tracked": false,
+      "bytes": 4052,
+      "sha256": "3058395c3a2885326676c26b38def05a33d80747936596374315ad47185b115d"
+    },
+    {
+      "path": "src/gateway/pattern-lab-dashboard-data.ts",
+      "tracked": false,
+      "bytes": 27358,
+      "sha256": "947c277c7c926f6af9a54b5a58bad47af08d85a45611c269cad957eb0c6a8114"
+    },
+    {
+      "path": "src/gateway/pattern-lab-discord-interactions.test.ts",
+      "tracked": false,
+      "bytes": 1244,
+      "sha256": "9ca031c63f43edce5dbcdf4c3aca1e9e600d3f0f630e7c8dfd989c565511450a"
+    },
+    {
+      "path": "src/gateway/pattern-lab-discord-interactions.ts",
+      "tracked": false,
+      "bytes": 10121,
+      "sha256": "2a28c1b58f9293e1e29b81bf804cd7c03457ca2d2112928ea56dbea358d7b844"
+    },
+    {
+      "path": "src/gateway/protocol/index.ts",
+      "tracked": true,
+      "bytes": 42980,
+      "sha256": "18f81bad88f62941d4bd07d17065d11e866a9bc6f27075da3c58464b7c1f008d"
+    },
+    {
+      "path": "src/gateway/protocol/schema/projects.ts",
+      "tracked": false,
+      "bytes": 3643,
+      "sha256": "380542b708fec68a4e1e2c57369d3bf350f41181948f68a2babe5e0387bba9bc"
+    },
+    {
+      "path": "src/gateway/protocol/schema/protocol-schemas.ts",
+      "tracked": true,
+      "bytes": 20317,
+      "sha256": "5b619226f8e0c97519f0d31cfbd8aeb9ed5de924ece7f532c58bfeaeb9204cfc"
+    },
+    {
+      "path": "src/gateway/protocol/schema/types.ts",
+      "tracked": true,
+      "bytes": 16342,
+      "sha256": "928a5889260c479dd1d5b295240a6ec1ecc50953d7a40965b9e848b792c96c24"
+    },
+    {
+      "path": "src/gateway/server-methods-list.ts",
+      "tracked": true,
+      "bytes": 5454,
+      "sha256": "ee4e1a4345609fa2005762ab76ae78ffc37797ae11cb4438f5f395b36838abae"
+    },
+    {
+      "path": "src/gateway/server-methods/kalshi-dashboard.test.ts",
+      "tracked": false,
+      "bytes": 10110,
+      "sha256": "979b6f2504c719212404f6aae7f7fa9a7476eba6321697f26273527d02c4124b"
+    },
+    {
+      "path": "src/gateway/server-methods/kalshi-dashboard.ts",
+      "tracked": false,
+      "bytes": 22797,
+      "sha256": "46025f53c42b74790d95a7d7fd42a60481a7d72f1ce69dc988605873c11932e2"
+    },
+    {
+      "path": "src/gateway/server-methods/ops-summary.test.ts",
+      "tracked": false,
+      "bytes": 14439,
+      "sha256": "a167cee144bad00a55ef83f16e78da1955492c36a5a9f3cae01f9a467c428849"
+    },
+    {
+      "path": "src/gateway/server-methods/ops-summary.ts",
+      "tracked": false,
+      "bytes": 19838,
+      "sha256": "375cefaa2be7f6f3077f1233804be9a37ec4ce17045ff8b077ac0bc69775fba2"
+    },
+    {
+      "path": "src/gateway/server-methods/pattern-lab-dashboard.test.ts",
+      "tracked": false,
+      "bytes": 4424,
+      "sha256": "df66bbd46fab1e737f760ab4f43aa21624e3eb078aab00b709fc8c64b871f38e"
+    },
+    {
+      "path": "src/gateway/server-methods/pattern-lab-dashboard.ts",
+      "tracked": false,
+      "bytes": 2242,
+      "sha256": "d3af5b7140db5c06ccbaf54cf8082428daef644986d092d39adb85d950e47023"
+    },
+    {
+      "path": "src/gateway/server-methods/projects.test.ts",
+      "tracked": false,
+      "bytes": 4840,
+      "sha256": "f1680e7bbfc4def362a7aa67acb34eb9f934faf5a4d8dc62e76296bd39a14f53"
+    },
+    {
+      "path": "src/gateway/server-methods/projects.ts",
+      "tracked": false,
+      "bytes": 12771,
+      "sha256": "42ec9dde44d55a2f84f457013b0c3f39609edcf9e7601732114d6c8ad5de5e71"
+    },
+    {
+      "path": "src/projects/store.test.ts",
+      "tracked": false,
+      "bytes": 4791,
+      "sha256": "9656d1a58f7beb8ce93501e3cdc3189e80c21a33a676be7b0166e6f1d0f6307f"
+    },
+    {
+      "path": "src/projects/store.ts",
+      "tracked": false,
+      "bytes": 27659,
+      "sha256": "400f14a588063fceea581b4bdb9bb4e5fc9ebc5697cf9d745135258014e965ba"
+    },
+    {
+      "path": "ui/index.html",
+      "tracked": true,
+      "bytes": 12954,
+      "sha256": "a2cc91b47af216055b3608e8a2c7d59822213581e7e2e0677c0d081e9025c185"
+    },
+    {
+      "path": "ui/public/sw.js",
+      "tracked": true,
+      "bytes": 10836,
+      "sha256": "5236f58a6830b4f94029c983fd210ec4cb2a9ab4e1de431d4eb81b55e07d2cca"
+    },
+    {
+      "path": "ui/src/styles/agents.css",
+      "tracked": false,
+      "bytes": 86415,
+      "sha256": "11c5f9bfe7bce835f567f50db41a2087e22545d99535f3b76d6ce1d3ae545725"
+    },
+    {
+      "path": "ui/src/styles/chat/grouped.css",
+      "tracked": true,
+      "bytes": 12969,
+      "sha256": "6d514b5d36a7e72f64c61e6f777358d96b4ce93f8e2f428d8f066222bf8f8c8b"
+    },
+    {
+      "path": "ui/src/styles/chat/layout.css",
+      "tracked": true,
+      "bytes": 34245,
+      "sha256": "d99d25bab6b90b633c35dcea1d3694d37246f31333a8ec60fe9c4312caf6547d"
+    },
+    {
+      "path": "ui/src/styles/chat/layout.test.ts",
+      "tracked": true,
+      "bytes": 1173,
+      "sha256": "27bbc52b58355841da8cc32d1ce036b2651d7da7054bdbdfcc057f8e1e281cf5"
+    },
+    {
+      "path": "ui/src/styles/chat/sidebar.css",
+      "tracked": true,
+      "bytes": 9541,
+      "sha256": "25546b60cdd450c8c0ed64040d82ca29749a8deed550542a585aa007fcb6bc38"
+    },
+    {
+      "path": "ui/src/styles/chat/tool-cards.css",
+      "tracked": true,
+      "bytes": 17819,
+      "sha256": "91ee3f347bc32169f3d0e4b9cda080798b71298ec14a660407caa832028c2be6"
+    },
+    {
+      "path": "ui/src/styles/components.css",
+      "tracked": true,
+      "bytes": 121476,
+      "sha256": "8c821bcea108ba341bc3d4c9fc2481844f73b0e81a23ad78e53347f4f3264777"
+    },
+    {
+      "path": "ui/src/styles/components.test.ts",
+      "tracked": true,
+      "bytes": 7609,
+      "sha256": "9bf19ea91c5b00939ed534f5825faae191d1044b483766878b33893799f45a67"
+    },
+    {
+      "path": "ui/src/styles/config-quick.test.ts",
+      "tracked": true,
+      "bytes": 4830,
+      "sha256": "0bc89bf744c4ef6b384b07e0fa7b8bf1318dfbdc3321e0e3a16591b72a6fa9f4"
+    },
+    {
+      "path": "ui/src/styles/kalshi-dashboard.css",
+      "tracked": false,
+      "bytes": 28942,
+      "sha256": "e890e8ecb15c2487ffb7425c208d143551b5ba4fd41f76175ce7befe87466d90"
+    },
+    {
+      "path": "ui/src/styles/layout.mobile.css",
+      "tracked": true,
+      "bytes": 24837,
+      "sha256": "862c69701a76ca0da7857c5da1c93b33b0287b1d60df85541fd177be5c9f8b28"
+    },
+    {
+      "path": "ui/src/styles/layout.mobile.test.ts",
+      "tracked": true,
+      "bytes": 4529,
+      "sha256": "f8c76593eed38704e8325936f2677db021fd88452f436e1ca0a25546612b1da8"
+    },
+    {
+      "path": "ui/src/styles/projects.css",
+      "tracked": false,
+      "bytes": 10377,
+      "sha256": "77035b0780af1478cf4f4ec19b92a7183d6393162e2297c92e3267e860ae0c82"
+    },
+    {
+      "path": "ui/src/ui/app-render-projects-tab.ts",
+      "tracked": false,
+      "bytes": 4016,
+      "sha256": "859c6a3dbea369bfe2f454d3ccdd17885eb628aab175b63ad5f67011341bb554"
+    },
+    {
+      "path": "ui/src/ui/chat/chat-responsive.browser.test.ts",
+      "tracked": true,
+      "bytes": 32878,
+      "sha256": "f2c1ebd403d1058e08779ea3d7550ddc9a16e8edab4983315fac70510cef611c"
+    },
+    {
+      "path": "ui/src/ui/controllers/cron.test.ts",
+      "tracked": true,
+      "bytes": 45638,
+      "sha256": "908e720f93cafd90d87bd6e1ea29001a22eea1d3c37ce8b65ea819da1a2bb0fe"
+    },
+    {
+      "path": "ui/src/ui/controllers/cron.ts",
+      "tracked": true,
+      "bytes": 34385,
+      "sha256": "830abf925bd75de0903dee59fa2d758b1364211e52fa6449e97299aa743bfecb"
+    },
+    {
+      "path": "ui/src/ui/controllers/kalshi-dashboard.ts",
+      "tracked": false,
+      "bytes": 36923,
+      "sha256": "97150189770e2cba72a73580cb47e4dc769336b6d8b78156b2d7078283e51516"
+    },
+    {
+      "path": "ui/src/ui/controllers/projects.test.ts",
+      "tracked": false,
+      "bytes": 3769,
+      "sha256": "0aa2180b22ddf85256c96608dc3fc900f63a911ade029c960e896a9fdc6e303e"
+    },
+    {
+      "path": "ui/src/ui/controllers/projects.ts",
+      "tracked": false,
+      "bytes": 11022,
+      "sha256": "656af7a3189270d6a4ff38f396cb529e51165e33bf997c7374a0ccea99399f65"
+    },
+    {
+      "path": "ui/src/ui/mobile-viewport.test.ts",
+      "tracked": false,
+      "bytes": 4305,
+      "sha256": "d9e880c2201a694c73b4fe376f1c278b4d765bcc7f542cb3450d042d82f0c341"
+    },
+    {
+      "path": "ui/src/ui/mobile-viewport.ts",
+      "tracked": false,
+      "bytes": 9390,
+      "sha256": "5e865d06a027f7bae40f3ba1d194a57a9e57ea142aed1bd3307ee08d9e9fd9e1"
+    },
+    {
+      "path": "ui/src/ui/views/agents-room.test.ts",
+      "tracked": false,
+      "bytes": 1615,
+      "sha256": "44f52a1de600a91d2b212349eaccbf8e7caa02aa92a75a7cb112d58cce0f8837"
+    },
+    {
+      "path": "ui/src/ui/views/agents-room.ts",
+      "tracked": false,
+      "bytes": 134329,
+      "sha256": "0bdf29e4c5e180a1eb3dc9f7e8a5593af5990ac09223c74224633f2d5f3d6d10"
+    },
+    {
+      "path": "ui/src/ui/views/agents-workflows.test.ts",
+      "tracked": false,
+      "bytes": 8610,
+      "sha256": "656b0e353f7413b557b055f125803875279cb7569b710d4b337f41e27e2d183b"
+    },
+    {
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "tracked": false,
+      "bytes": 46731,
+      "sha256": "6c2add2a7d7777849303f53fd90eb86a395a59bafff7bb6afbd1c756e675431d"
+    },
+    {
+      "path": "ui/src/ui/views/agents.test.ts",
+      "tracked": true,
+      "bytes": 95086,
+      "sha256": "06c2c0fe63d662f1b848b13033902cd8050a36862f48d30b876d56cc01699348"
+    },
+    {
+      "path": "ui/src/ui/views/cron.test.ts",
+      "tracked": true,
+      "bytes": 28438,
+      "sha256": "5adf5b2f08c89755a656dedc16bd10bd5df0eef2ea371f7824da9d5bd4dc0682"
+    },
+    {
+      "path": "ui/src/ui/views/cron.ts",
+      "tracked": true,
+      "bytes": 91243,
+      "sha256": "f5484315a820ceb33aa493e59e2710904c21f5b211ced9d9899b4573bf614b0d"
+    },
+    {
+      "path": "ui/src/ui/views/kalshi-dashboard.test.ts",
+      "tracked": false,
+      "bytes": 63371,
+      "sha256": "8492d41aa598563eb466f89485db0d1f46058796951002acd65515c2ff14d274"
+    },
+    {
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "tracked": false,
+      "bytes": 198113,
+      "sha256": "a6f6a2c04bf1ca4d5fc127c80fe0ad90abfec31d8dfd852d4c432d587f33f805"
+    },
+    {
+      "path": "ui/src/ui/views/pattern-lab-dashboard.test.ts",
+      "tracked": false,
+      "bytes": 4706,
+      "sha256": "7ee4bac3ac5fadd0bba3ef896d2e489b461d502d5ee545fd10568ac192e3aa4a"
+    },
+    {
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "tracked": false,
+      "bytes": 18787,
+      "sha256": "bfde59e4734b4f12742739b57eba5c4b1955d11ce1048b368e496430a66e948d"
+    },
+    {
+      "path": "ui/src/ui/views/projects.test.ts",
+      "tracked": false,
+      "bytes": 6585,
+      "sha256": "9cdc2e9bd4c9ff94a4e261cd2bbafca1f0741e565151a47bf1d29eeffb82d92f"
+    },
+    {
+      "path": "ui/src/ui/views/projects.ts",
+      "tracked": false,
+      "bytes": 25662,
+      "sha256": "e4d8885ed03108538fdbd0344470a4ba06a0458d49a4bf5d66b441f078104e21"
+    },
+    {
+      "path": "youtube-v1/scripts/youtube-v1-automation.mjs",
+      "tracked": false,
+      "bytes": 7221,
+      "sha256": "bcaf30e507b088b619c32b40530b6ef0872ad56459e088745df15552ebac4e27"
+    }
+  ],
+  "verify": [
+    "git apply --check --cached customizations/dashboard/openclaw-dashboard-customizations.patch",
+    "pnpm test ui/src/ui/pwa-shell.test.ts ui/src/styles/config-quick.test.ts",
+    "pnpm test ui/src/styles/components.test.ts ui/src/ui/views/agents-room.test.ts ui/src/ui/views/agents.test.ts ui/src/ui/views/cron.test.ts ui/src/ui/controllers/cron.test.ts",
+    "pnpm ui:build"
+  ]
+}

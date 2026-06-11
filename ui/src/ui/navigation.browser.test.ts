@@ -150,6 +150,8 @@ describe("control UI routing", () => {
     ].join("\n");
     app.requestUpdate();
     await app.updateComplete;
+    await vi.dynamicImportSettled();
+    await app.updateComplete;
 
     expect(app.tab).toBe("dreams");
     expectElement(app, ".dreams__tab", HTMLElement);
@@ -346,7 +348,10 @@ describe("control UI routing", () => {
     expectElement(app, ".sidebar-shell__body", HTMLElement);
     expectElement(app, ".sidebar-shell__footer", HTMLElement);
     expectElement(app, ".sidebar-brand", HTMLElement);
-    expectElement(app, ".sidebar-brand__logo", HTMLElement);
+    const sidebarLogo = expectElement(app, ".sidebar-brand__logo", HTMLElement);
+    expect(sidebarLogo.tagName).toBe("SPAN");
+    expect(sidebarLogo.querySelector("svg")).toBeInstanceOf(SVGElement);
+    expect(app.querySelector(".sidebar-brand__logo img")).toBeNull();
     expectElement(app, ".sidebar-brand__copy", HTMLElement);
 
     app.hello = {

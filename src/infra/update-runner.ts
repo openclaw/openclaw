@@ -126,6 +126,10 @@ type UpdateRunnerOptions = {
   tag?: string;
   channel?: UpdateChannel;
   devTargetRef?: string;
+  dirtyPolicy?: "skip" | "allow";
+  preserveDirty?: boolean;
+  requiredPaths?: string[];
+  sourceRoot?: string;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -601,6 +605,28 @@ function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRun
   }
 }
 
+function normalizeRequiredUpdatePaths(paths?: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (const rawPath of paths ?? []) {
+    const trimmed = rawPath.trim();
+    if (
+      !trimmed ||
+      path.isAbsolute(trimmed) ||
+      trimmed === "." ||
+      trimmed.startsWith(`..${path.sep}`) ||
+      trimmed === ".." ||
+      trimmed.split(/[\\/]+/).includes("..")
+    ) {
+      continue;
+    }
+    const normalizedPath = path.normalize(trimmed);
+    if (!normalized.includes(normalizedPath)) {
+      normalized.push(normalizedPath);
+    }
+  }
+  return normalized;
+}
+
 async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
 ): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
@@ -765,6 +791,86 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
       return null;
     };
+    const requiredPaths = normalizeRequiredUpdatePaths(opts.requiredPaths);
+    let dirtyChangesPreserved = false;
+    const preserveDirtyChanges = async (): Promise<UpdateRunResult | null> => {
+      if (dirtyChangesPreserved || !opts.preserveDirty) {
+        return null;
+      }
+      const stashStep = await runStep(
+        step(
+          "custom source preserve changes",
+          [
+            "git",
+            "-C",
+            gitRoot,
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            `openclaw-update-${new Date().toISOString()}`,
+          ],
+          gitRoot,
+        ),
+      );
+      steps.push(stashStep);
+      if (stashStep.exitCode !== 0) {
+        return buildGitErrorResult("custom-source-preserve-failed");
+      }
+      dirtyChangesPreserved = !/No local changes to save/i.test(stashStep.stdoutTail ?? "");
+      return null;
+    };
+    const restoreDirtyChanges = async (): Promise<UpdateRunResult | null> => {
+      if (!dirtyChangesPreserved) {
+        return null;
+      }
+      const applyStep = await runStep(
+        step(
+          "custom source restore changes",
+          ["git", "-C", gitRoot, "stash", "apply", "--index", "stash@{0}"],
+          gitRoot,
+        ),
+      );
+      steps.push(applyStep);
+      if (applyStep.exitCode !== 0) {
+        return buildGitErrorResult("custom-source-restore-failed");
+      }
+      const dropStep = await runStep(
+        step(
+          "custom source drop preserved changes",
+          ["git", "-C", gitRoot, "stash", "drop", "stash@{0}"],
+          gitRoot,
+        ),
+      );
+      steps.push(dropStep);
+      return null;
+    };
+    const verifyRequiredPaths = async (): Promise<UpdateRunResult | null> => {
+      if (requiredPaths.length === 0) {
+        return null;
+      }
+      const missing: string[] = [];
+      for (const requiredPath of requiredPaths) {
+        try {
+          await fs.access(path.join(gitRoot, requiredPath));
+        } catch {
+          missing.push(requiredPath);
+        }
+      }
+      steps.push({
+        name: "customization guard required paths",
+        command: `verify ${requiredPaths.join(" ")}`,
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: missing.length === 0 ? 0 : 1,
+        stdoutTail: missing.length === 0 ? `verified ${requiredPaths.length} required path(s)` : null,
+        stderrTail: missing.length === 0 ? null : `missing required path(s): ${missing.join(", ")}`,
+      });
+      if (missing.length > 0) {
+        return buildGitErrorResult("required-paths-missing");
+      }
+      return null;
+    };
 
     const statusCheck = await runStep(
       step(
@@ -776,7 +882,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     steps.push(statusCheck);
     const hasUncommittedChanges =
       statusCheck.stdoutTail && statusCheck.stdoutTail.trim().length > 0;
-    if (hasUncommittedChanges) {
+    const shouldPreserveDirtyChanges =
+      hasUncommittedChanges && (opts.preserveDirty || opts.dirtyPolicy === "allow");
+    if (hasUncommittedChanges && !shouldPreserveDirtyChanges) {
       return {
         status: "skipped",
         mode: "git",
@@ -790,12 +898,20 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
+        const preserveFailure = await preserveDirtyChanges();
+        if (preserveFailure) {
+          return preserveFailure;
+        }
         const failure = await runRequiredGitStep(
           `git checkout ${DEV_BRANCH}`,
           ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
           "checkout-failed",
         );
         if (failure) {
+          const restoreFailure = await restoreDirtyChanges();
+          if (restoreFailure) {
+            return restoreFailure;
+          }
           return failure;
         }
       }
@@ -1113,15 +1229,27 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
+        const preserveFailure = await preserveDirtyChanges();
+        if (preserveFailure) {
+          return preserveFailure;
+        }
         const failure = await runRequiredGitStep(
           `git checkout ${selectedSha}`,
           ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
           "checkout-failed",
         );
         if (failure) {
+          const restoreFailure = await restoreDirtyChanges();
+          if (restoreFailure) {
+            return restoreFailure;
+          }
           return failure;
         }
       } else {
+        const preserveFailure = await preserveDirtyChanges();
+        if (preserveFailure) {
+          return preserveFailure;
+        }
         const rebaseStep = await runStep(
           step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
         );
@@ -1140,6 +1268,10 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
             stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
           });
+          const restoreFailure = await restoreDirtyChanges();
+          if (restoreFailure) {
+            return restoreFailure;
+          }
           return {
             status: "error",
             mode: "git",
@@ -1174,14 +1306,27 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
+      const preserveFailure = await preserveDirtyChanges();
+      if (preserveFailure) {
+        return preserveFailure;
+      }
       const failure = await runRequiredGitStep(
         `git checkout ${tag}`,
         ["git", "-C", gitRoot, "checkout", "--detach", tag],
         "checkout-failed",
       );
       if (failure) {
+        const restoreFailure = await restoreDirtyChanges();
+        if (restoreFailure) {
+          return restoreFailure;
+        }
         return failure;
       }
+    }
+
+    const restoreFailure = await restoreDirtyChanges();
+    if (restoreFailure) {
+      return restoreFailure;
     }
 
     const manager = await resolveUpdateBuildManager(
@@ -1376,6 +1521,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             durationMs: Date.now() - startedAt,
           };
         }
+      }
+
+      const requiredPathsFailure = await verifyRequiredPaths();
+      if (requiredPathsFailure) {
+        return requiredPathsFailure;
       }
 
       const failedStep = findBlockingGitFailure(steps);

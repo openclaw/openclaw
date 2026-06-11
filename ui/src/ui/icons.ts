@@ -17,10 +17,23 @@ export const icons = {
       <line x1="6" x2="6" y1="20" y2="16" />
     </svg>
   `,
+  lineChart: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M3 3v18h18" />
+      <path d="m19 9-5 5-4-4-3 3" />
+    </svg>
+  `,
   link: html`
     <svg viewBox="0 0 24 24">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  `,
+  home: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m3 10.5 9-7 9 7" />
+      <path d="M5 9.5V21h14V9.5" />
+      <path d="M9 21v-7h6v7" />
     </svg>
   `,
   radio: html`

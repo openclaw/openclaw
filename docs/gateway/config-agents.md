@@ -355,6 +355,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - String form sets only the primary model.
   - Object form sets primary plus ordered failover models.
+  - Gateway session defaults, including the Control UI chat model picker, use the configured default agent's effective `model.primary` before the global `agents.defaults.model.primary`.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
@@ -956,6 +957,7 @@ for provider examples and precedence.
         id: "main",
         default: true,
         name: "Main Agent",
+        roomId: "core", // Control UI Live Agent Workspace room
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
@@ -1001,6 +1003,7 @@ for provider examples and precedence.
 
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- `roomId`: optional Control UI Live Agent Workspace room id. The Agents dashboard uses this canonical config value to group agents; use it for durable assignments instead of browser-local overrides.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `messages.tts`, so keep shared provider credentials and fallback policy in `messages.tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
@@ -1015,6 +1018,50 @@ for provider examples and precedence.
 - `subagents.allowAgents`: allowlist of agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
+
+### Control Director production contract
+
+The built-in Control Director (`agents.list[].id: "main"`) receives an
+additional operating contract in its system prompt. The contract requires the
+director to keep working while safe progress is possible, verify completion
+claims with concrete evidence when feasible, avoid marking incomplete work as
+finished, and end task reports with one explicit status line:
+`Status: complete`, `Status: blocked`, or `Status: needs_user_input`.
+
+Production deployments should keep the Control Director model policy scoped to
+the main agent:
+
+```json5
+{
+  id: "main",
+  name: "Control Director",
+  model: {
+    primary: "openclaw-control-qwen36-27b",
+    fallbacks: ["ollama/openclaw-control-qwen25-32b:latest"],
+  },
+  thinkingDefault: "off",
+  contextTokens: 64000,
+}
+```
+
+CLI agent selectors can still target this agent as `--agent control-director`
+because OpenClaw resolves unambiguous configured agent-name slugs to their
+canonical ids. The canonical id remains `main`.
+
+The Control Director thinking policy is conservative and scoped: persistent
+config stays `thinkingDefault: "off"` for routine turns, while the runtime can
+apply a one-shot non-off thinking level only when the current Control Director
+task is high-risk or multi-step. Implementation, evaluation, validation, and
+build-gap work escalate to medium thinking; failed builds/tests, rollback,
+Ollama/model routing, service/runtime changes, and production-risk work
+escalate to high thinking. Explicit `/think` directives and stored session
+thinking overrides always take precedence, and auto-escalation is not persisted
+to the session.
+
+Use `pnpm control-director:readiness` to check the live config, Ollama model
+inventory, rollback alias, context target, thinking policy, and required Ollama
+service environment. Use `pnpm control-director:eval` for the deterministic
+contract tests.
 
 ---
 

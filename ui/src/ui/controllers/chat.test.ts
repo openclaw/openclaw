@@ -756,7 +756,7 @@ describe("loadChatHistory filtering", () => {
   it("keeps assistant message when text field has real content but content is NO_REPLY", async () => {
     const messages = [{ role: "assistant", text: "real reply", content: "NO_REPLY" }];
     const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages }),
+      request: vi.fn().mockResolvedValue({ messages, targetStatus: "exact-run" }),
     };
     const state = createState({
       client: mockClient as unknown as ChatState["client"],
@@ -767,6 +767,198 @@ describe("loadChatHistory filtering", () => {
 
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("requests targeted history around a Judge Guard audit when target options are provided", async () => {
+    const messages = [{ role: "assistant", content: [{ type: "text", text: "target" }] }];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages, targetStatus: "exact-run" }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state, {
+      targetRunId: "run-judge-guard",
+      auditTs: 1710000000000,
+    });
+
+    expect(mockClient.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 200,
+      maxChars: 4000,
+      targetRunId: "run-judge-guard",
+      auditTs: 1710000000000,
+    });
+    expect(state.chatMessages).toEqual(messages);
+    expect(state.chatTargetStatus).toBe("exact-run");
+  });
+
+  it("targets the active run and clears the working indicator when history contains the final assistant reply", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "please check mobile" }],
+        __openclaw: { runId: "run-mobile" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "mobile is fixed" }],
+        __openclaw: { runId: "run-mobile" },
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages, targetStatus: "exact-run" }),
+    };
+    const state = createState({
+      chatRunId: "run-mobile",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(mockClient.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 200,
+      maxChars: 4000,
+      targetRunId: "run-mobile",
+    });
+    expect(state.chatMessages).toEqual(messages);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+  });
+
+  it("does not clear the working indicator until the active run has an assistant reply", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "please check mobile" }],
+        __openclaw: { runId: "run-mobile" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "older answer" }],
+        __openclaw: { runId: "run-older" },
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages, targetStatus: "timestamp-fallback" }),
+    };
+    const state = createState({
+      chatRunId: "run-mobile",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-mobile");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+  });
+
+  it("keeps quiet reconciliation failures from replacing the visible chat error", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("temporary mobile resume miss"));
+    const state = createState({
+      chatLoading: true,
+      chatRunId: "run-mobile",
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      lastError: "existing visible error",
+    });
+
+    await loadChatHistory(state, { targetRunId: "run-mobile", quiet: true });
+
+    expect(state.lastError).toBe("existing visible error");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("keeps the working indicator while the active run task is still running", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      tasks: [{ taskId: "task-run-mobile", runId: "run-mobile", status: "running" }],
+    });
+    const state = createState({
+      chatRunId: "run-mobile",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state, { targetRunId: "run-mobile", quiet: true });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("tasks.list", {
+      sessionKey: "main",
+      runId: "run-mobile",
+      limit: 1,
+    });
+    expect(state.chatRunId).toBe("run-mobile");
+    expect(state.chatTaskId).toBe("task-run-mobile");
+    expect(state.chatStream).toBe("Working...");
+  });
+
+  it("clears the active run from a completed task even when the final event was missed", async () => {
+    const messages = [{ role: "user", content: [{ type: "text", text: "check" }] }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        tasks: [{ taskId: "task-run-mobile", runId: "run-mobile", status: "completed" }],
+      })
+      .mockResolvedValueOnce({ messages, targetStatus: "not-found" });
+    const state = createState({
+      chatRunId: "run-mobile",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state, { targetRunId: "run-mobile", quiet: true });
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatTaskId).toBe("task-run-mobile");
+    expect(state.chatStream).toBeNull();
+    expect(state.chatRunStatus).toMatchObject({ phase: "complete", runId: "run-mobile" });
+  });
+
+  it("surfaces blocked task evidence when a run only promised future work", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        tasks: [
+          {
+            taskId: "task-run-mobile",
+            runId: "run-mobile",
+            status: "blocked",
+            blockedReason: "The final reply only promises future work.",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ messages: [], targetStatus: "not-found" });
+    const state = createState({
+      chatRunId: "run-mobile",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state, { targetRunId: "run-mobile", quiet: true });
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunStatus).toMatchObject({
+      phase: "error",
+      runId: "run-mobile",
+      detail: "The final reply only promises future work.",
+    });
   });
 
   it("filters the synthetic transcript-repair tool result from history", async () => {
@@ -831,6 +1023,25 @@ describe("loadChatHistory filtering", () => {
 });
 
 describe("sendChatMessage", () => {
+  it("tracks sent and received phases around the chat.send ack", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn(() => sent.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const started = sendChatMessage(state, "hello");
+    const runId = state.chatRunId;
+
+    expect(state.chatRunStatus).toMatchObject({ phase: "sent", runId });
+
+    sent.resolve({ runId, status: "started" });
+    await expect(started).resolves.toBe(runId);
+
+    expect(state.chatRunStatus).toMatchObject({ phase: "received", runId });
+  });
+
   it("does not start a second chat.send while the first send is awaiting ack", async () => {
     const sent = createDeferred<unknown>();
     const request = vi.fn(() => sent.promise);

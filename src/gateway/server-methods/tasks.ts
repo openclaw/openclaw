@@ -39,6 +39,7 @@ const LEDGER_STATUS_TO_TASK_STATUSES: Record<TaskLedgerStatus, TaskStatus[]> = {
   queued: ["queued"],
   running: ["running"],
   completed: ["succeeded"],
+  blocked: ["succeeded"],
   failed: ["failed", "lost"],
   timed_out: ["timed_out"],
   cancelled: ["cancelled"],
@@ -68,7 +69,10 @@ function mapTaskSummary(task: TaskRecord): TaskSummary {
     taskId: task.taskId,
     kind: task.taskKind ?? task.runtime,
     runtime: task.runtime,
-    status: TASK_STATUS_TO_LEDGER_STATUS[task.status],
+    status:
+      task.status === "succeeded" && task.terminalOutcome === "blocked"
+        ? "blocked"
+        : TASK_STATUS_TO_LEDGER_STATUS[task.status],
     title: formatTaskStatusTitle(task),
     ...(task.agentId ? { agentId: task.agentId } : {}),
     sessionKey: task.requesterSessionKey,
@@ -85,6 +89,15 @@ function mapTaskSummary(task: TaskRecord): TaskSummary {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(task.userVisible === true ? { userVisible: true } : {}),
+    ...(task.expectedDeliverable ? { expectedDeliverable: task.expectedDeliverable } : {}),
+    ...(task.acceptanceCriteria?.length ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
+    ...(task.artifactIds?.length ? { artifactIds: task.artifactIds } : {}),
+    ...(task.judgeStatus ? { judgeStatus: task.judgeStatus } : {}),
+    ...(task.judgeVerdict ? { judgeVerdict: task.judgeVerdict } : {}),
+    ...(task.judgeReason ? { judgeReason: task.judgeReason } : {}),
+    ...(task.judgeRunId ? { judgeRunId: task.judgeRunId } : {}),
+    ...(task.blockedReason ? { blockedReason: task.blockedReason } : {}),
   };
 }
 
@@ -96,6 +109,25 @@ function normalizeTaskStatusFilter(status: TasksListParams["status"]): Set<TaskS
   return new Set(statuses.flatMap((value) => LEDGER_STATUS_TO_TASK_STATUSES[value] ?? []));
 }
 
+function taskMatchesStatusFilter(task: TaskRecord, status: TasksListParams["status"]): boolean {
+  if (!status) {
+    return true;
+  }
+  const statuses = Array.isArray(status) ? status : [status];
+  if (statuses.length === 1 && statuses[0] === "blocked") {
+    return task.status === "succeeded" && task.terminalOutcome === "blocked";
+  }
+  if (
+    statuses.includes("blocked") &&
+    task.status === "succeeded" &&
+    task.terminalOutcome === "blocked"
+  ) {
+    return true;
+  }
+  const statusFilter = normalizeTaskStatusFilter(status);
+  return !statusFilter || statusFilter.has(task.status);
+}
+
 function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): boolean {
   const normalized = normalizeOptionalString(sessionKey);
   if (!normalized) {
@@ -104,6 +136,14 @@ function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): b
   return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
     (candidate) => normalizeOptionalString(candidate) === normalized,
   );
+}
+
+function taskMatchesRunId(task: TaskRecord, runId: string | undefined): boolean {
+  const normalized = normalizeOptionalString(runId);
+  if (!normalized) {
+    return true;
+  }
+  return normalizeOptionalString(task.runId) === normalized;
 }
 
 function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
@@ -152,13 +192,16 @@ export const tasksHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
     const filtered = listTaskRecords().filter((task) => {
-      if (statusFilter && !statusFilter.has(task.status)) {
+      if (!taskMatchesStatusFilter(task, params.status)) {
         return false;
       }
-      return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
+      return (
+        taskMatchesAgent(task, params.agentId) &&
+        taskMatchesSession(task, params.sessionKey) &&
+        taskMatchesRunId(task, params.runId)
+      );
     });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;

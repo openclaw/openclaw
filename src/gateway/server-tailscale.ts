@@ -1,15 +1,17 @@
+import type { GatewayTailscaleConfig } from "../config/types.gateway.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   disableTailscaleFunnel,
-  disableTailscaleServe,
   enableTailscaleFunnel,
   enableTailscaleServe,
   getTailnetHostname,
   hasTailscaleFunnelRouteForPort,
+  verifyTailscaleServeRouteForPort,
 } from "../infra/tailscale.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
+  tailscaleConfig?: GatewayTailscaleConfig;
   resetOnExit?: boolean;
   port: number;
   preserveFunnel?: boolean;
@@ -20,10 +22,20 @@ export async function startGatewayTailscaleExposure(params: {
     return null;
   }
 
+  const tailscaleRequired = params.tailscaleConfig?.required ?? true;
+  const tailscaleClientOptions = {
+    binaryPath: params.tailscaleConfig?.binaryPath,
+    socketPath: params.tailscaleConfig?.socketPath,
+  };
+
   try {
     if (params.tailscaleMode === "serve") {
       if (params.preserveFunnel === true) {
-        const funnelCovers = await hasTailscaleFunnelRouteForPort(params.port);
+        const funnelCovers = await hasTailscaleFunnelRouteForPort(
+          params.port,
+          undefined,
+          tailscaleClientOptions,
+        );
         if (funnelCovers) {
           const resetSuffix = params.resetOnExit
             ? "; resetOnExit is a no-op because no Serve route was applied this run"
@@ -37,11 +49,31 @@ export async function startGatewayTailscaleExposure(params: {
           return null;
         }
       }
-      await enableTailscaleServe(params.port);
+      await enableTailscaleServe(params.port, undefined, tailscaleClientOptions);
+      const verified = await verifyTailscaleServeRouteForPort(
+        params.port,
+        undefined,
+        tailscaleClientOptions,
+      );
+      if (!verified.ok) {
+        throw new Error(
+          `Tailscale Serve route verification failed: ${verified.reason ?? "unknown route mismatch"}`,
+        );
+      }
     } else {
-      await enableTailscaleFunnel(params.port);
+      await enableTailscaleFunnel(params.port, undefined, tailscaleClientOptions);
+      const funnelCovers = await hasTailscaleFunnelRouteForPort(
+        params.port,
+        undefined,
+        tailscaleClientOptions,
+      );
+      if (!funnelCovers) {
+        throw new Error(
+          `Tailscale Funnel route verification failed: no published route points at Gateway port ${params.port}`,
+        );
+      }
     }
-    const host = await getTailnetHostname().catch(() => null);
+    const host = await getTailnetHostname(undefined, tailscaleClientOptions).catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       params.logTailscale.info(
@@ -51,7 +83,14 @@ export async function startGatewayTailscaleExposure(params: {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);
     }
   } catch (err) {
-    params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
+    const message = `${params.tailscaleMode} failed: ${formatErrorMessage(err)}`;
+    params.logTailscale.warn(message);
+    if (tailscaleRequired) {
+      throw new Error(
+        `${message}. gateway.tailscale.mode=${params.tailscaleMode} is required; set gateway.tailscale.required=false to allow degraded startup.`,
+        { cause: err },
+      );
+    }
   }
 
   if (!params.resetOnExit) {
@@ -61,9 +100,11 @@ export async function startGatewayTailscaleExposure(params: {
   return async () => {
     try {
       if (params.tailscaleMode === "serve") {
-        await disableTailscaleServe();
+        params.logTailscale.warn(
+          "serve cleanup skipped: OpenClaw no longer runs broad `tailscale serve reset` on shutdown because it can delete unrelated Serve routes. Leave the verified route in place or clear it manually after confirming ownership.",
+        );
       } else {
-        await disableTailscaleFunnel();
+        await disableTailscaleFunnel(undefined, tailscaleClientOptions);
       }
     } catch (err) {
       params.logTailscale.warn(

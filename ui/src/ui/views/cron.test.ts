@@ -2,7 +2,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import type { CronJob } from "../types.ts";
-import { renderCron, type CronProps } from "./cron.ts";
+import { describeCronJobHealth, renderCron, type CronProps } from "./cron.ts";
 
 function createJob(id: string): CronJob {
   return {
@@ -265,6 +265,103 @@ describe("cron view", () => {
     );
     expect(summaries[0]).toBe("newer run");
     expect(summaries[1]).toBe("older run");
+  });
+
+  it("explains failed Docker sandbox cron jobs and confirmation-gates reruns", () => {
+    const container = document.createElement("div");
+    const onLoadRuns = vi.fn();
+    const onRun = vi.fn();
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const job = {
+      ...createJob("job-docker"),
+      name: "YouTube V1 health check",
+      state: {
+        lastStatus: "error" as const,
+        lastRunAtMs: Date.now() - 60_000,
+        lastError: "Error: Sandbox mode requires Docker, but the Docker daemon is not available.",
+      },
+    };
+
+    try {
+      render(
+        renderCron(
+          createProps({
+            jobs: [job],
+            jobsTotal: 1,
+            onLoadRuns,
+            onRun,
+          }),
+        ),
+        container,
+      );
+
+      expect(container.textContent).toContain("Automation Recovery");
+      expect(container.textContent).toContain("Review recommended");
+      expect(container.textContent).toContain("Docker sandbox unavailable");
+      expect(container.textContent).toContain("The scheduled work did not complete");
+
+      const runNow = getElement(
+        container,
+        ".cron-recovery-action .btn--primary",
+        HTMLButtonElement,
+      );
+      runNow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(onRun).not.toHaveBeenCalled();
+
+      confirm.mockReturnValue(true);
+      runNow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(onLoadRuns).toHaveBeenCalledWith("job-docker");
+      expect(onRun).toHaveBeenCalledWith(job, "force");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("describes skipped cron jobs as watchable instead of failed", () => {
+    const job = {
+      ...createJob("job-lock"),
+      name: "Kalshi weather evidence flywheel",
+      state: {
+        lastStatus: "skipped" as const,
+        lastError: "scheduled learning lock active",
+      },
+    };
+
+    expect(describeCronJobHealth(job)).toMatchObject({
+      tone: "watching",
+      title: "Skipped by design",
+      confidence: "Recent",
+    });
+  });
+
+  it("does not count disabled historical failures as automation recovery issues", () => {
+    const container = document.createElement("div");
+    const disabledFailedJob = {
+      ...createJob("disabled-failure"),
+      name: "Daily Real Estate Evaluations",
+      enabled: false,
+      state: {
+        lastStatus: "error" as const,
+        lastError: "cron classifier: denial token detected in summary",
+      },
+    };
+    const healthyJob = {
+      ...createJob("healthy-job"),
+      name: "Kalshi status bridge",
+      state: {
+        lastStatus: "ok" as const,
+      },
+    };
+
+    render(renderCron(createProps({ jobs: [disabledFailedJob, healthyJob] })), container);
+
+    const recovery = container.querySelector(".cron-recovery-panel")?.textContent ?? "";
+    expect(recovery).toContain("Automation Recovery");
+    expect(recovery).toContain("All clear");
+    expect(recovery).toContain("0 failed");
+    expect(recovery).not.toContain("Daily Real Estate Evaluations");
   });
 
   it("renders supported delivery options and normalizes stale announce selection", () => {
@@ -699,7 +796,7 @@ describe("cron view", () => {
     const enableButton = getButtonByText(container, "Disable");
     enableButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const runButton = getButtonByText(container, "Run");
+    const runButton = getButtonByText(container, "Run now");
     runButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const runDueButton = getButtonByText(container, "Run if due");

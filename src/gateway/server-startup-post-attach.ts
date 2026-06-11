@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
-import type { GatewayTailscaleMode } from "../config/types.gateway.js";
+import type { GatewayTailscaleConfig, GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -672,6 +672,7 @@ export async function startGatewayPostAttachRuntime(
     startupStartedAt?: number;
     broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
     tailscaleMode: GatewayTailscaleMode;
+    tailscaleConfig?: GatewayTailscaleConfig;
     resetOnExit: boolean;
     preserveFunnel: boolean;
     controlUiBasePath: string;
@@ -757,6 +758,7 @@ export async function startGatewayPostAttachRuntime(
       : measureStartup(params.startupTrace, "post-attach.tailscale", () =>
           runtimeDeps.startGatewayTailscaleExposure({
             tailscaleMode: params.tailscaleMode,
+            tailscaleConfig: params.tailscaleConfig,
             resetOnExit: params.resetOnExit,
             preserveFunnel: params.preserveFunnel,
             port: params.port,

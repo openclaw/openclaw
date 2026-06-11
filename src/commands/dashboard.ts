@@ -1,6 +1,9 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { copyToClipboard } from "../infra/clipboard.js";
+import { resolveTailscaleClient } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -13,6 +16,65 @@ import {
 type DashboardOptions = {
   noOpen?: boolean;
 };
+
+function formatDashboardLinksFromHost(params: {
+  host: string;
+  basePath?: string;
+  secure: boolean;
+}): { httpUrl: string; wsUrl: string } {
+  const basePath = normalizeControlUiBasePath(params.basePath);
+  const uiPath = basePath ? `${basePath}/` : "/";
+  const wsPath = basePath ? basePath : "";
+  const httpScheme = params.secure ? "https" : "http";
+  const wsScheme = params.secure ? "wss" : "ws";
+  return {
+    httpUrl: `${httpScheme}://${params.host}${uiPath}`,
+    wsUrl: `${wsScheme}://${params.host}${wsPath}`,
+  };
+}
+
+async function resolveDashboardLinks(params: {
+  cfg: OpenClawConfig;
+  port: number;
+  bind: "auto" | "lan" | "loopback" | "custom" | "tailnet";
+  customBindHost?: string;
+  basePath?: string;
+  runtime: RuntimeEnv;
+}): Promise<{ httpUrl: string; wsUrl: string }> {
+  const tailscaleMode = params.cfg.gateway?.tailscale?.mode ?? "off";
+  if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
+    try {
+      const client = await resolveTailscaleClient(undefined, {
+        binaryPath: params.cfg.gateway?.tailscale?.binaryPath,
+        socketPath: params.cfg.gateway?.tailscale?.socketPath,
+      });
+      const host = client.dnsName ?? client.ips[0];
+      if (host) {
+        return formatDashboardLinksFromHost({
+          host,
+          basePath: params.basePath,
+          secure: true,
+        });
+      }
+      params.runtime.log(
+        "Tailscale dashboard URL unavailable: Tailscale is running but did not report a DNS name or IP; falling back to loopback URL.",
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      params.runtime.log(
+        `Tailscale dashboard URL unavailable: ${message}; falling back to loopback URL.`,
+      );
+    }
+  }
+
+  return resolveControlUiLinks({
+    port: params.port,
+    bind: params.bind,
+    customBindHost: params.customBindHost,
+    basePath: params.basePath,
+    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
+  });
+}
 
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
@@ -33,12 +95,13 @@ export async function dashboardCommand(
 
   // LAN URLs fail secure-context checks in browsers.
   // Coerce only lan->loopback and preserve other bind modes.
-  const links = resolveControlUiLinks({
+  const links = await resolveDashboardLinks({
+    cfg,
     port,
     bind: bind === "lan" ? "loopback" : bind,
     customBindHost,
     basePath,
-    tlsEnabled: cfg.gateway?.tls?.enabled === true,
+    runtime,
   });
   // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
   const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;

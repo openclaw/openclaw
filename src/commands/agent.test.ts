@@ -260,7 +260,7 @@ function mockConfig(
   storePath: string,
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
-  agentsList?: Array<{ id: string; default?: boolean }>,
+  agentsList?: Array<{ id: string; name?: string; default?: boolean }>,
 ) {
   const cfg = {
     agents: {
@@ -574,12 +574,12 @@ describe("agentCommand", () => {
   it("does not load the full model catalog for trusted explicit overrides without an allowlist", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store, { models: {} });
+      mockConfig(home, store, { models: {} }, undefined, [{ id: "worker", default: true }]);
 
       await agentCommand(
         {
           message: "ping",
-          to: "+1222",
+          agentId: "worker",
           model: "openrouter/auto",
         },
         runtime,
@@ -1054,13 +1054,19 @@ describe("agentCommand", () => {
   it("passes resolved default thinking level to embedded runs", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store, {
-        model: { primary: "openai/gpt-4.1-mini" },
-        models: {
-          "anthropic/claude-opus-4-6": {},
-          "openai/gpt-4.1-mini": {},
+      mockConfig(
+        home,
+        store,
+        {
+          model: { primary: "openai/gpt-4.1-mini" },
+          models: {
+            "anthropic/claude-opus-4-6": {},
+            "openai/gpt-4.1-mini": {},
+          },
         },
-      });
+        undefined,
+        [{ id: "worker", default: true }],
+      );
       mockModelCatalogOnce([
         {
           id: "gpt-4.1-mini",
@@ -1070,7 +1076,7 @@ describe("agentCommand", () => {
         },
       ]);
 
-      await agentCommand({ message: "hi", to: "+1555" }, runtime);
+      await agentCommand({ message: "hi", agentId: "worker" }, runtime);
 
       expect(getLastEmbeddedCall()?.thinkLevel).toBe("low");
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
@@ -1080,7 +1086,10 @@ describe("agentCommand", () => {
   it("passes routing context to embedded runs", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store, undefined, undefined, [{ id: "ops" }]);
+      mockConfig(home, store, undefined, undefined, [
+        { id: "main", name: "Control Director", default: true },
+        { id: "ops" },
+      ]);
 
       await agentCommand(
         { message: "hi", agentId: "ops", replyChannel: "slack", thinking: "low" },
@@ -1091,6 +1100,16 @@ describe("agentCommand", () => {
       expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
       expect(callArgs?.messageChannel).toBe("slack");
       expect(runtime.log).toHaveBeenCalledWith("ok");
+
+      await agentCommand(
+        { message: "hi", agentId: "control-director", replyChannel: "slack", thinking: "low" },
+        runtime,
+      );
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.sessionKey).toBe("agent:main:main");
+      expect(callArgs?.sessionFile).toContain(
+        `${path.sep}agents${path.sep}main${path.sep}sessions`,
+      );
 
       await agentCommand(
         {

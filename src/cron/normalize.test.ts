@@ -150,6 +150,37 @@ describe("normalizeCronJobCreate", () => {
     expect("sessionKey" in cleared).toBe(false);
   });
 
+  it("normalizes direct command payloads without agent-turn fields", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "command payload",
+      enabled: true,
+      schedule: { kind: "cron", expr: "*/5 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "command",
+        command: " node ",
+        args: [" -e ", "console.log('ok')"],
+        cwd: " /tmp ",
+        env: { FOO: "bar", BAD: 42 },
+        successExitCodes: [0, "2", 2],
+        outputLimitBytes: "4096",
+        message: "should not survive",
+        model: "should-not-survive",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.payload).toEqual({
+      kind: "command",
+      command: "node",
+      args: ["-e", "console.log('ok')"],
+      cwd: "/tmp",
+      env: { FOO: "bar" },
+      successExitCodes: [0, 2],
+      outputLimitBytes: 4096,
+    });
+  });
+
   it("strips top-level legacy delivery hints from live input", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "legacy top-level delivery",

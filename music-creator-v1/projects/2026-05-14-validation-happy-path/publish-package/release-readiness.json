@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-05-14-validation-happy-path",
+  "selectedCandidateId": "candidate-01",
+  "selectedPath": "selected/candidate-01.wav",
+  "selectedSha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+  "status": "publish_ready",
+  "releaseReady": true,
+  "releaseGates": {
+    "humanFinalAudioApproval": true,
+    "rightsOwnerConfirmed": true,
+    "aiDisclosureReviewed": true,
+    "modelToolRightsEvidenceRecorded": true,
+    "platformMetadataComplete": true,
+    "publicPublishingApproval": true
+  },
+  "blockers": [],
+  "checkedAt": "2026-05-16T20:01:35.523Z"
+}

@@ -3,6 +3,55 @@
   "entries": [
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/app-render-config-tab.ts",
+      "text": "Discord"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/app-render-config-tab.ts",
+      "text": "iMessage"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/app-render-config-tab.ts",
+      "text": "Signal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/app-render-config-tab.ts",
+      "text": "Slack"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/app-render-config-tab.ts",
+      "text": "Telegram"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/app-render-config-tab.ts",
+      "text": "WhatsApp"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/app-render.ts",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/app-render.ts",
@@ -18,71 +67,29 @@
     {
       "count": 1,
       "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Discord"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "iMessage"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Signal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Slack"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Telegram"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "WhatsApp"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
       "name": "description",
-      "path": "ui/src/ui/app-settings.ts",
+      "path": "ui/src/ui/app-tab-refresh.ts",
       "text": "This connection does not have the operator.read scope. Some features may be unavailable."
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "title",
-      "path": "ui/src/ui/app-settings.ts",
+      "path": "ui/src/ui/app-tab-refresh.ts",
       "text": "Gateway Error"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "title",
-      "path": "ui/src/ui/app-settings.ts",
+      "path": "ui/src/ui/app-tab-refresh.ts",
       "text": "Missing operator.read scope"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "title",
-      "path": "ui/src/ui/app-settings.ts",
+      "path": "ui/src/ui/app-tab-refresh.ts",
       "text": "Skills with missing dependencies"
     },
     {
@@ -468,6 +475,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/navigation.ts",
+      "text": "dashboards"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/navigation.ts",
       "text": "settings"
     },
     {
@@ -826,6 +840,1231 @@
       "name": "text",
       "path": "ui/src/ui/views/agents-panels-tools-skills.ts",
       "text": "What this agent can use in the current chat session."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Agent room"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Dashboard data sources"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Healthy status facts"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Issue Queue"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Mac and agent model memory"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "OpenClaw pixel room dashboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Prediction Markets learning velocity"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Room legend"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Room status summary"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Supported venues"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Top Next Actions"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "What changed recently"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "What Needs My Attention?"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Activation"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Affected"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Agent ID"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "agents"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "always on / watch"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "App/private memory"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Automation bridge"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Beginner help and quick find"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Compressed RAM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Confidence"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Dashboard Data Sources"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Does not own"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Ended"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Expanded telemetry is available in the RAM breakdown, selected-worker Recent Actions, Cron Jobs, and Agent Workflow Maps. Skim Mode remains the default view above."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Expected behavior"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Expected dormant agents are not counted as failures."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "File-backed cache"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Input"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Inspect"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Inspection target"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Investigate Mode"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Issue Queue"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Kalshi"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Kalshi automation status will appear here after the dashboard snapshot loads."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Kind"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Largest model"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Likely cause"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Live Agent Workspace"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Live model RAM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "LIVE OPS"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Live, recent, stale, or problem signals before you trust the room."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "LLM active coverage"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Loaded model RAM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "macOS intentionally uses spare RAM for file cache. That cache is reclaimable, so true available RAM can be much higher than the raw \"used\" number suggests."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "macOS RAM also includes cache, compression, graphics, and kernel memory, so process RSS will not equal total Mac RAM exactly."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "macOS reported used"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Model"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Model check"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Model RAM when live"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "need help"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "No action needed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "No actionable issues detected. Expected dormant agents are not counted as failures."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "No agent selected"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "No agents configured."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "No recorded sessions for this agent yet. Once it runs, its recent tasks will appear here."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Now:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Ollama"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Open Details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "open issues"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Other processes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Output"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Owns"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Polymarket"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Process RAM seen"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Project room"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Purpose"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Quick find"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "RAM breakdown"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "RAM possible / available"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Recent Actions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Reclaimable cache"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Refreshing memory telemetry..."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "resting"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Role"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Safest next step"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "See who is actively working, who is resting, and who needs help in real time."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Select a worker in the room to inspect its state."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Selected worker"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Self-Improvement / Learning Queue - Learning Velocity"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Session"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Since this tab loaded/refreshed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Started"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Summon when"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Top actionable items"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Top Next Actions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Unused now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Updated"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "What changed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "What changed recently"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "What Needs My Attention?"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "What stayed blocked / next best proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Why this much RAM is possible"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Wired system RAM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "working now"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "24h scoring"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Accuracy"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Agents"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "All clear"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Always on"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Automation"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Channels"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Completed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Critical issue"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Discord problem"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Evidence"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Evidence scored"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Executive and Personal Ops"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Failed jobs"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Gateway"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "General Workspace"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "High pressure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Idle"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Inspect worker"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Kalshi status"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Live error"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Low pressure"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Model RAM"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Moderate pressure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Music Studio"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Needs help"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Next proof"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Offline"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Open Channels"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Open Cron Jobs"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Open Kalshi"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Open Overview"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Ops Summary"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Paper P&L"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Paused lanes"
+    },
+    {
+      "count": 4,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Prediction Markets"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Product and Build Lab"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "RAM high"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Reading"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Rerun safely"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Resting"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Retry channel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Review Prediction Markets"
+    },
+    {
+      "count": 4,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Review RAM monitor"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Review recommended"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Running tool"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Safety"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Shared Command"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Show workers"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Some systems need attention"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Thinking"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Unknown"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Unknown pressure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Waiting"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Watching"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Who is working"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Working"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Writing"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "YouTube Content Engine"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Agents that do not map cleanly to a named project room yet."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Directors, judgment, telemetry, credentials, and coordination."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Kalshi and Polymarket shared research, watch, risk, exposure, and execution roles."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Music ideation, arrangements, and release planning."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Products, funnels, curriculum, engineering specs, QA, release, and support."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Scheduling, email, calls, research briefs, hiring, journaling, and direction."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Trend research, scripts, publishing, repurposing, comments, offers, and analytics."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Awake agent without loaded local model"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Channel status needs review"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Gateway connection lost"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Live Gateway status is still loading"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Prediction Markets readiness needs review"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Prediction Markets signal is stale"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Runtime telemetry needs review"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "Scheduled job failed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "This always-on role is visually on watch, but it is not currently running a local LLM."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-room.ts",
+      "text": "This role is awake from a fresh Kalshi automation snapshot. No local model is currently loaded for this agent."
     },
     {
       "count": 1,
@@ -1246,6 +2485,580 @@
       "name": "label",
       "path": "ui/src/ui/views/agents-utils.ts",
       "text": "write"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Modify workflow order"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "OpenClaw workflow maps"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Selected workflow step"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Workflow operations summary"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Workflow project rooms"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Workflow summary"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "active / on watch rooms"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "agents"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Agents"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Approval Gate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Click a step to inspect it. Drag steps or use Earlier/Later to adjust the browser-local visual order without changing automation behavior; these controls are visual-only until real automation wiring is explicitly added."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Codex Use"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Current Signal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Earlier"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Handoff"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Last Failure"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Last Success"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "last workflow signal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Later"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Latest Session"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Next Expected Run"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Next Inspection Target"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "OpenClaw Agent Workflow Maps"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Outputs"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Programs and Tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Reset This Map"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Scheduled Jobs"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "scheduled jobs visible"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Selected Step"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "stale or needs review"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "steps"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Trigger"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Workflow Health for each Live Agent Workspace room, including owners, tools, Codex gates, approvals, handoffs, and live inspection signals."
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Active"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Executive and Personal Ops"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Music Studio"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Needs review"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "No recent signal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "On watch"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Prediction Markets"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Product and Build Lab"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Resting"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Shared Command"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Stale"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "YouTube Content Engine"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Directors, memory, telemetry, credentials, and Codex routing."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Kalshi and Polymarket research, paper trading, risk, exposure, and learning."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Product specs, apps, funnels, lessons, QA, release, and support."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Scheduling, email, calls, research briefs, hiring, journaling, and direction."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Song ideas, arrangements, production notes, and release planning."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "subtitle",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Trend research, video briefs, scripts, packaging, publishing readiness, and analytics."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Arrange and plan production"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Brief and script"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Capture musical idea"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Capture request and context"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Codex implementation gate"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Curate durable knowledge"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Discover and frame"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Draft and prepare"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Implement or assemble"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Operator intake"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Package for launch"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Paper execution only"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Publish readiness and learning"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Research and mispricing scan"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Review patterns and decisions"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Risk and exposure gate"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Route and coordinate"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Score and improve"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Specify the build"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Trend and source intake"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Verify, release, support"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/agents-workflows.ts",
+      "text": "Watch venue signals"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Agent Workflow Maps"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Channels"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Cron Jobs"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Files"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Live Agent Workspace"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Overview"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Skills"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/agents.ts",
+      "text": "Tools"
     },
     {
       "count": 1,
@@ -3651,6 +5464,1637 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Kalshi paper trading trend chart. X axis is scored trades over time. Left Y axis is accuracy from 0% to 100%. Right Y axis is cumulative paper P&L."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Paper P&L timeframe"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Refresh Kalshi dashboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Strategy at a glance"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Ticker, city, side, outcome..."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Accepted"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Accepted paper trades:"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Accuracy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Accuracy and P&L Trend"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Accuracy movement:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Accuracy trend"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Accuracy trend:"
+    },
+    {
+      "count": 5,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Action"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "actual scored paper results."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Bars:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Best scored lane:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Best Shadow Patterns"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Bet"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Brier"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Bucket"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Category"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "City"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Command Center"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Count"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Cross-domain strategy transfer is blocked by default. Broad lessons are limited to structural execution and data-quality rules like liquidity, spread, depth, staleness, fill quality, fees, and time to close."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Cumulative paper P&L"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Cumulative paper P&L:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Current Bottlenecks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Current Count"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Current learning bottleneck:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Current Paper Hypothesis"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "current time"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Current time boundary"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Current time boundary: actual scored results are left of this line."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Current time:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Dashboard timezone"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Decision Quality"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Decisions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Deep Audit Deferred"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Detect a possible improvement, diagnose whether it is a real edge or bad data, test it with bounded paper-only experiments, score it against baselines, then update only reversible paper strategy state."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Detector id"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Discovery approach:"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Domain"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Domain-Only Lessons"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Entry"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Est. Success"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Est. Success is OpenClaw's fair probability for the selected side at decision time. Entry is the simulated fill price and market-implied odds at entry, not a fresh live quote. If Win / Wrong shows estimated paper profit if the bet wins and paper loss if it loses. Expected Result Known uses logged Kalshi timing plus settlement timer data when available and says Unknown rather than guessing."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Estimated cycles to 100 accepted:"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Evidence"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Executable Quality"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Expected Result Known"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Exploration trades teach the system. Forward paper trades test whether the lesson holds. Live review remains blocked until evidence is strong."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Export visible CSV"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Focused watchlist:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Forward Review"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Freshness warnings:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Full Audit Tables"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Heavy audit sections are deferred to keep the dashboard fast and responsive. Use “Load full audit tables” when you need detailed paper-bet logs, hidden opportunities, weather expansion, strategy health, or raw ranked actions."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Hidden opportunities can pause bad paper lanes or start bounded paper tests. They cannot place live orders or unlock live trading."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Hover or focus inside the graph for exact values"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Hypothetical P&L"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "If Win / Wrong"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Inverse Standard Accuracy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Inverse Standard P&L"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Inverse Standard Strategy is active for paper learning, but it still cannot enable live trading. It can only create review-required paper tests."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "It is preserved as the Standard Strategy baseline for comparison, not the active paper-learning strategy."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Kalshi Dashboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Latest governor change:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Latest Resolved Paper Results"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Learning volume bars"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Learning volume:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Left of blue dotted line:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Live Blockers"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Live order allowed:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Live readiness:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Live trading enabled:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Live-Readiness Funnel"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Market area"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Market Type"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Meaning"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Metric To Watch"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Mission Control / Paper-Only Telemetry"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Needs parser/model work:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Net P&L"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Next"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Next 50 Upcoming Paper Trades To Resolve"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Next Cycle Recommendation"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Next proof step:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Next step"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Next Target"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No accepted paper bet history yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No active autonomous paper experiments yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No current-epoch weather model audit buckets yet. Older weather evidence is preserved as baseline, but this table waits for current paper weather trades."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No domain targets available yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No domain-level scored evidence yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No hidden opportunities detected yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No Inverse Standard Strategy audit segments yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No inverse-strategy recommendation yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No opportunity repairs are queued."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No overdue accepted paper trades waiting on a Kalshi result field."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No paper-volume actions available."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No rapid-learning bottlenecks detected."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No resolved paper bets are available in the current dashboard scope yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No resolved paper trades in this timeframe yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No scored lessons yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No scored paper trades yet, so the trend chart is unavailable."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No scored shadow trades yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No scored strategy lessons yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No shadow pattern scores yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No strategy comparison snapshot is available yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No strategy-governor routes have been recorded yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No upcoming accepted paper trades with future expected result timing."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "None"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "One practical view of paper volume, scored evidence, calibration, and practice mix. The same numbers feed the trend chart and strategy comparison, so duplicate summary cards stay out of the way."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "OpenClaw only marks a city trade-ready when a real active Kalshi market exists, the weather parser extracts the city/type/strike/direction/rules, and the weather model can externally price it. If Kalshi has not listed an active eligible market, OpenClaw keeps the city registered and waiting rather than fabricating a trade-ready signal."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Opportunity Lifecycle"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Outcome"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Overdue Paper Trades Awaiting Kalshi Result"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "P&L"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Paper decisions:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Paper Learning Snapshot"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Paper P&L"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Paper Practice Mix"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Pending timing buckets:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Plain English"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Plain-English next action"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "PolyClaw:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "polymarket-kalshi-divergence:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Prediction Market Paper Trading"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Previous"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Prioritize fast-resolving paper candidates and outcome scoring."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Priority"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "projected"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Projected accuracy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Projected next accuracy:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Projection zone: values to the right are paper-only estimates."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Rank"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Ranked Actions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Rapid learning is automatic in paper mode, but live trading remains blocked until separate statistical proof and human approval exist."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Read"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Read Efficiency"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Reason"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Recent Paper Bets"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Recommendation"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Resolution priority:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Resolved paper evidence only. Full comparison below."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Result"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Review"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Right of blue dotted line:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Role"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Route"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Rule"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Safety rule"
+    },
+    {
+      "count": 8,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Scored"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Scored accepted trades:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Scored paper trades by selected timezone"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "scored paper trades in each slice. Hover the graph for exact values."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Shadow Choices"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Side"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "simple projected accuracy, not proof."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Source"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Stake"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Standard Accuracy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Standard P&L"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Status"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Status / Next Step"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Still needed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Strategy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Strategy At A Glance"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "The governor is the paper-only traffic controller. It keeps losing or dirty lanes from receiving more simulated notional, keeps shadow learning running, and tests inverse ideas only when the current candidate has clean executable evidence."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "The mission summary above renders first for speed. Load the full audit when you need detailed logs, opportunity diagnostics, weather coverage, and strategy-governor tables."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "The short version first: learning status, paper profit direction, the main bottleneck, and the next paper-only move. Detailed audit tables remain below."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "This graph updates from real paper outcomes. Accuracy should trend up and cumulative paper P&L should trend toward positive before live review. Projected accuracy is a simple paper-only trend extrapolation from recent scored trades, not proof of future results."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "This is OpenClaw's paper-only idea filter. It looks for ways to improve, separates real paper lessons from possible data mistakes, and only changes paper behavior when the proof is clean. Live trading stays blocked."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "This section increases useful simulated practice volume only. It never enables live orders, cancellations, quote acceptance, RFQs, or funds movement."
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Tier"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Time"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Time zone:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Timeframe"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Timeframe:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Top Acceleration Action"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Top Blocked Lane"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Top No-Trade Reasons"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Total Loss"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Total Profit"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Trade-ready now:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Transfer Blocked"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Transfer-Safe Lessons"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Unknown"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Unsupported weather series found:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Waiting for active Kalshi markets:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Weather Arbitrage Strategy:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What changed:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What Changes Next"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What Has To Happen"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What is Standard Strategy now?"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What must happen next:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What OpenClaw Found"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What OpenClaw Learned"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What OpenClaw Should Do Next"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What this means right now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What We Learned"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "What Went Wrong"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Why keep proof gates?"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Win Rate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Wins / Losses"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Worst scored lane:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "X axis: scored paper trades over time"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Y axis: accuracy left, P&L right"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "1 hour"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "1 month"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "1 week"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "1 year"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "12 hours"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "24 hours"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "48 hours"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "6 hours"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "All"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "All time"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Arizona"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Central"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Crypto"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Eastern"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Economics"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Entertainment"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Mountain"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "No current failure pattern"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Pacific"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Politics"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Sports"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Unknown / Other"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/kalshi-dashboard.ts",
+      "text": "Weather"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/ui/views/login-gate.ts",
       "text": "ws://127.0.0.1:18789"
@@ -4200,6 +7644,503 @@
       "name": "text",
       "path": "ui/src/ui/views/overview.ts",
       "text": "openclaw doctor --generate-gateway-token"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Approval Gates"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Blockers"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Command Center"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Current state"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Learning Metrics"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Missing image"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Missing media"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Native YouTube Dashboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Next Actions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Next decision:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "No blockers remain for private or unlisted upload."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Pattern Lab"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Patterns. Criteria. Proof."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Public publish: blocked until explicit owner approval"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Refresh"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Review Video 01, approve original assets, inspect Shorts, and track the learning loop before any private upload or public publish decision."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Shorts Review"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Thumbnail Candidates"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Video Review"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Images"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Long-Form"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Proof Footage"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Shorts"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Thumbnails"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/pattern-lab-dashboard.ts",
+      "text": "Voiceover"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project status"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "/path/to/resource.md or .docx"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Optional resource name"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project instructions"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project name"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Purpose"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Quick note for this project"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Search projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add instructions or resources to build context."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add instructions, upload a resource, or write a note."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add Note"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add Path"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Advanced: gateway-local file path"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Archive"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Chats"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Context"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Context Used Next"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Current chat attached"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Find project"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Hide this project without deleting its stored data."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Instructions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Newest first"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Next context"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "No matching projects."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Persistent guidance for chats in this project."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project Chats"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project chats with active instructions and resources."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project cockpit"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project status, chats, and context will appear here."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Reindex"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Remove"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Resources"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Save"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Select a project."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Start a chat to use this project context."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Start Project Chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Truncated"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Upload Files"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Context ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Failed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Needs attention"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Needs context"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Unsupported"
     },
     {
       "count": 1,

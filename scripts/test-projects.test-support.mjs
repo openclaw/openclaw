@@ -52,6 +52,7 @@ const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config
 const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
 const AUTO_REPLY_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply-reply.config.ts";
 const AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG = "test/vitest/vitest.auto-reply-top-level.config.ts";
+const APPS_SNES_STUDIO_VITEST_CONFIG = "test/vitest/vitest.apps-snes-studio.config.ts";
 const BOUNDARY_VITEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "test/vitest/vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "test/vitest/vitest.channels.config.ts";
@@ -227,6 +228,7 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
+  appSnesStudio: APPS_SNES_STUDIO_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
   autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
   autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
@@ -342,6 +344,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
+  [
+    "scripts/promote-gateway-runtime-snapshot.mjs",
+    ["test/scripts/promote-gateway-runtime-snapshot.test.ts"],
+  ],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
@@ -506,6 +512,7 @@ const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
+export const FULL_EXTENSIONS_VITEST_NO_OUTPUT_TIMEOUT_MS = "1800000";
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
 const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
   "src/gateway/embeddings-http.test.ts",
@@ -945,7 +952,7 @@ function isRoutableChangedTarget(changedPath) {
   if (changedPath.endsWith(".live.test.ts")) {
     return false;
   }
-  return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
+  return /^(?:src|test|extensions|ui|packages|apps\/snes-studio)(?:\/|$)/u.test(changedPath);
 }
 
 function resolveSiblingTestTarget(changedPath, cwd) {
@@ -971,7 +978,9 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   if (siblingTest) {
     return [siblingTest];
   }
-  if (/^(?:src|test\/helpers|extensions|packages|ui\/src)\//u.test(changedPath)) {
+  if (/^(?:src|test\/helpers|extensions|packages|ui\/src|apps\/snes-studio\/src)\//u.test(
+    changedPath,
+  )) {
     const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd);
     if (affectedTests.length > 0) {
       return affectedTests;
@@ -1129,6 +1138,9 @@ function classifyTarget(arg, cwd) {
       return "extensionMisc";
     }
     return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
+  }
+  if (relative.startsWith("apps/snes-studio/")) {
+    return "appSnesStudio";
   }
   const channelContractKind = resolveChannelContractTargetKind(relative);
   if (channelContractKind) {
@@ -1386,6 +1398,7 @@ export function buildVitestRunPlans(
     "unitSecurity",
     "unitSupport",
     "unitUi",
+    "appSnesStudio",
     "utils",
     "wizard",
     "e2e",
@@ -1617,7 +1630,10 @@ export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
       ...spec,
       env: {
         ...spec.env,
-        [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
+        [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
+          spec.config === FULL_EXTENSIONS_VITEST_CONFIG
+            ? FULL_EXTENSIONS_VITEST_NO_OUTPUT_TIMEOUT_MS
+            : DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
       },
     };
   });

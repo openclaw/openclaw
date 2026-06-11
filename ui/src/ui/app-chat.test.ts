@@ -289,7 +289,7 @@ describe("refreshChatAvatar", () => {
     expect(host.chatAvatarUrl).toBe("blob:local-avatar");
   });
 
-  it("prefers the paired device token for avatar metadata and local avatar URLs", async () => {
+  it("prefers the current shared token over a paired device token for avatar metadata and local avatar URLs", async () => {
     const createObjectURL = vi.fn(() => "blob:device-avatar");
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
@@ -330,6 +330,59 @@ describe("refreshChatAvatar", () => {
       "/openclaw/avatar/main?meta=1",
       expect.objectContaining({
         method: "GET",
+        headers: { Authorization: "Bearer session-token" },
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/avatar/main",
+      expect.objectContaining({
+        method: "GET",
+        headers: { Authorization: "Bearer session-token" },
+      }),
+    );
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(host.chatAvatarUrl).toBe("blob:device-avatar");
+  });
+
+  it("uses the paired device token for avatar requests when no shared token is available", async () => {
+    const createObjectURL = vi.fn(() => "blob:device-avatar");
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url === "/openclaw/avatar/main?meta=1") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ avatarUrl: "/avatar/main" }),
+        });
+      }
+      if (url === "/avatar/main") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["avatar"]),
+        });
+      }
+      throw new Error(`Unexpected avatar URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({
+      basePath: "/openclaw/",
+      sessionKey: "agent:main",
+      hello: { auth: { deviceToken: "device-token" } } as ChatHost["hello"],
+    });
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/avatar/main?meta=1",
+      expect.objectContaining({
+        method: "GET",
         headers: { Authorization: "Bearer device-token" },
       }),
     );
@@ -340,8 +393,6 @@ describe("refreshChatAvatar", () => {
         headers: { Authorization: "Bearer device-token" },
       }),
     );
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
     expect(host.chatAvatarUrl).toBe("blob:device-avatar");
   });
 
@@ -717,6 +768,73 @@ describe("handleSendChat", () => {
       }),
     );
     expect(host.chatMessage).toBe("");
+  });
+
+  it("reconciles a completed active run from targeted history when the live final event is missed", async () => {
+    vi.useFakeTimers();
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    try {
+      let runId = "";
+      const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+        if (method === "chat.send") {
+          runId = String(params.idempotencyKey);
+          return { status: "started" };
+        }
+        if (method === "chat.history") {
+          return {
+            targetStatus: "exact-run",
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "finished on the gateway" }],
+                __openclaw: { runId },
+              },
+            ],
+          };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const requestUpdate = vi.fn();
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatMessage: "finish this on mobile",
+        requestUpdate,
+      });
+
+      await handleSendChat(host);
+
+      expect(runId).toMatch(uuidPattern);
+      expect(host.chatRunId).toBe(runId);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.waitFor(() => expect(host.chatRunId).toBeNull());
+
+      expect(request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "agent:main",
+        limit: 200,
+        maxChars: 4000,
+        targetRunId: runId,
+      });
+      expect(host.chatMessages).toEqual([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "finished on the gateway" }],
+          __openclaw: { runId },
+        },
+      ]);
+      expect(host.chatStream).toBeNull();
+      expect(requestUpdate).toHaveBeenCalled();
+    } finally {
+      if (originalVisibility) {
+        Object.defineProperty(document, "visibilityState", originalVisibility);
+      } else {
+        delete (document as unknown as { visibilityState?: string }).visibilityState;
+      }
+      vi.useRealTimers();
+    }
   });
 
   it("waits for an in-flight model picker update before sending chat", async () => {

@@ -1,4 +1,7 @@
-import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
+import {
+  collectConfiguredAgentHarnessRuntimes,
+  normalizeAgentHarnessRuntimeId,
+} from "../agents/harness-runtimes.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -656,6 +659,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   env: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
+  extraAgentHarnessRuntimes?: readonly string[];
   platform?: NodeJS.Platform;
 }): GatewayStartupPluginPlan {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
@@ -690,6 +694,12 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       includeLegacyAgentRuntimes: false,
     }),
   );
+  for (const runtime of params.extraAgentHarnessRuntimes ?? []) {
+    const normalized = normalizeAgentHarnessRuntimeId(runtime);
+    if (normalized && normalized !== "auto" && normalized !== "pi") {
+      requiredAgentHarnessRuntimes.add(normalized);
+    }
+  }
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
@@ -830,6 +840,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   env: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
+  extraAgentHarnessRuntimes?: readonly string[];
   platform?: NodeJS.Platform;
 }): string[] {
   return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
@@ -842,6 +853,7 @@ export function loadGatewayStartupPluginPlan(params: {
   env: NodeJS.ProcessEnv;
   index?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
+  extraAgentHarnessRuntimes?: readonly string[];
   platform?: NodeJS.Platform;
 }): GatewayStartupPluginPlan {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
@@ -869,6 +881,9 @@ export function loadGatewayStartupPluginPlan(params: {
     env: params.env,
     index: metadataSnapshot.index,
     manifestRegistry: metadataSnapshot.manifestRegistry,
+    ...(params.extraAgentHarnessRuntimes !== undefined
+      ? { extraAgentHarnessRuntimes: params.extraAgentHarnessRuntimes }
+      : {}),
     platform: params.platform,
   });
 }
@@ -878,6 +893,7 @@ export function resolveGatewayStartupPluginIds(params: {
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  extraAgentHarnessRuntimes?: readonly string[];
   platform?: NodeJS.Platform;
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).pluginIds];

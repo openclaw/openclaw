@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "requestId": "validation-garageband-status",
+  "action": "garageband-status",
+  "status": "queued",
+  "createdAt": "2026-05-17T21:40:11.336Z",
+  "expiresAt": "2026-05-17T21:50:11.337Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "target": {},
+  "safety": {
+    "remoteLoginUsed": false,
+    "arbitraryCommandsAllowed": false,
+    "arbitraryPathsAllowed": false,
+    "allowedActions": [
+      "health-check",
+      "garageband-status",
+      "list-bridge-files",
+      "open-latest-bridge-job",
+      "open-bridge-job"
+    ],
+    "operatorNote": "The MacBook pull agent validates this signature and action whitelist before doing anything."
+  }
+}

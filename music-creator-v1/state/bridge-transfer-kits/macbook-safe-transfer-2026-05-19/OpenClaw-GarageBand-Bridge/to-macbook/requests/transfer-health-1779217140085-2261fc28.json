@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "requestId": "transfer-health-1779217140085-2261fc28",
+  "action": "health-check",
+  "status": "queued",
+  "createdAt": "2026-05-19T18:59:00.086Z",
+  "expiresAt": "2026-05-20T18:59:00.086Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "target": {},
+  "safety": {
+    "remoteLoginUsed": false,
+    "arbitraryCommandsAllowed": false,
+    "arbitraryPathsAllowed": false,
+    "allowedActions": [
+      "health-check",
+      "garageband-status",
+      "list-bridge-files",
+      "open-latest-bridge-job",
+      "open-bridge-job"
+    ],
+    "operatorNote": "The MacBook pull agent validates this signature and action whitelist before doing anything."
+  }
+}

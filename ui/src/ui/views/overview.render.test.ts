@@ -123,4 +123,81 @@ describe("overview view rendering", () => {
     expect(container.textContent).toContain("openclaw devices list");
     expect(container.textContent).not.toContain("openclaw devices approve --latest");
   });
+
+  it("renders always-visible creative studio launchers", async () => {
+    const container = document.createElement("div");
+    const navigatedTo: string[] = [];
+    const props = createOverviewProps({
+      basePath: "/ui",
+      onNavigate: (tab) => {
+        navigatedTo.push(tab);
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Music Studio");
+    expect(container.textContent).toContain("Open Music Studio");
+    expect(container.querySelector<HTMLAnchorElement>('a[href="/ui/music-studio"]')).not.toBeNull();
+    expect(container.textContent).toContain("SNES Studio");
+    expect(container.textContent).toContain("Open SNES Studio");
+    expect(container.querySelector<HTMLAnchorElement>('a[href="/ui/snes-studio"]')).not.toBeNull();
+
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.primary")];
+    buttons
+      .find((button) => button.textContent?.includes("Open Music Studio"))
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    buttons
+      .find((button) => button.textContent?.includes("Open SNES Studio"))
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(navigatedTo).toEqual(["musicStudio", "snesStudio"]);
+  });
+
+  it("renders recent Judge Guard interventions from session audit rows", async () => {
+    const container = document.createElement("div");
+    const now = Date.now();
+    const props = createOverviewProps({
+      sessionsResult: {
+        ts: now,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: now,
+            displayName: "Todd Stanski",
+            judgeGuardAudit: [
+              {
+                ts: now,
+                runId: "run-judge-guard",
+                action: "rewrote_final_success_claim",
+                verdictStatus: "parsed",
+                verdict: "REJECT",
+                scope: "build completion",
+                risk: "medium",
+                conditions: "rerun build successfully",
+                payloadsChecked: 1,
+                payloadsRewritten: 1,
+              },
+            ],
+          },
+        ],
+      },
+      basePath: "/ui",
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Judge Guard");
+    expect(container.textContent).toContain("REJECT");
+    expect(container.textContent).toContain("Todd Stanski");
+    expect(container.textContent).toContain("rerun build successfully");
+    expect(
+      container.querySelector<HTMLAnchorElement>(".ov-judge-guard__session")?.getAttribute("href"),
+    ).toBe(`/ui/chat?session=agent%3Amain%3Amain&runId=run-judge-guard&auditTs=${now}`);
+  });
 });

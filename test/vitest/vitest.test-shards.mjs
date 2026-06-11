@@ -33,6 +33,11 @@ export const fullSuiteVitestShards = [
     projects: ["test/vitest/vitest.unit-support.config.ts"],
   },
   {
+    config: "test/vitest/vitest.full-apps.config.ts",
+    name: "apps",
+    projects: ["test/vitest/vitest.apps-snes-studio.config.ts"],
+  },
+  {
     config: "test/vitest/vitest.full-core-support-boundary.config.ts",
     name: "core-support-boundary",
     projects: ["test/vitest/vitest.boundary.config.ts", "test/vitest/vitest.tooling.config.ts"],

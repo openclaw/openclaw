@@ -21,6 +21,49 @@ const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const CONTROL_UI_DIST_RELATIVE_PATH = path.join("dist", "control-ui");
+
+export function preserveControlUiAssets(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const sourcePath = path.join(cwd, CONTROL_UI_DIST_RELATIVE_PATH);
+  const indexPath = path.join(sourcePath, "index.html");
+  try {
+    if (!fsImpl.statSync(indexPath).isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  const preserveRoot = path.join(cwd, ".artifacts", "tsdown-preserve");
+  const targetPath = path.join(
+    preserveRoot,
+    `control-ui-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  try {
+    fsImpl.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fsImpl.renameSync(sourcePath, targetPath);
+    return { sourcePath, targetPath };
+  } catch {
+    return null;
+  }
+}
+
+export function restorePreservedControlUiAssets(preserved, params = {}) {
+  if (!preserved) {
+    return true;
+  }
+  const fsImpl = params.fs ?? fs;
+  try {
+    fsImpl.rmSync(preserved.sourcePath, { force: true, recursive: true });
+    fsImpl.mkdirSync(path.dirname(preserved.sourcePath), { recursive: true });
+    fsImpl.renameSync(preserved.targetPath, preserved.sourcePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -327,9 +370,14 @@ function isMainModule() {
 if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneStaleRuntimeSymlinks();
+  const preservedControlUiAssets = preserveControlUiAssets();
   cleanTsdownOutputRoots();
   const invocation = resolveTsdownBuildInvocation();
   const result = await runTsdownBuildInvocation(invocation);
+  if (!restorePreservedControlUiAssets(preservedControlUiAssets)) {
+    console.error("Build could not restore preserved Control UI assets after rebuilding dist.");
+    process.exit(1);
+  }
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {
     console.error(

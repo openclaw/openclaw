@@ -88,7 +88,8 @@ describe("createSessionAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:dashboard:abc");
     expect(state.sessionsLoading).toBe(false);
@@ -151,7 +152,8 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -163,7 +165,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toStrictEqual([]);
+    expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -197,7 +199,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toStrictEqual([]);
+    expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -246,7 +248,8 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -375,7 +378,8 @@ describe("loadSessions", () => {
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
   });
 
@@ -405,7 +409,8 @@ describe("loadSessions", () => {
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
   });
 
@@ -454,12 +459,14 @@ describe("loadSessions", () => {
       limit: 10,
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(state.sessionsResult?.ts).toBe(2);
     expect(state.sessionsLoading).toBe(false);
@@ -542,7 +549,8 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
-      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.compaction.list", {
       key: "agent:main:main",
@@ -599,7 +607,7 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: false });
-    expect(state.sessionsResult?.sessions).toStrictEqual([]);
+    expect(state.sessionsResult?.sessions).toEqual([]);
   });
 
   it("applies partial events only to existing source-of-truth rows", () => {
@@ -645,7 +653,46 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: true, change: "deleted" });
-    expect(state.sessionsResult?.sessions).toStrictEqual([]);
+    expect(state.sessionsResult?.sessions).toEqual([]);
+  });
+
+  it("applies Judge guard audit updates from session change events", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "judge_guard",
+      ts: 2,
+      judgeGuardAudit: [
+        {
+          ts: 2,
+          runId: "run-judge-guard",
+          action: "rewrote_final_success_claim",
+          verdictStatus: "parsed",
+          verdict: "REJECT",
+          scope: "build completion",
+          risk: "medium",
+          conditions: "rerun build",
+          payloadsChecked: 1,
+          payloadsRewritten: 1,
+        },
+      ],
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]?.judgeGuardAudit?.[0]).toMatchObject({
+      runId: "run-judge-guard",
+      verdict: "REJECT",
+      payloadsRewritten: 1,
+    });
   });
 
   it("keeps terminal status updates visible while archived sessions are hidden", () => {

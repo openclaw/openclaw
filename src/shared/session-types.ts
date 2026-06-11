@@ -20,6 +20,7 @@ export type GatewayAgentRuntime = {
 export type GatewayAgentRow = {
   id: string;
   name?: string;
+  roomId?: string;
   identity?: GatewayAgentIdentity;
   workspace?: string;
   model?: GatewayAgentModel;

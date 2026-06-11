@@ -100,7 +100,34 @@ describe("security audit trust model findings", () => {
         },
       },
       {
-        name: "warns when config heuristics suggest a likely multi-user setup",
+        name: "does not warn for allowlisted group targets when exposed tools are guarded",
+        cfg: {
+          channels: {
+            discord: {
+              groupPolicy: "allowlist",
+              guilds: {
+                "1234567890": {
+                  channels: {
+                    "7777777777": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+          agents: { defaults: { sandbox: { mode: "all" } } },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[4].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "warns for allowlisted group targets when exposed tools are unguarded",
         cfg: {
           channels: {
             discord: {
@@ -117,7 +144,7 @@ describe("security audit trust model findings", () => {
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
         assert: () => {
-          const findings = audit(cases[4].cfg);
+          const findings = audit(cases[5].cfg);
           const finding = requireMultiUserHeuristicFinding(findings);
           expect(finding.severity).toBe("warn");
           expect(finding.detail).toContain(
@@ -138,7 +165,7 @@ describe("security audit trust model findings", () => {
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
         assert: () => {
-          const findings = audit(cases[5].cfg);
+          const findings = audit(cases[6].cfg);
           expect(
             findings.some(
               (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",

@@ -102,6 +102,9 @@ const runChannelPluginStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
 const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
+const collectGatewayStartupSessionAgentHarnessRuntimes = vi.hoisted(() =>
+  vi.fn((_params: unknown): string[] => []),
+);
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -133,6 +136,7 @@ vi.mock("../plugins/registry.js", () => ({
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
+  getActivePluginRuntimeSubagentMode: () => "default",
   getActivePluginRegistry: () => undefined,
   setActivePluginRegistry: vi.fn(),
 }));
@@ -151,6 +155,11 @@ vi.mock("./server-plugin-bootstrap.js", () => ({
 
 vi.mock("./server-startup-session-migration.js", () => ({
   runStartupSessionMigration: (params: unknown) => runStartupSessionMigration(params),
+}));
+
+vi.mock("./startup-agent-harness-runtimes.js", () => ({
+  collectGatewayStartupSessionAgentHarnessRuntimes: (params: unknown) =>
+    collectGatewayStartupSessionAgentHarnessRuntimes(params),
 }));
 
 function createLog() {
@@ -178,6 +187,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
+    collectGatewayStartupSessionAgentHarnessRuntimes.mockClear().mockReturnValue([]);
   });
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
@@ -360,6 +370,37 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
         pluginLookUpTable: undefined,
         preferSetupRuntimeForChannelPlugins: false,
         suppressPluginInfoLogs: false,
+      }),
+    );
+  });
+
+  it("passes persisted session harness runtimes into startup plugin planning", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "token",
+        },
+      },
+    } as OpenClawConfig;
+    collectGatewayStartupSessionAgentHarnessRuntimes.mockReturnValue(["codex"]);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(collectGatewayStartupSessionAgentHarnessRuntimes).toHaveBeenCalledWith({
+      config: cfg,
+      env: process.env,
+    });
+    expect(loadPluginLookUpTable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        extraAgentHarnessRuntimes: ["codex"],
       }),
     );
   });

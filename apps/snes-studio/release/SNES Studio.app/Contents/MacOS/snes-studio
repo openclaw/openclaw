@@ -1,0 +1,3 @@
+#!/bin/sh
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+open "$APP_DIR/Resources/app/index.html"

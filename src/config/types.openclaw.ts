@@ -80,6 +80,12 @@ export type OpenClawConfig = {
     channel?: "stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
+    /** Preserve local dirty source changes during an operator-triggered update. */
+    preserveDirty?: boolean;
+    /** Optional local source checkout to update instead of replacing custom runtime builds. */
+    sourceRoot?: string;
+    /** Paths that must still exist after an update before the result is accepted. */
+    requiredPaths?: string[];
     /** Core auto-update policy for package installs. */
     auto?: {
       /** Enable background auto-update checks and apply logic. Default: false. */

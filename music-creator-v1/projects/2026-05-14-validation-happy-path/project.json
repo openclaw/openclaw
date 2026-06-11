@@ -1,0 +1,546 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-05-14-validation-happy-path",
+  "status": "candidate_ingested",
+  "request": "Warm instrumental ambient piano cue for deep focus",
+  "artist": "Validation Artist",
+  "platform": "youtube",
+  "instrumental": true,
+  "durationSeconds": 60,
+  "projectPath": "music-creator-v1/projects/2026-05-14-validation-happy-path",
+  "createdAt": "2026-05-14T21:33:53.757Z",
+  "updatedAt": "2026-05-16T22:12:00.732Z",
+  "selectedCandidateId": "candidate-01",
+  "compliance": {
+    "status": "clear_for_draft",
+    "blocksDraft": false,
+    "blocksRelease": true,
+    "matchedRules": [],
+    "releaseGates": [
+      "rightsOwnerConfirmed",
+      "aiDisclosureReviewed",
+      "modelToolRightsEvidenceRecorded",
+      "platformMetadataComplete",
+      "publicPublishingApproval"
+    ]
+  },
+  "prompts": [
+    {
+      "candidateId": "candidate-01",
+      "model": "google/lyria-3-clip-preview",
+      "prompt": "Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.",
+      "instrumental": true,
+      "durationSeconds": 60,
+      "format": "wav",
+      "filename": "2026-05-14-validation-happy-path-candidate-01"
+    },
+    {
+      "candidateId": "candidate-02",
+      "model": "minimax/music-2.6",
+      "prompt": "Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.",
+      "instrumental": true,
+      "durationSeconds": 60,
+      "format": "mp3",
+      "filename": "2026-05-14-validation-happy-path-candidate-02"
+    },
+    {
+      "candidateId": "candidate-03",
+      "model": "comfy/workflow",
+      "prompt": "Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.",
+      "instrumental": true,
+      "durationSeconds": 60,
+      "format": "wav",
+      "filename": "2026-05-14-validation-happy-path-candidate-03"
+    }
+  ],
+  "providerAttempts": [
+    {
+      "candidateId": "candidate-01",
+      "model": "google/lyria-3-clip-preview",
+      "status": "planned",
+      "plannedAt": "2026-05-14T21:33:58.690Z"
+    },
+    {
+      "candidateId": "candidate-02",
+      "model": "minimax/music-2.6",
+      "status": "planned",
+      "plannedAt": "2026-05-14T21:33:58.691Z"
+    },
+    {
+      "candidateId": "candidate-03",
+      "model": "comfy/workflow",
+      "status": "planned",
+      "plannedAt": "2026-05-14T21:33:58.691Z"
+    }
+  ],
+  "candidates": [
+    {
+      "candidateId": "candidate-01",
+      "sourceKind": "openclaw_task_sync",
+      "sourcePath": "../../../private/tmp/music-creator-sync-fixture.wav",
+      "path": "candidates/candidate-01.wav",
+      "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+      "ingestedAt": "2026-05-14T21:36:58.293Z",
+      "status": "qa_passed",
+      "qa": {
+        "schemaVersion": 1,
+        "candidateId": "candidate-01",
+        "checkedAt": "2026-05-14T21:37:04.206Z",
+        "technical": {
+          "passed": true,
+          "ffprobeAvailable": true,
+          "manualOverride": false
+        },
+        "creative": {
+          "total": 90
+        },
+        "draftReady": true
+      },
+      "selectedPath": "selected/candidate-01.wav",
+      "selectedAt": "2026-05-16T20:00:52.925Z",
+      "selectedSha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c"
+    },
+    {
+      "candidateId": "garageband-validation-return",
+      "sourceKind": "garageband_bridge",
+      "sourcePath": "../Library/Mobile Documents/com~apple~CloudDocs/OpenClaw-GarageBand-Bridge/from-macbook/2026-05-14-validation-happy-path-candidate-01-1778968638557/garageband-bounce.wav",
+      "path": "candidates/garageband-validation-return.wav",
+      "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+      "ingestedAt": "2026-05-16T21:57:50.710Z",
+      "status": "ingested",
+      "qa": null
+    }
+  ],
+  "auditLog": [
+    {
+      "at": "2026-05-14T21:33:53.758Z",
+      "action": "create",
+      "status": "draft_created",
+      "note": "Created Music Creator V1 project."
+    },
+    {
+      "at": "2026-05-14T21:33:58.667Z",
+      "action": "generate-live",
+      "status": "draft_created",
+      "note": "Live generation dry_run_ready for candidate-01."
+    },
+    {
+      "at": "2026-05-14T21:33:58.691Z",
+      "action": "plan-generation",
+      "status": "generation_planned",
+      "note": "Generated OpenClaw music_generate call sheet."
+    },
+    {
+      "at": "2026-05-14T21:33:58.730Z",
+      "action": "generate-live",
+      "status": "generation_planned",
+      "note": "Live generation blocked_missing_credentials for candidate-01."
+    },
+    {
+      "at": "2026-05-14T21:36:58.294Z",
+      "action": "sync-live-output",
+      "status": "candidate_ingested",
+      "note": "Live output sync ingested for candidate-01."
+    },
+    {
+      "at": "2026-05-14T21:37:04.207Z",
+      "action": "qa",
+      "status": "qa_passed",
+      "note": "QA completed for candidate-01."
+    },
+    {
+      "at": "2026-05-16T20:00:52.926Z",
+      "action": "select",
+      "status": "selected",
+      "note": "Selected candidate-01."
+    },
+    {
+      "at": "2026-05-16T20:00:52.962Z",
+      "action": "publish-package",
+      "status": "publish_blocked",
+      "note": "publish_blocked"
+    },
+    {
+      "at": "2026-05-16T20:01:02.083Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "humanFinalAudioApproval=true"
+    },
+    {
+      "at": "2026-05-16T20:01:02.127Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "rightsOwnerConfirmed=true"
+    },
+    {
+      "at": "2026-05-16T20:01:02.163Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "aiDisclosureReviewed=true"
+    },
+    {
+      "at": "2026-05-16T20:01:02.198Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "modelToolRightsEvidenceRecorded=true"
+    },
+    {
+      "at": "2026-05-16T20:01:08.963Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "humanFinalAudioApproval=true"
+    },
+    {
+      "at": "2026-05-16T20:01:13.156Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "rightsOwnerConfirmed=true"
+    },
+    {
+      "at": "2026-05-16T20:01:17.387Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "aiDisclosureReviewed=true"
+    },
+    {
+      "at": "2026-05-16T20:01:23.625Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "modelToolRightsEvidenceRecorded=true"
+    },
+    {
+      "at": "2026-05-16T20:01:27.142Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "platformMetadataComplete=true"
+    },
+    {
+      "at": "2026-05-16T20:01:30.816Z",
+      "action": "set-release-gate",
+      "status": "publish_blocked",
+      "note": "publicPublishingApproval=true"
+    },
+    {
+      "at": "2026-05-16T20:01:35.524Z",
+      "action": "publish-package",
+      "status": "publish_ready",
+      "note": "publish_ready"
+    },
+    {
+      "at": "2026-05-16T21:57:18.566Z",
+      "action": "bridge-export",
+      "status": "publish_ready",
+      "note": "Exported candidate-01 to GarageBand bridge job 2026-05-14-validation-happy-path-candidate-01-1778968638557."
+    },
+    {
+      "at": "2026-05-16T21:57:50.711Z",
+      "action": "bridge-ingest",
+      "status": "candidate_ingested",
+      "note": "Ingested GarageBand return garageband-validation-return."
+    },
+    {
+      "at": "2026-05-16T22:05:11.582Z",
+      "action": "bridge-import-garageband",
+      "status": "candidate_ingested",
+      "note": "Imported GarageBand song garageband-source-validation."
+    },
+    {
+      "at": "2026-05-16T22:05:15.496Z",
+      "action": "vocal-plan",
+      "status": "candidate_ingested",
+      "note": "Created vocal plan validation-vocal-plan."
+    },
+    {
+      "at": "2026-05-16T22:05:22.432Z",
+      "action": "vocal-generate-live",
+      "status": "candidate_ingested",
+      "note": "Vocal generation dry_run_ready for validation-vocal-plan."
+    },
+    {
+      "at": "2026-05-16T22:05:27.021Z",
+      "action": "vocal-ingest",
+      "status": "candidate_ingested",
+      "note": "Ingested vocal validation-cloud-vocal."
+    },
+    {
+      "at": "2026-05-16T22:05:34.433Z",
+      "action": "bridge-export",
+      "status": "candidate_ingested",
+      "note": "Exported vocal validation-cloud-vocal to GarageBand bridge job 2026-05-14-validation-happy-path-vocal-validation-cloud-vocal-1778969134425."
+    },
+    {
+      "at": "2026-05-16T22:11:42.807Z",
+      "action": "vocal-plan",
+      "status": "candidate_ingested",
+      "note": "Created vocal plan blocked-tupac-voice-test."
+    },
+    {
+      "at": "2026-05-16T22:11:53.178Z",
+      "action": "vocal-plan",
+      "status": "candidate_ingested",
+      "note": "Created vocal plan safe-original-rap-test."
+    },
+    {
+      "at": "2026-05-16T22:12:00.732Z",
+      "action": "vocal-generate-live",
+      "status": "candidate_ingested",
+      "note": "Vocal generation dry_run_ready for safe-original-rap-test."
+    }
+  ],
+  "liveGeneration": {
+    "schemaVersion": 1,
+    "attempts": [
+      {
+        "attemptId": "live-generation-candidate-01-1778794438666",
+        "candidateId": "candidate-01",
+        "model": "google/lyria-3-clip-preview",
+        "createdAt": "2026-05-14T21:33:58.666Z",
+        "providerReady": false,
+        "status": "dry_run_ready",
+        "toolCall": "/tool music_generate prompt=\"Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.\" model=\"google/lyria-3-clip-preview\" instrumental=true durationSeconds=60 format=\"wav\" filename=\"2026-05-14-validation-happy-path-candidate-01\"",
+        "missingProviderKeys": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "COMFY_API_KEY",
+          "COMFY_CLOUD_API_KEY"
+        ]
+      },
+      {
+        "attemptId": "live-generation-candidate-01-1778794438729",
+        "candidateId": "candidate-01",
+        "model": "google/lyria-3-clip-preview",
+        "createdAt": "2026-05-14T21:33:58.729Z",
+        "providerReady": false,
+        "status": "blocked_missing_credentials",
+        "toolCall": "/tool music_generate prompt=\"Warm instrumental ambient piano cue for deep focus. Original music only. Avoid artist imitation, copyrighted lyrics, uncleared samples, clipping, and misleading real-person voice.\" model=\"google/lyria-3-clip-preview\" instrumental=true durationSeconds=60 format=\"wav\" filename=\"2026-05-14-validation-happy-path-candidate-01\"",
+        "missingProviderKeys": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY",
+          "MINIMAX_API_KEY",
+          "COMFY_API_KEY",
+          "COMFY_CLOUD_API_KEY"
+        ]
+      },
+      {
+        "attemptId": "live-sync-candidate-01-1778794618281",
+        "candidateId": "candidate-01",
+        "taskLookup": null,
+        "taskOutputFile": "/private/tmp/music-creator-task-output.json",
+        "createdAt": "2026-05-14T21:36:58.281Z",
+        "status": "ingested",
+        "stdout": "{\n  \"taskId\": \"task-sync-fixture\",\n  \"status\": \"succeeded\",\n  \"terminalSummary\": \"Generated fixture\",\n  \"details\": {\n    \"media\": {\n      \"mediaUrls\": [\n        \"MEDIA:/private/tmp/music-creator-sync-fixture.wav\"\n      ]\n    }\n  }\n}",
+        "stderr": "",
+        "parsed": {
+          "taskId": "task-sync-fixture",
+          "status": "succeeded",
+          "terminalSummary": "Generated fixture",
+          "details": {
+            "media": {
+              "mediaUrls": [
+                "MEDIA:/private/tmp/music-creator-sync-fixture.wav"
+              ]
+            }
+          }
+        },
+        "audioPaths": [
+          "../../../private/tmp/music-creator-sync-fixture.wav"
+        ]
+      }
+    ],
+    "lastStatus": "ingested"
+  },
+  "releaseGates": {
+    "humanFinalAudioApproval": true,
+    "rightsOwnerConfirmed": true,
+    "aiDisclosureReviewed": true,
+    "modelToolRightsEvidenceRecorded": true,
+    "platformMetadataComplete": true,
+    "publicPublishingApproval": true
+  },
+  "bridge": {
+    "schemaVersion": 1,
+    "exports": [
+      {
+        "jobId": "2026-05-14-validation-happy-path-candidate-01-1778968638557",
+        "candidateId": "candidate-01",
+        "bridgeRoot": "/Users/openclaw/Library/Mobile Documents/com~apple~CloudDocs/OpenClaw-GarageBand-Bridge",
+        "jobPath": "to-macbook/2026-05-14-validation-happy-path-candidate-01-1778968638557",
+        "audioPath": "to-macbook/2026-05-14-validation-happy-path-candidate-01-1778968638557/audio/candidate-01.wav",
+        "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+        "exportedAt": "2026-05-16T21:57:18.566Z",
+        "status": "exported_to_macbook"
+      },
+      {
+        "jobId": "2026-05-14-validation-happy-path-vocal-validation-cloud-vocal-1778969134425",
+        "itemId": "validation-cloud-vocal",
+        "itemKind": "vocal",
+        "bridgeRoot": "/Users/openclaw/Library/Mobile Documents/com~apple~CloudDocs/OpenClaw-GarageBand-Bridge",
+        "jobPath": "to-macbook/2026-05-14-validation-happy-path-vocal-validation-cloud-vocal-1778969134425",
+        "audioPath": "to-macbook/2026-05-14-validation-happy-path-vocal-validation-cloud-vocal-1778969134425/audio/validation-cloud-vocal.wav",
+        "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+        "exportedAt": "2026-05-16T22:05:34.433Z",
+        "status": "exported_to_macbook"
+      }
+    ],
+    "imports": [
+      {
+        "jobId": "2026-05-14-validation-happy-path-candidate-01-1778968638557",
+        "candidateId": "garageband-validation-return",
+        "sourcePath": "../Library/Mobile Documents/com~apple~CloudDocs/OpenClaw-GarageBand-Bridge/from-macbook/2026-05-14-validation-happy-path-candidate-01-1778968638557/garageband-bounce.wav",
+        "ingestedPath": "candidates/garageband-validation-return.wav",
+        "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+        "ingestedAt": "2026-05-16T21:57:50.711Z"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "sourceId": "garageband-source-validation",
+      "kind": "song",
+      "origin": "garageband_bridge",
+      "note": "Add original vocals and a light harmony stack that can sit above this GarageBand song.",
+      "sourcePath": "../Library/Mobile Documents/com~apple~CloudDocs/OpenClaw-GarageBand-Bridge/from-macbook/inbox/validation-garageband-song/audio/garageband-song.wav",
+      "path": "sources/garageband-source-validation.wav",
+      "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+      "importedAt": "2026-05-16T22:05:11.582Z",
+      "status": "available",
+      "inboxId": "validation-garageband-song"
+    }
+  ],
+  "vocalPlans": [
+    {
+      "schemaVersion": 1,
+      "vocalPlanId": "validation-vocal-plan",
+      "sourceRef": "garageband-source-validation",
+      "sourceKind": "song",
+      "mode": "openclaw_or_cloud",
+      "direction": "Warm lead vocal with subtle airy harmonies for a GarageBand arrangement",
+      "lyrics": "We build the sound from sparks and stone",
+      "prompt": {
+        "candidateId": "validation-vocal-plan",
+        "model": "minimax/music-2.6",
+        "prompt": "Create an original vocal layer for Warm instrumental ambient piano cue for deep focus. Source audio reference: garageband-source-validation. Vocal direction: Warm lead vocal with subtle airy harmonies for a GarageBand arrangement. Mode: openclaw_or_cloud. Use the supplied original lyrics exactly unless the request asks for refinement. Avoid artist imitation, celebrity voice cloning, copyrighted lyrics, uncleared samples, and misleading real-person voice. Return a clean vocal-forward result suitable for importing into GarageBand.",
+        "lyrics": "We build the sound from sparks and stone",
+        "instrumental": false,
+        "durationSeconds": 60,
+        "format": "mp3",
+        "filename": "2026-05-14-validation-happy-path-validation-vocal-plan"
+      },
+      "status": "dry_run_ready",
+      "createdAt": "2026-05-16T22:05:15.494Z",
+      "manualBoundaries": [
+        "OpenClaw music_generate can create vocal-forward audio when provider credentials exist.",
+        "Precise vocal alignment to an existing GarageBand session may require a cloud vocal/stem tool or manual GarageBand arrangement.",
+        "Voice cloning or artist imitation remains blocked unless explicit rights evidence is recorded."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "vocalPlanId": "blocked-tupac-voice-test",
+      "sourceRef": "garageband-source-validation",
+      "sourceKind": "song",
+      "mode": "openclaw_or_cloud",
+      "direction": "voice that sounds exactly like Tupac rapping over the beat",
+      "lyrics": "Original words only",
+      "compliance": {
+        "status": "blocked",
+        "blocksDraft": true,
+        "blocksRelease": true,
+        "matchedRules": [
+          {
+            "id": "artist_imitation",
+            "reason": "Artist imitation language is blocked for draft automation.",
+            "severity": "blocker",
+            "blocksDraft": true,
+            "blocksRelease": true,
+            "safeRewrite": "Rewrite with genre, mood, instrumentation, tempo, and structure only."
+          },
+          {
+            "id": "real_person_voice_clone",
+            "reason": "Exact real-person or artist voice cloning is blocked without verified rights and an authorized voice model.",
+            "severity": "blocker",
+            "blocksDraft": true,
+            "blocksRelease": true,
+            "safeRewrite": "Rewrite with genre, mood, instrumentation, tempo, and structure only."
+          }
+        ],
+        "releaseGates": [
+          "rightsOwnerConfirmed",
+          "aiDisclosureReviewed",
+          "modelToolRightsEvidenceRecorded",
+          "platformMetadataComplete",
+          "publicPublishingApproval"
+        ]
+      },
+      "prompt": {
+        "candidateId": "blocked-tupac-voice-test",
+        "model": "minimax/music-2.6",
+        "prompt": "Create an original vocal layer for Warm instrumental ambient piano cue for deep focus. Source audio reference: garageband-source-validation. Vocal direction: voice that sounds exactly like Tupac rapping over the beat. Mode: openclaw_or_cloud. Use the supplied original lyrics exactly unless the request asks for refinement. Avoid artist imitation, celebrity voice cloning, copyrighted lyrics, uncleared samples, and misleading real-person voice. Return a clean vocal-forward result suitable for importing into GarageBand.",
+        "lyrics": "Original words only",
+        "instrumental": false,
+        "durationSeconds": 60,
+        "format": "mp3",
+        "filename": "2026-05-14-validation-happy-path-blocked-tupac-voice-test"
+      },
+      "status": "blocked",
+      "createdAt": "2026-05-16T22:11:42.806Z",
+      "manualBoundaries": [
+        "OpenClaw music_generate can create vocal-forward audio when provider credentials exist.",
+        "Precise vocal alignment to an existing GarageBand session may require a cloud vocal/stem tool or manual GarageBand arrangement.",
+        "Voice cloning or artist imitation remains blocked unless explicit rights evidence is recorded."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "vocalPlanId": "safe-original-rap-test",
+      "sourceRef": "garageband-source-validation",
+      "sourceKind": "song",
+      "mode": "openclaw_or_cloud",
+      "direction": "original urgent baritone West Coast rap vocal with crisp diction and no artist imitation",
+      "lyrics": "Original words only",
+      "compliance": {
+        "status": "clear_for_draft",
+        "blocksDraft": false,
+        "blocksRelease": true,
+        "matchedRules": [],
+        "releaseGates": [
+          "rightsOwnerConfirmed",
+          "aiDisclosureReviewed",
+          "modelToolRightsEvidenceRecorded",
+          "platformMetadataComplete",
+          "publicPublishingApproval"
+        ]
+      },
+      "prompt": {
+        "candidateId": "safe-original-rap-test",
+        "model": "minimax/music-2.6",
+        "prompt": "Create an original vocal layer for Warm instrumental ambient piano cue for deep focus. Source audio reference: garageband-source-validation. Vocal direction: original urgent baritone West Coast rap vocal with crisp diction and no artist imitation. Mode: openclaw_or_cloud. Use the supplied original lyrics exactly unless the request asks for refinement. Avoid artist imitation, celebrity voice cloning, copyrighted lyrics, uncleared samples, and misleading real-person voice. Return a clean vocal-forward result suitable for importing into GarageBand.",
+        "lyrics": "Original words only",
+        "instrumental": false,
+        "durationSeconds": 60,
+        "format": "mp3",
+        "filename": "2026-05-14-validation-happy-path-safe-original-rap-test"
+      },
+      "status": "dry_run_ready",
+      "createdAt": "2026-05-16T22:11:53.175Z",
+      "manualBoundaries": [
+        "OpenClaw music_generate can create vocal-forward audio when provider credentials exist.",
+        "Precise vocal alignment to an existing GarageBand session may require a cloud vocal/stem tool or manual GarageBand arrangement.",
+        "Voice cloning or artist imitation remains blocked unless explicit rights evidence is recorded."
+      ]
+    }
+  ],
+  "vocals": [
+    {
+      "vocalId": "validation-cloud-vocal",
+      "planId": "validation-vocal-plan",
+      "sourceKind": "simulated_cloud_vocal",
+      "sourcePath": "music-creator-v1/projects/2026-05-14-validation-happy-path/selected/candidate-01.wav",
+      "path": "vocals/validation-cloud-vocal/validation-cloud-vocal.wav",
+      "sha256": "df372466276ab9f46734e954ce4219a9fad937a9074608b9f029c97fb6e5663c",
+      "ingestedAt": "2026-05-16T22:05:27.019Z",
+      "status": "ingested"
+    }
+  ]
+}

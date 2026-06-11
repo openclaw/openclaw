@@ -7,8 +7,9 @@ import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
 import { normalizeBasePath } from "../navigation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
-import { loadLocalAssistantIdentity } from "../storage.ts";
+import { loadLocalAssistantIdentity, loadLocalUserIdentity } from "../storage.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
+import { hasLocalUserIdentity, normalizeLocalUserIdentity } from "../user-identity.ts";
 
 export type ControlUiBootstrapState = {
   basePath: string;
@@ -18,6 +19,8 @@ export type ControlUiBootstrapState = {
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
   assistantAgentId: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
   serverVersion: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
@@ -52,6 +55,21 @@ function applyLocalAssistantAvatarOverride(state: ControlUiBootstrapState) {
   state.assistantAvatarSource = localAvatar;
   state.assistantAvatarStatus = "data";
   state.assistantAvatarReason = null;
+}
+
+function applyBootstrapUserIdentity(
+  state: ControlUiBootstrapState,
+  parsed: Pick<ControlUiBootstrapConfig, "userName" | "userAvatar">,
+) {
+  if (hasLocalUserIdentity(loadLocalUserIdentity())) {
+    return;
+  }
+  const normalized = normalizeLocalUserIdentity({
+    name: parsed.userName ?? null,
+    avatar: parsed.userAvatar ?? null,
+  });
+  state.userName = normalized.name;
+  state.userAvatar = normalized.avatar;
 }
 
 export async function loadControlUiBootstrapConfig(
@@ -119,6 +137,7 @@ export async function loadControlUiBootstrapConfig(
       }
       // Local override always wins — same pattern as the user avatar.
       applyLocalAssistantAvatarOverride(state);
+      applyBootstrapUserIdentity(state, parsed);
     }
     state.serverVersion = parsed.serverVersion ?? null;
     state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)

@@ -8,7 +8,8 @@ import {
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionEntry, SessionJudgeGuardAuditEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -33,10 +34,10 @@ import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
-  listAgentIds,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
+  resolveAgentSelector,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
@@ -51,10 +52,15 @@ import {
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
+import { resolveControlDirectorThinkingEscalation } from "./control-director-contract.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAgentHarnessPolicy } from "./harness/selection.js";
+import {
+  applyJudgeVerdictFinalOutputGuard,
+  type JudgeFinalOutputGuardAudit,
+} from "./judge-gate.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
@@ -94,6 +100,21 @@ type SkillsRuntime = typeof import("./skills.js");
 type SkillsFilterRuntime = typeof import("./skills/filter.js");
 type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
 type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
+
+function resolveAgentSelectorOrThrow(cfg: OpenClawConfig, selector: string): string {
+  const resolution = resolveAgentSelector(cfg, selector);
+  if (resolution.ok) {
+    return resolution.agentId;
+  }
+  if (resolution.reason === "ambiguous") {
+    throw new Error(
+      `Ambiguous agent selector "${selector}" matches multiple configured agent names: ${(resolution.agentIds ?? []).join(", ")}. Use an explicit agent id.`,
+    );
+  }
+  throw new Error(
+    `Unknown agent id "${selector}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+  );
+}
 
 const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
   () => import("./command/attempt-execution.runtime.js"),
@@ -236,12 +257,32 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
 ];
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
+const MAX_JUDGE_GUARD_AUDIT_ENTRIES = 20;
 
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   await persistSessionEntryBase({
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
   });
+}
+
+function buildSessionJudgeGuardAuditEntry(params: {
+  audit: JudgeFinalOutputGuardAudit;
+  runId?: string;
+  ts?: number;
+}): SessionJudgeGuardAuditEntry {
+  return {
+    ts: params.ts ?? Date.now(),
+    ...(params.runId ? { runId: params.runId } : {}),
+    action: params.audit.action,
+    verdictStatus: params.audit.verdictStatus,
+    ...(params.audit.verdict ? { verdict: params.audit.verdict } : {}),
+    ...(params.audit.scope ? { scope: params.audit.scope } : {}),
+    ...(params.audit.risk ? { risk: params.audit.risk } : {}),
+    ...(params.audit.conditions ? { conditions: params.audit.conditions } : {}),
+    payloadsChecked: params.audit.payloadsChecked,
+    payloadsRewritten: params.audit.payloadsRewritten,
+  };
 }
 
 function containsControlCharacters(value: string): boolean {
@@ -296,15 +337,9 @@ async function prepareAgentCommandExecution(
     workspaceDir: opts.workspaceDir,
   });
   const agentIdOverrideRaw = opts.agentId?.trim();
-  const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
-  if (agentIdOverride) {
-    const knownAgents = listAgentIds(cfg);
-    if (!knownAgents.includes(agentIdOverride)) {
-      throw new Error(
-        `Unknown agent id "${agentIdOverrideRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
-      );
-    }
-  }
+  const agentIdOverride = agentIdOverrideRaw
+    ? resolveAgentSelectorOrThrow(cfg, agentIdOverrideRaw)
+    : undefined;
   if (agentIdOverride && opts.sessionKey) {
     const sessionAgentId = resolveAgentIdFromSessionKey(opts.sessionKey);
     if (sessionAgentId !== agentIdOverride) {
@@ -591,6 +626,7 @@ async function agentCommandInternal(
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
           config: cfg,
+          runId,
         });
       } catch (error) {
         log.warn(
@@ -868,6 +904,12 @@ async function agentCommandInternal(
           ? modelCatalog
           : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+    if (!resolvedThinkLevel) {
+      resolvedThinkLevel = resolveControlDirectorThinkingEscalation({
+        agentId: sessionAgentId,
+        text: body,
+      })?.level;
+    }
     if (!resolvedThinkLevel) {
       resolvedThinkLevel = resolveThinkingDefault({
         cfg,
@@ -1238,6 +1280,7 @@ async function agentCommandInternal(
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
           config: cfg,
+          runId,
           embeddedAssistantGapFill,
         });
         sessionEntry = await (
@@ -1268,7 +1311,45 @@ async function agentCommandInternal(
       }
     }
 
-    const payloads = result.payloads ?? [];
+    const guardedFinalOutput = applyJudgeVerdictFinalOutputGuard({
+      payloads: result.payloads ?? [],
+      internalEvents: opts.internalEvents,
+    });
+    const payloads = guardedFinalOutput.payloads;
+    if (guardedFinalOutput.audit) {
+      const auditEntry = buildSessionJudgeGuardAuditEntry({
+        audit: guardedFinalOutput.audit,
+        runId: opts.runId,
+      });
+      if (opts.runId) {
+        emitAgentEvent({
+          runId: opts.runId,
+          sessionKey: sessionKey ?? sessionId,
+          stream: "judge_guard",
+          data: auditEntry,
+        });
+      }
+      if (sessionStore && sessionKey) {
+        const entry = sessionStore[sessionKey] ?? sessionEntry;
+        if (entry) {
+          const nextAudit = [...(entry.judgeGuardAudit ?? []), auditEntry].slice(
+            -MAX_JUDGE_GUARD_AUDIT_ENTRIES,
+          );
+          const next: SessionEntry = {
+            ...entry,
+            judgeGuardAudit: nextAudit,
+            updatedAt: auditEntry.ts,
+          };
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry: next,
+          });
+          sessionEntry = next;
+        }
+      }
+    }
 
     // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
     // This ensures that if the process restarts during delivery, the payload is durable.

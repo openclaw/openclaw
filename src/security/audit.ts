@@ -893,7 +893,12 @@ async function maybeProbeGateway(params: {
     explicitAuth: params.explicitAuth,
   });
   const res = await params
-    .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
+    .probe({
+      url,
+      auth: authResolution.auth,
+      timeoutMs: params.timeoutMs,
+      detailLevel: "presence",
+    })
     .catch((err) => ({
       ok: false,
       url,

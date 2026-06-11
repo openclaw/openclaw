@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "probeId": "transfer-1779217140079-25543a98",
+  "status": "mac_studio_probe_written",
+  "createdAt": "2026-05-19T18:59:00.079Z",
+  "studioMachine": "Matthew’s Mac Studio",
+  "remoteLoginUsed": false,
+  "expectedReply": "sync/macbook/transfer-1779217140079-25543a98.json",
+  "nextAction": "On the MacBook, run macbook-sync-check.command from the same bridge folder. Then run bridge-sync-status on the Mac Studio."
+}

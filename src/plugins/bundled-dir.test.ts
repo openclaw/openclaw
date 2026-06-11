@@ -10,6 +10,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+const originalRuntimeSnapshotRoot = process.env.OPENCLAW_RUNTIME_SNAPSHOT_ROOT;
 const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
 const originalExecArgv = [...process.execArgv];
@@ -170,6 +171,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   } else {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
+  }
+  if (originalRuntimeSnapshotRoot === undefined) {
+    delete process.env.OPENCLAW_RUNTIME_SNAPSHOT_ROOT;
+  } else {
+    process.env.OPENCLAW_RUNTIME_SNAPSHOT_ROOT = originalRuntimeSnapshotRoot;
   }
   if (originalVitest === undefined) {
     delete process.env.VITEST;
@@ -419,6 +425,54 @@ describe("resolveBundledPluginsDir", () => {
 
     expect(fs.realpathSync(bundledDir)).not.toBe(
       fs.realpathSync(path.join(overrideRoot, "extensions")),
+    );
+  });
+
+  it("trusts bundled plugin overrides from a package-local runtime snapshot", () => {
+    const installedRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-runtime-snapshot-",
+      hasDistExtensions: true,
+    });
+    seedBundledPluginTree(installedRoot, path.join("dist", "extensions"), "discord");
+    const snapshotRoot = path.join(installedRoot, ".artifacts", "gateway-runtime", "current");
+    const snapshotExtensions = path.join(snapshotRoot, "dist-runtime", "extensions");
+    seedBundledPluginTree(snapshotRoot, path.join("dist-runtime", "extensions"), "memory-core");
+
+    vi.spyOn(process, "cwd").mockReturnValue(installedRoot);
+    process.argv[1] = path.join(snapshotRoot, "dist", "index.js");
+    process.execArgv.length = 0;
+    delete process.env.VITEST;
+    process.env.OPENCLAW_RUNTIME_SNAPSHOT_ROOT = snapshotRoot;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = snapshotExtensions;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = requireBundledDir(resolveBundledPluginsDir());
+
+    expect(fs.realpathSync(bundledDir)).toBe(fs.realpathSync(snapshotExtensions));
+  });
+
+  it("rejects runtime snapshot overrides outside the running package root", () => {
+    const installedRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-runtime-snapshot-reject-",
+      hasDistExtensions: true,
+    });
+    seedBundledPluginTree(installedRoot, path.join("dist", "extensions"), "discord");
+    const outsideRoot = makeRepoRoot("openclaw-bundled-dir-runtime-snapshot-outside-");
+    const outsideExtensions = path.join(outsideRoot, "dist-runtime", "extensions");
+    seedBundledPluginTree(outsideRoot, path.join("dist-runtime", "extensions"), "memory-core");
+
+    vi.spyOn(process, "cwd").mockReturnValue(installedRoot);
+    process.argv[1] = path.join(installedRoot, "dist", "index.js");
+    process.execArgv.length = 0;
+    delete process.env.VITEST;
+    process.env.OPENCLAW_RUNTIME_SNAPSHOT_ROOT = outsideRoot;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = outsideExtensions;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = requireBundledDir(resolveBundledPluginsDir());
+
+    expect(fs.realpathSync(bundledDir)).toBe(
+      fs.realpathSync(path.join(installedRoot, "dist", "extensions")),
     );
   });
 

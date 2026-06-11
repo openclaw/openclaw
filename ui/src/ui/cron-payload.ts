@@ -14,6 +14,9 @@ export function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "agentTurn") {
     return typeof value.message === "string";
   }
+  if (value.kind === "command") {
+    return typeof value.command === "string";
+  }
   return false;
 }
 

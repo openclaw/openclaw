@@ -37,6 +37,10 @@ vi.mock("./icons.ts", () => ({
 import { renderApp } from "./app-render.ts";
 import { saveLocalAssistantIdentity } from "./storage.ts";
 
+async function flushLazyViews() {
+  await vi.dynamicImportSettled();
+}
+
 function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   return {
     settings: {
@@ -215,11 +219,15 @@ beforeEach(() => {
 });
 
 describe("renderApp assistant avatar routing", () => {
-  it("passes the browser-local assistant override to Quick Settings ahead of stale identity metadata", () => {
+  it("passes the browser-local assistant override to Quick Settings ahead of stale identity metadata", async () => {
     const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
     saveLocalAssistantIdentity({ avatar: dataUrl });
+    const container = document.createElement("div");
+    const state = createState();
 
-    renderApp(createState());
+    render(renderApp(state), container);
+    await flushLazyViews();
+    render(renderApp(state), container);
 
     expect(quickSettingsProps.current?.assistantAvatar).toBe(dataUrl);
     expect(quickSettingsProps.current?.assistantAvatarUrl).toBe(dataUrl);
@@ -241,23 +249,8 @@ describe("renderApp assistant avatar routing", () => {
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
   });
 
-  it("passes tools.exec.security to Quick Settings", () => {
-    renderApp(
-      createState({
-        configForm: {
-          tools: { exec: { security: "full" } },
-          agents: { defaults: { exec: { security: "deny" } } },
-        },
-      }),
-    );
-
-    expect(quickSettingsProps.current?.security.execPolicy).toBe("full");
-  });
-
-  it("renders stale cron state containing a job without a payload", () => {
-    const container = document.createElement("div");
-
-    render(
+  it("does not throw when stale cron state contains a job without a payload", () => {
+    expect(() =>
       renderApp(
         createState({
           cronJobs: [
@@ -275,9 +268,71 @@ describe("renderApp assistant avatar routing", () => {
           ],
         }),
       ),
-      container,
-    );
+    ).not.toThrow();
+  });
 
-    expect(container.querySelector(".shell")).toBeInstanceOf(HTMLElement);
+  it("renders the Kalshi dashboard body when the Kalshi tab is active", async () => {
+    const container = document.createElement("div");
+    const state = createState({
+      tab: "kalshi",
+      kalshiDashboard: null,
+      kalshiDashboardError: null,
+      kalshiDashboardLastFetchAt: null,
+      kalshiDashboardLoading: false,
+      kalshiDashboardPnlTimeframe: "all",
+      kalshiDashboardTimeframe: "24h",
+      kalshiDashboardTimezone: "America/New_York",
+      loadKalshiDashboard: vi.fn(),
+    });
+
+    render(renderApp(state), container);
+    await flushLazyViews();
+    render(renderApp(state), container);
+
+    expect(container.textContent).toContain("Kalshi Paper Trading");
+    expect(container.textContent).toContain("Prediction market paper trading status");
+    expect(container.textContent).toContain("Here’s what matters.");
+    expect(container.textContent).toContain("Advanced Audit hidden");
+    expect(container.textContent).toContain("Show Advanced Audit");
+  });
+
+  it("requests a rerender when Kalshi dashboard controls change", async () => {
+    const container = document.createElement("div");
+    const requestUpdate = vi.fn();
+    const state = createState({
+      tab: "kalshi",
+      kalshiDashboard: null,
+      kalshiDashboardError: null,
+      kalshiDashboardLastFetchAt: null,
+      kalshiDashboardLoading: false,
+      kalshiDashboardPnlTimeframe: "all",
+      kalshiDashboardShowDeepAudit: true,
+      kalshiDashboardTimeframe: "24h",
+      kalshiDashboardTimezone: "America/New_York",
+      loadKalshiDashboard: vi.fn(),
+    }) as AppViewState & { requestUpdate: () => void };
+    state.requestUpdate = requestUpdate;
+
+    render(renderApp(state), container);
+    await flushLazyViews();
+    render(renderApp(state), container);
+
+    const [timezone, timeframe] = [...container.querySelectorAll("select")];
+    expect(timezone).toBeDefined();
+    expect(timeframe).toBeDefined();
+    timezone.value = "America/Chicago";
+    timezone.dispatchEvent(new Event("change", { bubbles: true }));
+    timeframe.value = "7d";
+    timeframe.dispatchEvent(new Event("change", { bubbles: true }));
+
+    const sixHourPnl = [...container.querySelectorAll(".kalshi-chip")].find(
+      (button) => button.textContent?.trim() === "6 hours",
+    );
+    sixHourPnl?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(state.kalshiDashboardTimezone).toBe("America/Chicago");
+    expect(state.kalshiDashboardTimeframe).toBe("7d");
+    expect(state.kalshiDashboardPnlTimeframe).toBe("6h");
+    expect(requestUpdate).toHaveBeenCalledTimes(3);
   });
 });

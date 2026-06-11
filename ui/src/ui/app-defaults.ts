@@ -11,7 +11,7 @@ export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
 };
 
 export const DEFAULT_SESSIONS_FILTERS = {
-  activeMinutes: "120",
+  activeMinutes: "",
   limit: "200",
 } as const;
 
@@ -36,6 +36,11 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   wakeMode: "now",
   payloadKind: "agentTurn",
   payloadText: "",
+  commandArgsText: "",
+  commandCwd: "",
+  commandEnvText: "",
+  commandSuccessExitCodes: "",
+  commandOutputLimitBytes: "",
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,

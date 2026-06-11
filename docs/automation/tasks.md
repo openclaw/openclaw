@@ -24,7 +24,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 - Tasks are **records**, not schedulers - cron and heartbeat decide _when_ work runs, tasks track _what happened_.
 - ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
-- Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
+- Each task moves through `queued → running → terminal` (succeeded, blocked, failed, timed_out, cancelled, or lost).
 - Cron tasks stay live while the cron runtime still owns the job; if the
   in-memory runtime state is gone, task maintenance first checks durable cron
   run history before marking a task lost.
@@ -90,13 +90,14 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 ## What creates a task
 
-| Source                 | Runtime type | When a task record is created                          | Default notify policy |
-| ---------------------- | ------------ | ------------------------------------------------------ | --------------------- |
-| ACP background runs    | `acp`        | Spawning a child ACP session                           | `done_only`           |
-| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
-| Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `silent`              |
-| Agent media jobs       | `cli`        | Session-backed `music_generate`/`video_generate` runs  | `silent`              |
+| Source                    | Runtime type | When a task record is created                                       | Default notify policy |
+| ------------------------- | ------------ | ------------------------------------------------------------------- | --------------------- |
+| ACP background runs       | `acp`        | Spawning a child ACP session                                        | `done_only`           |
+| Subagent orchestration    | `subagent`   | Spawning a subagent via `sessions_spawn`                            | `done_only`           |
+| Cron jobs (all types)     | `cron`       | Every cron execution (main-session and isolated)                    | `silent`              |
+| Self-Improvement Governor | `cron`       | Gateway maintenance scans OpenClaw state for recommendation records | `silent`              |
+| CLI operations            | `cli`        | `openclaw agent` commands that run through the gateway              | `silent`              |
+| Agent media jobs          | `cli`        | Session-backed `music_generate`/`video_generate` runs               | `silent`              |
 
 <AccordionGroup>
   <Accordion title="Notify defaults for cron and media">
@@ -135,6 +136,7 @@ stateDiagram-v2
 | `queued`    | Created, waiting for the agent to start                                    |
 | `running`   | Agent turn is actively executing                                           |
 | `succeeded` | Completed successfully                                                     |
+| `blocked`   | The run ended, but the completion Judge found missing final evidence       |
 | `failed`    | Completed with an error                                                    |
 | `timed_out` | Exceeded the configured timeout                                            |
 | `cancelled` | Stopped by the operator via `openclaw tasks cancel`                        |
@@ -142,7 +144,7 @@ stateDiagram-v2
 
 Transitions happen automatically - when the associated agent run ends, the task status updates to match.
 
-Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, and timeout or abort outcomes finalize as `timed_out`. If an operator already cancelled the task, or the runtime already recorded a stronger terminal state such as `failed`, `timed_out`, or `lost`, a later success signal does not downgrade that terminal status.
+Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, and timeout or abort outcomes finalize as `timed_out`. User-visible gateway agent runs also pass through a completion Judge before they are treated as complete: replies that only say the agent is still working, or artifact requests that finish without a recorded artifact/link, surface as `blocked` with Judge evidence so the operator can see what is missing instead of guessing whether the work finished. If an operator already cancelled the task, or the runtime already recorded a stronger terminal state such as `failed`, `timed_out`, or `lost`, a later success signal does not downgrade that terminal status.
 
 `lost` is runtime-aware:
 

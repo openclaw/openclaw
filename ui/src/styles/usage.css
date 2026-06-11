@@ -30,7 +30,7 @@
 .usage-page-title {
   font-size: 22px;
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
   color: var(--text-strong);
 }
 
@@ -108,7 +108,7 @@
   color: var(--accent);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 .usage-loading-badge {
@@ -280,7 +280,7 @@
 
 .usage-query-hint {
   font-size: 11px;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 .usage-metric-badge {
@@ -294,7 +294,7 @@
   font-size: 11px;
   font-weight: 500;
   color: var(--muted);
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   transition: border-color 0.18s var(--ease-out);
 }
 
@@ -429,7 +429,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   color: var(--muted);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .usage-filter-popover,
@@ -695,7 +695,7 @@ details.usage-filter-select summary::-webkit-details-marker,
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 
 .usage-summary-value,

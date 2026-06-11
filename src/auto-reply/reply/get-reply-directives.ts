@@ -1,4 +1,5 @@
 import { listAgentEntries } from "../../agents/agent-scope.js";
+import { resolveControlDirectorThinkingEscalation } from "../../agents/control-director-contract.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
@@ -533,14 +534,24 @@ export async function resolveReplyDirectives(params: {
       });
   provider = modelState.provider;
   model = modelState.model;
+  const controlDirectorThinkingEscalation =
+    resolvedThinkLevel === undefined
+      ? resolveControlDirectorThinkingEscalation({
+          agentId,
+          text: commandText || cleanedBody,
+        })
+      : undefined;
   const resolvedThinkLevelWithDefault =
     resolvedThinkLevel ??
+    controlDirectorThinkingEscalation?.level ??
     (await modelState.resolveDefaultThinkingLevel()) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
   const thinkingExplicitlySet =
     directives.thinkLevel !== undefined ||
     sessionThinkLevel !== undefined ||
+    controlDirectorThinkingEscalation !== undefined ||
+    agentEntry?.thinkingDefault !== undefined ||
     agentCfg?.thinkingDefault !== undefined;
 
   // When neither directive nor session nor agent set reasoning, default to model capability

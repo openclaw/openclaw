@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-05-19T18:59:37.456Z",
+  "catalogProjectCount": 1,
+  "results": [
+    {
+      "project": "music-creator-v1/projects/2026-05-14-validation-happy-path",
+      "ok": true,
+      "missing": [],
+      "status": "candidate_ingested",
+      "candidateCount": 2,
+      "selectedCandidateId": "candidate-01"
+    }
+  ]
+}

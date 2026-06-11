@@ -1,80 +1,95 @@
 :root {
-  /* Background - Deep, rich dark with layered depth */
-  --bg: #0e1015;
-  --bg-accent: #13151b;
-  --bg-elevated: #191c24;
-  --bg-hover: #1f2330;
-  --bg-muted: #1f2330;
+  /* Mission-control canvas */
+  --bg: #02050a;
+  --bg-accent: #050b14;
+  --bg-elevated: #07111d;
+  --bg-hover: #101d2d;
+  --bg-muted: #0c1724;
+  --bg-content: #040913;
 
-  /* Card / Surface - Clear hierarchy between levels */
-  --card: #161920;
-  --card-foreground: #f0f0f2;
-  --card-highlight: rgba(255, 255, 255, 0.04);
-  --popover: #191c24;
-  --popover-foreground: #f0f0f2;
+  /* Card / Surface - layered but hard-edged */
+  --card: #07111d;
+  --card-foreground: #eef5ff;
+  --card-highlight: rgba(255, 255, 255, 0.07);
+  --popover: #0a1624;
+  --popover-foreground: #eef5ff;
 
   /* Panel */
-  --panel: #0e1015;
-  --panel-strong: #191c24;
-  --panel-hover: #1f2330;
-  --chrome: rgba(14, 16, 21, 0.96);
-  --chrome-strong: rgba(14, 16, 21, 0.98);
+  --panel: #02050a;
+  --panel-strong: #07111d;
+  --panel-hover: #101d2d;
+  --chrome: rgba(2, 5, 10, 0.94);
+  --chrome-strong: rgba(2, 5, 10, 0.98);
 
-  /* Text - Clean contrast */
-  --text: #d4d4d8;
-  --text-strong: #f4f4f5;
-  --chat-text: #d4d4d8;
-  --muted: #838387;
-  --muted-strong: #75757d;
-  --muted-foreground: #838387;
+  /* Text */
+  --text: #d9e6f5;
+  --text-strong: #ffffff;
+  --chat-text: #d9e6f5;
+  --muted: #8ca1b8;
+  --muted-strong: #a9bbcf;
+  --muted-foreground: #8ca1b8;
 
-  /* Border - Whisper-thin, barely there */
-  --border: #1e2028;
-  --border-strong: #2e3040;
-  --border-hover: #3e4050;
-  --input: #1e2028;
-  --ring: #ff5c5c;
+  /* Border */
+  --border: #183047;
+  --border-strong: #2b5272;
+  --border-hover: #4b7c9d;
+  --input: #1b3148;
+  --ring: #7de3ff;
 
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.2);
-  --selection-bg: #005fcc;
+  /* Accent - white structure, cyan telemetry, red alerts */
+  --accent: #f6f9ff;
+  --accent-hover: #ffffff;
+  --accent-muted: #9edfff;
+  --accent-subtle: rgba(125, 227, 255, 0.12);
+  --accent-foreground: #02050a;
+  --accent-glow: rgba(125, 227, 255, 0.24);
+  --selection-bg: #0a84ff;
   --selection-fg: #ffffff;
-  --primary: #ff5c5c;
-  --primary-foreground: #ffffff;
+  --primary: #f6f9ff;
+  --primary-foreground: #02050a;
 
   /* Secondary */
-  --secondary: #161920;
-  --secondary-foreground: #f0f0f2;
-  --accent-2: #14b8a6;
-  --accent-2-muted: rgba(20, 184, 166, 0.7);
-  --accent-2-subtle: rgba(20, 184, 166, 0.1);
+  --secondary: #0a1624;
+  --secondary-foreground: #eef5ff;
+  --accent-2: #7de3ff;
+  --accent-2-muted: rgba(125, 227, 255, 0.72);
+  --accent-2-subtle: rgba(125, 227, 255, 0.12);
 
   /* Semantic */
-  --ok: #22c55e;
-  --ok-muted: rgba(34, 197, 94, 0.75);
-  --ok-subtle: rgba(34, 197, 94, 0.08);
-  --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
-  --warn: #f59e0b;
-  --warn-muted: rgba(245, 158, 11, 0.75);
-  --warn-subtle: rgba(245, 158, 11, 0.08);
-  --danger: #ef4444;
-  --danger-muted: rgba(239, 68, 68, 0.75);
-  --danger-subtle: rgba(239, 68, 68, 0.08);
-  --info: #3b82f6;
+  --ok: #33f0a0;
+  --ok-muted: rgba(51, 240, 160, 0.75);
+  --ok-subtle: rgba(51, 240, 160, 0.1);
+  --destructive: #ff3b30;
+  --destructive-foreground: #ffffff;
+  --warn: #ffbd45;
+  --warn-muted: rgba(255, 189, 69, 0.78);
+  --warn-subtle: rgba(255, 189, 69, 0.12);
+  --danger: #ff3b30;
+  --danger-muted: rgba(255, 59, 48, 0.78);
+  --danger-subtle: rgba(255, 59, 48, 0.12);
+  --info: #7de3ff;
+  --success: var(--ok);
 
   /* Focus */
-  --focus: rgba(255, 92, 92, 0.2);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+  --focus: rgba(125, 227, 255, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 82%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 18px var(--accent-glow);
 
   /* Grid */
-  --grid-line: rgba(255, 255, 255, 0.03);
+  --grid-line: rgba(125, 227, 255, 0.055);
+  --mission-grid-line: rgba(125, 227, 255, 0.045);
+  --mission-grid-strong: rgba(246, 249, 255, 0.08);
+  --mission-redline: rgba(255, 59, 48, 0.38);
+  --mission-horizon: rgba(125, 227, 255, 0.16);
+  --mission-panel-line: rgba(125, 227, 255, 0.32);
+  --mission-panel-line-strong: rgba(246, 249, 255, 0.24);
+  --mission-glass: rgba(3, 7, 13, 0.84);
+  --mission-readout: #dff7ff;
+  --mission-critical: #ff3b30;
+  --mission-thrust: #f6f9ff;
+  --mission-caution: #ffbd45;
+  --mission-go: #33f0a0;
+  --mission-shadow-hard: 0 18px 44px rgba(0, 0, 0, 0.46);
 
   /* Theme transition */
   --theme-switch-x: 50%;
@@ -82,24 +97,32 @@
 
   /* Typography */
   --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-display: var(--font-body);
+    "Roboto Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco,
+    Consolas, monospace;
+  --font-mono: var(--mono);
+  --font-body:
+    "Aptos", "Inter", "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
+  --font-display:
+    "Aptos Display", "Aptos", "Inter", "Space Grotesk", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --fg: var(--text);
+  --surface: var(--card);
 
-  /* Shadows - Subtle, layered depth */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 24px var(--accent-glow);
+  /* Shadows - precision depth without softness overload */
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 12px 28px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.44);
+  --shadow-xl: 0 30px 70px rgba(0, 0, 0, 0.52);
+  --shadow-glow: 0 0 28px var(--accent-glow);
 
-  /* Radii - Slightly larger for modern feel */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  /* Radii - hard-edged aerospace controls */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
   --radius-full: 9999px;
-  --radius: 10px;
+  --radius: 4px;
 
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -112,85 +135,93 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
+  --mobile-keyboard-inset: 0px;
+  --chat-composer-height: 132px;
+  --chat-thread-bottom-padding: 166px;
+  --chat-visible-bottom: 100vh;
 
   color-scheme: dark;
 }
 
-/* Light theme tokens apply to every light-mode family. */
+/* Light theme still uses the mission-control visual language for this dashboard skin. */
 :root[data-theme-mode="light"] {
-  --bg: #f8f9fa;
-  --bg-accent: #f1f3f5;
-  --bg-elevated: #ffffff;
-  --bg-hover: #eceef0;
-  --bg-muted: #eceef0;
-  --bg-content: #f1f3f5;
+  --bg: #04070c;
+  --bg-accent: #07101a;
+  --bg-elevated: #0b1521;
+  --bg-hover: #122033;
+  --bg-muted: #0e1928;
+  --bg-content: #060b13;
 
-  --card: #ffffff;
-  --card-foreground: #1a1a1e;
-  --card-highlight: rgba(0, 0, 0, 0.02);
-  --popover: #ffffff;
-  --popover-foreground: #1a1a1e;
+  --card: #0b1521;
+  --card-foreground: #f5f9ff;
+  --card-highlight: rgba(255, 255, 255, 0.07);
+  --popover: #0d1826;
+  --popover-foreground: #f5f9ff;
 
-  --panel: #f8f9fa;
-  --panel-strong: #f1f3f5;
-  --panel-hover: #e6e8eb;
-  --chrome: rgba(248, 249, 250, 0.96);
-  --chrome-strong: rgba(248, 249, 250, 0.98);
+  --panel: #04070c;
+  --panel-strong: #0b1521;
+  --panel-hover: #122033;
+  --chrome: rgba(4, 7, 12, 0.95);
+  --chrome-strong: rgba(4, 7, 12, 0.98);
 
-  --text: #3c3c43;
-  --text-strong: #1a1a1e;
-  --chat-text: #3c3c43;
-  --muted: #6e6e73;
-  --muted-strong: #545458;
-  --muted-foreground: #6e6e73;
+  --text: #dce8f5;
+  --text-strong: #ffffff;
+  --chat-text: #dce8f5;
+  --muted: #94a7bc;
+  --muted-strong: #b2c3d5;
+  --muted-foreground: #94a7bc;
 
-  --border: #e5e5ea;
-  --border-strong: #d1d1d6;
-  --border-hover: #aeaeb2;
-  --input: #e5e5ea;
+  --border: #1c344c;
+  --border-strong: #315a7a;
+  --border-hover: #5b89a8;
+  --input: #203950;
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.08);
-  --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.1);
-  --primary: #dc2626;
-  --primary-foreground: #ffffff;
+  --accent: #f7faff;
+  --accent-hover: #ffffff;
+  --accent-muted: #9edfff;
+  --accent-subtle: rgba(125, 227, 255, 0.12);
+  --accent-foreground: #03060a;
+  --accent-glow: rgba(125, 227, 255, 0.22);
+  --primary: #f7faff;
+  --primary-foreground: #03060a;
 
-  --secondary: #f1f3f5;
-  --secondary-foreground: #3c3c43;
-  --accent-2: #0d9488;
-  --accent-2-muted: rgba(13, 148, 136, 0.75);
-  --accent-2-subtle: rgba(13, 148, 136, 0.08);
+  --secondary: #0d1826;
+  --secondary-foreground: #f5f9ff;
+  --accent-2: #7de3ff;
+  --accent-2-muted: rgba(125, 227, 255, 0.72);
+  --accent-2-subtle: rgba(125, 227, 255, 0.12);
 
-  --ok: #15803d;
-  --ok-muted: rgba(21, 128, 61, 0.75);
-  --ok-subtle: rgba(21, 128, 61, 0.08);
-  --destructive: #dc2626;
-  --destructive-foreground: #fafafa;
-  --warn: #b45309;
-  --warn-muted: rgba(180, 83, 9, 0.75);
-  --warn-subtle: rgba(180, 83, 9, 0.08);
-  --danger: #dc2626;
-  --danger-muted: rgba(220, 38, 38, 0.75);
-  --danger-subtle: rgba(220, 38, 38, 0.08);
-  --info: #2563eb;
+  --ok: #33f0a0;
+  --ok-muted: rgba(51, 240, 160, 0.76);
+  --ok-subtle: rgba(51, 240, 160, 0.1);
+  --destructive: #ff3b30;
+  --destructive-foreground: #ffffff;
+  --warn: #ffbd45;
+  --warn-muted: rgba(255, 189, 69, 0.78);
+  --warn-subtle: rgba(255, 189, 69, 0.12);
+  --danger: #ff3b30;
+  --danger-muted: rgba(255, 59, 48, 0.78);
+  --danger-subtle: rgba(255, 59, 48, 0.12);
+  --info: #7de3ff;
+  --success: var(--ok);
 
-  --focus: rgba(220, 38, 38, 0.15);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
+  --focus: rgba(125, 227, 255, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 82%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 18px var(--accent-glow);
 
-  --grid-line: rgba(0, 0, 0, 0.04);
+  --grid-line: rgba(125, 227, 255, 0.055);
+  --mission-grid-line: rgba(125, 227, 255, 0.045);
+  --mission-grid-strong: rgba(246, 249, 255, 0.08);
+  --mission-redline: rgba(255, 59, 48, 0.36);
+  --mission-horizon: rgba(125, 227, 255, 0.16);
 
-  /* Light shadows - Subtle, clean */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 12px 28px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.44);
+  --shadow-xl: 0 30px 70px rgba(0, 0, 0, 0.52);
   --shadow-glow: 0 0 20px var(--accent-glow);
 
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 /* Scrollbar - visible on light backgrounds */
@@ -485,8 +516,12 @@ body {
 body {
   margin: 0;
   font: 400 14px/1.55 var(--font-body);
-  letter-spacing: -0.01em;
-  background: var(--bg);
+  letter-spacing: 0;
+  background:
+    linear-gradient(180deg, rgba(125, 227, 255, 0.11) 0, transparent 22vh),
+    linear-gradient(90deg, transparent 0 48%, var(--mission-horizon) 50%, transparent 52%),
+    repeating-linear-gradient(90deg, transparent 0 31px, var(--mission-grid-line) 32px),
+    repeating-linear-gradient(0deg, transparent 0 31px, var(--mission-grid-line) 32px), var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -536,6 +571,28 @@ openclaw-app {
   position: relative;
   z-index: 1;
   min-height: 100vh;
+}
+
+openclaw-app::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 9%,
+      var(--mission-redline) 9% calc(9% + 1px),
+      transparent calc(9% + 1px)
+    ),
+    linear-gradient(
+      180deg,
+      transparent 0 14%,
+      var(--mission-grid-strong) 14% calc(14% + 1px),
+      transparent calc(14% + 1px)
+    ),
+    linear-gradient(120deg, transparent 0 68%, rgba(125, 227, 255, 0.06) 68% 69%, transparent 69%);
+  content: "";
 }
 
 @media (display-mode: standalone) {

@@ -29,6 +29,7 @@ vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginRuntimeSubagentMode: () => "default",
   getActivePluginChannelRegistry: () => null,
   getActivePluginRegistry: () => null,
   getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),

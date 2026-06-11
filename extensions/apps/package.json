@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/apps",
+  "version": "2026.5.8",
+  "private": true,
+  "description": "OpenClaw app builder plugin for native iOS app scaffolding and App Store readiness evidence",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.8"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.8"
+    }
+  }
+}

@@ -152,10 +152,17 @@ enum TailscaleServeGatewayDiscovery {
             "tailscale",
         ]
 
+        let sockets = self.socketCandidates()
         for candidate in candidates {
             guard let executable = self.resolveExecutablePath(candidate) else { continue }
-            if let stdout = await self.run(path: executable, args: ["status", "--json"], timeout: 1.0) {
-                return stdout
+            for socketPath in sockets {
+                if let stdout = await self.run(
+                    path: executable,
+                    args: self.statusArguments(socketPath: socketPath),
+                    timeout: 1.0)
+                {
+                    return stdout
+                }
             }
         }
 
@@ -189,6 +196,43 @@ enum TailscaleServeGatewayDiscovery {
         }
 
         return nil
+    }
+
+    static func statusArguments(socketPath: String?) -> [String] {
+        guard let socketPath = socketPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !socketPath.isEmpty
+        else {
+            return ["status", "--json"]
+        }
+        return ["--socket", socketPath, "status", "--json"]
+    }
+
+    static func socketCandidates(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default) -> [String?]
+    {
+        var out: [String?] = []
+        if let explicit = env["OPENCLAW_TAILSCALE_SOCKET"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !explicit.isEmpty
+        {
+            out.append(explicit)
+        }
+        out.append(nil)
+        if let home = env["HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !home.isEmpty
+        {
+            let userspace = "\(home)/.local/share/tailscale-userspace/tailscaled.sock"
+            if fileManager.fileExists(atPath: userspace) {
+                out.append(userspace)
+            }
+        }
+        var seen = Set<String>()
+        return out.filter { candidate in
+            let key = candidate ?? "<default>"
+            if seen.contains(key) { return false }
+            seen.insert(key)
+            return true
+        }
     }
 
     private static func run(path: String, args: [String], timeout: TimeInterval) async -> String? {

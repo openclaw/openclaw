@@ -60,12 +60,17 @@ and use `gateway.auth.mode: "token"` or `"password"`.
 {
   gateway: {
     bind: "loopback",
-    tailscale: { mode: "serve" },
+    tailscale: { mode: "serve", required: true },
   },
 }
 ```
 
 Open: `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
+
+OpenClaw verifies the active Serve route after applying it. The expected route
+is HTTPS `443`, path `/`, backend `http://127.0.0.1:<gateway-port>`, on the
+currently resolved tailnet host. If `gateway.tailscale.required` is true, a
+missing or stale route fails Gateway startup.
 
 ### Tailnet-only (bind to Tailnet IP)
 
@@ -112,10 +117,33 @@ openclaw gateway --tailscale funnel --auth password
 
 ## Notes
 
-- Tailscale Serve/Funnel requires the `tailscale` CLI to be installed and logged in.
+- Tailscale Serve/Funnel requires the `tailscale` CLI to be installed, logged in,
+  and connected to a running `tailscaled` daemon. OpenClaw validates this with
+  `tailscale status --json` and `tailscale ip -4`, not just `tailscale --version`.
+- If your daemon uses a non-default socket, set `gateway.tailscale.socketPath`
+  or `OPENCLAW_TAILSCALE_SOCKET`. If multiple Tailscale installs exist, set
+  `gateway.tailscale.binaryPath` or `OPENCLAW_TAILSCALE_BIN`.
+- `gateway.tailscale.required` defaults to `true` for `serve` and `funnel`, so
+  Gateway startup fails instead of silently running without the configured remote
+  exposure. Set it to `false` only when you intentionally allow degraded startup.
+- Gateway health includes `remoteAccess.status`. Required remote access reports
+  `failed` when Serve/Funnel, `tailscale whois`, or configured remote Codex SSH
+  checks are broken; best-effort remote access reports `degraded` with repair
+  commands.
+- Set `gateway.remote.codexSshTarget` when the Gateway should verify a remote
+  Codex app-server over SSH. Override the command with
+  `gateway.remote.codexDaemonCommand` only when the remote Codex install path is
+  non-standard.
+- `openclaw doctor` reports multiple Tailscale installs, dead default sockets,
+  missing Serve routes, unavailable `tailscale whois`, stale Control UI origins,
+  and configured remote SSH/Codex app-server health. `openclaw doctor --fix`
+  can persist the selected Tailscale socket, add the active Serve origin, and
+  reapply the private Serve route.
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password` to avoid public exposure.
-- Set `gateway.tailscale.resetOnExit` if you want OpenClaw to undo `tailscale serve`
-  or `tailscale funnel` configuration on shutdown.
+- `gateway.tailscale.resetOnExit` can undo Funnel configuration on shutdown.
+  OpenClaw does not run broad `tailscale serve reset` automatically because it
+  can delete unrelated Serve routes; clear Serve manually after confirming route
+  ownership.
 - Set `gateway.tailscale.preserveFunnel: true` to keep an externally configured
   `tailscale funnel` route alive across gateway restarts. When enabled and the
   gateway runs in `mode: "serve"`, OpenClaw checks `tailscale funnel status`

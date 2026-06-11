@@ -45,6 +45,13 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
+  createUserVisibleWorkRun,
+  finalizeUserVisibleWorkRun,
+  inferExpectedDeliverableFromUserRequest,
+  resolveFailedUserVisibleWorkStatus,
+} from "../../tasks/user-visible-work-run.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import {
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
@@ -110,6 +117,7 @@ import {
   resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
   readRecentSessionMessagesAsync,
+  readTargetedSessionMessagesAsync,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -136,6 +144,34 @@ type TranscriptAppendResult = {
 };
 
 type AbortOrigin = "rpc" | "stop-command";
+
+function collectFinalTextFromReplyPayloads(
+  replies: readonly { payload: ReplyPayload; kind: "block" | "final" }[],
+): string {
+  return replies
+    .map((entry) => entry.payload.text ?? entry.payload.spokenText ?? "")
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function collectArtifactIdsFromReplyPayloads(
+  replies: readonly { payload: ReplyPayload; kind: "block" | "final" }[],
+): string[] {
+  const ids: string[] = [];
+  for (const { payload } of replies) {
+    if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()) {
+      ids.push(payload.mediaUrl.trim());
+    }
+    for (const url of payload.mediaUrls ?? []) {
+      if (typeof url === "string" && url.trim()) {
+        ids.push(url.trim());
+      }
+    }
+  }
+  return [...new Set(ids)];
+}
 
 type AbortedPartialSnapshot = {
   runId: string;
@@ -1735,7 +1771,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      targetRunId?: string;
+      auditTs?: number;
     };
+    const historyParams = params as {
+      targetRunId?: unknown;
+      auditTs?: unknown;
+    };
+    const targetRunId =
+      typeof historyParams.targetRunId === "string" ? historyParams.targetRunId : undefined;
+    const auditTs = typeof historyParams.auditTs === "number" ? historyParams.auditTs : undefined;
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
@@ -1745,8 +1790,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const localMessages =
-      sessionId && storePath
+    const targetRequest = Boolean(targetRunId || typeof auditTs === "number");
+    const targetedMessages =
+      sessionId && storePath && targetRequest
+        ? await readTargetedSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
+            maxMessages: max,
+            targetRunId,
+            auditTs,
+          })
+        : null;
+    const localMessages = targetedMessages
+      ? targetedMessages.messages
+      : sessionId && storePath
         ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
@@ -1801,6 +1856,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: bounded.messages,
+      ...(targetedMessages?.targetStatus ? { targetStatus: targetedMessages.targetStatus } : {}),
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
@@ -2200,11 +2256,41 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      let trackedTaskId: string | undefined;
+      try {
+        const trackedTask = createUserVisibleWorkRun({
+          runtime: "cli",
+          taskKind: "chat",
+          sourceId: clientRunId,
+          requesterSessionKey: rawSessionKey,
+          ownerKey: rawSessionKey,
+          scopeKind: "session",
+          requesterOrigin: normalizeDeliveryContext({
+            channel: originatingRoute.originatingChannel,
+            to: originatingRoute.originatingTo,
+            accountId: originatingRoute.accountId,
+            threadId: originatingRoute.messageThreadId,
+          }),
+          childSessionKey: sessionKey,
+          runId: clientRunId,
+          task: parsedMessage,
+          label: "Assistant chat work item",
+          deliveryStatus: "pending",
+          notifyPolicy: "silent",
+          userVisible: true,
+          expectedDeliverable: inferExpectedDeliverableFromUserRequest(parsedMessage),
+          startedAt: now,
+          progressSummary: "Assistant accepted the request and is working on it.",
+        });
+        trackedTaskId = trackedTask.taskId;
+      } catch {
+        // Best-effort only: chat delivery must not depend on task tracking.
+      }
       if (activeChatSendDedupeKey) {
         context.dedupe.set(activeChatSendDedupeKey, {
           ts: now,
           ok: true,
-          payload: { runId: clientRunId },
+          payload: { runId: clientRunId, ...(trackedTaskId ? { taskId: trackedTaskId } : {}) },
         });
       }
       context.addChatRun(clientRunId, {
@@ -2214,6 +2300,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
+        ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const persistedImagesPromise = persistChatSendImages({
@@ -2736,14 +2823,37 @@ export const chatHandlers: GatewayRequestHandlers = {
                 });
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
+                const finalText = collectFinalTextFromReplyPayloads(deliveredReplies);
+                const artifactIds = collectArtifactIdsFromReplyPayloads(deliveredReplies);
+                finalizeUserVisibleWorkRun({
+                  runId: clientRunId,
+                  status: "succeeded",
+                  terminalSummary: "completed",
+                  finalText,
+                  userRequest: parsedMessage,
+                  expectedDeliverable: inferExpectedDeliverableFromUserRequest(parsedMessage),
+                  artifactIds,
+                });
                 setGatewayDedupeEntry({
                   dedupe: context.dedupe,
                   key: `chat:${clientRunId}`,
                   entry: {
                     ts: Date.now(),
                     ok: true,
-                    payload: { runId: clientRunId, status: "ok" as const },
+                    payload: {
+                      runId: clientRunId,
+                      status: "ok" as const,
+                      ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
+                    },
                   },
+                });
+              } else {
+                finalizeUserVisibleWorkRun({
+                  runId: clientRunId,
+                  status: "timed_out",
+                  terminalSummary: "aborted",
+                  userRequest: parsedMessage,
+                  expectedDeliverable: inferExpectedDeliverableFromUserRequest(parsedMessage),
                 });
               }
             },
@@ -2770,6 +2880,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             );
           });
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          finalizeUserVisibleWorkRun({
+            runId: clientRunId,
+            status: resolveFailedUserVisibleWorkStatus(err),
+            error: String(err),
+            terminalSummary: String(err),
+            userRequest: parsedMessage,
+            expectedDeliverable: inferExpectedDeliverableFromUserRequest(parsedMessage),
+          });
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
@@ -2780,6 +2898,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 runId: clientRunId,
                 status: "error" as const,
                 summary: String(err),
+                ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
               },
               error,
             },
@@ -2799,6 +2918,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       context.chatAbortControllers.delete(clientRunId);
       context.removeChatRun(clientRunId, clientRunId, sessionKey);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+      finalizeUserVisibleWorkRun({
+        runId: clientRunId,
+        status: resolveFailedUserVisibleWorkStatus(err),
+        error: String(err),
+        terminalSummary: String(err),
+        userRequest: rawMessage,
+        expectedDeliverable: inferExpectedDeliverableFromUserRequest(rawMessage),
+      });
       const payload = {
         runId: clientRunId,
         status: "error" as const,

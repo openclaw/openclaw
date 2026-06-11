@@ -25,6 +25,7 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { applyJudgeVerdictFinalOutputGuard } from "../judge-gate.js";
 import { isNestedAgentLane } from "../lanes.js";
 import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
@@ -307,11 +308,15 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
+  const guardedFinalOutput = applyJudgeVerdictFinalOutputGuard({
+    payloads,
+    internalEvents: opts.internalEvents,
+  });
   const normalizedReplyPayloads = normalizeAgentCommandReplyPayloads({
     cfg,
     opts,
     outboundSession,
-    payloads,
+    payloads: guardedFinalOutput.payloads,
     result,
     deliveryChannel,
     accountId: resolvedAccountId,
@@ -349,7 +354,7 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  if (!payloads || payloads.length === 0) {
+  if (!guardedFinalOutput.payloads || guardedFinalOutput.payloads.length === 0) {
     return { payloads: [], meta: resultMeta };
   }
 

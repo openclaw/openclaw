@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "status": "stopped",
+  "updatedAt": "2026-05-19T18:59:32Z",
+  "mode": "--once",
+  "allowedActions": "health-check, garageband-status, list-bridge-files, open-latest-bridge-job, open-bridge-job",
+  "remoteLoginUsed": false,
+  "remoteLoginState": "You need administrator access to run this tool... exiting!",
+  "detail": "One-shot run complete.",
+  "nextAction": "Mac Studio can queue signed jobs with bridge-queue-job. Close this Terminal window to stop the agent."
+}

@@ -259,6 +259,15 @@ export async function collectDoctorPreviewWarnings(params: {
   const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
   warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));
 
+  const { collectTailscaleRemoteHealthWarnings } = await import("./tailscale-remote-health.js");
+  warnings.push(
+    ...(await collectTailscaleRemoteHealthWarnings({
+      cfg: params.cfg,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    })),
+  );
+
   if (hasPluginLoadPaths(params.cfg)) {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
       await import("./bundled-plugin-load-paths.js");

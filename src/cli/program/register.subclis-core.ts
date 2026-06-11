@@ -108,6 +108,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerSystemCli",
     },
     {
+      commandNames: ["self-improvement"],
+      loadModule: () => import("../self-improvement-cli.js"),
+      exportName: "registerSelfImprovementCli",
+    },
+    {
       commandNames: ["models"],
       loadModule: () => import("../models-cli.js"),
       exportName: "registerModelsCli",
@@ -156,6 +161,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       commandNames: ["cron"],
       loadModule: () => import("../cron-cli.js"),
       exportName: "registerCronCli",
+    },
+    {
+      commandNames: ["courses"],
+      loadModule: () => import("../courses-cli.js"),
+      exportName: "registerCoursesCli",
     },
     {
       commandNames: ["dns"],

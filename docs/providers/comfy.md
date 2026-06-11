@@ -9,6 +9,8 @@ read_when:
 
 OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The plugin is entirely workflow-driven, so OpenClaw does not try to map generic `size`, `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto your graph.
 
+Book Studio uses this provider for local AI cover generation. When ComfyUI is configured for image generation and `agents.defaults.imageGenerationModel.primary` is `comfy/workflow`, **Generate Local AI Cover** creates real local cover image variants; otherwise Book Studio falls back to its editable SVG concept route.
+
 | Property        | Detail                                                                           |
 | --------------- | -------------------------------------------------------------------------------- |
 | Provider        | `comfy`                                                                          |

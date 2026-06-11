@@ -2,9 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#05070b" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#05070b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="OpenClaw" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
@@ -62,9 +72,326 @@
         } catch (e) {}
       })();
     </script>
+    <style>
+      :root {
+        color-scheme: dark;
+        background: #02050a;
+        --boot-text: #eaf4ff;
+        --boot-muted: #91a7bd;
+        --boot-line: rgba(125, 227, 255, 0.18);
+        --boot-accent: #7de3ff;
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        background:
+          linear-gradient(180deg, rgba(125, 227, 255, 0.06), transparent 34%),
+          repeating-linear-gradient(
+            90deg,
+            rgba(125, 227, 255, 0.05) 0,
+            rgba(125, 227, 255, 0.05) 1px,
+            transparent 1px,
+            transparent 78px
+          ),
+          #02050a;
+        color: var(--boot-text);
+        font-family:
+          "Aptos", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      openclaw-app {
+        display: block;
+        min-height: 100dvh;
+      }
+      .boot-shell {
+        min-height: 100dvh;
+        padding:
+          max(22px, env(safe-area-inset-top, 0px))
+          max(18px, env(safe-area-inset-right, 0px))
+          max(24px, env(safe-area-inset-bottom, 0px))
+          max(18px, env(safe-area-inset-left, 0px));
+        box-sizing: border-box;
+      }
+      [data-openclaw-control-ui-ready="1"] .boot-shell {
+        display: none;
+      }
+      .boot-shell__bar,
+      .boot-shell__panel,
+      .boot-shell__rail {
+        border: 1px solid var(--boot-line);
+        background: rgba(4, 10, 18, 0.82);
+        box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
+      }
+      .boot-shell__bar {
+        height: 74px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 0 16px;
+      }
+      .boot-shell__brand {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+      }
+      .boot-shell__eyebrow {
+        color: var(--boot-accent);
+        font:
+          700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .boot-shell__title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: clamp(20px, 5vw, 28px);
+        font-weight: 750;
+      }
+      .boot-shell__pulse {
+        width: 38px;
+        height: 38px;
+        border-radius: 999px;
+        border: 1px solid rgba(125, 227, 255, 0.44);
+        background: radial-gradient(circle, rgba(125, 227, 255, 0.52), transparent 64%);
+        animation: openclaw-boot-pulse 1.6s ease-in-out infinite;
+        flex: none;
+      }
+      .boot-shell__grid {
+        display: grid;
+        grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+        gap: 14px;
+        margin-top: 14px;
+      }
+      .boot-shell__rail,
+      .boot-shell__panel {
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .boot-shell__rail {
+        display: grid;
+        gap: 10px;
+      }
+      .boot-shell__line {
+        height: 13px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(145, 167, 189, 0.28), rgba(125, 227, 255, 0.2));
+      }
+      .boot-shell__line:nth-child(1) {
+        width: 78%;
+      }
+      .boot-shell__line:nth-child(2) {
+        width: 58%;
+      }
+      .boot-shell__line:nth-child(3) {
+        width: 68%;
+      }
+      .boot-shell__panel {
+        min-height: 220px;
+        display: grid;
+        align-content: center;
+        justify-items: start;
+        gap: 12px;
+      }
+      .boot-shell__status {
+        color: var(--boot-muted);
+        font-size: 15px;
+      }
+      .boot-shell__rescue {
+        display: none;
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .boot-shell--rescue .boot-shell__rescue {
+        display: flex;
+        flex-wrap: wrap;
+      }
+      .boot-shell__action {
+        appearance: none;
+        border: 1px solid rgba(125, 227, 255, 0.38);
+        border-radius: 999px;
+        background: rgba(125, 227, 255, 0.12);
+        color: var(--boot-text);
+        cursor: pointer;
+        font:
+          700 13px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        padding: 11px 14px;
+      }
+      .boot-shell__action--primary {
+        background: rgba(125, 227, 255, 0.24);
+        border-color: rgba(125, 227, 255, 0.62);
+      }
+      .boot-shell__action:disabled {
+        cursor: wait;
+        opacity: 0.58;
+      }
+      .boot-shell__ready {
+        border: 1px solid rgba(51, 240, 160, 0.34);
+        border-radius: 999px;
+        color: #ccffe9;
+        background: rgba(51, 240, 160, 0.1);
+        padding: 8px 12px;
+        font:
+          700 12px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        text-transform: uppercase;
+      }
+      @keyframes openclaw-boot-pulse {
+        0%,
+        100% {
+          opacity: 0.54;
+          transform: scale(0.92);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      @media (max-width: 720px) {
+        .boot-shell__grid {
+          grid-template-columns: 1fr;
+        }
+        .boot-shell__rail {
+          grid-template-columns: 1fr 0.8fr;
+        }
+        .boot-shell__panel {
+          min-height: 58dvh;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-shell__pulse {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <openclaw-app></openclaw-app>
+    <openclaw-app>
+      <div class="boot-shell" aria-label="OpenClaw dashboard loading">
+        <div class="boot-shell__bar">
+          <div class="boot-shell__brand">
+            <div class="boot-shell__eyebrow">Mission Control</div>
+            <div class="boot-shell__title">OpenClaw Dashboard</div>
+          </div>
+          <div class="boot-shell__pulse" aria-hidden="true"></div>
+        </div>
+        <div class="boot-shell__grid">
+          <div class="boot-shell__rail" aria-hidden="true">
+            <div class="boot-shell__line"></div>
+            <div class="boot-shell__line"></div>
+            <div class="boot-shell__line"></div>
+          </div>
+          <div class="boot-shell__panel">
+            <div class="boot-shell__ready">Cached app shell ready</div>
+            <div class="boot-shell__status">Connecting to OpenClaw...</div>
+            <div class="boot-shell__rescue" aria-label="Dashboard recovery actions">
+              <button class="boot-shell__action boot-shell__action--primary" type="button">
+                Reload dashboard
+              </button>
+              <button class="boot-shell__action" type="button">Reset cached dashboard</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </openclaw-app>
+    <script>
+      (function () {
+        var READY_ATTRIBUTE = "data-openclaw-control-ui-ready";
+        var RESCUE_QUERY = "__openclaw_mobile_rescue";
+        var UPDATE_QUERY = "__openclaw_sw_update";
+        var RESCUE_DELAY_MS = 9000;
+
+        function markReady() {
+          document.documentElement.setAttribute(READY_ATTRIBUTE, "1");
+        }
+
+        function isReady() {
+          return (
+            document.documentElement.getAttribute(READY_ATTRIBUTE) === "1" ||
+            !document.querySelector(".boot-shell")
+          );
+        }
+
+        function freshUrl(extraParam) {
+          var url = new URL(window.location.href);
+          url.searchParams.set(UPDATE_QUERY, "1");
+          if (extraParam) {
+            url.searchParams.set(extraParam, String(Date.now()));
+          }
+          return url.toString();
+        }
+
+        function setStatus(text) {
+          var status = document.querySelector(".boot-shell__status");
+          if (status) {
+            status.textContent = text;
+          }
+        }
+
+        function setActionsDisabled(disabled) {
+          var buttons = document.querySelectorAll(".boot-shell__action");
+          for (var i = 0; i < buttons.length; i++) {
+            buttons[i].disabled = disabled;
+          }
+        }
+
+        async function resetCachedDashboard() {
+          setActionsDisabled(true);
+          setStatus("Resetting the cached dashboard...");
+          try {
+            if ("caches" in window) {
+              var keys = await window.caches.keys();
+              await Promise.all(
+                keys
+                  .filter(function (key) {
+                    return key.indexOf("openclaw-control-") === 0;
+                  })
+                  .map(function (key) {
+                    return window.caches.delete(key);
+                  })
+              );
+            }
+          } catch (e) {}
+          try {
+            if ("serviceWorker" in navigator) {
+              var registrations = await navigator.serviceWorker.getRegistrations();
+              await Promise.all(
+                registrations.map(function (registration) {
+                  return registration.unregister();
+                })
+              );
+            }
+          } catch (e) {}
+          window.location.replace(freshUrl(RESCUE_QUERY));
+        }
+
+        function showRescue() {
+          if (isReady()) {
+            return;
+          }
+          var shell = document.querySelector(".boot-shell");
+          if (!shell) {
+            return;
+          }
+          shell.classList.add("boot-shell--rescue");
+          setStatus("Still loading. Reload or reset the cached dashboard.");
+        }
+
+        window.addEventListener("openclaw-control-ui-ready", markReady, { once: true });
+        window.setTimeout(showRescue, RESCUE_DELAY_MS);
+        window.addEventListener("DOMContentLoaded", function () {
+          var buttons = document.querySelectorAll(".boot-shell__action");
+          if (buttons[0]) {
+            buttons[0].addEventListener("click", function () {
+              window.location.replace(freshUrl(null));
+            });
+          }
+          if (buttons[1]) {
+            buttons[1].addEventListener("click", resetCachedDashboard);
+          }
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

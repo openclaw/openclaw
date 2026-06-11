@@ -174,8 +174,16 @@ describe("tsdown config", () => {
         expect.arrayContaining([
           "@lancedb/lancedb",
           "@larksuiteoapi/node-sdk",
+          "@vitest/expect",
+          "@whiskeysockets/baileys",
+          "axios",
+          "fast-uri",
           "matrix-js-sdk",
+          "pino",
+          "prism-media",
+          "@discordjs/voice",
           "qrcode-terminal",
+          "vitest",
         ]),
       );
     }
@@ -184,6 +192,11 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
+    expect(externalize("vitest", undefined, false)).toBe(true);
+    expect(externalize("@vitest/expect", undefined, false)).toBe(true);
+    expect(externalize("fast-uri/types/index.d.ts", undefined, true)).toBe(true);
+    expect(externalize("axios/index.d.cts", undefined, true)).toBe(true);
+    expect(externalize("prism-media/typings/index.d.ts", undefined, true)).toBe(true);
   });
 
   it("suppresses unresolved imports from extension source", () => {

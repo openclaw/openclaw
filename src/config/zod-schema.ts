@@ -477,6 +477,9 @@ export const OpenClawSchema = z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
         checkOnStart: z.boolean().optional(),
+        preserveDirty: z.boolean().optional(),
+        sourceRoot: z.string().min(1).optional(),
+        requiredPaths: z.array(z.string().min(1)).optional(),
         auto: z
           .object({
             enabled: z.boolean().optional(),
@@ -914,6 +917,9 @@ export const OpenClawSchema = z
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
+            binaryPath: z.string().optional(),
+            socketPath: z.string().optional(),
+            required: z.boolean().optional(),
             resetOnExit: z.boolean().optional(),
             preserveFunnel: z.boolean().optional(),
           })
@@ -928,6 +934,8 @@ export const OpenClawSchema = z
             tlsFingerprint: z.string().optional(),
             sshTarget: z.string().optional(),
             sshIdentity: z.string().optional(),
+            codexSshTarget: z.string().optional(),
+            codexDaemonCommand: z.string().optional(),
           })
           .strict()
           .optional(),

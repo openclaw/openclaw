@@ -1,7 +1,11 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentSelector,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   resolveAgentSessionDirsFromAgentsDir,
   resolveAgentSessionDirsFromAgentsDirSync,
@@ -45,6 +49,21 @@ function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTa
 function shouldSkipDiscoveryError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   return typeof code === "string" && NON_FATAL_DISCOVERY_ERROR_CODES.has(code);
+}
+
+function resolveAgentSelectorOrThrow(cfg: OpenClawConfig, selector: string): string {
+  const resolution = resolveAgentSelector(cfg, selector);
+  if (resolution.ok) {
+    return resolution.agentId;
+  }
+  if (resolution.reason === "ambiguous") {
+    throw new Error(
+      `Ambiguous agent selector "${selector}" matches multiple configured agent names: ${(resolution.agentIds ?? []).join(", ")}. Use an explicit agent id.`,
+    );
+  }
+  throw new Error(
+    `Unknown agent id "${selector}". Use "openclaw agents list" to see configured agents.`,
+  );
 }
 
 function isWithinRoot(realPath: string, realRoot: string): boolean {
@@ -410,13 +429,7 @@ export function resolveSessionStoreTargets(
   }
 
   if (hasAgent) {
-    const knownAgents = listAgentIds(cfg);
-    const requested = normalizeAgentId(opts.agent ?? "");
-    if (!knownAgents.includes(requested)) {
-      throw new Error(
-        `Unknown agent id "${opts.agent}". Use "openclaw agents list" to see configured agents.`,
-      );
-    }
+    const requested = resolveAgentSelectorOrThrow(cfg, opts.agent ?? "");
     return [
       {
         agentId: requested,

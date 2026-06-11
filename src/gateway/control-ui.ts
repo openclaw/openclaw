@@ -11,6 +11,7 @@ import {
 } from "../infra/control-ui-assets.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { openLocalFileSafely, FsSafeError, readSecureFile } from "../infra/fs-safe.js";
+import { JsonFileReadError } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
@@ -27,7 +28,7 @@ import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { authorizeControlUiReadGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -53,6 +54,10 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
+import {
+  PATTERN_LAB_MEDIA_ROUTE_PREFIX,
+  resolvePatternLabMediaFile,
+} from "./pattern-lab-dashboard-data.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -103,6 +108,10 @@ function contentTypeForExt(ext: string): string {
       return "image/gif";
     case ".webp":
       return "image/webp";
+    case ".mp3":
+      return "audio/mpeg";
+    case ".mp4":
+      return "video/mp4";
     case ".ico":
       return "image/x-icon";
     case ".txt":
@@ -150,6 +159,11 @@ type ControlUiAvatarMeta = {
   avatarReason: string | null;
 };
 
+type SafeDataAvatar = {
+  contentType: string;
+  buffer: Buffer;
+};
+
 function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | null): {
   avatarSource: string | null;
   avatarStatus: ControlUiAvatarResolution["kind"] | null;
@@ -163,6 +177,42 @@ function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | nul
     avatarStatus: resolved.kind,
     avatarReason: resolved.kind === "none" ? resolved.reason : null,
   };
+}
+
+function resolveSafeDataAvatar(dataUrl: string): SafeDataAvatar | null {
+  const commaIndex = dataUrl.indexOf(",");
+  if (commaIndex <= 5) {
+    return null;
+  }
+  const meta = dataUrl.slice(5, commaIndex);
+  const contentType = (meta.split(";")[0] || "").trim().toLowerCase();
+  if (!/^image\/[a-z0-9.+-]+$/i.test(contentType)) {
+    return null;
+  }
+  try {
+    const payload = dataUrl.slice(commaIndex + 1);
+    const buffer = /(?:^|;)base64(?:;|$)/i.test(meta)
+      ? Buffer.from(payload, "base64")
+      : Buffer.from(decodeURIComponent(payload), "utf8");
+    if (buffer.length <= 0 || buffer.length > AVATAR_MAX_BYTES) {
+      return null;
+    }
+    return { contentType, buffer };
+  } catch {
+    return null;
+  }
+}
+
+function serveDataAvatar(res: ServerResponse, avatar: SafeDataAvatar, method?: string | null) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", avatar.contentType);
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Content-Length", String(avatar.buffer.length));
+  if (method === "HEAD") {
+    res.end();
+    return;
+  }
+  res.end(avatar.buffer);
 }
 
 function applyControlUiSecurityHeaders(res: ServerResponse) {
@@ -286,7 +336,7 @@ async function authorizeControlUiReadRequest(
   const clientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
-  const authResult = await authorizeHttpGatewayConnect({
+  const authResult = await authorizeControlUiReadGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
     req,
@@ -355,7 +405,15 @@ async function authorizeControlUiReadRequest(
 }
 
 async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean> {
-  const pairing = await listDevicePairing();
+  let pairing;
+  try {
+    pairing = await listDevicePairing();
+  } catch (err) {
+    if (err instanceof JsonFileReadError) {
+      return false;
+    }
+    throw err;
+  }
   for (const device of pairing.paired) {
     const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
     if (!operatorToken || operatorToken.revokedAtMs) {
@@ -613,6 +671,96 @@ export async function handleControlUiAssistantMediaRequest(
   }
 }
 
+export async function handleControlUiPatternLabMediaRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts?: {
+    basePath?: string;
+    auth?: ResolvedGatewayAuth;
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+    rateLimiter?: AuthRateLimiter;
+  },
+): Promise<boolean> {
+  const urlRaw = req.url;
+  if (!urlRaw || !isReadHttpMethod(req.method)) {
+    return false;
+  }
+  const url = new URL(urlRaw, "http://localhost");
+  const basePath = normalizeControlUiBasePath(opts?.basePath);
+  const routePath = basePath
+    ? `${basePath}${PATTERN_LAB_MEDIA_ROUTE_PREFIX}`
+    : PATTERN_LAB_MEDIA_ROUTE_PREFIX;
+  if (url.pathname !== routePath) {
+    return false;
+  }
+
+  applyControlUiSecurityHeaders(res);
+  if (
+    !(await authorizeControlUiReadRequest(req, res, {
+      auth: opts?.auth,
+      trustedProxies: opts?.trustedProxies,
+      allowRealIpFallback: opts?.allowRealIpFallback,
+      rateLimiter: opts?.rateLimiter,
+      allowQueryToken: true,
+      requiredOperatorMethod: "patternLab.dashboard.snapshot",
+    }))
+  ) {
+    return true;
+  }
+
+  const filePath = resolvePatternLabMediaFile(url.searchParams.get("path") ?? "");
+  if (!filePath) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  const stat = fs.statSync(filePath);
+  const contentType = contentTypeForExt(path.extname(filePath).toLowerCase());
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Accept-Ranges", "bytes");
+  if (req.method === "HEAD") {
+    res.statusCode = 200;
+    res.setHeader("Content-Length", String(stat.size));
+    res.end();
+    return true;
+  }
+
+  const range = req.headers.range;
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/u.exec(range);
+    if (match) {
+      const startRaw = match[1] ?? "";
+      const endRaw = match[2] ?? "";
+      const start = startRaw ? Number(startRaw) : 0;
+      const end = endRaw ? Number(endRaw) : stat.size - 1;
+      if (
+        Number.isInteger(start) &&
+        Number.isInteger(end) &&
+        start >= 0 &&
+        end >= start &&
+        start < stat.size
+      ) {
+        const boundedEnd = Math.min(end, stat.size - 1);
+        res.statusCode = 206;
+        res.setHeader("Content-Range", `bytes ${start}-${boundedEnd}/${stat.size}`);
+        res.setHeader("Content-Length", String(boundedEnd - start + 1));
+        fs.createReadStream(filePath, { start, end: boundedEnd }).pipe(res);
+        return true;
+      }
+    }
+    res.statusCode = 416;
+    res.setHeader("Content-Range", `bytes */${stat.size}`);
+    res.end();
+    return true;
+  }
+
+  res.statusCode = 200;
+  res.setHeader("Content-Length", String(stat.size));
+  fs.createReadStream(filePath).pipe(res);
+  return true;
+}
+
 export async function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -666,9 +814,9 @@ export async function handleControlUiAvatarRequest(
     const resolved = opts.resolveAvatar(agentId);
     const meta = controlUiAvatarResolutionMeta(resolved);
     const avatarUrl =
-      resolved.kind === "local"
+      resolved.kind === "local" || resolved.kind === "data"
         ? buildControlUiAvatarUrl(basePath, agentId)
-        : resolved.kind === "remote" || resolved.kind === "data"
+        : resolved.kind === "remote"
           ? resolved.url
           : null;
     sendJson(res, 200, {
@@ -681,6 +829,15 @@ export async function handleControlUiAvatarRequest(
   }
 
   const resolved = opts.resolveAvatar(agentId);
+  if (resolved.kind === "data") {
+    const dataAvatar = resolveSafeDataAvatar(resolved.url);
+    if (!dataAvatar) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    serveDataAvatar(res, dataAvatar, req.method);
+    return true;
+  }
   if (resolved.kind !== "local") {
     respondControlUiNotFound(res);
     return true;
@@ -702,9 +859,15 @@ export async function handleControlUiAvatarRequest(
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
-  // Static UI should never be cached aggressively while iterating; allow the
-  // browser to revalidate.
-  res.setHeader("Cache-Control", "no-cache");
+  const base = path.basename(filePath).toLowerCase();
+  const cacheControl =
+    base === "index.html" ||
+    base === "sw.js" ||
+    base === "asset-manifest.json" ||
+    base === "manifest.webmanifest"
+      ? "no-store"
+      : "no-cache";
+  res.setHeader("Cache-Control", cacheControl);
 }
 
 function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
@@ -721,7 +884,7 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
     );
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-store");
   res.end(body);
 }
 
@@ -842,16 +1005,18 @@ export async function handleControlUiHttpRequest(
     const identity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
       : DEFAULT_ASSISTANT_IDENTITY;
-    const avatarValue = resolveAssistantAvatarUrl({
-      avatar: identity.avatar,
-      agentId: identity.agentId,
-      basePath,
-    });
-    const avatarMeta = config
-      ? controlUiAvatarResolutionMeta(
-          resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
-        )
-      : controlUiAvatarResolutionMeta(null);
+    const resolvedAvatar = config
+      ? resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true })
+      : null;
+    const avatarValue =
+      resolvedAvatar?.kind === "local" || resolvedAvatar?.kind === "data"
+        ? buildControlUiAvatarUrl(basePath, identity.agentId)
+        : resolveAssistantAvatarUrl({
+            avatar: identity.avatar,
+            agentId: identity.agentId,
+            basePath,
+          });
+    const avatarMeta = controlUiAvatarResolutionMeta(resolvedAvatar);
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");

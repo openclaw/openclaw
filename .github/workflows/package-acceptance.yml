@@ -180,6 +180,8 @@ on:
         required: false
       ANTHROPIC_API_TOKEN:
         required: false
+      FACTORY_API_KEY:
+        required: false
       BYTEPLUS_API_KEY:
         required: false
       CEREBRAS_API_KEY:

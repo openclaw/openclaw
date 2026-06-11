@@ -22,6 +22,7 @@ export type TaskDeliveryStatus =
 export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
 export type TaskTerminalOutcome = "succeeded" | "blocked";
+export type TaskJudgeStatus = "not_required" | "pending" | "approved" | "rejected" | "invalid";
 export type TaskScopeKind = "session" | "system";
 
 export type TaskStatusCounts = Record<TaskStatus, number>;
@@ -77,6 +78,15 @@ export type TaskRecord = {
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
+  userVisible?: boolean;
+  expectedDeliverable?: string;
+  acceptanceCriteria?: string[];
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 };
 
 export type TaskRegistrySnapshot = {

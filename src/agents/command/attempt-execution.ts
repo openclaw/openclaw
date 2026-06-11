@@ -89,6 +89,7 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  runId?: string;
   embeddedAssistantGapFill?: boolean;
   assistant: {
     api: string;
@@ -220,6 +221,7 @@ async function persistTextTurnTranscript(
         message: {
           role: "user",
           content: promptText,
+          ...(params.runId ? { __openclaw: { runId: params.runId } } : {}),
           timestamp: Date.now(),
         },
       });
@@ -249,6 +251,7 @@ async function persistTextTurnTranscript(
             model: params.assistant.model,
             usage: resolveTranscriptUsage(params.assistant.usage),
             stopReason: "stop",
+            ...(params.runId ? { __openclaw: { runId: params.runId } } : {}),
             timestamp: Date.now(),
           },
         });
@@ -292,6 +295,7 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  runId?: string;
 }): Promise<SessionEntry | undefined> {
   return await persistTextTurnTranscript({
     ...params,
@@ -316,6 +320,7 @@ export async function persistCliTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  runId?: string;
   embeddedAssistantGapFill?: boolean;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
@@ -336,6 +341,7 @@ export async function persistCliTurnTranscript(params: {
     threadId: params.threadId,
     sessionCwd: params.sessionCwd,
     config: params.config,
+    runId: params.runId,
     embeddedAssistantGapFill: gapFill,
     assistant: {
       api: "cli",

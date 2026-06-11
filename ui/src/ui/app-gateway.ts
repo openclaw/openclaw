@@ -19,6 +19,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import type { ChatRunStatus } from "./chat/run-status.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
@@ -69,6 +70,64 @@ import type {
   UpdateAvailable,
 } from "./types.ts";
 
+const CONTROL_UI_CLIENT_METADATA_STORAGE_KEY = "openclaw.controlUi.clientMetadata";
+
+type ControlUiClientMetadataOverride = {
+  displayName?: string;
+  deviceFamily?: string;
+  platform?: string;
+};
+
+function normalizeClientMetadataString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function coerceControlUiClientMetadataOverride(
+  value: unknown,
+): ControlUiClientMetadataOverride | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const out: ControlUiClientMetadataOverride = {};
+  const displayName = normalizeClientMetadataString(record.displayName);
+  if (displayName) {
+    out.displayName = displayName;
+  }
+  const deviceFamily = normalizeClientMetadataString(record.deviceFamily);
+  if (deviceFamily) {
+    out.deviceFamily = deviceFamily;
+  }
+  const platform = normalizeClientMetadataString(record.platform);
+  if (platform) {
+    out.platform = platform;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function readControlUiClientMetadataOverride(): ControlUiClientMetadataOverride | null {
+  const globalOverride = coerceControlUiClientMetadataOverride(
+    (globalThis as { __OPENCLAW_CONTROL_UI_CLIENT_METADATA__?: unknown })
+      .__OPENCLAW_CONTROL_UI_CLIENT_METADATA__,
+  );
+  if (globalOverride) {
+    return globalOverride;
+  }
+  try {
+    const raw = globalThis.localStorage?.getItem(CONTROL_UI_CLIENT_METADATA_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    return coerceControlUiClientMetadataOverride(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
 }
@@ -79,6 +138,7 @@ type GatewayHost = {
   clientInstanceId: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  connectionAttemptStarted?: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -104,6 +164,8 @@ type GatewayHost = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatTaskId?: string | null;
+  chatRunStatus?: ChatRunStatus | null;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
@@ -460,6 +522,7 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
+  host.connectionAttemptStarted = true;
   shutdownHost.pendingShutdownMessage = null;
   shutdownHost.resumeChatQueueAfterReconnect = false;
   host.lastError = null;
@@ -483,12 +546,16 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
     gatewayUrl: host.settings.gatewayUrl,
     serverVersion: host.serverVersion,
   });
+  const clientMetadataOverride = readControlUiClientMetadataOverride();
   const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
     clientName: "openclaw-control-ui",
+    displayName: clientMetadataOverride?.displayName,
     clientVersion,
+    platform: clientMetadataOverride?.platform,
+    deviceFamily: clientMetadataOverride?.deviceFamily,
     mode: "webchat",
     instanceId: host.clientInstanceId,
     onHello: (hello) => {
@@ -522,13 +589,23 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
             console.warn("[openclaw] pending abort failed:", err);
           });
       }
-      // Reset orphaned chat run state from before disconnect.
-      // Any in-flight run's final event was lost during the disconnect window.
-      host.chatRunId = null;
-      (host as unknown as { chatStream: string | null }).chatStream = null;
-      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      // Reconcile orphaned chat run state from before disconnect. The final
+      // event may have been missed while the browser/mobile PWA was offline;
+      // task-backed history reconciliation will clear terminal runs durably.
+      const orphanedRunId = host.chatRunId;
+      if (orphanedRunId) {
+        void loadChatHistory(host as unknown as ChatState, {
+          targetRunId: orphanedRunId,
+          quiet: true,
+        });
+      } else {
+        host.chatRunStatus = null;
+        host.chatTaskId = null;
+        (host as unknown as { chatStream: string | null }).chatStream = null;
+        (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+        resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      }
       (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
-      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       if (shutdownHost.resumeChatQueueAfterReconnect) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.

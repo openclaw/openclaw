@@ -576,6 +576,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
       options: {
         reasoning: "max",
+        timeoutMs: 300_000,
       },
     });
 
@@ -586,7 +587,54 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
       {
         reasoning: "xhigh",
+        timeoutMs: 300_000,
         apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("passes provider payload hooks through simple completion options", async () => {
+    const model = {
+      provider: "openai",
+      id: "local-json-model",
+      name: "local-json-model",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:8000/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 16384,
+    } satisfies Model<"openai-completions">;
+    const onPayload = vi.fn();
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "local-openclaw",
+        source: "models.providers.local-openai.apiKey",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        maxTokens: 1024,
+        temperature: 0.1,
+        onPayload,
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        maxTokens: 1024,
+        temperature: 0.1,
+        onPayload,
+        apiKey: "local-openclaw",
       },
     );
   });

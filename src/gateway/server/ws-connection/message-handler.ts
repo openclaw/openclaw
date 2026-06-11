@@ -624,6 +624,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           allowRealIpFallback,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
+          tailscaleClientOptions: {
+            binaryPath: configSnapshot.gateway?.tailscale?.binaryPath,
+            socketPath: configSnapshot.gateway?.tailscale?.socketPath,
+          },
         });
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =

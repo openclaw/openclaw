@@ -82,10 +82,7 @@ function isXSearchEnabled(config: unknown): boolean {
     config && typeof config === "object"
       ? resolveEffectiveXSearchConfig(config as never)
       : undefined;
-  if (resolved?.enabled === false) {
-    return false;
-  }
-  return hasResolvableXaiApiKey(config);
+  return resolved?.enabled !== false;
 }
 
 function createLazyCodeExecutionTool(ctx: {

@@ -494,7 +494,7 @@
 .config-section-hero__title {
   font-size: 15px;
   font-weight: 650;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   line-height: 1.3;
 }
 
@@ -535,7 +535,7 @@
   margin: 0;
   font-size: 15px;
   font-weight: 650;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   color: var(--accent);
 }
 
@@ -681,7 +681,7 @@
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -721,7 +721,7 @@
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -822,7 +822,7 @@
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 .settings-info-row__value {
@@ -1003,7 +1003,7 @@
   margin: 0;
   font-size: 14px;
   font-weight: 650;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
   line-height: 1.35;
 }
 
@@ -1083,7 +1083,7 @@
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .cfg-field__help {
@@ -1698,7 +1698,7 @@
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
 }
 
 .cfg-array__item-remove {

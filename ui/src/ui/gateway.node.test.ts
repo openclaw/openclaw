@@ -102,6 +102,7 @@ type ConnectFrame = {
   method?: string;
   params?: {
     auth?: { token?: string; password?: string; deviceToken?: string };
+    client?: { displayName?: string; deviceFamily?: string; platform?: string };
     scopes?: string[];
   };
 };
@@ -277,6 +278,24 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
+  it("includes optional client pairing metadata on connect", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      displayName: "OpenClaw smoke iPhone profile",
+      deviceFamily: "control-ui-smoke",
+      platform: "iPhone",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.client).toMatchObject({
+      displayName: "OpenClaw smoke iPhone profile",
+      deviceFamily: "control-ui-smoke",
+      platform: "iPhone",
+    });
+  });
+
   it("reports request timing for attributed RPC latency", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
@@ -361,6 +380,51 @@ describe("GatewayBrowserClient", () => {
       ok: false,
       errorCode: "CONFIG_ERROR",
     });
+  });
+
+  it("times out optional dashboard requests and clears stale pending entries", async () => {
+    vi.useFakeTimers();
+    const onRequestTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onRequestTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    onRequestTiming.mockClear();
+
+    const request = client.request("ops.summary", {}, { timeoutMs: 25 });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("ops.summary");
+
+    const rejection = expect(request).rejects.toThrow("ops.summary timed out after 25ms");
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+    expectLatestRequestTiming(onRequestTiming, {
+      id: frame.id,
+      method: "ops.summary",
+      ok: false,
+      errorCode: "CLIENT_TIMEOUT",
+    });
+
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { state: "healthy" },
+    });
+    expect(onRequestTiming).toHaveBeenCalledTimes(1);
   });
 
   it("prefers explicit shared auth over cached device tokens", async () => {

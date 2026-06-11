@@ -212,6 +212,15 @@ describe("task-registry store runtime", () => {
       status: "running",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
+      userVisible: true,
+      expectedDeliverable: "nightly digest",
+      acceptanceCriteria: ["include summary", "include link"],
+      artifactIds: ["artifact-digest-1"],
+      judgeStatus: "approved",
+      judgeVerdict: "APPROVE",
+      judgeReason: "Digest was produced.",
+      judgeRunId: "judge-run-sqlite",
+      blockedReason: "not blocked",
     });
 
     resetTaskRegistryForTests({ persist: false });
@@ -220,6 +229,17 @@ describe("task-registry store runtime", () => {
     expect(restored?.taskId).toBe(created.taskId);
     expect(restored?.sourceId).toBe("job-123");
     expect(restored?.task).toBe("Run nightly cron");
+    expect(restored).toMatchObject({
+      userVisible: true,
+      expectedDeliverable: "nightly digest",
+      acceptanceCriteria: ["include summary", "include link"],
+      artifactIds: ["artifact-digest-1"],
+      judgeStatus: "approved",
+      judgeVerdict: "APPROVE",
+      judgeReason: "Digest was produced.",
+      judgeRunId: "judge-run-sqlite",
+      blockedReason: "not blocked",
+    });
   });
 
   it("persists parentFlowId with task rows", () => {

@@ -1,0 +1,10 @@
+# Music Creator V1 provider environment template
+# Put real values in a private file outside git, then source that file.
+# Do not commit real provider keys.
+
+export GEMINI_API_KEY=""
+export GOOGLE_API_KEY=""
+export MINIMAX_API_KEY=""
+export COMFY_API_KEY=""
+export COMFY_CLOUD_API_KEY=""
+export KITS_API_KEY=""

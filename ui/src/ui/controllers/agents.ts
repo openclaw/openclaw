@@ -6,18 +6,23 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import { resolveAgentIdFromSessionKey } from "../session-key.ts";
 import type {
   AgentsListResult,
+  AgentsRuntimeStatusResult,
   ChatModelOverride,
   ModelCatalogEntry,
+  OpsSummaryResult,
   SessionsListResult,
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../types.ts";
+import type { AgentsPanel } from "../views/agents.types.ts";
 import { saveConfig } from "./config.ts";
 import type { ConfigState } from "./config.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
+
+const SUPPLEMENTAL_DASHBOARD_REQUEST_TIMEOUT_MS = 15_000;
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -26,6 +31,12 @@ export type AgentsState = {
   agentsError: string | null;
   agentsList: AgentsListResult | null;
   agentsSelectedId: string | null;
+  agentsRuntimeLoading?: boolean;
+  agentsRuntimeError?: string | null;
+  agentsRuntimeStatus?: AgentsRuntimeStatusResult | null;
+  opsSummaryLoading?: boolean;
+  opsSummaryError?: string | null;
+  opsSummary?: OpsSummaryResult | null;
   toolsCatalogLoading: boolean;
   toolsCatalogLoadingAgentId?: string | null;
   toolsCatalogError: string | null;
@@ -39,7 +50,7 @@ export type AgentsState = {
   sessionsResult?: SessionsListResult | null;
   chatModelOverrides?: Record<string, ChatModelOverride | null>;
   chatModelCatalog?: ModelCatalogEntry[];
-  agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+  agentsPanel?: AgentsPanel;
 };
 
 export type AgentsConfigSaveState = AgentsState & ConfigState;
@@ -81,6 +92,67 @@ export async function loadAgents(state: AgentsState) {
     }
   } finally {
     state.agentsLoading = false;
+  }
+}
+
+export async function loadOpsSummary(state: AgentsState) {
+  if (!state.client || !state.connected || state.opsSummaryLoading) {
+    return;
+  }
+  state.opsSummaryLoading = true;
+  state.opsSummaryError = null;
+  try {
+    const res = await state.client.request<OpsSummaryResult>(
+      "ops.summary",
+      {},
+      { timeoutMs: SUPPLEMENTAL_DASHBOARD_REQUEST_TIMEOUT_MS },
+    );
+    state.opsSummary = res ?? null;
+  } catch (err) {
+    state.opsSummary = null;
+    const message = String(err);
+    if (/unknown method:\s*ops\.summary/i.test(message)) {
+      state.opsSummaryError =
+        "Gateway operations summary is not available from the running gateway yet.";
+      return;
+    }
+    state.opsSummaryError = isMissingOperatorReadScopeError(err)
+      ? formatMissingOperatorReadScopeMessage("operations summary")
+      : message;
+  } finally {
+    state.opsSummaryLoading = false;
+  }
+}
+
+export async function loadAgentsRuntimeStatus(state: AgentsState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.agentsRuntimeLoading) {
+    return;
+  }
+  state.agentsRuntimeLoading = true;
+  state.agentsRuntimeError = null;
+  try {
+    const res = await state.client.request<AgentsRuntimeStatusResult>(
+      "agents.runtime.status",
+      {},
+      { timeoutMs: SUPPLEMENTAL_DASHBOARD_REQUEST_TIMEOUT_MS },
+    );
+    state.agentsRuntimeStatus = res ?? null;
+  } catch (err) {
+    state.agentsRuntimeStatus = null;
+    const message = String(err);
+    if (/unknown method:\s*agents\.runtime\.status/i.test(message)) {
+      state.agentsRuntimeError =
+        "Runtime memory telemetry is not available from the running gateway yet.";
+      return;
+    }
+    state.agentsRuntimeError = isMissingOperatorReadScopeError(err)
+      ? formatMissingOperatorReadScopeMessage("agent runtime status")
+      : message;
+  } finally {
+    state.agentsRuntimeLoading = false;
   }
 }
 

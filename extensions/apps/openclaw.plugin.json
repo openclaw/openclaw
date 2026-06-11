@@ -1,0 +1,19 @@
+{
+  "id": "apps",
+  "name": "Apps",
+  "description": "Create, validate, and prepare native apps from OpenClaw prompts.",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "commandAliases": [
+    {
+      "name": "apps"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

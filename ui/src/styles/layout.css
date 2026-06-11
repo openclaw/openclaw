@@ -21,6 +21,9 @@
   animation: dashboard-enter 0.3s var(--ease-out);
   transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
   overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(125, 227, 255, 0.08), transparent 30%),
+    linear-gradient(315deg, rgba(255, 59, 48, 0.08), transparent 34%), var(--bg);
 }
 
 @supports (height: 100dvh) {
@@ -87,10 +90,41 @@
   align-items: center;
   padding: 0 24px;
   min-height: 58px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(12px) saturate(1.6);
-  -webkit-backdrop-filter: blur(12px) saturate(1.6);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  background:
+    linear-gradient(90deg, rgba(125, 227, 255, 0.1), transparent 36%, rgba(255, 59, 48, 0.08)),
+    color-mix(in srgb, var(--chrome) 94%, transparent);
+  backdrop-filter: blur(16px) saturate(1.8);
+  -webkit-backdrop-filter: blur(16px) saturate(1.8);
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+    0 14px 34px rgba(0, 0, 0, 0.22);
+}
+
+.topbar::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--mission-redline), var(--accent-2), transparent 72%);
+  content: "";
+}
+
+/* SpaceX-inspired mission shell. CSS-only so initial load stays light. */
+.topbar::before {
+  position: absolute;
+  top: 9px;
+  left: 24px;
+  color: color-mix(in srgb, var(--mission-readout) 74%, transparent);
+  content: "MISSION CONTROL";
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  pointer-events: none;
+  text-transform: uppercase;
 }
 
 .topnav-shell {
@@ -114,8 +148,10 @@
   height: 38px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent),
+    color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
   cursor: pointer;
   transition:
@@ -403,11 +439,30 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(125, 227, 255, 0.08), transparent 34%),
+    repeating-linear-gradient(0deg, transparent 0 31px, var(--mission-grid-line) 32px),
+    color-mix(in srgb, var(--bg) 94%, var(--bg-elevated) 6%);
 }
 
 :root[data-theme-mode="light"] .sidebar {
-  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+  background:
+    linear-gradient(180deg, rgba(0, 126, 167, 0.08), transparent 34%),
+    repeating-linear-gradient(0deg, transparent 0 31px, var(--mission-grid-line) 32px),
+    color-mix(in srgb, var(--panel) 98%, white 2%);
+}
+
+.sidebar::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg, var(--accent-2), transparent 42%, var(--mission-redline));
+  content: "";
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .sidebar-shell {
@@ -461,11 +516,25 @@
 }
 
 .sidebar-brand__logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 32px;
   height: 32px;
   flex-shrink: 0;
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: var(--radius-sm);
+  background: #060b12;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 8px 18px color-mix(in srgb, black 22%, transparent);
+  overflow: hidden;
+}
+
+.sidebar-brand__logo svg {
+  display: block;
+  width: 32px;
+  height: 32px;
 }
 
 .sidebar-brand__copy {
@@ -479,7 +548,7 @@
   font-size: 10px;
   line-height: 1.1;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   color: var(--muted);
   text-transform: uppercase;
 }
@@ -488,7 +557,7 @@
   font-size: 15px;
   line-height: 1.1;
   font-weight: 700;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
   color: var(--text-strong);
   white-space: nowrap;
   overflow: hidden;
@@ -515,7 +584,7 @@
   justify-content: center;
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition:
     background var(--duration-fast) ease,
@@ -582,7 +651,7 @@
   min-height: 28px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
   cursor: pointer;
   text-align: left;
@@ -599,7 +668,7 @@
 .nav-section__label-text {
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -633,7 +702,7 @@
   gap: 8px;
   min-height: 40px;
   padding: 0 9px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -677,8 +746,10 @@
 
 .nav-item:hover {
   color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background:
+    linear-gradient(90deg, rgba(125, 227, 255, 0.07), transparent 70%),
+    color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  border-color: color-mix(in srgb, var(--border-strong) 64%, transparent);
   text-decoration: none;
 }
 
@@ -689,17 +760,20 @@
 .nav-item.active,
 .nav-item--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  background:
+    linear-gradient(90deg, rgba(125, 227, 255, 0.16), transparent 76%),
+    color-mix(in srgb, var(--accent-subtle) 70%, var(--bg-elevated) 30%);
+  border-color: color-mix(in srgb, var(--accent-2) 48%, transparent);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    0 12px 24px color-mix(in srgb, black 10%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--accent-2) 18%, transparent),
+    0 12px 24px color-mix(in srgb, black 14%, transparent);
 }
 
 .nav-item.active .nav-item__icon,
 .nav-item--active .nav-item__icon {
   opacity: 1;
-  color: var(--accent);
+  color: var(--accent-2);
 }
 
 .sidebar--collapsed .sidebar-shell {
@@ -819,7 +893,7 @@
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 
 .sidebar-version__text {
@@ -933,6 +1007,11 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 22vh),
+    repeating-linear-gradient(90deg, transparent 0 47px, var(--mission-grid-line) 48px),
+    repeating-linear-gradient(0deg, transparent 0 47px, var(--mission-grid-line) 48px),
+    color-mix(in srgb, var(--bg-content, var(--bg)) 92%, transparent);
 }
 
 .content > * + * {
@@ -957,11 +1036,12 @@
 
 /* Content header */
 .content-header {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 8px;
+  padding: 12px 14px 13px;
   overflow: hidden;
   transform-origin: top center;
   transition:
@@ -969,7 +1049,36 @@
     transform var(--shell-focus-duration) var(--shell-focus-ease),
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
-  max-height: 80px;
+  max-height: 96px;
+  border: 1px solid color-mix(in srgb, var(--mission-panel-line) 72%, transparent);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(90deg, rgba(255, 59, 48, 0.1), transparent 24%, rgba(125, 227, 255, 0.09)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 48%), var(--mission-glass);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    var(--mission-shadow-hard);
+}
+
+.content-header::before {
+  position: absolute;
+  top: 0;
+  left: 16px;
+  width: 86px;
+  height: 3px;
+  background: var(--mission-critical);
+  content: "";
+}
+
+.content-header::after {
+  position: absolute;
+  right: 14px;
+  bottom: 0;
+  left: 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--mission-panel-line), transparent);
+  content: "";
+  opacity: 0.8;
 }
 
 .shell--chat-focus .content-header {
@@ -984,6 +1093,7 @@
   opacity: 0;
   transform: translateY(-10px);
   max-height: 0px;
+  border-width: 0;
   padding-top: 0;
   padding-bottom: 0;
   overflow: hidden;
@@ -991,19 +1101,21 @@
 }
 
 .page-title {
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.03em;
+  font-family: var(--font-display);
+  font-size: 23px;
+  font-weight: 900;
+  letter-spacing: 0;
   line-height: 1.2;
-  color: var(--accent);
+  color: var(--text-strong);
+  text-transform: uppercase;
 }
 
 .page-sub {
-  color: var(--muted);
+  color: var(--mission-readout);
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 700;
   margin-top: 4px;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .page-meta {
@@ -1031,13 +1143,13 @@
 .dreaming-header-controls__mode {
   appearance: none;
   border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   padding: 4px 10px;
   background: transparent;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.2;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
   font-weight: 600;
   cursor: pointer;
@@ -1085,7 +1197,7 @@
   overflow: hidden;
   white-space: nowrap;
   text-transform: none;
-  letter-spacing: normal;
+  letter-spacing: 0;
   font-size: 10px;
   font-weight: 500;
   color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);

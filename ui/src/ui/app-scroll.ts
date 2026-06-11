@@ -4,7 +4,7 @@ const HEADER_HIDE_SCROLL_DELTA = 12;
 const HEADER_SHOW_TOP_THRESHOLD = 24;
 
 type ScrollHost = {
-  updateComplete: Promise<unknown>;
+  updateComplete?: Promise<unknown>;
   querySelector: (selectors: string) => Element | null;
   style: CSSStyleDeclaration;
   chatScrollFrame: number | null;
@@ -46,7 +46,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
     return (document.scrollingElement ?? document.documentElement) as HTMLElement | null;
   };
   // Wait for Lit render to complete, then scroll
-  void host.updateComplete.then(() => {
+  void (host.updateComplete ?? Promise.resolve()).then(() => {
     host.chatScrollFrame = requestAnimationFrame(() => {
       host.chatScrollFrame = null;
       const target = pickScrollTarget();
@@ -109,7 +109,7 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   if (host.logsScrollFrame) {
     cancelAnimationFrame(host.logsScrollFrame);
   }
-  void host.updateComplete.then(() => {
+  void (host.updateComplete ?? Promise.resolve()).then(() => {
     host.logsScrollFrame = requestAnimationFrame(() => {
       host.logsScrollFrame = null;
       const container = queryHost(host, ".log-stream") as HTMLElement | null;

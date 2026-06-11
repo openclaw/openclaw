@@ -20,6 +20,7 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
+import { buildControlDirectorSystemPromptSection } from "./control-director-contract.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
@@ -1261,6 +1262,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
   lines.push(
+    ...buildControlDirectorSystemPromptSection(runtimeInfo?.agentId),
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     ...(modelIdentityLine ? [modelIdentityLine] : []),

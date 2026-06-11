@@ -1025,6 +1025,13 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     const extraPaths = status.workspaceDir
       ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
       : [];
+    const rollupCoverageLine = !workspaceDir
+      ? muted("no workspace")
+      : rollup?.error
+        ? muted(rollup.error)
+        : rollup
+          ? success(formatRollupStatusLine(rollup.plan))
+          : muted("unavailable");
     const lines = [
       `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
       `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
@@ -1042,13 +1049,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       }`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
       `${label("Session rollups")} ${info(formatRollupEnabled(Boolean(rollup?.config.enabled)))}`,
-      `${label("Rollup coverage")} ${
-        !workspaceDir
-          ? muted("no workspace")
-          : rollup?.error
-            ? muted(rollup.error)
-            : success(formatRollupStatusLine(rollup.plan))
-      }`,
+      `${label("Rollup coverage")} ${rollupCoverageLine}`,
     ].filter(Boolean) as string[];
     if (rollup?.error) {
       lines.push(`${label("Rollup status")} ${warn(`status generation failed: ${rollup.error}`)}`);
@@ -1351,8 +1352,8 @@ export async function runMemoryRollup(opts: MemoryRollupOptions) {
           return;
         }
 
-        const shouldApply = Boolean(opts.apply) && !Boolean(opts.stale);
-        const runDry = !shouldApply || Boolean(opts.dryRun);
+        const shouldApply = opts.apply && !opts.stale;
+        const runDry = !shouldApply || opts.dryRun;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
 
         const plan = await writeSessionRollups({
@@ -1395,7 +1396,7 @@ export async function runMemoryRollup(opts: MemoryRollupOptions) {
     defaultRuntime.writeJson(
       allResults.map((result) => {
         const staleActions = result.plan.actions.filter((action) => action.status !== "upToDate");
-        const resultActions = Boolean(opts.stale) ? staleActions : result.plan.actions;
+        const resultActions = opts.stale ? staleActions : result.plan.actions;
         const staleOrphans = result.plan.orphans;
         return {
           agentId: result.agentId,

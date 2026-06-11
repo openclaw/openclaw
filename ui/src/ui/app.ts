@@ -38,7 +38,6 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
-import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
@@ -57,6 +56,7 @@ import {
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,
   onPopState as onPopStateInternal,
+  refreshActiveTab as refreshActiveTabInternal,
 } from "./app-settings.ts";
 import {
   resetToolStream as resetToolStreamInternal,
@@ -68,12 +68,106 @@ import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import { RealtimeTalkSession, type RealtimeTalkStatus } from "./chat/realtime-talk.ts";
+import type { ChatRunStatus } from "./chat/run-status.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
+import {
+  addAppStudioScreenFlowConnection as addAppStudioScreenFlowConnectionInternal,
+  applyAppStudioScreenAnalysis as applyAppStudioScreenAnalysisInternal,
+  approveAppStudioGate as approveAppStudioGateInternal,
+  applyAppStudioPrompt as applyAppStudioPromptInternal,
+  createAppStudioProject as createAppStudioProjectInternal,
+  DEFAULT_APP_STUDIO_APPLE_FACTS,
+  DEFAULT_APP_STUDIO_BUILD_ENGINE,
+  DEFAULT_APP_STUDIO_FLOW_DRAFT,
+  DEFAULT_APP_STUDIO_PROMPT,
+  dismissAppStudioReceipt as dismissAppStudioReceiptInternal,
+  importAppStudioAppleFacts as importAppStudioAppleFactsInternal,
+  importAppStudioScreenImages as importAppStudioScreenImagesInternal,
+  loadAppStudioDashboard as loadAppStudioDashboardInternal,
+  removeAppStudioScreenFlowConnection as removeAppStudioScreenFlowConnectionInternal,
+  reorderAppStudioScreens as reorderAppStudioScreensInternal,
+  runAppStudioGate as runAppStudioGateInternal,
+  selectAppStudioProject as selectAppStudioProjectInternal,
+  setAppStudioBuildEngine as setAppStudioBuildEngineInternal,
+  setAppStudioScreenOrder as setAppStudioScreenOrderInternal,
+  updateAppStudioAppleFact as updateAppStudioAppleFactInternal,
+  updateAppStudioFlowDraft as updateAppStudioFlowDraftInternal,
+  updateAppStudioScreenAnalysisDraft as updateAppStudioScreenAnalysisDraftInternal,
+  updateAppStudioScreenImageFiles as updateAppStudioScreenImageFilesInternal,
+  updateAppStudioScreenImageNotes as updateAppStudioScreenImageNotesInternal,
+  type AppStudioActionReceipt,
+  type AppStudioAppleFactsDraft,
+  type AppStudioBuildEngine,
+  type AppStudioDashboardSnapshot,
+  type AppStudioFlowDraft,
+  type AppStudioGateId,
+  type AppStudioScreenImageDraft,
+} from "./controllers/app-studio-dashboard.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import {
+  approveBookWriterCover as approveBookWriterCoverInternal,
+  archiveBookWriterPlan as archiveBookWriterPlanInternal,
+  copyBookWriterPlan as copyBookWriterPlanInternal,
+  createBookWriterFullDraft as createBookWriterFullDraftInternal,
+  createBookWriterPlan as createBookWriterPlanInternal,
+  createBookWriterQuickRead as createBookWriterQuickReadInternal,
+  applyBookWriterAiSuggestion as applyBookWriterAiSuggestionInternal,
+  cancelBookWriterAiSuggestion as cancelBookWriterAiSuggestionInternal,
+  deleteArchivedBookWriterPlan as deleteArchivedBookWriterPlanInternal,
+  deleteActiveBookWriterPlans as deleteActiveBookWriterPlansInternal,
+  deleteDeletedBookWriterPlan as deleteDeletedBookWriterPlanInternal,
+  deleteBookWriterPlan as deleteBookWriterPlanInternal,
+  disableBookWriterAutomation as disableBookWriterAutomationInternal,
+  draftBookWriterParagraph as draftBookWriterParagraphInternal,
+  draftBookWriterPlan as draftBookWriterPlanInternal,
+  editBookWriterCoverWithLocalAi as editBookWriterCoverWithLocalAiInternal,
+  emptyDeletedBookWriterPlans as emptyDeletedBookWriterPlansInternal,
+  fillBookWriterParagraphPlans as fillBookWriterParagraphPlansInternal,
+  fixBookWriterPlan as fixBookWriterPlanInternal,
+  finishBookWriterPlan as finishBookWriterPlanInternal,
+  generateBookWriterChapterSetup as generateBookWriterChapterSetupInternal,
+  generateBookWriterCoverConcept as generateBookWriterCoverConceptInternal,
+  generateBookWriterEditableCoverConcept as generateBookWriterEditableCoverConceptInternal,
+  generateBookWriterIdeaSetup as generateBookWriterIdeaSetupInternal,
+  loadBookWriterDashboard as loadBookWriterDashboardInternal,
+  packageBookWriterPlan as packageBookWriterPlanInternal,
+  prepareBookWriterPublish as prepareBookWriterPublishInternal,
+  prepareBookWriterPublishWithCoverStrategy as prepareBookWriterPublishWithCoverStrategyInternal,
+  propagateBookWriterStoryChange as propagateBookWriterStoryChangeInternal,
+  rebalanceBookWriterStructure as rebalanceBookWriterStructureInternal,
+  redoBookWriterEdit as redoBookWriterEditInternal,
+  restoreArchivedBookWriterPlan as restoreArchivedBookWriterPlanInternal,
+  restoreDeletedBookWriterPlan as restoreDeletedBookWriterPlanInternal,
+  restoreFinishedBookWriterPlan as restoreFinishedBookWriterPlanInternal,
+  requestBookWriterAiHelp as requestBookWriterAiHelpInternal,
+  requestBookWriterSetupAiHelp as requestBookWriterSetupAiHelpInternal,
+  saveBookWriterPlan as saveBookWriterPlanInternal,
+  stitchBookWriterPlan as stitchBookWriterPlanInternal,
+  undoBookWriterEdit as undoBookWriterEditInternal,
+  uploadBookWriterCoverFile as uploadBookWriterCoverFileInternal,
+  updateBookWriterPenNameProfile as updateBookWriterPenNameProfileInternal,
+  updatePublishedBookWriterMetrics as updatePublishedBookWriterMetricsInternal,
+  type BookWriterActionReceipt,
+  type BookWriterAiAction,
+  type BookWriterAiHelpRequest,
+  type BookWriterAiHelpSuggestion,
+  type BookWriterChapterSetupTarget,
+  type BookWriterCelebration,
+  type BookWriterDashboardSnapshot,
+  type BookWriterDashboardView,
+  type BookWriterDashboardMode,
+  type BookWriterDestructiveAction,
+  type BookWriterIdeaSetupTarget,
+  type BookWriterPlan,
+  type BookWriterPublishedMetrics,
+  type BookWriterPublishedProof,
+  type BookWriterProfanityLevel,
+  type BookWriterTonePreset,
+} from "./controllers/book-writer-dashboard.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
@@ -82,6 +176,16 @@ import type {
 } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import {
+  loadKalshiDashboard as loadKalshiDashboardInternal,
+  type KalshiDashboardSnapshot,
+} from "./controllers/kalshi-dashboard.ts";
+import {
+  approvePatternLabAssetType as approvePatternLabAssetTypeInternal,
+  loadPatternLabDashboard as loadPatternLabDashboardInternal,
+  type PatternLabAssetType,
+  type PatternLabDashboardSnapshot,
+} from "./controllers/pattern-lab-dashboard.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -97,7 +201,20 @@ import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName }
 import type {
   AgentsListResult,
   AgentsFilesListResult,
+  AgentsRuntimeStatusResult,
   AgentIdentityResult,
+  SelfImprovementRecommendationGroup,
+  SelfImprovementRecommendation,
+  SelfImprovementAuditEvent,
+  SelfImprovementAnalysisRunResult,
+  SelfImprovementModelPreflightResult,
+  SelfImprovementOperationalHealthResult,
+  SelfImprovementProductionCheckResult,
+  SelfImprovementMaintenanceResult,
+  SelfImprovementDailyScorecard,
+  SelfImprovementProposal,
+  SelfImprovementScanResult,
+  SelfImprovementScorecard,
   ConfigSnapshot,
   ConfigUiHints,
   ChatModelOverride,
@@ -109,6 +226,7 @@ import type {
   LogLevel,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  OpsSummaryResult,
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionCompactionCheckpoint,
@@ -118,9 +236,13 @@ import type {
   NostrProfile,
   ToolsCatalogResult,
   ToolsEffectiveResult,
+  ProjectsGetResult,
+  ProjectsListResult,
+  ProjectContextPreview,
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
+import { loadAgentWorkflowOrders } from "./views/agents-workflows-state.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
@@ -162,6 +284,7 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+  @state() connectionAttemptStarted = false;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
@@ -207,6 +330,11 @@ export class OpenClawApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+  @state() chatTaskId: string | null = null;
+  @state() chatRunStatus: ChatRunStatus | null = null;
+  @state() chatTargetRunId: string | null = null;
+  @state() chatTargetAuditTs: number | null = null;
+  @state() chatTargetStatus: "exact-run" | "timestamp-fallback" | "not-found" | null = null;
   @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
@@ -216,7 +344,6 @@ export class OpenClawApp extends LitElement {
   @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
-  @state() chatModelSwitchPromises: Record<string, Promise<boolean>> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
@@ -232,12 +359,77 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
-  private nativeBridgeCleanup: (() => void) | null = null;
   @state() chatManualRefreshInFlight = false;
   @state() chatHeaderControlsHidden = false;
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
+  @state() kalshiDashboardLoading = false;
+  @state() kalshiDashboardError: string | null = null;
+  @state() kalshiDashboard: KalshiDashboardSnapshot | null = null;
+  @state() kalshiDashboardLastFetchAt: number | null = null;
+  @state() kalshiDashboardTimezone = "America/New_York";
+  @state() kalshiDashboardTimeframe = "24h";
+  @state() kalshiDashboardPnlTimeframe = "all";
+  @state() kalshiDashboardStrategySort: import("./views/kalshi-dashboard.js").KalshiStrategySort =
+    "problem_first";
+  @state() kalshiDashboardShowDeepAudit = false;
+  @state() kalshiDashboardAuditPages: Record<string, number> = {};
+  @state() kalshiDashboardAuditQueries: Record<string, string> = {};
+  @state() patternLabDashboardLoading = false;
+  @state() patternLabDashboardError: string | null = null;
+  @state() patternLabDashboard: PatternLabDashboardSnapshot | null = null;
+  @state() patternLabDashboardLastFetchAt: number | null = null;
+  @state() patternLabApprovalBusy: PatternLabAssetType | null = null;
+  @state() bookWriterLoading = false;
+  @state() bookWriterError: string | null = null;
+  @state() bookWriterDashboard: BookWriterDashboardSnapshot | null = null;
+  @state() bookWriterLastFetchAt: number | null = null;
+  @state() bookWriterSelectedRunId: string | null = null;
+  @state() bookWriterTopicDraft = "";
+  @state() bookWriterTargetWordsDraft = 12000;
+  @state() bookWriterToneDraft: BookWriterTonePreset = "professional";
+  @state() bookWriterCustomToneDraft = "";
+  @state() bookWriterProfanityDraft: BookWriterProfanityLevel = "none";
+  @state() bookWriterPenNameDraft = "";
+  @state() bookWriterNewBookSetupOpen = false;
+  @state() bookWriterReadPage = 0;
+  @state() bookWriterReadPreviewOpen = false;
+  @state() bookWriterReadPreviewMode: "paperback" | "ebook" = "paperback";
+  @state() bookWriterActiveView: BookWriterDashboardView = "brief";
+  @state() bookWriterMode: BookWriterDashboardMode = "guided";
+  @state() bookWriterPendingAiAction: BookWriterAiAction | null = null;
+  @state() bookWriterPendingAiSuggestion: BookWriterAiHelpSuggestion | null = null;
+  @state() bookWriterPendingDestructiveAction: BookWriterDestructiveAction | null = null;
+  @state() bookWriterActionReceipt: BookWriterActionReceipt | null = null;
+  @state() bookWriterCelebration: BookWriterCelebration | null = null;
+  @state() bookWriterFocusedParagraphId: string | null = null;
+  @state() bookWriterSearchQuery = "";
+  @state() bookWriterSavingAction: string | null = null;
+  @state() bookWriterUndoStack: BookWriterPlan[] = [];
+  @state() bookWriterRedoStack: BookWriterPlan[] = [];
+  @state() appStudioLoading = false;
+  @state() appStudioError: string | null = null;
+  @state() appStudioDashboard: AppStudioDashboardSnapshot | null = null;
+  @state() appStudioLastFetchAt: number | null = null;
+  @state() appStudioSelectedAppDir: string | null = null;
+  @state() appStudioPromptDraft = DEFAULT_APP_STUDIO_PROMPT;
+  @state() appStudioCreateNameDraft = "";
+  @state() appStudioCreateAppIdDraft = "";
+  @state() appStudioCreateBundleIdDraft = "";
+  @state() appStudioSavingAction: string | null = null;
+  @state() appStudioActionReceipt: AppStudioActionReceipt | null = null;
+  @state() appStudioAppleFactsDraft: AppStudioAppleFactsDraft = {
+    ...DEFAULT_APP_STUDIO_APPLE_FACTS,
+  };
+  @state() appStudioBuildEngineDraft: AppStudioBuildEngine = DEFAULT_APP_STUDIO_BUILD_ENGINE;
+  @state() appStudioScreenImageDrafts: AppStudioScreenImageDraft[] = [];
+  @state() appStudioScreenImageNotesDraft = "";
+  @state() appStudioScreenAnalysisDraft = "";
+  @state() appStudioFlowDraft: AppStudioFlowDraft = { ...DEFAULT_APP_STUDIO_FLOW_DRAFT };
+  @state() appStudioLivePollTimer: ReturnType<typeof setInterval> | null = null;
+  @state() appStudioLivePollAppDir: string | null = null;
+  @state() appStudioActionStartedAt: number | null = null;
 
   onSlashAction?: (action: string) => void | Promise<void>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
@@ -356,6 +548,32 @@ export class OpenClawApp extends LitElement {
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
   @state() agentsSelectedId: string | null = null;
+  @state() agentsRuntimeLoading = false;
+  @state() agentsRuntimeError: string | null = null;
+  @state() agentsRuntimeStatus: AgentsRuntimeStatusResult | null = null;
+  @state() opsSummaryLoading = false;
+  @state() opsSummaryError: string | null = null;
+  @state() opsSummary: OpsSummaryResult | null = null;
+  @state() selfImprovementLoading = false;
+  @state() selfImprovementError: string | null = null;
+  @state() selfImprovementRecommendations: SelfImprovementRecommendation[] = [];
+  @state() selfImprovementGroups: SelfImprovementRecommendationGroup[] = [];
+  @state() selfImprovementScorecard: SelfImprovementScorecard | null = null;
+  @state() selfImprovementScorecards: SelfImprovementDailyScorecard[] = [];
+  @state() selfImprovementHealth: SelfImprovementOperationalHealthResult | null = null;
+  @state() selfImprovementProposals: SelfImprovementProposal[] = [];
+  @state() selfImprovementAuditEvents: SelfImprovementAuditEvent[] = [];
+  @state() selfImprovementTotal = 0;
+  @state() selfImprovementScanLoading = false;
+  @state() selfImprovementLastScan: SelfImprovementScanResult["scan"] | null = null;
+  @state() selfImprovementAnalysisLoading = false;
+  @state() selfImprovementLastAnalysis: SelfImprovementAnalysisRunResult | null = null;
+  @state() selfImprovementModelPreflightLoading = false;
+  @state() selfImprovementLastModelPreflight: SelfImprovementModelPreflightResult | null = null;
+  @state() selfImprovementProductionCheckLoading = false;
+  @state() selfImprovementLastProductionCheck: SelfImprovementProductionCheckResult | null = null;
+  @state() selfImprovementMaintenanceLoading = false;
+  @state() selfImprovementLastMaintenance: SelfImprovementMaintenanceResult | null = null;
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;
@@ -364,7 +582,19 @@ export class OpenClawApp extends LitElement {
   @state() toolsEffectiveResultKey: string | null = null;
   @state() toolsEffectiveError: string | null = null;
   @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
-  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" = "files";
+  @state() agentsPanel:
+    | "room"
+    | "workflows"
+    | "overview"
+    | "files"
+    | "tools"
+    | "skills"
+    | "channels"
+    | "cron"
+    | "self-improvement" = "room";
+  @state() agentsWorkflowRoomId: string | null = null;
+  @state() agentsWorkflowStepId: string | null = null;
+  @state() agentsWorkflowOrders = loadAgentWorkflowOrders();
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -402,6 +632,23 @@ export class OpenClawApp extends LitElement {
   @state() sessionsCheckpointBusyKey: string | null = null;
   @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
 
+  @state() projectsLoading = false;
+  @state() projectsSaving = false;
+  @state() projectsError: string | null = null;
+  @state() projectsList: ProjectsListResult | null = null;
+  @state() projectsSelectedId: string | null = null;
+  @state() projectsDetail: ProjectsGetResult | null = null;
+  @state() projectsContextPreview: ProjectContextPreview | null = null;
+  @state() projectsSessions: SessionsListResult | null = null;
+  @state() projectCreateName = "";
+  @state() projectCreateDescription = "";
+  @state() projectCreateInstructions = "";
+  @state() projectResourcePath = "";
+  @state() projectResourceName = "";
+  @state() projectResourceNote = "";
+  @state() projectSearchQuery = "";
+  @state() projectInstructionsDraft = "";
+
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
   @state() usageCostSummary: import("./types.js").CostUsageSummary | null = null;
@@ -414,7 +661,7 @@ export class OpenClawApp extends LitElement {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
-  @state() usageScope: "instance" | "family" = "family";
+  @state() usageScope: "instance" | "family" = "instance";
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];
@@ -581,6 +828,9 @@ export class OpenClawApp extends LitElement {
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
+  private kalshiDashboardPollInterval: number | null = null;
+  private dashboardPollInterval: number | null = null;
+  private dashboardPollInFlight = false;
   private logsScrollFrame: number | null = null;
   private controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
@@ -591,6 +841,7 @@ export class OpenClawApp extends LitElement {
   private popStateHandler = () =>
     onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
   private topbarObserver: ResizeObserver | null = null;
+  private mobileViewportCleanup: (() => void) | null = null;
   private globalKeydownHandler = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k") {
       e.preventDefault();
@@ -649,7 +900,6 @@ export class OpenClawApp extends LitElement {
     document.addEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.addEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
-    this.nativeBridgeCleanup = initNativeBridge(this);
     void this.initWebPushState();
   }
 
@@ -659,8 +909,6 @@ export class OpenClawApp extends LitElement {
 
   disconnectedCallback() {
     document.removeEventListener("keydown", this.globalKeydownHandler);
-    this.nativeBridgeCleanup?.();
-    this.nativeBridgeCleanup = null;
     document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
     if (this.sessionSwitchNoticeTimer !== null) {
@@ -911,6 +1159,288 @@ export class OpenClawApp extends LitElement {
 
   async loadCron() {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+  }
+
+  async loadKalshiDashboard(opts?: {
+    auditTablePages?: Record<string, number>;
+    auditTableQueries?: Record<string, string>;
+    force?: boolean;
+    quiet?: boolean;
+    view?: "full" | "workspace";
+  }) {
+    await loadKalshiDashboardInternal(this, opts);
+  }
+
+  async loadPatternLabDashboard() {
+    await loadPatternLabDashboardInternal(this);
+  }
+
+  async approvePatternLabAssetType(assetType: PatternLabAssetType) {
+    await approvePatternLabAssetTypeInternal(this, assetType);
+  }
+
+  async loadBookWriterDashboard(opts?: { runId?: string | null; quiet?: boolean }) {
+    await loadBookWriterDashboardInternal(this, opts);
+  }
+
+  async createBookWriterPlan() {
+    await createBookWriterPlanInternal(this);
+  }
+
+  async createBookWriterFullDraft() {
+    await createBookWriterFullDraftInternal(this);
+  }
+
+  async saveBookWriterPlan(plan: BookWriterPlan) {
+    await saveBookWriterPlanInternal(this, plan);
+  }
+
+  async deleteBookWriterPlan(runId: string) {
+    await deleteBookWriterPlanInternal(this, runId);
+  }
+
+  async deleteActiveBookWriterPlans(runIds: string[]) {
+    await deleteActiveBookWriterPlansInternal(this, runIds);
+  }
+
+  async archiveBookWriterPlan(runId: string) {
+    await archiveBookWriterPlanInternal(this, runId);
+  }
+
+  async copyBookWriterPlan(runId: string) {
+    await copyBookWriterPlanInternal(this, runId);
+  }
+
+  async restoreArchivedBookWriterPlan(archivedId: string) {
+    await restoreArchivedBookWriterPlanInternal(this, archivedId);
+  }
+
+  async deleteArchivedBookWriterPlan(archivedId: string) {
+    await deleteArchivedBookWriterPlanInternal(this, archivedId);
+  }
+
+  async restoreDeletedBookWriterPlan(deletedId: string) {
+    await restoreDeletedBookWriterPlanInternal(this, deletedId);
+  }
+
+  async deleteDeletedBookWriterPlan(deletedId: string) {
+    await deleteDeletedBookWriterPlanInternal(this, deletedId);
+  }
+
+  async emptyDeletedBookWriterPlans() {
+    await emptyDeletedBookWriterPlansInternal(this);
+  }
+
+  async finishBookWriterPlan(runId: string, proof?: Partial<BookWriterPublishedProof>) {
+    await finishBookWriterPlanInternal(this, runId, proof);
+  }
+
+  async restoreFinishedBookWriterPlan(finishedId: string) {
+    await restoreFinishedBookWriterPlanInternal(this, finishedId);
+  }
+
+  async updatePublishedBookWriterMetrics(
+    finishedId: string,
+    metrics: Partial<BookWriterPublishedMetrics>,
+  ) {
+    await updatePublishedBookWriterMetricsInternal(this, finishedId, metrics);
+  }
+
+  async draftBookWriterPlan() {
+    await draftBookWriterPlanInternal(this);
+  }
+
+  async fillBookWriterParagraphPlans(chapterId?: string) {
+    await fillBookWriterParagraphPlansInternal(this, chapterId);
+  }
+
+  async generateBookWriterIdeaSetup(targets: BookWriterIdeaSetupTarget[]) {
+    await generateBookWriterIdeaSetupInternal(this, targets);
+  }
+
+  async generateBookWriterChapterSetup(targets: BookWriterChapterSetupTarget[]) {
+    await generateBookWriterChapterSetupInternal(this, targets);
+  }
+
+  async updateBookWriterPenNameProfile(profile: {
+    name: string;
+    lane: string;
+    readerPromise: string;
+  }) {
+    await updateBookWriterPenNameProfileInternal(this, profile);
+  }
+
+  async draftBookWriterParagraph(paragraphId: string, replaceExisting?: boolean) {
+    await draftBookWriterParagraphInternal(this, paragraphId, replaceExisting);
+  }
+
+  async propagateBookWriterStoryChange() {
+    await propagateBookWriterStoryChangeInternal(this);
+  }
+
+  async rebalanceBookWriterStructure() {
+    await rebalanceBookWriterStructureInternal(this);
+  }
+
+  async stitchBookWriterPlan() {
+    await stitchBookWriterPlanInternal(this);
+  }
+
+  async packageBookWriterPlan() {
+    await packageBookWriterPlanInternal(this);
+  }
+
+  async fixBookWriterPlan() {
+    await fixBookWriterPlanInternal(this);
+  }
+
+  async prepareBookWriterPublish() {
+    await prepareBookWriterPublishInternal(this);
+  }
+
+  async prepareBookWriterPublishWithCoverStrategy(coverStrategy: "upload" | "kdp-cover-creator") {
+    await prepareBookWriterPublishWithCoverStrategyInternal(this, coverStrategy);
+  }
+
+  async generateBookWriterCoverConcept() {
+    await generateBookWriterCoverConceptInternal(this);
+  }
+
+  async generateBookWriterEditableCoverConcept() {
+    await generateBookWriterEditableCoverConceptInternal(this);
+  }
+
+  async editBookWriterCoverWithLocalAi(variantId: string | undefined, instruction: string) {
+    await editBookWriterCoverWithLocalAiInternal(this, variantId, instruction);
+  }
+
+  async approveBookWriterCover(variantId?: string) {
+    await approveBookWriterCoverInternal(this, variantId);
+  }
+
+  async uploadBookWriterCoverFile(file: File) {
+    await uploadBookWriterCoverFileInternal(this, file);
+  }
+
+  async disableBookWriterAutomation() {
+    await disableBookWriterAutomationInternal(this);
+  }
+
+  async requestBookWriterAiHelp(request: BookWriterAiHelpRequest) {
+    await requestBookWriterAiHelpInternal(this, request);
+  }
+
+  async requestBookWriterSetupAiHelp(
+    intent: BookWriterAiHelpRequest["intent"],
+    customDirection?: string,
+  ) {
+    await requestBookWriterSetupAiHelpInternal(this, intent, customDirection);
+  }
+
+  async applyBookWriterAiSuggestion(suggestion: BookWriterAiHelpSuggestion, value?: string) {
+    await applyBookWriterAiSuggestionInternal(this, suggestion, value);
+  }
+
+  cancelBookWriterAiSuggestion() {
+    cancelBookWriterAiSuggestionInternal(this);
+  }
+
+  async createBookWriterQuickRead() {
+    await createBookWriterQuickReadInternal(this);
+  }
+
+  async undoBookWriterEdit() {
+    await undoBookWriterEditInternal(this);
+  }
+
+  async redoBookWriterEdit() {
+    await redoBookWriterEditInternal(this);
+  }
+
+  async loadAppStudioDashboard(opts?: { appDir?: string | null; quiet?: boolean }) {
+    await loadAppStudioDashboardInternal(this, opts);
+  }
+
+  async createAppStudioProject() {
+    await createAppStudioProjectInternal(this);
+  }
+
+  async applyAppStudioPrompt() {
+    await applyAppStudioPromptInternal(this);
+  }
+
+  async setAppStudioBuildEngine(buildEngine: AppStudioBuildEngine) {
+    await setAppStudioBuildEngineInternal(this, buildEngine);
+  }
+
+  async runAppStudioGate(gate: AppStudioGateId) {
+    await runAppStudioGateInternal(this, gate);
+  }
+
+  async selectAppStudioProject(appDir: string) {
+    await selectAppStudioProjectInternal(this, appDir);
+  }
+
+  async reorderAppStudioScreens(screenId: string, direction: "up" | "down") {
+    await reorderAppStudioScreensInternal(this, screenId, direction);
+  }
+
+  async setAppStudioScreenOrder(screenIds: string[]) {
+    await setAppStudioScreenOrderInternal(this, screenIds);
+  }
+
+  async updateAppStudioScreenImageFiles(files: FileList | File[] | null) {
+    await updateAppStudioScreenImageFilesInternal(this, files);
+  }
+
+  updateAppStudioScreenImageNotes(value: string) {
+    updateAppStudioScreenImageNotesInternal(this, value);
+  }
+
+  updateAppStudioScreenAnalysisDraft(value: string) {
+    updateAppStudioScreenAnalysisDraftInternal(this, value);
+  }
+
+  async importAppStudioScreenImages() {
+    await importAppStudioScreenImagesInternal(this);
+  }
+
+  async applyAppStudioScreenAnalysis() {
+    await applyAppStudioScreenAnalysisInternal(this);
+  }
+
+  updateAppStudioFlowDraft(field: keyof AppStudioFlowDraft, value: string) {
+    updateAppStudioFlowDraftInternal(this, field, value);
+  }
+
+  async addAppStudioScreenFlowConnection() {
+    await addAppStudioScreenFlowConnectionInternal(this);
+  }
+
+  async removeAppStudioScreenFlowConnection(edgeId: string) {
+    await removeAppStudioScreenFlowConnectionInternal(this, edgeId);
+  }
+
+  updateAppStudioAppleFact(field: keyof AppStudioAppleFactsDraft, value: string) {
+    updateAppStudioAppleFactInternal(this, field, value);
+  }
+
+  async importAppStudioAppleFacts() {
+    await importAppStudioAppleFactsInternal(this);
+  }
+
+  async approveAppStudioGate(approvalId: string) {
+    await approveAppStudioGateInternal(this, approvalId);
+  }
+
+  dismissAppStudioReceipt() {
+    dismissAppStudioReceiptInternal(this);
+  }
+
+  async refreshActiveDashboardTab() {
+    await refreshActiveTabInternal(
+      this as unknown as Parameters<typeof refreshActiveTabInternal>[0],
+    );
   }
 
   async handleAbortChat() {

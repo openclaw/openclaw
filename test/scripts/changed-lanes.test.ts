@@ -451,6 +451,7 @@ describe("scripts/changed-lanes", () => {
       "changelog attributions",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
+      "agent role contracts",
       "duplicate scan target coverage",
       "typecheck core tests",
       "lint core",
@@ -730,6 +731,7 @@ describe("scripts/changed-lanes", () => {
       "check:changelog-attributions",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
+      "agents:eval:contracts",
       "dup:check:coverage",
       "release-metadata:check",
       "ios:version:check",
@@ -737,6 +739,24 @@ describe("scripts/changed-lanes", () => {
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
+  });
+
+  it("classifies tracked local ops artifacts as tooling instead of unknown all-lane changes", () => {
+    const result = detectChangedLanes([
+      "control/state/GITHUB_BACKUP_SCRIPT_REPAIR_STATUS.json",
+      "work/scripts/backup-sync-github.sh",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expectLanes(result.lanes, {
+      tooling: true,
+    });
+    expect(result.reasons).toEqual([
+      "control/state/GITHUB_BACKUP_SCRIPT_REPAIR_STATUS.json: local ops tooling surface",
+      "work/scripts/backup-sync-github.sh: local ops tooling surface",
+    ]);
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
   it("keeps docs plus changelog entries on the docs-only changed gate", () => {
@@ -930,6 +950,10 @@ describe("scripts/changed-lanes", () => {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
+      {
+        name: "agent role contracts",
+        args: ["agents:eval:contracts"],
+      },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);
   });
@@ -949,6 +973,10 @@ describe("scripts/changed-lanes", () => {
       {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
+      },
+      {
+        name: "agent role contracts",
+        args: ["agents:eval:contracts"],
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);

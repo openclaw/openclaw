@@ -10,6 +10,8 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
   assistantAgentId: string;
+  userName?: string | null;
+  userAvatar?: string | null;
   serverVersion?: string;
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;

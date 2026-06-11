@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../str
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
-type BlockedIpv6Range = Ipv6Range | "discard";
+type BlockedIpv6Range = Ipv6Range | "benchmarking" | "discard" | "orchid2";
 
 const BLOCKED_IPV4_SPECIAL_USE_RANGES = new Set<Ipv4Range>([
   "unspecified",

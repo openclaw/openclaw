@@ -3,12 +3,16 @@ import type { IconName } from "./icons.js";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 export const TAB_GROUPS = [
-  { label: "chat", tabs: ["chat"] },
+  { label: "chat", tabs: ["chat", "projects"] },
   {
     label: "control",
     tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
   },
-  { label: "agent", tabs: ["agents", "skills", "nodes", "dreams"] },
+  {
+    label: "dashboards",
+    tabs: ["appStudio", "musicStudio", "snesStudio", "bookWriter", "kalshi", "patternLab"],
+  },
+  { label: "agent", tabs: ["agents", "agentWorkflows", "skills", "nodes", "dreams"] },
   {
     label: "settings",
     tabs: [
@@ -26,7 +30,14 @@ export const TAB_GROUPS = [
 
 export type Tab =
   | "agents"
+  | "agentWorkflows"
   | "overview"
+  | "appStudio"
+  | "musicStudio"
+  | "snesStudio"
+  | "kalshi"
+  | "bookWriter"
+  | "patternLab"
   | "channels"
   | "instances"
   | "sessions"
@@ -35,6 +46,7 @@ export type Tab =
   | "skills"
   | "nodes"
   | "chat"
+  | "projects"
   | "config"
   | "communications"
   | "appearance"
@@ -47,7 +59,14 @@ export type Tab =
 
 const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
+  agentWorkflows: "/agent-workflows",
   overview: "/overview",
+  appStudio: "/app-studio",
+  musicStudio: "/music-studio",
+  snesStudio: "/snes-studio",
+  kalshi: "/kalshi",
+  bookWriter: "/book-writer",
+  patternLab: "/pattern-lab",
   channels: "/channels",
   instances: "/instances",
   sessions: "/sessions",
@@ -56,6 +75,7 @@ const TAB_PATHS: Record<Tab, string> = {
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
+  projects: "/projects",
   config: "/config",
   communications: "/communications",
   appearance: "/appearance",
@@ -75,6 +95,28 @@ const PATH_TO_TAB = new Map<string, Tab>([
   ...Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab] as const),
   ...Object.entries(PATH_ALIASES),
 ]);
+
+const TAB_TITLE_FALLBACKS: Partial<Record<Tab, string>> = {
+  agentWorkflows: "Agent Workflow Maps",
+  appStudio: "App Studio",
+  musicStudio: "Music Studio",
+  snesStudio: "SNES Studio",
+  kalshi: "Kalshi",
+  bookWriter: "Book Studio",
+  patternLab: "Pattern Lab",
+  projects: "Projects",
+};
+
+const TAB_SUBTITLE_FALLBACKS: Partial<Record<Tab, string>> = {
+  agentWorkflows: "Live Agent Workspace workflow maps, ownership, and health.",
+  appStudio: "Prompt, build, validate, and prepare native iPhone apps for the App Store.",
+  musicStudio: "Prompt, arrange, play, and finish original music.",
+  snesStudio: "Prompt, play, and edit a SNES game without SNES jargon.",
+  kalshi: "Prediction market paper trading status.",
+  bookWriter: "Plan, write, package, and publish-prep original books.",
+  patternLab: "YouTube review, approval, and learning dashboard.",
+  projects: "Project workspaces, chats, and resources.",
+};
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) {
@@ -159,10 +201,26 @@ export function iconForTab(tab: Tab): IconName {
   switch (tab) {
     case "agents":
       return "folder";
+    case "agentWorkflows":
+      return "brain";
     case "chat":
       return "messageSquare";
+    case "projects":
+      return "folder";
     case "overview":
       return "barChart";
+    case "appStudio":
+      return "spark";
+    case "musicStudio":
+      return "radio";
+    case "snesStudio":
+      return "monitor";
+    case "kalshi":
+      return "lineChart";
+    case "bookWriter":
+      return "book";
+    case "patternLab":
+      return "monitor";
     case "channels":
       return "link";
     case "instances":
@@ -201,9 +259,13 @@ export function iconForTab(tab: Tab): IconName {
 }
 
 export function titleForTab(tab: Tab) {
-  return t(`tabs.${tab}`);
+  const key = `tabs.${tab}`;
+  const translated = t(key);
+  return translated === key ? (TAB_TITLE_FALLBACKS[tab] ?? translated) : translated;
 }
 
 export function subtitleForTab(tab: Tab) {
-  return t(`subtitles.${tab}`);
+  const key = `subtitles.${tab}`;
+  const translated = t(key);
+  return translated === key ? (TAB_SUBTITLE_FALLBACKS[tab] ?? translated) : translated;
 }

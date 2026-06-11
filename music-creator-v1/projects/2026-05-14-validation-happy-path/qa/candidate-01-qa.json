@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "candidate-01",
+  "checkedAt": "2026-05-14T21:37:04.206Z",
+  "technical": {
+    "passed": true,
+    "ffprobeAvailable": true,
+    "manualOverride": false
+  },
+  "creative": {
+    "total": 90
+  },
+  "draftReady": true
+}

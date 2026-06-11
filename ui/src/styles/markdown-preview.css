@@ -1,0 +1,10 @@
+@import "@create-markdown/preview/themes/system.css";
+
+.cm-preview {
+  --cm-mono: var(--mono);
+  --cm-link: var(--accent);
+  --cm-info: var(--info);
+  --cm-warning: var(--warn);
+  --cm-success: var(--ok);
+  --cm-danger: var(--danger);
+}

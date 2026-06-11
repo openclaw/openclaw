@@ -84,6 +84,11 @@ provider does not support them. Bundled transparent-background support is
 OpenAI-specific; other providers may still preserve PNG alpha if their
 backend emits it.
 
+Book Studio's **Generate Local AI Cover** action uses this same shared
+`image_generate` surface. For a fully local cover workflow, configure ComfyUI
+as `agents.defaults.imageGenerationModel.primary: "comfy/workflow"` and set
+the ComfyUI image workflow keys described in [ComfyUI](/providers/comfy).
+
 ## Supported providers
 
 | Provider   | Default model                           | Edit support                       | Auth                                                  |

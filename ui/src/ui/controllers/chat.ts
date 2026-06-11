@@ -8,6 +8,7 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
+import type { ChatRunStatus } from "../chat/run-status.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -26,6 +27,7 @@ const CHAT_HISTORY_REQUEST_MAX_CHARS = 4_000;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const CHAT_HISTORY_TARGET_REQUEST_LIMIT = 200;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
@@ -254,6 +256,88 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type ChatTaskSummary = {
+  status?: string;
+  runId?: string;
+  taskId?: string;
+  terminalSummary?: string;
+  blockedReason?: string;
+  error?: string;
+};
+
+type ChatSendAck = {
+  runId?: string;
+  status?: string;
+  taskId?: string;
+};
+
+type ChatRunTaskProbe =
+  | { state: "active" | "unknown" }
+  | { state: "terminal"; task: ChatTaskSummary };
+
+function isTerminalTaskStatus(status: string | undefined): boolean {
+  return (
+    status === "completed" ||
+    status === "blocked" ||
+    status === "failed" ||
+    status === "timed_out" ||
+    status === "cancelled"
+  );
+}
+
+async function probeChatRunTask(state: ChatState, runId: string | null): Promise<ChatRunTaskProbe> {
+  if (!runId || !state.client || !state.connected) {
+    return { state: "unknown" };
+  }
+  try {
+    const res = await state.client.request<{ tasks?: ChatTaskSummary[] }>("tasks.list", {
+      sessionKey: state.sessionKey,
+      runId,
+      limit: 1,
+    });
+    const task = Array.isArray(res.tasks) ? res.tasks[0] : undefined;
+    if (!task) {
+      return { state: "unknown" };
+    }
+    if (task.taskId && !state.chatTaskId) {
+      state.chatTaskId = task.taskId;
+    }
+    const status = typeof task.status === "string" ? task.status : undefined;
+    if (status === "queued" || status === "running") {
+      return { state: "active" };
+    }
+    if (isTerminalTaskStatus(status)) {
+      return { state: "terminal", task };
+    }
+  } catch {
+    return { state: "unknown" };
+  }
+  return { state: "unknown" };
+}
+
+function applyTerminalTaskRunStatus(state: ChatState, runId: string, task: ChatTaskSummary) {
+  const status = task.status;
+  const detail = task.blockedReason ?? task.error ?? task.terminalSummary;
+  state.chatRunId = null;
+  state.chatTaskId = task.taskId ?? state.chatTaskId ?? null;
+  state.chatStream = null;
+  state.chatStreamStartedAt = null;
+  if (status === "completed") {
+    state.chatRunStatus = { phase: "complete", runId, updatedAt: Date.now() };
+    return;
+  }
+  if (status === "cancelled") {
+    state.chatRunStatus = { phase: "aborted", runId, updatedAt: Date.now() };
+    return;
+  }
+  state.chatRunStatus = {
+    phase: "error",
+    runId,
+    detail: status === "blocked" ? detail || "Needs attention" : detail || status || "error",
+    updatedAt: Date.now(),
+  };
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -266,8 +350,11 @@ export type ChatState = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
+  chatTaskId?: string | null;
+  chatTargetStatus?: "exact-run" | "timestamp-fallback" | "not-found" | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatRunStatus?: ChatRunStatus | null;
   lastError: string | null;
   resetChatInputHistoryNavigation?: () => void;
 };
@@ -292,30 +379,58 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
-export async function loadChatHistory(state: ChatState) {
+export async function loadChatHistory(
+  state: ChatState,
+  opts?: { targetRunId?: string | null; auditTs?: number | null; quiet?: boolean },
+) {
   if (!state.client || !state.connected) {
     return;
   }
   const sessionKey = state.sessionKey;
+  const activeRunIdBeforeRequest = state.chatRunId;
+  const targetRunId = opts?.targetRunId ?? activeRunIdBeforeRequest ?? null;
+  const targetedRequest =
+    Boolean(targetRunId) || (typeof opts?.auditTs === "number" && Number.isFinite(opts.auditTs));
+  const taskProbe =
+    targetRunId && state.chatRunId === targetRunId
+      ? await probeChatRunTask(state, targetRunId)
+      : { state: "unknown" as const };
+  if (taskProbe.state === "active") {
+    return;
+  }
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
-  state.chatLoading = true;
-  state.lastError = null;
+  if (!opts?.quiet) {
+    state.chatLoading = true;
+  }
+  if (!opts?.quiet) {
+    state.lastError = null;
+  }
   try {
-    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
+    let res: {
+      messages?: Array<unknown>;
+      sessionId?: string;
+      thinkingLevel?: string;
+      targetStatus?: "exact-run" | "timestamp-fallback" | "not-found";
+    };
     for (;;) {
       try {
         res = await state.client.request<{
           messages?: Array<unknown>;
           sessionId?: string;
           thinkingLevel?: string;
+          targetStatus?: "exact-run" | "timestamp-fallback" | "not-found";
         }>("chat.history", {
           sessionKey,
-          limit: CHAT_HISTORY_REQUEST_LIMIT,
+          limit: targetedRequest ? CHAT_HISTORY_TARGET_REQUEST_LIMIT : CHAT_HISTORY_REQUEST_LIMIT,
           maxChars: CHAT_HISTORY_REQUEST_MAX_CHARS,
+          ...(targetRunId ? { targetRunId } : {}),
+          ...(typeof opts?.auditTs === "number" && Number.isFinite(opts.auditTs)
+            ? { auditTs: opts.auditTs }
+            : {}),
         });
         break;
       } catch (err) {
@@ -340,30 +455,75 @@ export async function loadChatHistory(state: ChatState) {
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    const completedActiveRun =
+      activeRunIdBeforeRequest &&
+      state.chatRunId === activeRunIdBeforeRequest &&
+      hasAssistantHistoryMessageForRun(visibleMessages, activeRunIdBeforeRequest);
+    if (completedActiveRun) {
+      state.chatRunId = null;
+      state.chatTaskId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      state.chatRunStatus = {
+        phase: "complete",
+        runId: activeRunIdBeforeRequest,
+        updatedAt: Date.now(),
+      };
+    } else if (targetRunId && taskProbe.state === "terminal") {
+      applyTerminalTaskRunStatus(state, targetRunId, taskProbe.task);
+    }
     state.currentSessionId =
       typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
+    state.chatTargetStatus = res.targetStatus ?? null;
     maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+    if (!state.chatRunId) {
+      // History includes completed tool results and text inline, so keeping
+      // finished streaming artifacts would cause duplicates.
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    }
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
     }
-    if (isMissingOperatorReadScopeError(err)) {
-      state.chatMessages = [];
-      state.chatThinkingLevel = null;
-      state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
-    } else {
-      state.lastError = String(err);
+    if (!opts?.quiet) {
+      if (isMissingOperatorReadScopeError(err)) {
+        state.chatMessages = [];
+        state.chatThinkingLevel = null;
+        state.chatTargetStatus = null;
+        state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
+      } else {
+        state.chatTargetStatus = null;
+        state.lastError = String(err);
+      }
     }
   } finally {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
       state.chatLoading = false;
     }
   }
+}
+
+function getMessageRunId(message: unknown): string | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const meta = (message as { __openclaw?: unknown }).__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const runId = (meta as { runId?: unknown }).runId;
+  return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function hasAssistantHistoryMessageForRun(messages: readonly unknown[], runId: string): boolean {
+  return messages.some(
+    (message) =>
+      Boolean(message && typeof message === "object" && !Array.isArray(message)) &&
+      (message as { role?: unknown }).role === "assistant" &&
+      getMessageRunId(message) === runId,
+  );
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
@@ -398,12 +558,12 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
 async function requestChatSend(
   state: ChatState,
   params: { message: string; attachments?: ChatAttachment[]; runId: string },
-) {
+): Promise<ChatSendAck> {
   const sessionId =
     typeof state.currentSessionId === "string" && state.currentSessionId.trim()
       ? state.currentSessionId.trim()
       : undefined;
-  await state.client!.request("chat.send", {
+  return await state.client!.request<ChatSendAck>("chat.send", {
     sessionKey: state.sessionKey,
     ...(sessionId ? { sessionId } : {}),
     message: params.message,
@@ -537,17 +697,27 @@ export async function sendChatMessage(
   state.lastError = null;
   const runId = generateUUID();
   state.chatRunId = runId;
+  state.chatTaskId = null;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatRunStatus = { phase: "sent", runId, updatedAt: now };
 
   try {
-    await requestChatSend(state, { message: msg, attachments, runId });
+    const ack = await requestChatSend(state, { message: msg, attachments, runId });
+    if (ack.taskId) {
+      state.chatTaskId = ack.taskId;
+    }
+    if (state.chatRunId === runId) {
+      state.chatRunStatus = { phase: "received", runId, updatedAt: Date.now() };
+    }
     return runId;
   } catch (err) {
     const error = formatConnectError(err);
     state.chatRunId = null;
+    state.chatTaskId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatRunStatus = { phase: "error", runId, detail: error, updatedAt: Date.now() };
     state.lastError = error;
     state.chatMessages = [
       ...state.chatMessages,
@@ -664,6 +834,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
       state.chatStream = next;
+      state.chatRunStatus = {
+        phase: "replying",
+        runId: payload.runId ?? state.chatRunId,
+        updatedAt: Date.now(),
+      };
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
@@ -685,7 +860,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatTaskId = null;
     state.chatStreamStartedAt = null;
+    state.chatRunStatus = { phase: "complete", runId: payload.runId, updatedAt: Date.now() };
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
@@ -709,12 +886,21 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatTaskId = null;
     state.chatStreamStartedAt = null;
+    state.chatRunStatus = { phase: "aborted", runId: payload.runId, updatedAt: Date.now() };
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatTaskId = null;
     state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
+    state.chatRunStatus = {
+      phase: "error",
+      runId: payload.runId,
+      detail: payload.errorMessage ?? "chat error",
+      updatedAt: Date.now(),
+    };
   }
   return payload.state;
 }

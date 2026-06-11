@@ -8,6 +8,7 @@ import type {
   TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
+  TaskJudgeStatus,
 } from "./task-registry.types.js";
 
 export type DetachedTaskCreateParams = {
@@ -28,6 +29,15 @@ export type DetachedTaskCreateParams = {
   preferMetadata?: boolean;
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
+  userVisible?: boolean;
+  expectedDeliverable?: string;
+  acceptanceCriteria?: string[];
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 };
 
 export type DetachedRunningTaskCreateParams = DetachedTaskCreateParams & {
@@ -64,6 +74,12 @@ export type DetachedTaskCompleteParams = {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 };
 
 export type DetachedTaskFailParams = {
@@ -76,6 +92,12 @@ export type DetachedTaskFailParams = {
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 };
 
 export type DetachedTaskFinalizeParams = {
@@ -89,6 +111,12 @@ export type DetachedTaskFinalizeParams = {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
+  artifactIds?: string[];
+  judgeStatus?: TaskJudgeStatus;
+  judgeVerdict?: string;
+  judgeReason?: string;
+  judgeRunId?: string;
+  blockedReason?: string;
 };
 
 export type DetachedTaskDeliveryStatusParams = {

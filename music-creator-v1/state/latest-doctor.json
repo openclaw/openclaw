@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-05-16T21:58:28.247Z",
+  "checks": [
+    {
+      "name": "music-creator-v1 directory",
+      "ok": true,
+      "detail": "package root"
+    },
+    {
+      "name": "projects directory",
+      "ok": true,
+      "detail": "project manifests"
+    },
+    {
+      "name": "openclaw CLI",
+      "ok": true,
+      "detail": "live music_generate orchestration"
+    },
+    {
+      "name": "ffprobe",
+      "ok": true,
+      "detail": "technical audio QA"
+    },
+    {
+      "name": "ffmpeg",
+      "ok": true,
+      "detail": "loudness and silence checks"
+    },
+    {
+      "name": "GEMINI_API_KEY configured",
+      "ok": false,
+      "detail": "Secret value redacted."
+    },
+    {
+      "name": "GOOGLE_API_KEY configured",
+      "ok": false,
+      "detail": "Secret value redacted."
+    },
+    {
+      "name": "MINIMAX_API_KEY configured",
+      "ok": false,
+      "detail": "Secret value redacted."
+    },
+    {
+      "name": "COMFY_API_KEY configured",
+      "ok": false,
+      "detail": "Secret value redacted."
+    },
+    {
+      "name": "COMFY_CLOUD_API_KEY configured",
+      "ok": false,
+      "detail": "Secret value redacted."
+    }
+  ]
+}

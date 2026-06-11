@@ -1,0 +1,106 @@
+{
+  "id": "book-writer",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Book Writer",
+  "description": "Creates original review-ready book packages with local-first model governance.",
+  "commandAliases": [{ "name": "books" }],
+  "uiHints": {
+    "outputDir": {
+      "label": "Output Directory",
+      "help": "Directory where book-writer run artifacts are stored."
+    },
+    "localProvider": {
+      "label": "Local Provider",
+      "help": "Preferred local model provider. LM Studio is the default."
+    },
+    "localModel": {
+      "label": "Local Model",
+      "help": "Model id Book Writer uses for live local prose generation."
+    },
+    "memoryPolicy.defaultGb": {
+      "label": "Default Memory Cap",
+      "help": "Normal daily LLM RAM cap in GB."
+    },
+    "memoryPolicy.hardRejectGb": {
+      "label": "Hard Reject Memory Cap",
+      "help": "Reject models whose measured peak memory exceeds this GB value."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "outputDir": { "type": "string" },
+      "localProvider": {
+        "type": "string",
+        "enum": ["lmstudio", "ollama", "custom"]
+      },
+      "localModel": { "type": "string" },
+      "localBaseUrl": { "type": "string" },
+      "memoryPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultGb": { "type": "number", "minimum": 1 },
+          "idealGb": { "type": "number", "minimum": 1 },
+          "premiumGb": { "type": "number", "minimum": 1 },
+          "hardRejectGb": { "type": "number", "minimum": 1 }
+        }
+      },
+      "schedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timezone": { "type": "string" },
+          "reviewReadyBy": { "type": "string" }
+        }
+      },
+      "editorialPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "blockedAffirmativeThemes": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "allowCriticalHistoricalDiscussion": { "type": "boolean" },
+          "uncertainMeansBlocked": { "type": "boolean" }
+        }
+      },
+      "publishing": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "primaryChannel": { "type": "string" },
+          "kdpSelectDefault": { "type": "boolean" },
+          "finalSubmitRequiresApproval": { "type": "boolean" }
+        }
+      },
+      "qualityThresholds": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "minWords": { "type": "number", "minimum": 1 },
+          "minQualityScore": { "type": "number", "minimum": 0, "maximum": 1 },
+          "maxInternalSimilarity": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      },
+      "penNames": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "lane": { "type": "string" },
+            "readerPromise": { "type": "string" }
+          },
+          "required": ["name"]
+        }
+      }
+    }
+  }
+}

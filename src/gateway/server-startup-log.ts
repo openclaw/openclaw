@@ -1,9 +1,8 @@
 import chalk from "chalk";
 import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
-  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveThinkingDefault,
   legacyModelKey,
   modelKey,
@@ -33,10 +32,10 @@ export function logGatewayStartup(params: {
   log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string) => void };
   isNixMode: boolean;
 }) {
-  const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const { provider: agentProvider, model: agentModel } = resolveDefaultModelForAgent({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    agentId: defaultAgentId,
   });
   const modelRef = `${agentProvider}/${agentModel}`;
   const modelDetails = formatAgentModelStartupDetails({
