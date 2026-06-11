@@ -1838,6 +1838,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.model = "gpt-5.4";
     followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
     followupRun.run.extraSystemPromptStatic = "stable group prompt";
+    followupRun.run.senderId = "sender-static";
     followupRun.originatingChannel = "telegram";
 
     const result = await runAgentTurnWithFallback({
@@ -1870,6 +1871,7 @@ describe("runAgentTurnWithFallback", () => {
       trigger: "user",
       messageChannel: "telegram",
       messageProvider: "telegram",
+      senderId: "sender-static",
     });
   });
 
@@ -2243,12 +2245,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2311,12 +2308,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2402,12 +2394,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2481,12 +2468,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(true);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(true);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2539,6 +2521,51 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.kind).toBe("preamble");
     expect(call?.progressText).toBe("Let me check the files.");
     expect(call?.itemId).toBe("commentary-1");
+  });
+
+  it("does not emit CLI commentary when commentary progress is explicitly disabled", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        // Defined-but-off commentary progress must leave commentary emission off
+        // so pre-tool text stays in the assistant stream (#92092).
+        expect(params.emitCommentaryText).toBe(false);
+        return { payloads: [{ text: "done" }], meta: {} };
+      },
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { commentaryProgressEnabled: false },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
@@ -5198,6 +5225,8 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("uses compact generic copy for raw external chat errors when verbose is off", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
     );
@@ -5210,7 +5239,7 @@ describe("runAgentTurnWithFallback", () => {
         Provider: "whatsapp",
         MessageSid: "msg",
       } as unknown as TemplateContext,
-      opts: {},
+      opts: { runId: "run-provider-failure" } as GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -5230,6 +5259,21 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     }
+    const terminalFailureEvent = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .find((event) => {
+        if (!event || typeof event !== "object") {
+          return false;
+        }
+        const data = (event as { data?: Record<string, unknown> }).data;
+        return (
+          (event as { runId?: unknown }).runId === "run-provider-failure" &&
+          (event as { stream?: unknown }).stream === "lifecycle" &&
+          data?.phase === "error" &&
+          data.fallbackExhaustedFailure === true
+        );
+      });
+    expect(terminalFailureEvent).toBeDefined();
   });
 
   it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {

@@ -2772,8 +2772,8 @@ export type OpenClawPluginApi = {
     injection: PluginNextTurnInjection,
   ) => Promise<PluginNextTurnInjectionEnqueueResult>;
   /**
-   * Register a trusted pre-tool policy. Only bundled plugins may use this
-   * before-tool-call policy tier.
+   * Register a trusted pre-tool policy. Installed plugins must declare the
+   * policy id in `contracts.trustedToolPolicies`.
    */
   registerTrustedToolPolicy: (policy: PluginTrustedToolPolicyRegistration) => void;
   /**

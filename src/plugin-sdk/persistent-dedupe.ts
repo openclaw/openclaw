@@ -13,7 +13,7 @@ import type { FileLockOptions } from "./file-lock.js";
 const LEGACY_PATH_OWNER_ID = "core:persistent-dedupe";
 const DEFAULT_NAMESPACE_PREFIX = "persistent-dedupe";
 
-type PersistentDedupeEntry = {
+export type PersistentDedupeEntry = {
   key: string;
   seenAt: number;
 };
@@ -74,6 +74,18 @@ export type PersistentDedupeLegacyJsonMigrationOptions = PersistentDedupePluginS
   namespace: string;
   now?: number;
   removeFile?: boolean;
+};
+
+export type PersistentDedupeLegacyJsonImportEntry = {
+  key: string;
+  value: PersistentDedupeEntry;
+  ttlMs?: number;
+};
+
+type PersistentDedupeLegacyJsonEntriesResult = {
+  entries: PersistentDedupeLegacyJsonImportEntry[];
+  skippedExpired: number;
+  skippedInvalid: number;
 };
 
 /** Per-call options used when checking or recording a dedupe key. */
@@ -168,12 +180,33 @@ function resolveEntrySeenAt(entry: PersistentDedupeEntry | undefined): number | 
     : undefined;
 }
 
+function resolveUnknownEntrySeenAt(value: unknown): number | undefined {
+  if (!value || typeof value !== "object" || !("seenAt" in value)) {
+    return undefined;
+  }
+  return typeof value.seenAt === "number" && Number.isFinite(value.seenAt)
+    ? value.seenAt
+    : undefined;
+}
+
 function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
 function resolveEntryKey(key: string): string {
   return `k.${shortHash(key)}`;
+}
+
+export function createPersistentDedupeImportEntry(params: {
+  key: string;
+  seenAt: number;
+  ttlMs?: number;
+}): PersistentDedupeLegacyJsonImportEntry {
+  return {
+    key: resolveEntryKey(params.key),
+    value: { key: params.key, seenAt: params.seenAt },
+    ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+  };
 }
 
 function resolveRemainingTtlMs(
@@ -200,6 +233,16 @@ function normalizeNamespacePrefix(value: string | undefined): string {
 
 function resolveStateNamespace(prefix: string, namespace: string): string {
   return `${prefix}.${shortHash(namespace)}`;
+}
+
+export function resolvePersistentDedupePluginStateNamespace(options: {
+  namespace: string;
+  namespacePrefix?: string;
+}): string {
+  return resolveStateNamespace(
+    normalizeNamespacePrefix(options.namespacePrefix),
+    resolveNamespace(options.namespace),
+  );
 }
 
 function hasPluginStateOptions(
@@ -295,39 +338,74 @@ function parseLegacyDedupeData(raw: string): {
   return { data, invalidCount };
 }
 
-/** Import one retired JSON dedupe cache file into plugin-state SQLite during doctor repair. */
-export async function migratePersistentDedupeLegacyJsonFile(
-  options: PersistentDedupeLegacyJsonMigrationOptions,
-): Promise<PersistentDedupeLegacyJsonMigrationResult> {
+async function readPersistentDedupeLegacyJsonFileEntries(options: {
+  filePath: string;
+  ttlMs: number;
+  now?: number;
+}): Promise<PersistentDedupeLegacyJsonEntriesResult> {
   const raw = await fs.readFile(options.filePath, "utf8");
   const { data, invalidCount } = parseLegacyDedupeData(raw);
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const now = options.now ?? Date.now();
-  const store = createPersistentStoreResolver(options)(resolveNamespace(options.namespace));
-  const result: PersistentDedupeLegacyJsonMigrationResult = {
-    imported: 0,
-    skippedExpired: 0,
-    skippedInvalid: 0,
-    skippedExisting: 0,
-    removed: false,
-  };
+  const entries: PersistentDedupeLegacyJsonImportEntry[] = [];
+  let skippedExpired = 0;
 
   for (const [key, seenAt] of Object.entries(data)) {
     const ttlOption = resolveRemainingTtlMs(seenAt, ttlMs, now);
     if (ttlOption === null) {
-      result.skippedExpired++;
+      skippedExpired++;
       continue;
     }
+    entries.push(createPersistentDedupeImportEntry({ key, seenAt, ...ttlOption }));
+  }
+
+  return { entries, skippedExpired, skippedInvalid: invalidCount };
+}
+
+export async function listPersistentDedupeLegacyJsonFileEntries(options: {
+  filePath: string;
+  ttlMs: number;
+  now?: number;
+}): Promise<PersistentDedupeLegacyJsonImportEntry[]> {
+  return (await readPersistentDedupeLegacyJsonFileEntries(options)).entries;
+}
+
+export function shouldReplacePersistentDedupeEntry(params: {
+  existingValue: unknown;
+  incomingValue: unknown;
+}): boolean {
+  const incomingSeenAt = resolveUnknownEntrySeenAt(params.incomingValue);
+  return (
+    incomingSeenAt != null &&
+    incomingSeenAt > (resolveUnknownEntrySeenAt(params.existingValue) ?? 0)
+  );
+}
+
+/** Import one retired JSON dedupe cache file into plugin-state SQLite during doctor repair. */
+export async function migratePersistentDedupeLegacyJsonFile(
+  options: PersistentDedupeLegacyJsonMigrationOptions,
+): Promise<PersistentDedupeLegacyJsonMigrationResult> {
+  const legacy = await readPersistentDedupeLegacyJsonFileEntries(options);
+  const store = createPersistentStoreResolver(options)(resolveNamespace(options.namespace));
+  const result: PersistentDedupeLegacyJsonMigrationResult = {
+    imported: 0,
+    skippedExpired: legacy.skippedExpired,
+    skippedInvalid: legacy.skippedInvalid,
+    skippedExisting: 0,
+    removed: false,
+  };
+
+  for (const entry of legacy.entries) {
     const changed = store.update?.(
-      resolveEntryKey(key),
+      entry.key,
       (current) => {
         const currentSeenAt = resolveEntrySeenAt(current);
-        if (currentSeenAt != null && currentSeenAt >= seenAt) {
+        if (currentSeenAt != null && currentSeenAt >= entry.value.seenAt) {
           return undefined;
         }
-        return { key, seenAt };
+        return entry.value;
       },
-      ttlOption,
+      entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
     );
     if (changed) {
       result.imported++;
@@ -336,7 +414,6 @@ export async function migratePersistentDedupeLegacyJsonFile(
     }
   }
 
-  result.skippedInvalid = invalidCount;
   if (options.removeFile !== false) {
     await fs.rm(options.filePath, { force: true });
     result.removed = true;

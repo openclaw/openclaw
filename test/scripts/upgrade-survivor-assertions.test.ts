@@ -23,6 +23,23 @@ function writeMigratedSessionState(stateDir: string): void {
   writeFileSync(mainSessionFile, '{"type":"main"}\n');
   writeFileSync(directSessionFile, '{"type":"direct"}\n');
   writeFileSync(groupSessionFile, '{"type":"group"}\n');
+  writeJson(join(agentSessionsDir, "sessions.json"), {
+    "agent:main:main": {
+      sessionFile: mainSessionFile,
+      sessionId: "upgrade-main-session",
+      skillsSnapshot: {
+        prompt: "legacy prompt survives as metadata",
+      },
+    },
+    "agent:main:+15551234567": {
+      sessionFile: directSessionFile,
+      sessionId: "upgrade-direct-session",
+    },
+    "agent:main:slack:channel:cupgrade": {
+      sessionFile: groupSessionFile,
+      sessionId: "upgrade-group-session",
+    },
+  });
 
   const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
   try {
