@@ -100,15 +100,18 @@ export function collectGatewayConfigFindings(
   const gatewayToolsAllow = new Set(
     gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
   );
-  // Dual-key gated tools must NOT count toward `dangerous_allow`. Their
-  // `allow` entry alone is INERT (the tool is not materialized into the
-  // candidate set without the matching `directInvoke.<flag>` opt-in). The
-  // dedicated `host_read_allow` / `host_write_allow` findings handle the
-  // actual exposure when both gates are set. See ClawSweeper [P2] on PR
-  // #85664: "Keep inert read allow entries out of dangerous_allow".
-  const DUAL_KEY_GATED_TOOLS = new Set<string>(["read"]);
+  // Suppress `dangerous_allow` for a dual-key gated tool ONLY while its class
+  // opt-in is active — then the more specific `host_read_allow` finding fires
+  // instead. When the opt-in is INACTIVE, `allow: ["read"]` still removes
+  // `read` from the HTTP deny list, which can make a same-named plugin tool
+  // reachable over `/tools/invoke` while the built-in stays unmaterialized; in
+  // that case `dangerous_allow` must fire so the exposure is visible. See
+  // ClawSweeper [P1] on PR #85664: "Preserve auditing for same-named plugin
+  // tools".
+  const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  const classOptInActiveForTool = new Set<string>(hostFsReadOptIn ? ["read"] : []);
   const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
-    (name) => gatewayToolsAllow.has(name) && !DUAL_KEY_GATED_TOOLS.has(name),
+    (name) => gatewayToolsAllow.has(name) && !classOptInActiveForTool.has(name),
   );
   if (reenabledOverHttp.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
@@ -126,11 +129,10 @@ export function collectGatewayConfigFindings(
   }
 
   // Host-FS read opt-in finding: only fires when BOTH gates are set
-  // (`directInvoke.hostFsRead: true` AND `tools.allow` includes "read"). Set
-  // by either gate alone, the `read` tool is NOT materialized (see
-  // `tool-resolution.ts` dual-key gating) so no exposure exists — silence is
-  // correct in those cases.
-  const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  // (`directInvoke.hostFsRead: true` AND `tools.allow` includes "read"). With
+  // the opt-in active the built-in `read` is materialized (see
+  // `tool-resolution.ts` dual-key gating); this is the specific exposure
+  // finding that supersedes the generic `dangerous_allow` warning above.
   if (hostFsReadOptIn && gatewayToolsAllow.has("read")) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
     findings.push({
