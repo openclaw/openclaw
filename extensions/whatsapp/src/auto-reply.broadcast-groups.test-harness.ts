@@ -6,11 +6,11 @@ import {
   sendWebDirectInboundMessage,
 } from "./auto-reply.test-harness.js";
 import { monitorWebChannel } from "./auto-reply/monitor.js";
-import type { WebInboundMessage } from "./inbound.js";
+import type { WebInboundMessageInput } from "./inbound.js";
 
 export async function monitorWebChannelWithCapture(resolver: unknown): Promise<{
   spies: ReturnType<typeof createWebInboundDeliverySpies>;
-  onMessage: (msg: WebInboundMessage) => Promise<void>;
+  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
 }> {
   const spies = createWebInboundDeliverySpies();
   const { listenerFactory, getOnMessage } = createWebListenerFactoryCapture();

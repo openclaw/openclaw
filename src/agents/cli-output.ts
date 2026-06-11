@@ -624,7 +624,6 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   }
 }
 
-/** Creates an incremental JSONL parser for CLI streaming responses and tool events. */
 /** Creates a stateful parser for streaming JSONL CLI backend output. */
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
@@ -632,7 +631,6 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
-  classifyCommentaryText?: boolean;
   onCommentaryText?: (text: string) => void;
 }) {
   let lineBuffer = "";
@@ -643,8 +641,10 @@ export function createCliJsonlStreamingParser(params: {
   let output: CliOutput | null = null;
   const texts: string[] = [];
   const toolTracker = createToolUseTracker();
+  // Classification is keyed on consumer presence so reclassified pre-tool text
+  // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
-    params.classifyCommentaryText === true && usesClaudeStreamJsonDialect(params);
+    Boolean(params.onCommentaryText) && usesClaudeStreamJsonDialect(params);
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {

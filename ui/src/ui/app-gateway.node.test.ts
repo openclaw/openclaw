@@ -185,6 +185,7 @@ function createHost(): TestGatewayHost {
     localMediaPreviewRoots: [],
     serverVersion: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     updateStatusBanner: null,
     sessionKey: "main",
     chatMessages: [],
@@ -532,7 +533,156 @@ describe("connectGateway", () => {
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
     });
+    expect(host.pendingUpdateHandoff).toBe(false);
     expect(host.updateStatusBanner).toBeNull();
+  });
+
+  it("clears managed-service handoff verification when update status completes", async () => {
+    const host = createHost();
+    host.pendingUpdateHandoff = true;
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "2.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      server: { version: "2.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateHandoff).toBe(false);
+    });
+    expect(host.pendingUpdateExpectedVersion).toBeNull();
+    expect(host.updateStatusBanner).toBeNull();
+  });
+
+  it("keeps polling while managed-service handoff restart health is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      host.pendingUpdateHandoff = true;
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      let updateStatusCalls = 0;
+      client.request.mockImplementation(async (method: string) => {
+        if (method === "update.status") {
+          updateStatusCalls += 1;
+          if (updateStatusCalls === 1) {
+            return {
+              sentinel: {
+                kind: "update",
+                status: "skipped",
+                stats: {
+                  reason: "restart-health-pending",
+                },
+              },
+            };
+          }
+          return {
+            sentinel: {
+              kind: "update",
+              status: "ok",
+              stats: {
+                after: { version: "2.0.0" },
+              },
+            },
+          };
+        }
+        return {};
+      });
+
+      client.emitHello({
+        type: "hello-ok",
+        protocol: 4,
+        server: { version: "2.0.0" },
+        auth: { role: "operator", scopes: [] },
+        snapshot: {},
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(updateStatusCalls).toBeGreaterThanOrEqual(2);
+      expect(host.pendingUpdateHandoff).toBe(false);
+      expect(host.updateStatusBanner).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fail managed-service handoff while the detached update is still pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      host.pendingUpdateHandoff = true;
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      let updateComplete = false;
+      let updateStatusCalls = 0;
+      client.request.mockImplementation(async (method: string) => {
+        if (method === "update.status") {
+          updateStatusCalls += 1;
+          return {
+            sentinel: updateComplete
+              ? {
+                  kind: "update",
+                  status: "ok",
+                  stats: {
+                    after: { version: "2.0.0" },
+                  },
+                }
+              : {
+                  kind: "update",
+                  status: "skipped",
+                  stats: {
+                    reason: "managed-service-handoff-started",
+                  },
+                },
+          };
+        }
+        return {};
+      });
+
+      client.emitHello({
+        type: "hello-ok",
+        protocol: 4,
+        server: { version: "2.0.0" },
+        auth: { role: "operator", scopes: [] },
+        snapshot: {},
+      });
+
+      await vi.advanceTimersByTimeAsync(10_500);
+
+      expect(updateStatusCalls).toBeGreaterThan(1);
+      expect(host.pendingUpdateHandoff).toBe(true);
+      expect(host.updateStatusBanner).toBeNull();
+
+      updateComplete = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(host.pendingUpdateHandoff).toBe(false);
+      expect(host.updateStatusBanner).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a hard error when the restarted version does not match the expected update", async () => {
@@ -566,6 +716,7 @@ describe("connectGateway", () => {
 
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.pendingUpdateHandoff).toBe(false);
       expect(host.updateStatusBanner).toEqual({
         tone: "danger",
         text: "Update installed but running version did not change — restart may have been blocked. Expected v2.0.0, running v1.0.0.",
@@ -605,9 +756,48 @@ describe("connectGateway", () => {
 
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.pendingUpdateHandoff).toBe(false);
       expect(host.updateStatusBanner).toEqual({
         tone: "danger",
         text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
+      });
+    });
+  });
+
+  it("surfaces managed-service handoff failures even without a final version", async () => {
+    const host = createHost();
+    host.pendingUpdateHandoff = true;
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "managed-service-handoff-failed",
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateHandoff).toBe(false);
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update error: managed-service-handoff-failed. Check the gateway logs for the replacement failure.",
       });
     });
   });

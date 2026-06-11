@@ -483,6 +483,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       run: (parsedParams, resolved) =>
         applySkillProposal({
           workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
         }),

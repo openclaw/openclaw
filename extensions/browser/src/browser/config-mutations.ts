@@ -120,6 +120,7 @@ export async function createBrowserProfileConfig(params: {
         nextProfileConfig = {
           cdpUrl: params.parsedCdpUrl,
           ...(params.driver ? { driver: params.driver } : {}),
+          ...(params.driver === "existing-session" ? { attachOnly: true } : {}),
           color: profileColor,
         };
       } else if (params.driver === "existing-session") {

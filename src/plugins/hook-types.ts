@@ -248,6 +248,12 @@ export type PluginHookAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
+  /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
+  channel?: string;
+  /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
+  chatId?: string;
+  /** Sender identity for channel-originated runs when available. */
+  senderId?: string;
   trigger?: string;
   channelId?: string;
   /** Resolved effective context-token budget after model/config/agent caps. */

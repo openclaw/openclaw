@@ -263,6 +263,7 @@ export type CommandOptions = {
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+const TIMEOUT_EXIT_CODE = 124;
 const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 
 type CapturedOutputBuffers = {
@@ -307,7 +308,6 @@ function appendCapturedOutput(
     }
   }
 }
-
 export function resolveProcessExitCode(params: {
   explicitCode: number | null | undefined;
   childExitCode: number | null | undefined;
@@ -614,8 +614,8 @@ export async function runCommandWithTimeout(
             : "exit";
       const normalizedCode =
         termination === "timeout" || termination === "no-output-timeout"
-          ? resolvedCode === 0
-            ? 124
+          ? resolvedCode == null || resolvedCode === 0
+            ? TIMEOUT_EXIT_CODE
             : resolvedCode
           : resolvedCode;
       resolve({

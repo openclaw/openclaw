@@ -92,6 +92,8 @@ function createMockCronService(): CronServiceContract {
     status: vi.fn(async () => ({
       enabled: true,
       storePath: "/tmp/openclaw-test-cron.json",
+      storage: "sqlite" as const,
+      sqlitePath: "/tmp/openclaw-test-state/state/openclaw.sqlite",
       jobs: 0,
       nextWakeAtMs: null,
     })),
