@@ -63,10 +63,7 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
-import {
-  createDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
-} from "../../../infra/diagnostic-trace-context.js";
+import { runWithDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
   getPairedNode,
   requestNodePairing,
@@ -121,6 +118,10 @@ import {
   setClientPluginNodeCapability,
 } from "../../plugin-node-capability.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
+import {
+  createGatewayMessageDiagnosticTrace,
+  createGatewayRequestDiagnosticTrace,
+} from "../../request-diagnostic-trace.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -427,6 +428,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     logHealth,
     logWsControl,
   } = params;
+  // A WebSocket connection is the stable request root; individual JSON-RPC
+  // frames are siblings because separate client calls on one socket are not
+  // causally ordered by transport arrival.
+  const requestTrace = createGatewayRequestDiagnosticTrace(upgradeReq, {
+    honorTraceparent: isLocalDirectRequest(upgradeReq),
+  });
 
   const sendFrame = async (obj: unknown): Promise<void> =>
     await new Promise<void>((resolve, reject) => {
@@ -2116,7 +2123,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   };
 
   socket.on("message", (data) => {
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
+    void runWithDiagnosticTraceContext(createGatewayMessageDiagnosticTrace(requestTrace), () =>
+      handleMessage(data),
+    );
   });
 }
 

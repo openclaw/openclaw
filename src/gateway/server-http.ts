@@ -12,10 +12,7 @@ import type { WebSocketServer } from "ws";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
-} from "../infra/diagnostic-trace-context.js";
+import { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -32,6 +29,7 @@ import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
+import { createGatewayRequestDiagnosticTrace } from "./request-diagnostic-trace.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import {
   isProtectedPluginRoutePathFromContext,
@@ -533,8 +531,9 @@ export function createGatewayHttpServer(opts: {
       });
 
   function handleRequestWithTrace(req: IncomingMessage, res: ServerResponse) {
-    return runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-      handleRequest(req, res),
+    return runWithDiagnosticTraceContext(
+      createGatewayRequestDiagnosticTrace(req, { honorTraceparent: isLocalDirectRequest(req) }),
+      () => handleRequest(req, res),
     );
   }
 
@@ -854,137 +853,143 @@ export function attachGatewayUpgradeHandler(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), async () => {
-      const configSnapshot = getRuntimeConfig();
-      const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-      const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
-      if (scopedNodeCapability.malformedScopedPath) {
-        writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
-        socket.destroy();
-        return;
-      }
-      if (scopedNodeCapability.rewrittenUrl) {
-        req.url = scopedNodeCapability.rewrittenUrl;
-      }
-      const resolvedAuthLocal = getResolvedAuth();
-      const requestPath = scopedNodeCapability.pathname;
-      const pathContext = resolvePluginRoutePathContext(requestPath);
-      const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
-      if (nodeCapability) {
-        // Node-capability WebSocket upgrades authenticate before plugin upgrade dispatch so
-        // plugin handlers never receive unauthorized scoped capability sockets.
-        const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
-        const ok = await authorizePluginNodeCapabilityRequest({
-          req,
-          auth: resolvedAuthLocal,
-          trustedProxies,
-          allowRealIpFallback,
-          clients,
-          nodeCapability,
-          capability: scopedNodeCapability.capability,
-          malformedScopedPath: scopedNodeCapability.malformedScopedPath,
-          rateLimiter,
-        });
-        if (!ok.ok) {
-          writeUpgradeAuthFailure(socket, ok);
+    void runWithDiagnosticTraceContext(
+      createGatewayRequestDiagnosticTrace(req, {
+        honorTraceparent: isLocalDirectRequest(req),
+      }),
+      async () => {
+        const configSnapshot = getRuntimeConfig();
+        const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+        const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+        const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
+        if (scopedNodeCapability.malformedScopedPath) {
+          writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
           socket.destroy();
           return;
         }
-      }
-      if (handlePluginUpgrade) {
-        let pluginGatewayAuthSatisfied = false;
-        let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
-        let pluginGatewayRequestOperatorScopes: string[] | undefined;
-        const enforcePluginGatewayAuth = (
-          shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth
-        )(pathContext);
-        if (
-          enforcePluginGatewayAuth &&
-          !(await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(requestPath)
-        ) {
-          const { checkGatewayHttpRequestAuth } = await getHttpAuthUtilsModule();
-          const authCheck = await checkGatewayHttpRequestAuth({
+        if (scopedNodeCapability.rewrittenUrl) {
+          req.url = scopedNodeCapability.rewrittenUrl;
+        }
+        const resolvedAuthLocal = getResolvedAuth();
+        const requestPath = scopedNodeCapability.pathname;
+        const pathContext = resolvePluginRoutePathContext(requestPath);
+        const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
+        if (nodeCapability) {
+          // Node-capability WebSocket upgrades authenticate before plugin upgrade dispatch so
+          // plugin handlers never receive unauthorized scoped capability sockets.
+          const { authorizePluginNodeCapabilityRequest } =
+            await getPluginNodeCapabilityAuthModule();
+          const ok = await authorizePluginNodeCapabilityRequest({
             req,
             auth: resolvedAuthLocal,
             trustedProxies,
             allowRealIpFallback,
+            clients,
+            nodeCapability,
+            capability: scopedNodeCapability.capability,
+            malformedScopedPath: scopedNodeCapability.malformedScopedPath,
             rateLimiter,
-            cfg: configSnapshot,
           });
-          if (!authCheck.ok) {
-            writeUpgradeAuthFailure(socket, authCheck.authResult);
+          if (!ok.ok) {
+            writeUpgradeAuthFailure(socket, ok);
             socket.destroy();
             return;
           }
-          pluginGatewayAuthSatisfied = true;
-          pluginGatewayRequestAuth = authCheck.requestAuth;
-          const { resolvePluginRouteRuntimeOperatorScopes } =
-            await getPluginRouteRuntimeScopesModule();
-          pluginGatewayRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
-            req,
-            authCheck.requestAuth,
-          );
         }
-        if (
-          await handlePluginUpgrade(req, socket, head, pathContext, {
-            gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
-            gatewayRequestAuth: pluginGatewayRequestAuth,
-            gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
-          })
-        ) {
-          return;
-        }
-      }
-      const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
-      if (wss.listenerCount("connection") === 0) {
-        writeUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
-        socket.destroy();
-        return;
-      }
-      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
-        writeUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
-        socket.destroy();
-        return;
-      }
-      let budgetTransferred = false;
-      // The socket owns the preauth budget until the WebSocket connection handler claims it;
-      // close/error paths release here to avoid leaking unauthenticated connection slots.
-      const releaseUpgradeBudget = () => {
-        if (budgetTransferred) {
-          return;
-        }
-        budgetTransferred = true;
-        preauthConnectionBudget.release(preauthBudgetKey);
-      };
-      socket.once("close", releaseUpgradeBudget);
-      try {
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          (
-            ws as unknown as import("ws").WebSocket & {
-              __openclawPreauthBudgetClaimed?: boolean;
-              __openclawPreauthBudgetKey?: string;
+        if (handlePluginUpgrade) {
+          let pluginGatewayAuthSatisfied = false;
+          let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
+          let pluginGatewayRequestOperatorScopes: string[] | undefined;
+          const enforcePluginGatewayAuth = (
+            shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth
+          )(pathContext);
+          if (
+            enforcePluginGatewayAuth &&
+            !(await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(requestPath)
+          ) {
+            const { checkGatewayHttpRequestAuth } = await getHttpAuthUtilsModule();
+            const authCheck = await checkGatewayHttpRequestAuth({
+              req,
+              auth: resolvedAuthLocal,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+              cfg: configSnapshot,
+            });
+            if (!authCheck.ok) {
+              writeUpgradeAuthFailure(socket, authCheck.authResult);
+              socket.destroy();
+              return;
             }
-          )["__openclawPreauthBudgetKey"] = preauthBudgetKey;
-          wss.emit("connection", ws, req);
-          const budgetClaimed = Boolean(
+            pluginGatewayAuthSatisfied = true;
+            pluginGatewayRequestAuth = authCheck.requestAuth;
+            const { resolvePluginRouteRuntimeOperatorScopes } =
+              await getPluginRouteRuntimeScopesModule();
+            pluginGatewayRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
+              req,
+              authCheck.requestAuth,
+            );
+          }
+          if (
+            await handlePluginUpgrade(req, socket, head, pathContext, {
+              gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
+              gatewayRequestAuth: pluginGatewayRequestAuth,
+              gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
+            })
+          ) {
+            return;
+          }
+        }
+        const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+        if (wss.listenerCount("connection") === 0) {
+          writeUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
+          socket.destroy();
+          return;
+        }
+        if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
+          writeUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
+          socket.destroy();
+          return;
+        }
+        let budgetTransferred = false;
+        // The socket owns the preauth budget until the WebSocket connection handler claims it;
+        // close/error paths release here to avoid leaking unauthenticated connection slots.
+        const releaseUpgradeBudget = () => {
+          if (budgetTransferred) {
+            return;
+          }
+          budgetTransferred = true;
+          preauthConnectionBudget.release(preauthBudgetKey);
+        };
+        socket.once("close", releaseUpgradeBudget);
+        try {
+          wss.handleUpgrade(req, socket, head, (ws) => {
             (
               ws as unknown as import("ws").WebSocket & {
                 __openclawPreauthBudgetClaimed?: boolean;
+                __openclawPreauthBudgetKey?: string;
               }
-            )["__openclawPreauthBudgetClaimed"],
-          );
-          if (budgetClaimed) {
-            budgetTransferred = true;
-            socket.off("close", releaseUpgradeBudget);
-          }
-        });
-      } catch {
-        socket.off("close", releaseUpgradeBudget);
-        releaseUpgradeBudget();
-        throw new Error("gateway websocket upgrade failed");
-      }
-    }).catch((err: unknown) => {
+            )["__openclawPreauthBudgetKey"] = preauthBudgetKey;
+            wss.emit("connection", ws, req);
+            const budgetClaimed = Boolean(
+              (
+                ws as unknown as import("ws").WebSocket & {
+                  __openclawPreauthBudgetClaimed?: boolean;
+                }
+              )["__openclawPreauthBudgetClaimed"],
+            );
+            if (budgetClaimed) {
+              budgetTransferred = true;
+              socket.off("close", releaseUpgradeBudget);
+            }
+          });
+        } catch {
+          socket.off("close", releaseUpgradeBudget);
+          releaseUpgradeBudget();
+          throw new Error("gateway websocket upgrade failed");
+        }
+      },
+    ).catch((err: unknown) => {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);

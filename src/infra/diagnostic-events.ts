@@ -296,6 +296,30 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   reason: string;
 };
 
+export type DiagnosticRunInvocationEvent = DiagnosticBaseEvent & {
+  type: "run.invocation";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+};
+
+export type DiagnosticRunInvocationCompletedEvent = DiagnosticBaseEvent & {
+  type: "run.invocation.completed";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+  durationMs: number;
+  outcome: "completed" | "error";
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -667,6 +691,8 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionTurnCreatedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
+  | DiagnosticRunInvocationEvent
+  | DiagnosticRunInvocationCompletedEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent

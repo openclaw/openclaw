@@ -101,4 +101,51 @@ describe("gateway HTTP request trace scope", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("inherits inbound traceparent as the request trace parent", async () => {
+    const events: Array<{ trace?: DiagnosticTraceContext; type: string }> = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push({ trace: event.trace, type: event.type });
+    });
+    let activeTraceInHandler: DiagnosticTraceContext | undefined;
+    const parentTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+    const parentSpanId = "00f067aa0ba902b7";
+
+    await withTempConfig({
+      cfg: { gateway: { auth: { mode: "none" } } },
+      run: async () => {
+        const httpServer = createGatewayHttpServer({
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async (_req, res) => {
+            activeTraceInHandler = getActiveDiagnosticTraceContext();
+            emitDiagnosticEvent({ type: "message.queued", source: "gateway-test" });
+            res.statusCode = 204;
+            res.end();
+            return true;
+          },
+          resolvedAuth,
+        });
+        const port = await listen(httpServer);
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/hook`, {
+            headers: { traceparent: `00-${parentTraceId}-${parentSpanId}-01` },
+          });
+          expect(response.status).toBe(204);
+        } finally {
+          await closeServer(httpServer);
+        }
+      },
+    });
+
+    stop();
+    expect(activeTraceInHandler?.traceId).toBe(parentTraceId);
+    expect(activeTraceInHandler?.parentSpanId).toBe(parentSpanId);
+    expect(activeTraceInHandler?.spanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(activeTraceInHandler?.spanId).not.toBe(parentSpanId);
+    expect(events).toEqual([{ trace: activeTraceInHandler, type: "message.queued" }]);
+  });
 });
