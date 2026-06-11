@@ -7,9 +7,16 @@
 #
 # Security: graphiti-mcp is bound to the docker0 bridge IP (172.17.0.1), NOT
 # 0.0.0.0 — it is reachable from the host and from containers, never from the
-# public internet. The life container reaches it via a `docker network connect`
-# in Phase 3 (see README). The Graphiti MCP surface is unauthenticated and
-# exposes destructive tools, so it must never be published on a public iface.
+# public internet. The Graphiti MCP surface is unauthenticated and exposes
+# destructive tools, so it must never be published on a public iface.
+#
+# Reachability from the life agent: graphiti-mcp ALSO joins the external
+# `life_default` network (the life compose project's network), so the life
+# gateway resolves `graphiti-mcp` by name. This is declarative on purpose —
+# the old imperative `docker network connect` did NOT survive life container
+# recreation (broke memory silently on every redeploy/restart of life).
+# falkordb stays on the internal network only. Requires the life project
+# network to exist before `up` (it does, on this host).
 
 name: graphiti-life
 
@@ -53,10 +60,16 @@ services:
       - "172.17.0.1:8000:8000"
     networks:
       - graphiti
+      - life_net
 
 networks:
   graphiti:
     driver: bridge
+  # life agent's compose network — lets the life gateway resolve graphiti-mcp
+  # by name across container recreations (see header comment)
+  life_net:
+    name: life_default
+    external: true
 
 volumes:
   falkordb_data:

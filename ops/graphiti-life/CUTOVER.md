@@ -13,15 +13,21 @@ Applies the per-user memory feature to the live `life` gateway on the US host
 - `graphiti-life` compose stack healthy on the host (`/opt/graphiti`).
 - Proxy validated; identity hook written.
 
-## 1. Connect the life container to Graphiti's network
+## 1. Network reachability (declarative — no manual step)
+
+> **2026-06-11 update:** the original imperative `docker network connect` did NOT
+> survive life-container recreation — memory broke silently on the next redeploy.
+> The compose file now declares `life_default` as an external network on the
+> `graphiti-mcp` service, so the life gateway resolves `graphiti-mcp` by name
+> across recreations of either side. No manual connect needed.
 
 ```bash
-docker network connect graphiti-life_graphiti life-openclaw-gateway-1
 # verify the proxy host resolves from inside life:
 docker exec life-openclaw-gateway-1 getent hosts graphiti-mcp
 ```
 
-(Re-run after any `docker compose up` that recreates the life container.)
+Requires the `life` compose project (and its `life_default` network) to exist
+before `docker compose up` of the graphiti-life stack.
 
 ## 2. Install the extensions into life's config dir
 
