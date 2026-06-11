@@ -285,12 +285,17 @@ class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
         headers.authorization = `Bearer ${token}`;
       }
     }
+    const options: WebSocket.ClientOptions = {
+      headers,
+      // Codex app-server's Unix transport closes upgrade handshakes that offer compression.
+      perMessageDeflate: false,
+    };
     this.ws = endpoint.url.startsWith("unix://")
       ? new WebSocket("ws://localhost/", {
-          headers,
+          ...options,
           createConnection: () => connectCodexSupervisorUnixSocket(endpoint.url),
         })
-      : new WebSocket(endpoint.url, { headers });
+      : new WebSocket(endpoint.url, options);
     this.openPromise = new Promise((resolve, reject) => {
       this.ws.once("open", resolve);
       this.ws.once("error", reject);
