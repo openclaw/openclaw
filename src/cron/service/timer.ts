@@ -1495,6 +1495,16 @@ function isRunnableJob(params: {
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }
+  return hasReplayableMissedCronSlot(job, nowMs);
+}
+
+// A missed cron slot is replayable only when it fell after updatedAtMs:
+// schedule updates and run outcomes recompute nextRunAtMs when they bump it,
+// so replaying older slots would re-fire schedules whose nextRunAtMs an update
+// deliberately moved (#91944). Metadata-only updates also bump updatedAtMs;
+// suppressing their crash-window slots skips a best-effort catch-up, which is
+// the safe direction for outbound jobs.
+function hasReplayableMissedCronSlot(job: CronJob, nowMs: number): boolean {
   let previousRunAtMs: number | undefined;
   try {
     previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
@@ -1507,6 +1517,9 @@ function isRunnableJob(params: {
   const lastRunAtMs = job.state.lastRunAtMs;
   if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
     // Only replay a "missed slot" when there is concrete run history.
+    return false;
+  }
+  if (Number.isFinite(job.updatedAtMs) && previousRunAtMs <= job.updatedAtMs) {
     return false;
   }
   return previousRunAtMs > lastRunAtMs;
@@ -1572,20 +1585,7 @@ function deferPendingBackoffMissedCronSlots(
     if (backoffUntilMs === undefined || nowMs >= backoffUntilMs) {
       continue;
     }
-    let previousRunAtMs: number | undefined;
-    try {
-      previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
-    } catch {
-      continue;
-    }
-    const lastRunAtMs = job.state.lastRunAtMs;
-    if (
-      typeof previousRunAtMs !== "number" ||
-      !Number.isFinite(previousRunAtMs) ||
-      typeof lastRunAtMs !== "number" ||
-      !Number.isFinite(lastRunAtMs) ||
-      previousRunAtMs <= lastRunAtMs
-    ) {
+    if (!hasReplayableMissedCronSlot(job, nowMs)) {
       continue;
     }
     if (job.state.nextRunAtMs !== backoffUntilMs) {
