@@ -157,18 +157,21 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
     if (!authorizationPlan.ok) {
       return { complete: false, patterns: [] };
     }
-    const segments = authorizationPlan.groups.flatMap((group) =>
-      group.candidates
-        .filter((candidate) => candidate.allowAlways)
-        .map((candidate) => candidate.sourceSegment),
-    );
-    return resolveAllowAlwaysPatternCoverage({
-      segments,
+    const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
+    const reusableSegments = candidates
+      .filter((candidate) => candidate.allowAlways)
+      .map((candidate) => candidate.sourceSegment);
+    const coverage = resolveAllowAlwaysPatternCoverage({
+      segments: reusableSegments,
       cwd,
       env: params.env,
       platform: process.platform,
       strictInlineEval: params.strictInlineEval,
     });
+    return {
+      ...coverage,
+      complete: coverage.complete && reusableSegments.length === candidates.length,
+    };
   }
   const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
   if (!analysis.ok) {
