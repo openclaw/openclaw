@@ -232,6 +232,29 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
+  it("falls back to state media when a cwd collision is outside allowed roots", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-blocked-cwd-collision-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const cwd = path.join(base, "cwd");
+      const relativePath = "media/inbound/photo.jpg";
+      const cwdPath = path.join(cwd, relativePath);
+      const statePath = path.join(stateDir, relativePath);
+      await fs.mkdir(path.dirname(cwdPath), { recursive: true });
+      await fs.mkdir(path.dirname(statePath), { recursive: true });
+      await fs.writeFile(cwdPath, "blocked-cwd-media");
+      await fs.writeFile(statePath, "state-media");
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
+        localPathRoots: [path.join(stateDir, "media")],
+      });
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+
+      expect(result.buffer.toString()).toBe("state-media");
+    });
+  });
+
   it("blocks local attachments outside configured roots", async () => {
     if (process.platform === "win32") {
       return;

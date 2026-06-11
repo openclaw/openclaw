@@ -335,7 +335,10 @@ export class MediaAttachmentCache {
     }
     if (!path.isAbsolute(rawPath)) {
       const cwdCandidate = path.resolve(rawPath);
-      if (pathExists(cwdCandidate)) {
+      if (
+        pathExists(cwdCandidate) &&
+        isInboundPathAllowed({ filePath: cwdCandidate, roots: this.localPathRoots })
+      ) {
         return cwdCandidate;
       }
       const stateCandidate = path.resolve(resolveStateDir(), rawPath);
