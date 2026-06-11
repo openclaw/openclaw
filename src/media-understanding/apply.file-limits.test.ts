@@ -17,8 +17,29 @@ describe("resolveFileLimits", () => {
     expect(resolveFileLimits({}).pdf.maxPages).toBe(20);
   });
 
+  it("keeps non-limit fresh-install defaults from resolveInputFileLimits", () => {
+    // Fresh-install contract: only the byte/page budgets move to the chat
+    // attachment cap; everything else keeps the input-file defaults.
+    const limits = resolveFileLimits({});
+    expect(limits.maxChars).toBeGreaterThan(0);
+    expect(limits.allowedMimes).toContain("application/pdf");
+    expect(limits.allowUrl).toBe(true);
+  });
+
   it("tracks agents.defaults.mediaMaxMb for the byte cap", () => {
     const cfg: OpenClawConfig = { agents: { defaults: { mediaMaxMb: 50 } } };
+    expect(resolveFileLimits(cfg).maxBytes).toBe(50 * MB);
+  });
+
+  it("follows a lowered attachment cap instead of blanket-raising extraction", () => {
+    // Upgrade contract: extraction tracks what the gateway accepts in both
+    // directions, so a tightened mediaMaxMb tightens extraction too.
+    const cfg: OpenClawConfig = { agents: { defaults: { mediaMaxMb: 5 } } };
+    expect(resolveFileLimits(cfg).maxBytes).toBe(5 * MB);
+  });
+
+  it("uses the larger of mediaMaxMb and pdfMaxBytesMb for the byte cap", () => {
+    const cfg: OpenClawConfig = { agents: { defaults: { mediaMaxMb: 50, pdfMaxBytesMb: 30 } } };
     expect(resolveFileLimits(cfg).maxBytes).toBe(50 * MB);
   });
 
