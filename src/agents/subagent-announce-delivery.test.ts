@@ -634,6 +634,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       accountId?: string;
       threadId?: string | number;
     };
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
   }) {
     const callGateway = createGatewayMock();
     let activityChecks = 0;
@@ -673,6 +679,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       triggerMessage: "child done",
       steerMessage: "child done",
       requesterOrigin: params.requesterOrigin,
+      completionDirectOrigin: params.completionDirectOrigin,
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       directIdempotencyKey: "announce-no-external-route",
