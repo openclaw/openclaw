@@ -589,8 +589,8 @@ export const de: TranslationMap = {
     showArchivedShort: "Archived",
     hideArchivedShort: "Hide archived",
     layout: "Card layout",
-    layoutCompact: "Compact cards",
-    layoutComfortable: "Comfortable cards",
+    layoutCompact: "Compact card density",
+    layoutComfortable: "Comfortable card density",
     dispatch: "Dispatcher anstoßen",
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",

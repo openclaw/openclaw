@@ -587,8 +587,8 @@ export const uk: TranslationMap = {
     showArchivedShort: "Archived",
     hideArchivedShort: "Hide archived",
     layout: "Card layout",
-    layoutCompact: "Compact cards",
-    layoutComfortable: "Comfortable cards",
+    layoutCompact: "Compact card density",
+    layoutComfortable: "Comfortable card density",
     dispatch: "Підштовхнути диспетчер",
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",

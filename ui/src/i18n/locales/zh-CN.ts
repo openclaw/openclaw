@@ -582,8 +582,8 @@ export const zh_CN: TranslationMap = {
     showArchivedShort: "Archived",
     hideArchivedShort: "Hide archived",
     layout: "Card layout",
-    layoutCompact: "Compact cards",
-    layoutComfortable: "Comfortable cards",
+    layoutCompact: "Compact card density",
+    layoutComfortable: "Comfortable card density",
     dispatch: "提醒调度器",
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
