@@ -449,15 +449,10 @@ export async function executePreparedCliRun(
           }
         }
 
-        const configuredAgentTimeoutSeconds = params.config?.agents?.defaults?.timeoutSeconds;
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
           timeoutMs: params.timeoutMs,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-          hasConfiguredAgentTimeout:
-            typeof configuredAgentTimeoutSeconds === "number" &&
-            Number.isFinite(configuredAgentTimeoutSeconds) &&
-            configuredAgentTimeoutSeconds > 0,
           useResume,
           trigger: params.trigger,
         });

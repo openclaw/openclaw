@@ -73,7 +73,6 @@ export function resolveCliNoOutputTimeoutMs(params: {
   useResume: boolean;
   trigger?: EmbeddedRunTrigger;
   runTimeoutOverrideMs?: number;
-  hasConfiguredAgentTimeout?: boolean;
 }): number {
   const hasExplicitRunTimeout =
     typeof params.runTimeoutOverrideMs === "number" &&
@@ -83,7 +82,7 @@ export function resolveCliNoOutputTimeoutMs(params: {
     params.backend,
     params.useResume,
     params.trigger,
-    hasExplicitRunTimeout || params.hasConfiguredAgentTimeout === true,
+    hasExplicitRunTimeout,
   );
   // Keep watchdog below global timeout in normal cases.
   const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
