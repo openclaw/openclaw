@@ -834,6 +834,42 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("allows ctime-only fingerprint drift while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalCtimeDrift = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalCtimeDrift,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    const stableStat = await fs.stat(sessionFile, { bigint: true });
+    const driftedStat = Object.assign(
+      Object.create(Object.getPrototypeOf(stableStat)),
+      stableStat,
+      {
+        ctimeNs: stableStat.ctimeNs + 1_000_000n,
+      },
+    ) as typeof stableStat;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options?.bigint === true) {
+        return driftedStat;
+      }
+      throw new Error(`unexpected stat call for ${String(target)}`);
+    });
+
+    try {
+      await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLockLocalCtimeDrift).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
   it("still rejects external edits after the prompt stream lock is reacquired", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
