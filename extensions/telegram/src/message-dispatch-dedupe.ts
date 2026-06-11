@@ -11,7 +11,8 @@ export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-messag
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
-export type TelegramMessageDispatchReplayGuard = ClaimableDedupe;
+export type TelegramMessageDispatchReplayGuard = ClaimableDedupe &
+  Required<Pick<ClaimableDedupe, "forget">>;
 
 export type TelegramMessageDispatchClaim =
   | { kind: "claimed"; key: string }
@@ -127,6 +128,18 @@ export async function commitTelegramMessageDispatchReplay(params: {
   await Promise.all(
     keys.map((key) =>
       params.guard.commit(key, { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE }),
+    ),
+  );
+}
+
+export async function forgetTelegramMessageDispatchReplay(params: {
+  guard: TelegramMessageDispatchReplayGuard;
+  keys?: readonly string[];
+}): Promise<void> {
+  const keys = normalizeReplayKeys(params.keys);
+  await Promise.all(
+    keys.map((key) =>
+      params.guard.forget(key, { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE }),
     ),
   );
 }

@@ -523,10 +523,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     telegramDeps?: TelegramBotDeps;
     bot?: Bot;
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
+    retryDispatchErrors?: boolean;
+    suppressFailureFallback?: boolean;
     textLimit?: number;
   }) {
     const bot = params.bot ?? createBot();
-    await dispatchTelegramMessage({
+    return await dispatchTelegramMessage({
       context: params.context,
       bot,
       cfg: params.cfg ?? {},
@@ -537,6 +539,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
+      retryDispatchErrors: params.retryDispatchErrors,
+      suppressFailureFallback: params.suppressFailureFallback,
     });
   }
 
@@ -2399,6 +2403,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(firstPartialUpdateOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(nextPartialUpdateOrder);
     expect(deliverReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns retryable when spooled replay suppresses fallback after non-silent delivery skip", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "failed" });
+      return { queuedFinal: false };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect((result as { error?: unknown }).error).toBeInstanceOf(Error);
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("keeps tool progress visible after a partial-streamed intermediate block", async () => {
