@@ -15,6 +15,7 @@ import {
   type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
@@ -477,7 +478,11 @@ async function resolveOAuthCredentialForCodexAppServer(
     isCodexAppServerAuthProvider(ownerCredential.provider, params.config)
       ? ownerCredential
       : undefined;
-  if (params.forceRefresh && !persistedOAuthCredential && overlaidOAuthCredential) {
+  const shouldRefreshRuntimeOnlyOAuthCredential =
+    !persistedOAuthCredential &&
+    overlaidOAuthCredential &&
+    !hasUsableOAuthCredential(overlaidOAuthCredential);
+  if (shouldRefreshRuntimeOnlyOAuthCredential) {
     const refreshedRuntimeCredential = await refreshOAuthCredentialForRuntime({
       credential: overlaidOAuthCredential,
     });
@@ -487,11 +492,15 @@ async function resolveOAuthCredentialForCodexAppServer(
     store.profiles[profileId] = refreshedRuntimeCredential;
     return refreshedRuntimeCredential;
   }
+  const shouldForceRefreshPersistedCredential =
+    params.forceRefresh &&
+    persistedOAuthCredential !== undefined &&
+    !hasUsableOAuthCredential(persistedOAuthCredential);
   const resolved = await resolveApiKeyForProfile({
     store,
     profileId,
     agentDir: ownerAgentDir,
-    forceRefresh: params.forceRefresh && Boolean(persistedOAuthCredential),
+    forceRefresh: shouldForceRefreshPersistedCredential,
   });
   const refreshed = loadAuthProfileStoreForSecretsRuntime(ownerAgentDir).profiles[profileId];
   const storedCredential = store.profiles[profileId];
