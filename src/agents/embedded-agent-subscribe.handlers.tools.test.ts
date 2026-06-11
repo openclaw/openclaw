@@ -1802,6 +1802,43 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingTargets.has("tool-status-only-sent")).toBe(false);
   });
 
+  it("commits partially failed message sends when delivery results prove a send", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-partial-sent",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "partially delivered",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-partial-sent",
+      isError: false,
+      result: {
+        details: {
+          status: "partial_failed",
+          results: [{ channel: "discord", messageId: "message-1" }],
+          sentBeforeError: true,
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["partially delivered"]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:123",
+      text: "partially delivered",
+    });
+    expect(ctx.state.pendingMessagingTexts.has("tool-partial-sent")).toBe(false);
+    expect(ctx.state.pendingMessagingTargets.has("tool-partial-sent")).toBe(false);
+  });
+
   it("commits message sends with ordinary success JSON results", async () => {
     const { ctx } = createTestContext();
 

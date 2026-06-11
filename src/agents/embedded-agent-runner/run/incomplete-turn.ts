@@ -307,8 +307,13 @@ export function resolveIncompleteTurnPayloadText(params: {
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
     params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
   );
+  const unsignedThinkingOnlyAssistant = isUnsignedThinkingOnlyAssistantTurn(
+    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
+  );
   const nonVisiblePostToolAssistant =
-    emptyResponseAssistant || (reasoningOnlyAssistant && hasCompletedToolActivity(params.attempt));
+    emptyResponseAssistant ||
+    unsignedThinkingOnlyAssistant ||
+    (reasoningOnlyAssistant && hasCompletedToolActivity(params.attempt));
 
   if (
     (params.payloadCount !== 0 && !toolUseTerminal && !nonVisiblePostToolAssistant) ||
@@ -342,6 +347,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
+    !unsignedThinkingOnlyAssistant &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -564,6 +570,27 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
     return false;
   }
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
+}
+
+function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  return (
+    assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking" &&
+    hasThinkingContentBlock(message)
+  );
+}
+
+function hasThinkingContentBlock(message: object): boolean {
+  const content = (message as { content?: unknown }).content;
+  return (
+    Array.isArray(content) &&
+    content.some(
+      (block) =>
+        block && typeof block === "object" && (block as { type?: unknown }).type === "thinking",
+    )
+  );
 }
 
 function isEmptyResponseAssistantTurn(params: {

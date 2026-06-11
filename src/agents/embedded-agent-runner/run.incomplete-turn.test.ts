@@ -3631,6 +3631,34 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBe("⚠️ Agent couldn't generate a response. Please try again.");
   });
 
+  it("treats unsigned thinking-only terminal payloads as incomplete despite reasoning payloads", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [
+          {
+            type: "thinking",
+            thinking: "The answer is hidden in internal reasoning.",
+          },
+        ],
+        usage: { input: 5000, output: 20, totalTokens: 5020 },
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(incompleteTurnText).toBe("⚠️ Agent couldn't generate a response. Please try again.");
+  });
+
   it("retries empty openai-responses turns after non-mutating missing tools and pre-tool text", () => {
     const toolMetas = [
       {
@@ -4093,6 +4121,36 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "partial_failed",
+        results: [{ channel: "discord", messageId: "message-4" }],
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        deliveryStatus: "partial_failed",
+        receipt: {
+          primaryPlatformMessageId: "message-5",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "partial_failed",
+        payloadOutcomes: [
+          {
+            status: "sent",
+            resultCount: 1,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "partial_failed",
+      }),
+    ).toBe(false);
   });
 
   it("does not treat metadata-only messaging targets as delivery evidence", () => {

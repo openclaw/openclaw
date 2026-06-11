@@ -213,6 +213,10 @@ function hasSentPayloadOutcomeEvidence(value: unknown): boolean {
   });
 }
 
+function hasResultArrayEvidence(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
 function hasInternalSourceReplyEvidence(details: Record<string, unknown>): boolean {
   if (details.sourceReplySink !== "internal-ui") {
     return false;
@@ -230,19 +234,25 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   }
   const deliveryStatus =
     readLowercaseString(record.deliveryStatus) ?? readLowercaseString(record.delivery_status);
-  if (deliveryStatus && deliveryStatus !== "sent") {
+  if (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") {
     return false;
   }
   if (deliveryStatus === "sent") {
     return true;
   }
   const status = readLowercaseString(record.status);
-  if (!deliveryStatus && status && isKnownNonSentDeliveryStatus(status)) {
+  if (
+    !deliveryStatus &&
+    status &&
+    status !== "partial_failed" &&
+    isKnownNonSentDeliveryStatus(status)
+  ) {
     return false;
   }
   return (
     hasMessageIdEvidence(record) ||
     hasPositiveNumber(record.resultCount) ||
+    hasResultArrayEvidence(record.results) ||
     hasSentPayloadOutcomeEvidence(record.payloadOutcomes) ||
     hasInternalSourceReplyEvidence(record) ||
     (depth < 3 && hasCommittedMessagingToolResultDetailsAtDepth(record.result, depth + 1))
