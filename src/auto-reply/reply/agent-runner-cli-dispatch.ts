@@ -224,10 +224,8 @@ function createToolEventBridge(params: {
 /**
  * Tracks CLI tool start/result events and renders the same durable tool
  * summaries the embedded runner emits: a formatToolAggregate line per result
- * (with args-derived meta captured at start), plus the tool output block when
- * full verbose output is enabled. The CLI parser emits tool result events, but
- * until now they were dropped at the bridge, so CLI-backed runs had no durable
- * tool record under verbose while embedded runs did.
+ * (args-derived meta captured at start), plus the output block under full
+ * verbose. Keeps CLI runs at tool-summary parity with embedded runs.
  */
 export function createCliToolSummaryTracker(params: {
   detailMode?: "explain" | "raw";

@@ -827,6 +827,29 @@ export function createFollowupRunner(params: {
             const notifyUserMessagePersisted = () => {
               queuedUserMessagePersistedAcrossFallback = true;
             };
+            // Shared by the embedded onToolResult callback and the CLI tool
+            // summary tracker so both runners deliver identical durable summaries.
+            const deliverFollowupToolSummary = (payload: ReplyPayload) =>
+              enqueueProgressDelivery(async () => {
+                if (
+                  run.sourceReplyDeliveryMode === "message_tool_only" &&
+                  !shouldEmitToolResultProgress()
+                ) {
+                  return;
+                }
+                await sendFollowupPayloads(
+                  [payload],
+                  effectiveQueued,
+                  {
+                    provider,
+                    modelId: model,
+                  },
+                  { kind: "tool", mirror: false, runId },
+                );
+                if (payload.isError === true) {
+                  markVisibleToolErrorProgress();
+                }
+              });
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
                 const cliSessionBinding = getCliSessionBinding(
@@ -845,27 +868,7 @@ export function createFollowupRunner(params: {
                   detailMode: toolProgressDetail,
                   shouldEmitToolResult: shouldEmitToolResultProgress,
                   shouldEmitToolOutput: shouldEmitToolOutputProgress,
-                  deliver: (payload) =>
-                    enqueueProgressDelivery(async () => {
-                      if (
-                        run.sourceReplyDeliveryMode === "message_tool_only" &&
-                        !shouldEmitToolResultProgress()
-                      ) {
-                        return;
-                      }
-                      await sendFollowupPayloads(
-                        [payload],
-                        effectiveQueued,
-                        {
-                          provider,
-                          modelId: model,
-                        },
-                        { kind: "tool", mirror: false, runId },
-                      );
-                      if (payload.isError === true) {
-                        markVisibleToolErrorProgress();
-                      }
-                    }),
+                  deliver: deliverFollowupToolSummary,
                 });
                 const result = await runCliAgentWithLifecycle({
                   runId,
@@ -1068,27 +1071,7 @@ export function createFollowupRunner(params: {
                 toolProgressDetail,
                 shouldEmitToolResult: shouldEmitToolResultProgress,
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
-                onToolResult: (payload) =>
-                  enqueueProgressDelivery(async () => {
-                    if (
-                      run.sourceReplyDeliveryMode === "message_tool_only" &&
-                      !shouldEmitToolResultProgress()
-                    ) {
-                      return;
-                    }
-                    await sendFollowupPayloads(
-                      [payload],
-                      effectiveQueued,
-                      {
-                        provider,
-                        modelId: model,
-                      },
-                      { kind: "tool", mirror: false, runId },
-                    );
-                    if (payload.isError === true) {
-                      markVisibleToolErrorProgress();
-                    }
-                  }),
+                onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) =>
                   enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({

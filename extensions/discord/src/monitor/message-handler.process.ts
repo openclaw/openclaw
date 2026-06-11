@@ -1038,8 +1038,6 @@ async function processDiscordMessageInner(
         },
         onItemEvent: async (payload) => {
           if (payload.kind === "preamble") {
-            // While the durable verbose commentary lane is active, the ephemeral
-            // draft yields its commentary lines so commentary renders once.
             if (verboseProgressActive()) {
               return;
             }
