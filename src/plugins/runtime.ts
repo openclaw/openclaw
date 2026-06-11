@@ -353,10 +353,6 @@ export function requireActivePluginChannelRegistry(): PluginRegistry {
   return created;
 }
 
-function countSessionExtensionSurface(registry: PluginRegistry | null): number {
-  return registry?.sessionExtensions?.length ?? 0;
-}
-
 export function pinActivePluginSessionExtensionRegistry(registry: PluginRegistry) {
   const previousRegistry = asPluginRegistry(state.sessionExtension.registry);
   installSurfaceRegistry(state.sessionExtension, registry, true);
@@ -380,15 +376,7 @@ export function releasePinnedPluginSessionExtensionRegistry(registry?: PluginReg
 }
 
 export function getActivePluginSessionExtensionRegistry(): PluginRegistry | null {
-  const surfaceRegistry = asPluginRegistry(state.sessionExtension.registry ?? state.activeRegistry);
-  if (!state.sessionExtension.pinned) {
-    return surfaceRegistry;
-  }
-  const activeRegistry = asPluginRegistry(state.activeRegistry);
-  return countSessionExtensionSurface(surfaceRegistry) > 0 ||
-    countSessionExtensionSurface(activeRegistry) === 0
-    ? surfaceRegistry
-    : activeRegistry;
+  return asPluginRegistry(state.sessionExtension.registry ?? state.activeRegistry);
 }
 
 export function getActivePluginSessionExtensionRegistryVersion(): number {

@@ -198,7 +198,7 @@ describe("plugin runtime route registry", () => {
     expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
   });
 
-  it("falls through from an empty pinned session extension registry to the active surface", () => {
+  it("keeps empty pinned session extension registries authoritative over active extensions", () => {
     const startupRegistry = createEmptyPluginRegistry();
     const laterRegistry = createRegistryWithSessionExtension("later", "presence");
 
@@ -207,8 +207,9 @@ describe("plugin runtime route registry", () => {
     const sessionExtensionVersionBeforeSwap = getActivePluginSessionExtensionRegistryVersion();
     setActivePluginRegistry(laterRegistry);
 
-    expect(getActivePluginSessionExtensionRegistry()).toBe(laterRegistry);
-    expect(getActivePluginSessionExtensionRegistryVersion()).not.toBe(
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(getActivePluginSessionExtensionRegistry()?.sessionExtensions).toHaveLength(0);
+    expect(getActivePluginSessionExtensionRegistryVersion()).toBe(
       sessionExtensionVersionBeforeSwap,
     );
   });
