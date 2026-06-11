@@ -56,6 +56,10 @@ vi.mock("./session.js", async () => {
   return {
     ...actual,
     createWaSocket: createWaSocketLocal,
+    readWebAuthExistsForDecision: vi.fn(async () => ({
+      outcome: "stable",
+      exists: true,
+    })),
     waitForWaConnection: waitForWaConnectionLocal,
     formatError: formatErrorLocal,
     getStatusCode,

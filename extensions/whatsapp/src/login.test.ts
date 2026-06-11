@@ -16,6 +16,10 @@ vi.mock("./session.js", async () => {
   return {
     ...actual,
     createWaSocket: vi.fn().mockResolvedValue(sock),
+    readWebAuthExistsForDecision: vi.fn().mockResolvedValue({
+      outcome: "stable",
+      exists: true,
+    }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
   };
 });
