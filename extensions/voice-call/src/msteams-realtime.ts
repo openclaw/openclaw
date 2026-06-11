@@ -1144,6 +1144,10 @@ export function createMsteamsRealtimeCall(params: {
           type: "display.image",
           dataBase64: img.bytes.toString("base64"),
           mime: img.mime,
+          // PiP by default (#17): the image rides as an inset over the live avatar instead of a
+          // fullscreen takeover, keeping the bot visibly present. An older worker ignores the
+          // field and shows fullscreen — same behavior as before.
+          mode: "overlay",
           // Hold each non-final slideshow frame for a fixed beat (plus overlap, so the next frame
           // lands before this one expires); the last keeps the worker default.
           ...(sequence && !isLast
