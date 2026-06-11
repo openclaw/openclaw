@@ -22,15 +22,15 @@ This PR does not currently block tool calls, require confirmation, emit runtime 
 
 The model is designed around facts that a real before-tool-call consumer can supply later:
 
-| Fact              | Meaning                                                                 |
-| ----------------- | ----------------------------------------------------------------------- |
-| `toolName`        | Concrete normalized runtime tool id, such as `exec` or `gmail.send`.    |
-| `toolSource`      | Runtime owner class such as core, plugin, MCP, or channel.              |
-| `actor`           | Entity requesting the tool call: `user`, `agent`, `system`, or `tool`.  |
-| `influencedBy`    | External or stored content sources that influenced the tool decision.   |
-| `capability`      | Security capability resolved from tool metadata or the tool id.         |
-| `approvalState`   | Whether explicit approval is absent, requested, approved, or denied.    |
-| `operatorPolicy`  | Whether the existing operator tool policy allowed, denied, or is unknown. |
+| Fact             | Meaning                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `toolName`       | Concrete normalized runtime tool id, such as `exec` or `gmail.send`.      |
+| `toolSource`     | Runtime owner class such as core, plugin, MCP, or channel.                |
+| `actor`          | Entity requesting the tool call: `user`, `agent`, `system`, or `tool`.    |
+| `influencedBy`   | External or stored content sources that influenced the tool decision.     |
+| `capability`     | Security capability resolved from tool metadata or the tool id.           |
+| `approvalState`  | Whether explicit approval is absent, requested, approved, or denied.      |
+| `operatorPolicy` | Whether the existing operator tool policy allowed, denied, or is unknown. |
 
 `actor` is not a trust source. An agent-originated call influenced by web, email, file, GitHub, browser, memory, skill, or webhook content is still evaluated as externally influenced.
 
@@ -74,12 +74,12 @@ Unknown capability strings normalize to `unknown`. The helper `resolveSecurityMa
 
 ## Decisions
 
-| Decision          | Meaning                                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------------------------- |
-| `allow`           | Policy data allows the fact set.                                                                               |
-| `warn`            | Policy data marks the fact set as security-relevant.                                                           |
-| `require_confirm` | Policy data says this fact set should require explicit confirmation if a later opt-in runtime mode uses it.    |
-| `block`           | Policy data says this fact set should not be allowed if a later opt-in enforcement mode uses the model.        |
+| Decision          | Meaning                                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `allow`           | Policy data allows the fact set.                                                                            |
+| `warn`            | Policy data marks the fact set as security-relevant.                                                        |
+| `require_confirm` | Policy data says this fact set should require explicit confirmation if a later opt-in runtime mode uses it. |
+| `block`           | Policy data says this fact set should not be allowed if a later opt-in enforcement mode uses the model.     |
 
 For this PR, these decisions are evaluator output only.
 
