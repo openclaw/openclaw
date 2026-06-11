@@ -191,7 +191,16 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
   return true;
 }
 
-/** Installs an after-tool hook that terminates the turn after a qualifying message send. */
+/** Installs an after-tool hook that records delivery but does not terminate the turn.
+ *
+ * Previously the hook returned `terminate: true` after a qualifying message send,
+ * which caused the agent loop to end immediately. This prevented the model from
+ * continuing planned work after sending an interstitial/progress update message
+ * (e.g. "checking the codebase, one moment"). The model's natural stopReason
+ * (end_turn/stop) determines when the turn ends — re-invoking the model after
+ * the tool result lets it continue if it was a progress message, or naturally
+ * end with stopReason: stop if it was the final answer. (#92169)
+ */
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -211,7 +220,6 @@ export function installMessageToolOnlyTerminalHook(params: {
       })
     ) {
       params.onDeliveredSourceReply?.();
-      return { ...hookResult, terminate: true };
     }
     return hookResult;
   };
