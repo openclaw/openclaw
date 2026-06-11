@@ -2052,7 +2052,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/subagents: resolve spawned subagent runtime models from configured subagent defaults (`agents.list[<id>].subagents.model` -> `agents.defaults.subagents.model` -> `agents.list[<id>].model`) instead of the parent agent primary, and keep gateway/reply fallbacks alias-aware. (#72984) Thanks @joeykrug.
 - Agents: honor `OPENCLAW_WORKSPACE_DIR` when resolving the default agent workspace, preserving explicit config precedence while keeping env-backed deployments out of the system prompt fallback path. Fixes #66786.
 - Doctor/Codex: stop warning that the message tool is unavailable for source-reply paths where OpenClaw grants `message` at runtime, keeping update and doctor output aligned with the OpenAI happy path. Thanks @pashpashpash.
 - Channels/Weixin: bump the external Weixin catalog entry to `@tencent-weixin/openclaw-weixin@2.4.3` with the matching package integrity. (#81730) Thanks @scotthuang.
