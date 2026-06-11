@@ -710,16 +710,17 @@ async function resolveDoctorMemoryDreamingPayload(params: {
 }): Promise<DoctorMemoryDreamingPayload> {
   const nowMs = Date.now();
   const dreamingConfig = resolveDreamingConfig(params.cfg);
+  const targetAgentId = params.requestedAgentId ?? params.agentId;
   const primaryWorkspaceDir =
     normalizeTrimmedString(params.workspaceDir) ??
-    normalizeTrimmedString(resolveAgentWorkspaceDir(params.cfg, params.agentId));
+    normalizeTrimmedString(resolveAgentWorkspaceDir(params.cfg, targetAgentId));
   const configuredWorkspaces = params.requestedAgentId
     ? primaryWorkspaceDir
       ? [primaryWorkspaceDir]
       : []
     : resolveMemoryDreamingWorkspaces(params.cfg, {
         primaryWorkspaceDir,
-        primaryAgentId: params.agentId,
+        primaryAgentId: targetAgentId,
       }).map((entry) => entry.workspaceDir);
   const allWorkspaces =
     configuredWorkspaces.length > 0
