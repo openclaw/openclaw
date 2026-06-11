@@ -94,7 +94,7 @@ describe("WhatsApp inbound flat aliases", () => {
       url: "https://example.com/next.jpg",
     });
 
-    msg.group!.mentions!.jids = ["first@s.whatsapp.net"];
+    msg.group.mentions.jids = ["first@s.whatsapp.net"];
     expect(msg.mentions).toEqual(["first@s.whatsapp.net"]);
     msg.mentionedJids = ["second@s.whatsapp.net"];
     expect(msg.group?.mentions?.jids).toEqual(["second@s.whatsapp.net"]);
