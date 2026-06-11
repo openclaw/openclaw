@@ -615,15 +615,24 @@ async function tryRealpath(filePath: string): Promise<string | null> {
 }
 
 export async function writeWorkspaceSupportFile(params: {
+  workspaceDir?: string;
   skillDir: string;
   relativePath: string;
   content: string;
   overwrite?: boolean;
+  allowedSymlinkTargetRealPaths?: readonly string[];
 }): Promise<void> {
   const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
-  await fs.mkdir(params.skillDir, { recursive: true });
-  const skillRoot = await root(params.skillDir);
-  await skillRoot.write(relativePath, params.content, {
+  const filePath = path.join(params.skillDir, ...relativePath.split("/"));
+  const target = params.workspaceDir
+    ? await resolveWorkspaceSkillWriteTarget({
+        workspaceDir: params.workspaceDir,
+        filePath,
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+      })
+    : { rootDir: params.skillDir, relativePath };
+  const targetRoot = await root(target.rootDir);
+  await targetRoot.write(target.relativePath, params.content, {
     encoding: "utf8",
     mkdir: true,
     ...(params.overwrite === undefined ? {} : { overwrite: params.overwrite }),
@@ -631,12 +640,22 @@ export async function writeWorkspaceSupportFile(params: {
 }
 
 export async function removeWorkspaceSupportFile(params: {
+  workspaceDir?: string;
   skillDir: string;
   relativePath: string;
+  allowedSymlinkTargetRealPaths?: readonly string[];
 }): Promise<void> {
   const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
-  const skillRoot = await root(params.skillDir);
-  await skillRoot.remove(relativePath).catch((error: unknown) => {
+  const filePath = path.join(params.skillDir, ...relativePath.split("/"));
+  const target = params.workspaceDir
+    ? await resolveWorkspaceSkillWriteTarget({
+        workspaceDir: params.workspaceDir,
+        filePath,
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+      })
+    : { rootDir: params.skillDir, relativePath };
+  const targetRoot = await root(target.rootDir);
+  await targetRoot.remove(target.relativePath).catch((error: unknown) => {
     if ((error as { code?: string })?.code !== "ENOENT") {
       throw error;
     }
