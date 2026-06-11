@@ -508,6 +508,39 @@ describe("createMsteamsRealtimeCall", () => {
     expect(consultArgs?.images).toHaveLength(3);
   });
 
+  it("verbal interrupt ('stop') flushes playback deterministically while audio is playing out", () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: { provider: mock.provider, providerConfig: {} },
+      });
+      const req = mock.getRequest();
+      const cancels = (): number =>
+        ctx.sent.filter((m) => (m as { type?: string }).type === "assistant.cancel").length;
+
+      // ~10s of model audio queued for playout.
+      req.onAudio(Buffer.alloc(480_000));
+
+      // A normal caller turn does NOT flush.
+      req.onTranscript?.("user", "tell me more about the budget", true);
+      expect(cancels()).toBe(0);
+
+      // "Stop." while still playing → immediate assistant.cancel (worker queue flush).
+      req.onTranscript?.("user", "Stop.", true);
+      expect(cancels()).toBe(1);
+
+      // After playout ended, "stop" has nothing to flush → no extra cancel.
+      vi.advanceTimersByTime(15_000);
+      req.onTranscript?.("user", "stop", true);
+      expect(cancels()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();

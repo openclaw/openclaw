@@ -52,6 +52,7 @@ import { describeMsteamsVideoFrameOwner, type MsteamsVideoFrame } from "./msteam
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import { readArgText } from "./utils.js";
+import { isVerbalInterrupt } from "./verbal-interrupt.js";
 import type { VisionBudget } from "./vision-budget.js";
 
 /** Teams bridge wire format. */
@@ -671,6 +672,19 @@ export function createMsteamsRealtimeCall(params: {
       }
       if (isFinal) {
         recordTranscript(role, text);
+        // Deterministic verbal interrupt ("stop" / "hold on" / "never mind"): flush the worker's
+        // playback queue immediately instead of waiting for the model's own interruption handling —
+        // the model is mid-generation when these arrive, so this is what makes the cut feel instant.
+        if (role === "user" && Date.now() < playbackEndAt && isVerbalInterrupt(text)) {
+          logger?.debug?.(`MsteamsRealtime: verbal interrupt on ${callId} — flushing playback`);
+          turnId += 1;
+          try {
+            session.send({ type: "assistant.cancel", turnId });
+          } catch {
+            // non-fatal: the model-side interruption still applies
+          }
+          playbackEndAt = Date.now();
+        }
         // Deterministic group-gate: evaluate each finished caller turn with the same core the
         // streaming path uses (wake phrase + follow-up window); the result gates the model's reply
         // AUDIO below, so "speak only when addressed" holds even if the model ignores instructions.
