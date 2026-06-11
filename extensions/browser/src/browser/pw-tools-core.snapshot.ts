@@ -435,6 +435,7 @@ export async function navigateViaPlaywright(opts: {
     await forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
       reason: "retry navigate after detached frame",
     }).catch(() => {});
     page = await getPageForTargetId(opts);

@@ -61,6 +61,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
+      chatType: "channel",
       internalEvents,
     },
     expected: {
@@ -70,6 +71,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
+      chatType: "channel",
     },
   } satisfies {
     runId: string;

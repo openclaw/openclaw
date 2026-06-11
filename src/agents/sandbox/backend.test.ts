@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   getSandboxBackendFactory,
   getSandboxBackendManager,
+  getSandboxBackendWorkdirResolver,
   registerSandboxBackend,
 } from "./backend.js";
 
@@ -39,5 +40,19 @@ describe("sandbox backend registry", () => {
     expect(getSandboxBackendManager("test-managed")).toBe(manager);
     restore();
     expect(getSandboxBackendManager("test-managed")).toBeNull();
+  });
+
+  it("registers backend workdir resolvers alongside factories", () => {
+    const factory = async () => {
+      throw new Error("not used");
+    };
+    const resolveWorkdir = () => "/runtime/workspace";
+    const restore = registerSandboxBackend("test-workdir", {
+      factory,
+      resolveWorkdir,
+    });
+    expect(getSandboxBackendWorkdirResolver("test-workdir")).toBe(resolveWorkdir);
+    restore();
+    expect(getSandboxBackendWorkdirResolver("test-workdir")).toBeNull();
   });
 });

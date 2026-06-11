@@ -1,4 +1,3 @@
-/** Verifies the official external plugin catalog manifests, install specs, and labels. */
 import { describe, expect, it } from "vitest";
 import {
   type OfficialExternalPluginCatalogEntry,
@@ -50,6 +49,9 @@ describe("official external plugin catalog", () => {
         defaultChoice: "npm",
         minHostVersion: ">=2026.5.27",
       },
+    );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("llama-cpp"))?.npmSpec).toBe(
+      "@openclaw/llama-cpp-provider",
     );
   });
 

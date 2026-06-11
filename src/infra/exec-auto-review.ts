@@ -15,7 +15,7 @@ export type ExecAutoReviewDecision =
     };
 
 /** Execution host whose command policy context is being reviewed. */
-export type ExecAutoReviewHost = "gateway" | "node";
+export type ExecAutoReviewHost = "gateway" | "node" | "codex-app-server";
 
 /** Command and policy facts supplied to an exec auto-reviewer. */
 export type ExecAutoReviewInput = {

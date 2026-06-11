@@ -546,6 +546,7 @@ async function waitForMatrixChannelReady(
 async function patchMatrixQaGatewayConfig(params: {
   gateway: MatrixQaGatewayChild;
   patch: Record<string, unknown>;
+  replacePaths?: string[];
   restartDelayMs?: number;
 }) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -561,6 +562,7 @@ async function patchMatrixQaGatewayConfig(params: {
         {
           raw: JSON.stringify(params.patch, null, 2),
           baseHash: snapshot.hash,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
           restartDelayMs: params.restartDelayMs ?? 0,
         },
         { timeoutMs: 60_000 },
@@ -973,6 +975,7 @@ export async function runMatrixQaLive(params: {
                   await patchMatrixQaGatewayConfig({
                     gateway: scenarioGateway.harness.gateway,
                     patch,
+                    replacePaths: opts?.replacePaths,
                     restartDelayMs: opts?.restartDelayMs,
                   });
                 },

@@ -5,7 +5,8 @@ import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
+vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-model-shared")>()),
   normalizeModelCompat: (model: Record<string, unknown>) => model,
   resolveProviderEndpoint: (baseUrl: string) => ({
     baseUrl,
@@ -116,7 +117,7 @@ describe("github-copilot model defaults", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 64_000,
-        thinkingLevelMap: { xhigh: "xhigh" },
+        thinkingLevelMap: { xhigh: "xhigh", max: null },
         compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
       });
     });
@@ -223,8 +224,11 @@ describe("resolveCopilotForwardCompatModel", () => {
   });
 
   it("preserves static Anthropic thinking maps for Claude Opus 1M fallback rows", () => {
+    const opus46 = requireResolvedModel(createMockCtx("claude-opus-4.6-1m"));
+    expect(opus46.thinkingLevelMap).toEqual({ xhigh: null, max: null });
+
     const result = requireResolvedModel(createMockCtx("claude-opus-4.7-1m-internal"));
-    expect(result.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
+    expect(result.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: null });
     expect(result.compat).toEqual({
       supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
     });
@@ -509,6 +513,24 @@ describe("fetchCopilotModelCatalog", () => {
         },
       },
       {
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+        object: "model",
+        vendor: "Anthropic",
+        capabilities: {
+          type: "chat",
+          limits: {
+            max_context_window_tokens: 200000,
+            max_output_tokens: 64000,
+          },
+          supports: {
+            vision: true,
+            tool_calls: true,
+            reasoning_effort: ["low", "medium", "high", "max"],
+          },
+        },
+      },
+      {
         // Internal router — must be filtered out (id starts with "accounts/").
         id: "accounts/msft/routers/abc123",
         name: "Search Agent A",
@@ -557,6 +579,7 @@ describe("fetchCopilotModelCatalog", () => {
       "gpt-5.3-codex",
       "gemini-3.1-pro-preview",
       "claude-opus-4.7-1m-internal",
+      "claude-opus-4-5",
     ]);
 
     const gpt55 = out.find((m) => m.id === "gpt-5.5");
@@ -589,9 +612,15 @@ describe("fetchCopilotModelCatalog", () => {
     const opus1m = out.find((m) => m.id === "claude-opus-4.7-1m-internal");
     expect(opus1m?.api).toBe("anthropic-messages");
     expect(opus1m?.contextWindow).toBe(1_000_000);
-    expect(opus1m?.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
+    expect(opus1m?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: null });
     expect(opus1m?.compat).toEqual({
       supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
+
+    const opus45 = out.find((m) => m.id === "claude-opus-4-5");
+    expect(opus45?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
+    expect(opus45?.compat).toEqual({
+      supportedReasoningEfforts: ["low", "medium", "high", "max"],
     });
   });
 

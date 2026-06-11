@@ -93,24 +93,21 @@ describe("listThinkingLevels", () => {
 
   it("includes xhigh for provider-advertised models", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      (provider === "openai" && ["gpt-5.4", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
       (provider === "openai" &&
         ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
-      (provider === "github-copilot" && ["gpt-5.4", "gpt-5.4"].includes(context.modelId))
+      (provider === "github-copilot" && context.modelId === "gpt-5.4")
         ? true
         : undefined,
     );
 
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.3-codex-spark")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
+    for (const [provider, model] of [
+      ["openai", "gpt-5.4"],
+      ["openai", "gpt-5.4-pro"],
+      ["openai", "gpt-5.3-codex-spark"],
+      ["github-copilot", "gpt-5.4"],
+    ] as const) {
+      expect(listThinkingLevels(provider, model)).toContain("xhigh");
+    }
   });
 
   it("excludes xhigh for non-codex models", () => {
@@ -285,6 +282,114 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
+  it("uses canonical Fable params when no provider thinking profile exists", () => {
+    const catalog = [
+      {
+        provider: "microsoft-foundry",
+        id: "company-fable",
+        api: "anthropic-messages",
+        reasoning: false,
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ];
+
+    expect(listThinkingLevels("microsoft-foundry", "company-fable", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "adaptive",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "microsoft-foundry",
+        model: "company-fable",
+        catalog,
+      }),
+    ).toBe("high");
+  });
+
+  it("preserves provider-specific profiles for Fable Messages routes", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }],
+      defaultLevel: "off",
+    });
+
+    expect(
+      listThinkingLevels("proxy", "company-fable", [
+        {
+          provider: "proxy",
+          id: "company-fable",
+          api: "anthropic-messages",
+          reasoning: true,
+          params: { canonicalModelId: "claude-fable-5" },
+        },
+      ]),
+    ).toEqual(["off", "low"]);
+  });
+
+  it("does not infer the Fable contract without an Anthropic Messages catalog row", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }],
+      defaultLevel: "off",
+    });
+
+    expect(listThinkingLevels("openrouter", "anthropic/claude-fable-5")).toEqual(["off", "low"]);
+  });
+
+  it("does not apply the Fable profile to OpenAI-compatible catalog rows", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "high" }],
+      defaultLevel: "off",
+    });
+
+    expect(
+      listThinkingLevels("openrouter", "anthropic/claude-fable-5", [
+        {
+          provider: "openrouter",
+          id: "anthropic/claude-fable-5",
+          api: "openai-completions",
+          reasoning: true,
+        },
+      ]),
+    ).toEqual(["off", "low", "high"]);
+  });
+
+  it("preserves explicit provider opt-outs for canonical Fable aliases", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+    const catalog = [
+      {
+        provider: "claude-cli",
+        id: "company-fable",
+        api: "anthropic-messages",
+        reasoning: true,
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ];
+
+    expect(listThinkingLevels("claude-cli", "company-fable", catalog)).toEqual(["off"]);
+  });
+
+  it("uses generic thinking levels when a provider has no custom profile", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(null);
+
+    expect(
+      listThinkingLevels("vllm", "reasoning-model", [
+        {
+          provider: "vllm",
+          id: "reasoning-model",
+          reasoning: true,
+        },
+      ]),
+    ).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+
   it("matches provider-qualified catalog ids for provider thinking profiles", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
       context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
@@ -364,6 +469,32 @@ describe("listThinkingLevels", () => {
         provider: "demo",
         model: "demo-model",
         level: "max",
+      }),
+    ).toBe("high");
+  });
+
+  it("maps xhigh to high for provider profiles with max but no xhigh", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "anthropic"
+        ? {
+            levels: [
+              { id: "off" },
+              { id: "minimal" },
+              { id: "low" },
+              { id: "medium" },
+              { id: "high" },
+              { id: "adaptive" },
+              { id: "max" },
+            ],
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        level: "xhigh",
       }),
     ).toBe("high");
   });
