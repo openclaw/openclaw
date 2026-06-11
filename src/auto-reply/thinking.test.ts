@@ -372,6 +372,26 @@ describe("listThinkingLevels", () => {
     ]);
   });
 
+  it("intentionally suppresses compat-driven xhigh for non-Claude anthropic-messages rows", () => {
+    // Even when the catalog explicitly advertises xhigh via compat, a non-Claude
+    // model on the anthropic-messages transport stays on the Claude base set.
+    // The transport itself doesn't carry a generic xhigh contract — only Claude
+    // families do — so the catalog signal is intentionally suppressed here.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).not.toContain(
+      "xhigh",
+    );
+  });
+
   it("does not infer the Claude profile without an anthropic-messages catalog row", () => {
     // Same provider id, but the catalog row says openai-completions — must NOT
     // grant Claude levels to a non-Anthropic transport.

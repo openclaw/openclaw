@@ -198,6 +198,11 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     context: providerContext,
   });
+  // Any anthropic-messages catalog row routes through the canonical Claude
+  // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
+  // non-Claude models on the anthropic-messages transport collapse to the Claude
+  // base set, deliberately bypassing the later compat-driven xhigh upgrade —
+  // anthropic-messages does not carry a generic xhigh contract.
   const anthropicMessagesProfile =
     context.api === "anthropic-messages"
       ? resolveClaudeThinkingProfile(context.modelId, context.params, {
