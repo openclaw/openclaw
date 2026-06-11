@@ -109,6 +109,17 @@ function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
+  onDispatch?: (dispatcherOptions: {
+    deliver: (
+      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
+      info: { kind: string },
+    ) => Promise<void>;
+    onSkip?: (
+      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
+      info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+    ) => void;
+    onSettled?: () => unknown;
+  }) => Promise<void>;
   onDeliver?: (
     deliver: (
       payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
@@ -127,7 +138,7 @@ function makeRuntime(params: {
       },
       reply: {
         dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (rawParams: unknown) => {
-          const deliver = (
+          const dispatcherOptions = (
             rawParams as {
               dispatcherOptions: {
                 deliver: (
@@ -139,10 +150,25 @@ function makeRuntime(params: {
                   },
                   info: { kind: string },
                 ) => Promise<void>;
+                onSkip?: (
+                  payload: {
+                    text?: string;
+                    mediaUrl?: string;
+                    mediaUrls?: string[];
+                    audioAsVoice?: boolean;
+                  },
+                  info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+                ) => void;
+                onSettled?: () => unknown;
               };
             }
-          ).dispatcherOptions.deliver;
-          await params.onDeliver?.(deliver);
+          ).dispatcherOptions;
+          if (params.onDispatch) {
+            await params.onDispatch(dispatcherOptions);
+          } else {
+            await params.onDeliver?.(dispatcherOptions.deliver);
+          }
+          await dispatcherOptions.onSettled?.();
         }),
         finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => {
           params.onFinalize?.(rawCtx);
@@ -378,10 +404,10 @@ describe("dispatchOutbound", () => {
 
   it("flushes buffered tool text when non-streaming final block is silent", async () => {
     const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
+      onDispatch: async ({ deliver, onSkip }) => {
         await deliver({ text: "first visible tool message" }, { kind: "tool" });
         await deliver({ text: "second visible tool message" }, { kind: "tool" });
-        await deliver({ text: "NO_REPLY" }, { kind: "block" });
+        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
       },
     });
 
@@ -411,6 +437,53 @@ describe("dispatchOutbound", () => {
       "second visible tool message",
     ]);
     expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("does not re-send tool fallback after timeout when non-streaming final block is silent", async () => {
+    vi.useFakeTimers();
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver, onSkip }) => {
+        await deliver({ text: "visible tool message" }, { kind: "tool" });
+        await vi.advanceTimersByTimeAsync(60_000);
+        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "empty text", payload: {} },
+    { name: "silent token", payload: { text: "NO_REPLY" } },
+  ])("delivers media-only non-streaming final block replies with $name", async ({ payload }) => {
+    const mediaUrl = "https://example.com/final.png";
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ ...payload, mediaUrl }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendMediaMock).toHaveBeenCalledWith({
+      creds: { appId: "app", clientSecret: "secret" },
+      kind: "image",
+      msgId: "msg-1",
+      source: { url: mediaUrl },
+      target: { id: "user-openid", type: "c2c" },
+    });
   });
 
   it("renews pending tool-media fallback when partial progress is delivered", async () => {

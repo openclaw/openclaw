@@ -98,9 +98,21 @@ function immediateToolProgressText(payload: ReplyDeliverPayload): string | undef
   return text;
 }
 
-function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
-  const text = (payload.text ?? "").trim();
+function hasReplyMedia(payload: ReplyDeliverPayload): boolean {
+  return Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+}
+
+function isSilentBlockReplyText(text: string): boolean {
   return !text || text === "[SKIP]" || isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
+}
+
+function blockReplyTextForDelivery(payload: ReplyDeliverPayload): string {
+  const text = payload.text ?? "";
+  return isSilentBlockReplyText(text.trim()) ? "" : text;
+}
+
+function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
+  return !hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
 }
 
 // ============ dispatchOutbound ============
@@ -144,8 +156,22 @@ export async function dispatchOutbound(
   const toolMediaUrls: string[] = [];
   let toolFallbackSent = false;
   let toolRenewalCount = 0;
+  let skippedSilentBlockResponse = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let toolOnlyTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  const markBlockResponse = (): void => {
+    hasBlockResponse = true;
+    inbound.typing.keepAlive?.stop();
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    if (toolOnlyTimeoutId) {
+      clearTimeout(toolOnlyTimeoutId);
+      toolOnlyTimeoutId = null;
+    }
+  };
 
   // ---- Tool fallback ----
   const sendToolFallback = async (): Promise<void> => {
@@ -190,6 +216,16 @@ export async function dispatchOutbound(
 
   const hasPendingToolFallbackPayload = (): boolean =>
     toolTexts.length > 0 || toolMediaUrls.length > 0;
+
+  const flushPendingToolDeliveriesOnce = async (): Promise<boolean> => {
+    if (toolFallbackSent || !hasPendingToolFallbackPayload()) {
+      return false;
+    }
+    await flushPendingToolDeliveries();
+    toolFallbackSent = true;
+    recordOutbound();
+    return true;
+  };
 
   const renewToolOnlyFallback = (): boolean => {
     if (toolFallbackSent) {
@@ -439,23 +475,10 @@ export async function dispatchOutbound(
                 }
 
                 // ---- Block deliver ----
-                hasBlockResponse = true;
-                inbound.typing.keepAlive?.stop();
-                if (timeoutId) {
-                  clearTimeout(timeoutId);
-                  timeoutId = null;
-                }
-                if (toolOnlyTimeoutId) {
-                  clearTimeout(toolOnlyTimeoutId);
-                  toolOnlyTimeoutId = null;
-                }
+                markBlockResponse();
 
                 if (!streamingController && isSilentBlockReply(payload)) {
-                  if (hasPendingToolFallbackPayload()) {
-                    await flushPendingToolDeliveries();
-                    toolFallbackSent = true;
-                    recordOutbound();
-                  } else if (event.type === "group") {
+                  if (!(await flushPendingToolDeliveriesOnce()) && event.type === "group") {
                     log?.info(
                       `Model decided to skip group message (${(payload.text ?? "").trim() || "empty reply"}) from ${event.senderId}`,
                     );
@@ -501,7 +524,7 @@ export async function dispatchOutbound(
                   return undefined;
                 };
 
-                let replyText = payload.text ?? "";
+                let replyText = blockReplyTextForDelivery(payload);
                 const deliverEvent = {
                   type: event.type,
                   senderId: event.senderId,
@@ -584,6 +607,25 @@ export async function dispatchOutbound(
                   clearTimeout(timeoutId);
                   timeoutId = null;
                 }
+              },
+              onSkip: (
+                _payload: ReplyDeliverPayload,
+                info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+              ) => {
+                if (
+                  !streamingController &&
+                  (info.kind === "block" || info.kind === "final") &&
+                  (info.reason === "silent" || info.reason === "empty")
+                ) {
+                  skippedSilentBlockResponse = true;
+                  markBlockResponse();
+                }
+              },
+              onSettled: async () => {
+                if (skippedSilentBlockResponse && (await flushPendingToolDeliveriesOnce())) {
+                  return { visibleReplySent: true };
+                }
+                return undefined;
               },
             },
             replyOptions: {
