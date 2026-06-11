@@ -308,6 +308,8 @@ describe("createAcpReplyProjector", () => {
     allowToolSummaries = false;
 
     await projector.onEvent({ type: "done" });
+    // Intermediate done defers final text delivery; flush(true) delivers it.
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "done" }]);
   });
@@ -357,6 +359,10 @@ describe("createAcpReplyProjector", () => {
     allowToolSummaries = false;
 
     await projector.onEvent({ type: "done" });
+
+    // Intermediate done defers final text delivery in final_only mode.
+    // Turn-level flush(true) delivers the accumulated text.
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "fallback. I don't" }]);
   });
@@ -501,12 +507,18 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toStrictEqual([]);
 
     await projector.onEvent({ type: "done" });
-    expect(deliveries).toHaveLength(3);
+    // Intermediate done events defer final text delivery in final_only mode.
+    // Only buffered tool/status deliveries are flushed.
+    expect(deliveries).toHaveLength(2);
     expect(deliveries[0]).toEqual({
       kind: "tool",
       text: prefixSystemMessage("available commands updated (7)"),
     });
     expectToolCallSummary(deliveries[1]);
+
+    // Turn-level flush(true) delivers the accumulated final text.
+    await projector.flush(true);
+    expect(deliveries).toHaveLength(3);
     expect(deliveries[2]).toEqual({ kind: "final", text: "What now?" });
   });
 
@@ -535,6 +547,73 @@ describe("createAcpReplyProjector", () => {
       text: prefixSystemMessage("available commands updated (7)"),
     });
     expectToolCallSummary(deliveries[1]);
+  });
+
+  it("accumulates final_only text across multiple invocations and delivers once on turn-level flush", async () => {
+    const deliveries: Delivery[] = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "final_only",
+            tagVisibility: { tool_call: true },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    // Invocation 1: text + tool call, ends with done(toolUse)
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Step 1: Creating file...",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_tool_1",
+      status: "in_progress",
+      title: "create_file",
+      text: "create_file (in_progress)",
+    });
+    expect(deliveries).toStrictEqual([]);
+
+    // Intermediate done(toolUse) — skips final text, delivers tool summaries
+    await projector.onEvent({ type: "done" });
+    expect(deliveries.length).toBeGreaterThanOrEqual(1); // at least tool summary
+    // No final text delivered yet
+    expect(deliveries.filter((d) => d.kind === "final")).toHaveLength(0);
+
+    // Invocation 2: more text + another tool call
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Step 2: Writing content...",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_tool_2",
+      status: "in_progress",
+      title: "write_file",
+      text: "write_file (in_progress)",
+    });
+
+    // Final done(stop) — still skips final text delivery
+    await projector.onEvent({ type: "done" });
+    expect(deliveries.filter((d) => d.kind === "final")).toHaveLength(0);
+
+    // Turn-level flush(true) delivers all accumulated text as one final
+    await projector.flush(true);
+    const finals = deliveries.filter((d) => d.kind === "final");
+    expect(finals).toHaveLength(1);
+    expect(finals[0].text).toBe("Step 1: Creating file...\n\nStep 2: Writing content...");
   });
 
   it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {

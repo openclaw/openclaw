@@ -270,17 +270,22 @@ export function createAcpReplyProjector(params: {
     clearLiveIdleTimer();
     blockReplyPipeline.stop();
     blockReplyPipeline = createTurnBlockReplyPipeline();
-    emittedOutputChars = 0;
-    truncationNoticeEmitted = false;
     lastStatusHash = undefined;
     lastToolHash = undefined;
     lastUsageTuple = undefined;
-    lastVisibleOutputTail = undefined;
-    pendingHiddenBoundary = false;
     liveBufferText = "";
-    finalOnlyOutputText = "";
     pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
+    // In final_only mode, text/output state survives across invocations so that
+    // pre-tool text between consecutive tool calls is preserved and delivered
+    // once at turn completion rather than on each intermediate done event.
+    if (settings.deliveryMode !== "final_only") {
+      emittedOutputChars = 0;
+      truncationNoticeEmitted = false;
+      lastVisibleOutputTail = undefined;
+      pendingHiddenBoundary = false;
+      finalOnlyOutputText = "";
+    }
   };
 
   const flushBufferedToolDeliveries = async (force: boolean) => {
@@ -296,14 +301,17 @@ export function createAcpReplyProjector(params: {
     }
   };
 
-  const flush = async (force = false): Promise<void> => {
+  const flush = async (force = false, opts?: { skipFinalText?: boolean }): Promise<void> => {
     if (settings.deliveryMode === "live") {
       clearLiveIdleTimer();
       flushLiveBuffer({ force: true });
     }
     await flushBufferedToolDeliveries(force);
     if (settings.deliveryMode === "final_only") {
-      if (force && finalOnlyOutputText.trim().length > 0) {
+      // skipFinalText: true means this is an intermediate done(event) — defer
+      // final text delivery to the turn-level flush(true) so that all text
+      // accumulated across multiple invocations reaches the channel as one unit.
+      if (force && !opts?.skipFinalText && finalOnlyOutputText.trim().length > 0) {
         const text = finalOnlyOutputText;
         finalOnlyOutputText = "";
         await params.deliver("final", { text });
@@ -514,7 +522,10 @@ export function createAcpReplyProjector(params: {
     }
 
     if (event.type === "done" || event.type === "error") {
-      await flush(true);
+      // In final_only mode, intermediate done events (e.g. done(toolUse) between
+      // invocations) defer final text delivery to the turn-level flush(true) call
+      // so that text accumulated across all invocations reaches the channel together.
+      await flush(true, { skipFinalText: settings.deliveryMode === "final_only" });
       resetTurnState();
     }
   };
