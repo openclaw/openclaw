@@ -579,4 +579,16 @@ describe("buildClaudeOwnerKey", () => {
     const b = buildClaudeOwnerKey({ ...base, sessionKey: "key-b" });
     expect(a1).not.toBe(b);
   });
+
+  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — orphans live sessions)", () => {
+    expect(
+      buildClaudeOwnerKey({
+        agentAccountId: "acct-1",
+        agentId: "agent-main",
+        authProfileId: "profile-a",
+        sessionId: "sess-1",
+        sessionKey: "key-a",
+      }),
+    ).toBe("718b9a6cf473526c3c357883dfc8f1da1cf90b709d9ed38d675b52314abe6800");
+  });
 });
