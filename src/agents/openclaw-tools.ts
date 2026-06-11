@@ -456,12 +456,21 @@ export function createOpenClawTools(
       runSessionKey: options?.runSessionKey,
       sessionAgentId,
       config: resolvedConfig,
+      workspaceDir,
+    }),
+    createClearGoalTool({
+      agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionAgentId,
+      config: resolvedConfig,
+      workspaceDir,
     }),
     createUpdateGoalTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
       sessionAgentId,
       config: resolvedConfig,
+      workspaceDir,
     }),
     ...(options?.sandboxed
       ? []
