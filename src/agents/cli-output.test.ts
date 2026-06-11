@@ -905,7 +905,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -954,7 +953,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -990,7 +988,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([{ text: "Final answer.", delta: "Final answer." }]);
   });
 
-  it("falls back to assistant deltas when classification is enabled without delivery", () => {
+  it("keeps pre-tool text in assistant deltas when no commentary consumer is wired", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -1000,7 +998,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
     });
 
@@ -1041,7 +1038,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: () => undefined,
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -1074,7 +1070,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: () => undefined,
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -1122,7 +1117,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: () => undefined,
       onCommentaryText: (text) => commentaryTexts.push(text),
     });

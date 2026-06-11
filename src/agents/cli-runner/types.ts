@@ -107,7 +107,6 @@ export type RunCliAgentParams = {
     firstModelCallStarted?: boolean;
   }) => void;
   replyOperation?: ReplyOperation;
-  classifyCommentaryText?: boolean;
   emitCommentaryText?: boolean;
   /**
    * Close any long-lived CLI live session created for this run after the run

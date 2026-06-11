@@ -2243,12 +2243,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2311,12 +2306,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2402,12 +2392,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2481,12 +2466,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(true);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(true);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2541,7 +2521,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.itemId).toBe("commentary-1");
   });
 
-  it("does not classify CLI commentary when commentary progress is explicitly disabled", async () => {
+  it("does not emit CLI commentary when commentary progress is explicitly disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-6"),
@@ -2550,15 +2530,9 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        // commentaryProgressEnabled: false (defined but off) must not engage
-        // classification: with no commentary consumer wired, classified text
-        // would be dropped instead of reaching the assistant stream (#91976).
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        // Defined-but-off commentary progress must leave commentary emission off
+        // so pre-tool text stays in the assistant stream (#92092).
         expect(params.emitCommentaryText).toBe(false);
         return { payloads: [{ text: "done" }], meta: {} };
       },

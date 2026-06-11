@@ -1401,12 +1401,7 @@ describe("createFollowupRunner runtime config", () => {
     };
     const onItemEvent = vi.fn(async () => {});
     runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(true);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(true);
         realAgentEvents.emitAgentEvent({
           runId: params.runId,

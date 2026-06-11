@@ -564,7 +564,6 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
-            classifyCommentaryText: context.params.classifyCommentaryText,
             onCommentaryText: context.params.emitCommentaryText ? emitCliCommentaryText : undefined,
             cleanup: async () => {
               try {
@@ -610,7 +609,6 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
-              classifyCommentaryText: context.params.classifyCommentaryText,
               onCommentaryText: context.params.emitCommentaryText
                 ? emitCliCommentaryText
                 : undefined,
