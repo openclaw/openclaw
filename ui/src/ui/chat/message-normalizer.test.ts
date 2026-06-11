@@ -300,6 +300,25 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("recognizes M2A MEDIA attachments as MPEG audio", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:/tmp/openclaw/voice.m2a",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/voice.m2a",
+            kind: "audio",
+            label: "voice.m2a",
+            mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
     it("keeps valid local MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

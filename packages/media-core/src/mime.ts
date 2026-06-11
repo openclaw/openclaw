@@ -72,7 +72,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ...buildMimeByExt(),
   // Canonical extension mappings for common MIME aliases
   ".jpg": "image/jpeg",
-  ".m2a": "audio/mp4",
+  ".m2a": "audio/mpeg",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   ".webm": "video/webm",

@@ -160,7 +160,7 @@ describe("mime detection", () => {
 
   it("detects M2A audio from a bare filename when buffer sniffing is inconclusive", async () => {
     const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.m2a" });
-    expect(mime).toBe("audio/mp4");
+    expect(mime).toBe("audio/mpeg");
   });
 
   it("detects Apple CAF audio by magic bytes when file-type does not recognize the container", async () => {
@@ -194,7 +194,7 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "image.bmp", expected: "image/bmp" },
     { filePath: "photo.jpg", expected: "image/jpeg" },
     { filePath: "photo.JPG", expected: "image/jpeg" },
-    { filePath: "voice.m2a", expected: "audio/mp4" },
+    { filePath: "voice.m2a", expected: "audio/mpeg" },
     { filePath: "voice.mp3", expected: "audio/mpeg" },
     { filePath: "voice.wav", expected: "audio/wav" },
     { filePath: "clip.avi", expected: "video/x-msvideo" },
