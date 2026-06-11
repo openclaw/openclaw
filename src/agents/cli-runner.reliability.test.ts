@@ -2047,7 +2047,7 @@ describe("resolveCliNoOutputTimeoutMs", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },
       timeoutMs: 600_000,
-      hasConfiguredAgentTimeout: true,
+      runTimeoutOverrideMs: 600_000,
       useResume: true,
       trigger: "user",
     });
