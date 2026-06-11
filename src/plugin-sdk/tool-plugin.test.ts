@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { textResult } from "../agents/tools/common.js";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
 import { defineToolPlugin, getToolPluginMetadata } from "./tool-plugin.js";
 
@@ -120,10 +121,7 @@ describe("defineToolPlugin", () => {
           name: "text_result",
           description: "Return a text result.",
           parameters: Type.Object({}),
-          execute: () => ({
-            content: [{ type: "text", text: "ready" }],
-            details: { status: "ok" },
-          }),
+          execute: () => textResult("ready", { status: "ok" }),
         }),
       ],
     });
@@ -136,6 +134,41 @@ describe("defineToolPlugin", () => {
       content: [{ type: "text", text: "ready" }],
       details: { status: "ok" },
     });
+  });
+
+  it("wraps bare text-shaped JSON with content and details fields", async () => {
+    const entry = defineToolPlugin({
+      id: "bare-result-json",
+      name: "Bare Result JSON",
+      description: "Bare result JSON tool.",
+      tools: (tool) => [
+        tool({
+          name: "bare_result_json",
+          description: "Return bare result-shaped JSON.",
+          parameters: Type.Object({}),
+          execute: () => ({
+            content: [{ type: "text", text: "ordinary payload" }],
+            details: { status: "ok" },
+          }),
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "bare-result-json" });
+
+    entry.register(captured.api);
+
+    const payload = {
+      content: [{ type: "text", text: "ordinary payload" }],
+      details: { status: "ok" },
+    };
+    const result = await captured.tools[0].execute("call-1", {});
+    expect(result.details).toEqual(payload);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(payload, null, 2),
+      },
+    ]);
   });
 
   it("wraps plain JSON objects with content fields instead of treating them as tool results", async () => {

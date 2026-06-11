@@ -16,6 +16,7 @@ import {
 } from "./plugin-entry.js";
 
 const EMPTY_TOOL_PLUGIN_CONFIG_SCHEMA = Type.Object({}, { additionalProperties: false });
+const AGENT_TOOL_RESULT_MARK = Symbol.for("openclaw.agentToolResult");
 
 export const toolPluginMetadataSymbol = Symbol.for("openclaw.plugin-sdk.tool-plugin.metadata");
 
@@ -140,15 +141,8 @@ function isAgentToolContentBlock(value: unknown): boolean {
   return false;
 }
 
-function hasOnlyAgentToolResultKeys(record: Record<string, unknown>): boolean {
-  return Object.keys(record).every(
-    (key) =>
-      key === "content" ||
-      key === "details" ||
-      key === "terminalSummary" ||
-      key === "progress" ||
-      key === "terminate",
-  );
+function isMarkedAgentToolResult(value: object): boolean {
+  return (value as Record<typeof AGENT_TOOL_RESULT_MARK, unknown>)[AGENT_TOOL_RESULT_MARK] === true;
 }
 
 function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
@@ -156,13 +150,19 @@ function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
     return false;
   }
   const record = value as Record<string, unknown>;
-  if (!hasOnlyAgentToolResultKeys(record)) {
-    return false;
-  }
   if (!("details" in record) || !Array.isArray(record.content)) {
     return false;
   }
-  return record.content.every(isAgentToolContentBlock);
+  if (!record.content.every(isAgentToolContentBlock)) {
+    return false;
+  }
+  return (
+    isMarkedAgentToolResult(value) ||
+    "terminalSummary" in record ||
+    "progress" in record ||
+    "terminate" in record ||
+    record.content.some((block) => (block as { type?: unknown }).type !== "text")
+  );
 }
 
 function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> {

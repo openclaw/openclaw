@@ -392,7 +392,7 @@ export function stringifyToolPayload(payload: unknown): string {
 }
 
 export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
-  return {
+  return markAgentToolResult({
     content: [
       {
         type: "text",
@@ -400,7 +400,7 @@ export function textResult<TDetails>(text: string, details: TDetails): AgentTool
       },
     ],
     details,
-  };
+  });
 }
 
 export function failedTextResult<TDetails extends { status: "failed" }>(
@@ -421,7 +421,7 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
 export type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
 
 export function toolProgressResult(progress: PublicToolProgress): AgentToolResult<undefined> {
-  return {
+  return markAgentToolResult({
     content: [],
     details: undefined,
     progress: {
@@ -430,7 +430,7 @@ export function toolProgressResult(progress: PublicToolProgress): AgentToolResul
       privacy: "public",
       ...(progress.id ? { id: progress.id } : {}),
     },
-  };
+  });
 }
 
 // Tool progress is a UI side channel. The model-facing tool result remains in
@@ -512,7 +512,9 @@ export async function imageResult(params: {
       },
     },
   };
-  return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
+  return markAgentToolResult(
+    await sanitizeToolResultImages(result, params.label, params.imageSanitization),
+  );
 }
 
 export async function imageResultFromFile(params: {
@@ -574,4 +576,13 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
     );
   // Return undefined instead of empty array to avoid accidentally clearing all tags
   return result.length ? result : undefined;
+}
+
+const AGENT_TOOL_RESULT_MARK = Symbol.for("openclaw.agentToolResult");
+
+function markAgentToolResult<TDetails>(
+  result: AgentToolResult<TDetails>,
+): AgentToolResult<TDetails> {
+  Object.defineProperty(result, AGENT_TOOL_RESULT_MARK, { value: true });
+  return result;
 }
