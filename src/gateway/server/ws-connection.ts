@@ -33,6 +33,7 @@ import { logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
+import { resolveKeepAliveConfig, startKeepAlive } from "./ws-connection.keepalive.js";
 import {
   buildHandshakeAuthLogKey,
   HandshakeAuthLogLimiter,
@@ -318,7 +319,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
-    let pingTimer: ReturnType<typeof setInterval> | undefined;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
@@ -342,9 +342,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       closed = true;
       clearTimeout(handshakeTimer);
-      if (pingTimer !== undefined) {
-        clearInterval(pingTimer);
-      }
+      client?.keepalive?.stop();
       releasePreauthBudget();
       if (client) {
         clients.delete(client);
@@ -547,13 +545,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         releasePreauthBudget();
         client = next;
         clients.add(next);
-        pingTimer = setInterval(() => {
-          try {
-            socket.ping();
-          } catch {
-            // close() clears the timer; ping can race with a socket already entering CLOSING.
-          }
-        }, 25_000);
+        // Keepalive is on by default; an operator opts out with
+        // gateway.keepalive.interval: 0. startKeepAlive owns its own pong
+        // listener and timers; close() calls stop() to tear them down.
+        const keepaliveConfig = resolveKeepAliveConfig(getRuntimeConfig().gateway?.keepalive);
+        if (keepaliveConfig) {
+          next.keepalive = startKeepAlive(socket, keepaliveConfig, () => {
+            setCloseCause("keepalive-timeout", {
+              intervalMs: keepaliveConfig.intervalMs,
+              pongWaitMs: keepaliveConfig.timeoutMs,
+            });
+            logGateway.info("keepalive closed unresponsive connection", { connId });
+            close(4000, "keepalive-timeout");
+          });
+        }
         return true;
       },
       setHandshakeState: (next) => {

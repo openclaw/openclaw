@@ -1073,6 +1073,15 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         handshakeTimeoutMs: z.number().int().min(1).optional(),
+        keepalive: z
+          .object({
+            // 0 disables keepalive; otherwise a sane ping cadence. Omitting the
+            // block leaves keepalive on at the runtime default (30000ms).
+            interval: z.union([z.literal(0), z.number().int().min(5000).max(3_600_000)]).optional(),
+            timeout: z.number().int().min(1000).max(60_000).optional(),
+          })
+          .strict()
+          .optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
         channelMaxRestartsPerHour: z.number().int().min(1).optional(),
@@ -1224,6 +1233,23 @@ export const OpenClawSchema = z
             message:
               "channelStaleEventThresholdMinutes should be >= channelHealthCheckMinutes to avoid delayed stale detection",
           });
+        }
+        const keepalive = gateway.keepalive;
+        if (keepalive && keepalive.timeout != null) {
+          // When interval is omitted the runtime uses the default (30000ms; keep
+          // in sync with DEFAULT_KEEPALIVE_INTERVAL_MS), so validate timeout
+          // against the EFFECTIVE interval, not only an explicit one. A
+          // timeout-only block must not slip through with timeout >= 30000.
+          // interval 0 disables keepalive, so the check does not apply.
+          const effectiveInterval = keepalive.interval ?? 30000;
+          if (effectiveInterval > 0 && keepalive.timeout >= effectiveInterval) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["keepalive", "timeout"],
+              message:
+                "gateway.keepalive.timeout must be less than gateway.keepalive.interval (default 30000) to avoid spurious connection closes",
+            });
+          }
         }
       })
       .optional(),

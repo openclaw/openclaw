@@ -510,6 +510,26 @@ export type GatewayConfig = {
    */
   handshakeTimeoutMs?: number;
   /**
+   * Post-auth WebSocket keepalive. The gateway pings an idle client and closes
+   * the connection (code 4000) if it does not pong in time, so a dead client
+   * socket is recycled in ~interval+timeout instead of lingering until the OS
+   * TCP timeout. On by default; the client reconnects on its next RPC.
+   */
+  keepalive?: {
+    /**
+     * Milliseconds of idle before the gateway pings the client.
+     * Default: 30000. Range: 5000–3600000. Set to 0 to disable keepalive.
+     */
+    interval?: number;
+    /**
+     * Milliseconds to wait for the client's pong before closing the connection.
+     * Default: 10000. Range: 1000–60000. Must be less than interval. Raise this
+     * if the gateway event loop can stall longer than the default (a late-decoded
+     * pong on a live peer would otherwise be closed).
+     */
+    timeout?: number;
+  };
+  /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
    * Set to 0 to disable. Default: 5.

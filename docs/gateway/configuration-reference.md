@@ -603,6 +603,24 @@ See [Inferred commitments](/concepts/commitments).
 - `OPENCLAW_APNS_RELAY_BASE_URL` / `OPENCLAW_APNS_RELAY_TIMEOUT_MS`: temporary env overrides for the relay config above.
 - `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true`: development-only escape hatch for loopback HTTP relay URLs. Production relay URLs should stay on HTTPS.
 - `gateway.handshakeTimeoutMs`: pre-auth Gateway WebSocket handshake timeout in milliseconds. Default: `15000`. `OPENCLAW_HANDSHAKE_TIMEOUT_MS` takes precedence when set. Increase this on loaded or low-powered hosts where local clients can connect while startup warmup is still settling.
+- `gateway.keepalive.interval`: milliseconds a post-auth client connection may sit idle before the gateway sends a WebSocket ping. Default: `30000`. Range: `5000`-`3600000`. Set to `0` to disable keepalive entirely. Keepalive is **on by default**.
+- `gateway.keepalive.timeout`: milliseconds to wait for the client's pong after a ping before the gateway closes the connection with close code `4000`. Default: `10000`. Range: `1000`-`60000`. Must be strictly less than `interval`. Raise it if the gateway event loop can stall longer than the default, otherwise a late-decoded pong from a live peer can be closed (the client then reconnects). Lower it for faster dead-socket detection on a lightly loaded gateway.
+
+  Example (raise the pong window for high-latency clients):
+
+  ```json5
+  {
+    gateway: {
+      keepalive: {
+        interval: 30000, // ping after 30s idle
+        timeout: 15000, // close if no pong within 15s (links with >5s RTT)
+      },
+    },
+  }
+  ```
+
+  Rationale: a crashed or network-partitioned client leaves a half-open socket the gateway cannot otherwise detect until the OS TCP timeout fires (15-30 minutes on Linux), which is what makes `mcp__openclaw__*` RPCs hang on a "healthy" gateway. Keepalive closes the dead socket in about `interval + timeout`; the client reconnects on its next RPC. The peer's WebSocket library answers pings with pongs automatically, so an active client never trips this. To turn keepalive off, set `interval: 0`.
+
 - `gateway.channelHealthCheckMinutes`: channel health-monitor interval in minutes. Set `0` to disable health-monitor restarts globally. Default: `5`.
 - `gateway.channelStaleEventThresholdMinutes`: stale-socket threshold in minutes. Keep this greater than or equal to `gateway.channelHealthCheckMinutes`. Default: `30`.
 - `gateway.channelMaxRestartsPerHour`: maximum health-monitor restarts per channel/account in a rolling hour. Default: `10`.

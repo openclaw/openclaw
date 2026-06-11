@@ -220,6 +220,16 @@ loopback/local pairing.
 
 Side-effecting methods require **idempotency keys** (see schema).
 
+## WebSocket Ping/Pong (Post-Auth)
+
+After the `hello-ok` handshake completes, the gateway may send **WebSocket-level ping frames** to detect unresponsive client connections. These are not application frames; they are handled by the underlying WebSocket library (e.g., the `ws` npm package or browser WebSocket API) without explicit application code.
+
+**Recommended client behavior**: Let your WebSocket library auto-respond to pings with pongs. Most libraries do this by default. The gateway uses ping/pong as a keepalive mechanism, not for application signaling. A client's activity (sending or receiving any frame, including pongs) resets the gateway's keepalive timer.
+
+**Close code 4000**: If the gateway closes a connection with close code `4000` and reason `"keepalive-timeout"`, it means the client did not respond to a ping within the configured timeout window. This is a normal operational signal; the client should reconnect on its next RPC attempt.
+
+The keepalive interval and timeout are configurable via `gateway.keepalive.interval` and `gateway.keepalive.timeout`. See [`configuration-reference.md`](/gateway/configuration-reference) for details.
+
 ## Roles + scopes
 
 For the full operator scope model, approval-time checks, and shared-secret

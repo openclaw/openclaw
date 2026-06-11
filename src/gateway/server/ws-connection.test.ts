@@ -174,11 +174,14 @@ describe("attachGatewayWsConnectionHandler", () => {
       }),
     ).toBe(true);
 
-    vi.advanceTimersByTime(25_000);
+    // Keepalive pings the connection once it has been idle for the default
+    // interval (30s), then waits for the peer's pong.
+    vi.advanceTimersByTime(30_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
 
+    // After close, keepalive is stopped: no further pings regardless of time.
     socket.emit("close", 1000, Buffer.from("done"));
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(60_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
   });
 
