@@ -743,6 +743,54 @@ describe("createMsteamsRealtimeCall", () => {
     expect(ctxB.closedReason).toBeNull();
   });
 
+  it("provider onClose (realtime WS drop) hangs up the Teams session (B2)", () => {
+    // Without this, onClose only set closed=true: the caller sat in silence and a later
+    // close(reason) early-returned, leaving the Teams call un-hangup-able.
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {} },
+    });
+
+    mock.getRequest().onClose?.("error");
+
+    expect(ctx.closedReason).toBe("realtime-closed");
+  });
+
+  it("a failed realtime connect() hangs up the Teams session (B1 trigger path)", async () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    // The bridge never comes up: connect() rejects.
+    const failingProvider = {
+      id: "openai",
+      label: "Mock Realtime",
+      isConfigured: () => true,
+      createBridge: (req: RealtimeVoiceBridgeCreateRequest) => {
+        const bridge = (
+          mock.provider as unknown as {
+            createBridge: (r: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
+          }
+        ).createBridge(req);
+        return {
+          ...bridge,
+          connect: async () => {
+            throw new Error("model down");
+          },
+        };
+      },
+    } as unknown as RealtimeVoiceProviderPlugin;
+
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: failingProvider, providerConfig: {} },
+    });
+
+    await vi.waitFor(() => {
+      expect(ctx.closedReason).toBe("realtime-unavailable");
+    });
+  });
+
   it("hides look_at_screen and show_to_caller under the 'none' tool policy", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();

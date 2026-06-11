@@ -830,11 +830,11 @@ export function createMsteamsRealtimeCall(params: {
       logger?.warn(`MsteamsRealtime: bridge error — ${error.message}`);
     },
     onClose: () => {
-      closed = true;
-      if (visionPushTimer) {
-        clearInterval(visionPushTimer);
-        visionPushTimer = undefined;
-      }
+      // The realtime provider's WS dropped (model-side failure, network loss). Funnel through the
+      // same teardown as a hangup — INCLUDING closing the Teams worker session — or the caller is
+      // stranded in silence on a call that close(reason) can no longer end (its `closed` early-return
+      // would skip session.close forever). (Review B2)
+      closeCall("realtime-closed");
     },
   });
 
@@ -1440,18 +1440,57 @@ export function createMsteamsRealtimeCall(params: {
     }
   }
 
+  /**
+   * Single teardown for every way the bridge can end: the returned `close` (caller hangup /
+   * manager hangup), the provider's `onClose` (realtime WS dropped), and a failed `connect()`.
+   * Passing a `reason` also closes the Teams worker session so the call actually ends; the
+   * meeting recap and the vision timer are handled identically on every path. (Review B2)
+   */
+  function closeCall(reason?: string): void {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    // Meeting recap (#18/#22): on call end, post minutes to the caller's Teams chat. Opt-in via
+    // msteams.meetingRecap; skipped for notify call-backs (a delivered result is not a meeting)
+    // and for calls with no real conversation. Detached — teardown never waits on it.
+    if (
+      deps.voiceConfig?.msteams?.meetingRecap === true &&
+      !deps.onDeliveryComplete &&
+      recordingActive &&
+      session.caller.aadId &&
+      transcript.length >= 4
+    ) {
+      void runMeetingRecap();
+    }
+    if (visionPushTimer) {
+      clearInterval(visionPushTimer);
+      visionPushTimer = undefined;
+    }
+    try {
+      realtime.close();
+    } catch {
+      // best-effort teardown
+    }
+    // A manager-driven hangup or bridge-side failure passes a reason — also close the Teams worker
+    // session so the call actually ends. A caller-driven session.end passes none (the session is
+    // already closing).
+    if (reason !== undefined) {
+      try {
+        session.close(reason);
+      } catch {
+        // best-effort teardown
+      }
+    }
+  }
+
   void realtime.connect().catch((err: unknown) => {
     logger?.error(
       `MsteamsRealtime: connect failed — ${err instanceof Error ? err.message : String(err)}`,
     );
     // The model never came up; close the Teams session so the worker hangs up
     // cleanly instead of leaving the caller in silence.
-    closed = true;
-    try {
-      session.close("realtime-unavailable");
-    } catch {
-      // best-effort teardown
-    }
+    closeCall("realtime-unavailable");
   });
 
   return {
@@ -1512,40 +1551,7 @@ export function createMsteamsRealtimeCall(params: {
       }
     },
     close: (reason?: string) => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      // Meeting recap (#18/#22): on call end, post minutes to the caller's Teams chat. Opt-in via
-      // msteams.meetingRecap; skipped for notify call-backs (a delivered result is not a meeting)
-      // and for calls with no real conversation. Detached — teardown never waits on it.
-      if (
-        deps.voiceConfig?.msteams?.meetingRecap === true &&
-        !deps.onDeliveryComplete &&
-        recordingActive &&
-        session.caller.aadId &&
-        transcript.length >= 4
-      ) {
-        void runMeetingRecap();
-      }
-      if (visionPushTimer) {
-        clearInterval(visionPushTimer);
-        visionPushTimer = undefined;
-      }
-      try {
-        realtime.close();
-      } catch {
-        // best-effort teardown
-      }
-      // A manager-driven hangup passes a reason — also close the Teams worker session so the call
-      // actually ends. A caller-driven session.end passes none (the session is already closing).
-      if (reason !== undefined) {
-        try {
-          session.close(reason);
-        } catch {
-          // best-effort teardown
-        }
-      }
+      closeCall(reason);
     },
   };
 }

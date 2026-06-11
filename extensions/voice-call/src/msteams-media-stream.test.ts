@@ -439,6 +439,42 @@ describe("MsteamsMediaStream", () => {
     expect(ends).toHaveLength(0);
   });
 
+  it("fires onSessionEnd exactly once when the host closes a started session (session.close)", async () => {
+    // A host-initiated close (e.g. realtime connect failure calling session.close) destroys the
+    // connection meta before the ws close event runs, so the close handler alone would never
+    // deliver onSessionEnd — leaking host call state. closeSession must deliver it itself. (B1)
+    const port = randomPort();
+    const ends: Array<{ callId: string; reason: string }> = [];
+    let session: MsteamsSession | undefined;
+    server = await startServer({
+      port,
+      onSessionStart: (s) => {
+        session = s;
+      },
+      onSessionEnd: (info) => ends.push(info),
+    });
+
+    const callId = "call-host-close";
+    const ws = openAuthed(port, callId);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.send(
+      JSON.stringify({ type: "session.start", callId, threadId: "t", caller: { aadId: "a" } }),
+    );
+    await waitFor(() => session !== undefined);
+
+    session?.close("realtime-unavailable");
+
+    await waitFor(() => ends.length > 0);
+    // Let the ws close event run too — it must not double-deliver.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    expect(ends).toEqual([{ callId, reason: "realtime-unavailable" }]);
+  });
+
   it("drops the connection when an inbound frame exceeds the payload cap", async () => {
     const port = randomPort();
     let frames = 0;

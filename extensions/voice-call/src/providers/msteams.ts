@@ -291,11 +291,11 @@ export class MsteamsProvider implements VoiceCallProvider {
    * teardown path. No-op if the provider was constructed without a full config.
    */
   async stop(): Promise<void> {
-    for (const providerCallId of Array.from(this.calls.keys())) {
+    // teardownCall handles both the streaming and realtime maps and funnels through
+    // releaseCallState, so collect the ids from both before mutating either.
+    const liveIds = new Set([...this.calls.keys(), ...this.realtimeCalls.keys()]);
+    for (const providerCallId of liveIds) {
       this.teardownCall(providerCallId, { closeSession: true, reason: "shutdown" });
-    }
-    for (const providerCallId of Array.from(this.realtimeCalls.keys())) {
-      this.disposeRealtimeCall(providerCallId);
     }
     // Cancel any outstanding outbound timers so they can't fire after teardown.
     for (const providerCallId of Array.from(this.pendingOutboundTimers.keys())) {
@@ -939,34 +939,27 @@ export class MsteamsProvider implements VoiceCallProvider {
   }
 
   private handleSessionEnd(info: { callId: string; reason: string }): void {
-    this.vision.release(info.callId);
-    this.recordingActiveByCall.delete(info.callId);
-    this.clearOutboundTimer(info.callId);
-    this.clearTimedOutOutbound(info.callId);
-    // Outbound realtime calls have a CallRecord (manager.initiateCall); read it before disposal
-    // clears the mapping, then finalize it. Caller-driven session.end passes no close reason.
-    const internalCallId = this.outboundRealtimeInternalIds.get(info.callId);
-    if (this.disposeRealtimeCall(info.callId)) {
-      if (internalCallId && this.manager) {
-        this.manager.processEvent({
-          id: `msteams-ended-${info.callId}-${Date.now()}`,
-          type: "call.ended",
-          callId: internalCallId,
-          providerCallId: info.callId,
-          timestamp: Date.now(),
-          reason: mapEndReason(info.reason),
-        });
-      }
-      return;
-    }
+    // Resolve the internal call id BEFORE teardown clears the mappings:
+    // - streaming calls carry it in their `calls` state (returned by teardownCall),
+    // - outbound realtime calls bypass `calls` (outboundRealtimeInternalIds),
+    // - a placed outbound call that ends BEFORE session.start ever attaches it
+    //   (declined / busy / placement failure) only exists in pendingOutbound. It
+    //   must be finalized here: this end also cancels the no-answer timer that
+    //   would otherwise have reaped it, so without an event the CallRecord from
+    //   manager.initiateCall stays active forever and counts against
+    //   maxConcurrentCalls. (Review B5)
+    const outboundInternalId = this.outboundRealtimeInternalIds.get(info.callId);
+    const pendingInternalId = this.pendingOutbound.get(info.callId)?.internalCallId;
     const state = this.teardownCall(info.callId, { closeSession: false });
-    if (!state || !this.manager) {
+    const internalCallId = state?.internalCallId ?? outboundInternalId ?? pendingInternalId;
+    // Inbound realtime calls never touch CallManager — no record to finalize.
+    if (!internalCallId || !this.manager) {
       return;
     }
     this.manager.processEvent({
       id: `msteams-ended-${info.callId}-${Date.now()}`,
       type: "call.ended",
-      callId: state.internalCallId,
+      callId: internalCallId,
       providerCallId: info.callId,
       timestamp: Date.now(),
       reason: mapEndReason(info.reason),
@@ -993,6 +986,21 @@ export class MsteamsProvider implements VoiceCallProvider {
     return realtimeCall;
   }
 
+  /**
+   * Single owner for the per-call provider state that is not the streaming/realtime bridge itself:
+   * vision frames, the recording gate, the outbound no-answer timer, the timed-out guard, and the
+   * pending-outbound entry. Every teardown funnels through {@link teardownCall} → here, so no end
+   * path (caller hangup, manager hangup, connect failure, never-attached placement) can leak them.
+   * Idempotent — reentrant teardown chains hit no-ops. (Review B1/B2/B3/B5)
+   */
+  private releaseCallState(providerCallId: string): void {
+    this.vision.release(providerCallId);
+    this.recordingActiveByCall.delete(providerCallId);
+    this.clearOutboundTimer(providerCallId);
+    this.clearTimedOutOutbound(providerCallId);
+    this.pendingOutbound.delete(providerCallId);
+  }
+
   /** Abort playback, close the STT session, and drop per-call state. */
   private teardownCall(
     providerCallId: string,
@@ -1006,22 +1014,25 @@ export class MsteamsProvider implements VoiceCallProvider {
       options.closeSession ? (options.reason ?? "completed") : undefined,
     );
     const state = this.calls.get(providerCallId);
-    if (!state) {
-      return undefined;
+    if (state) {
+      this.calls.delete(providerCallId);
+      state.ttsAbort?.abort();
+      state.ttsAbort = null;
+      try {
+        state.sttSession.close();
+      } catch (err) {
+        this.logger?.warn(
+          `MsteamsProvider: error closing STT for ${providerCallId} — ${describeError(err)}`,
+        );
+      }
+      if (options.closeSession) {
+        state.session.close(options.reason ?? "completed");
+      }
     }
-    this.calls.delete(providerCallId);
-    state.ttsAbort?.abort();
-    state.ttsAbort = null;
-    try {
-      state.sttSession.close();
-    } catch (err) {
-      this.logger?.warn(
-        `MsteamsProvider: error closing STT for ${providerCallId} — ${describeError(err)}`,
-      );
-    }
-    if (options.closeSession) {
-      state.session.close(options.reason ?? "completed");
-    }
+    // Unconditional (even when no streaming/realtime entry was found): the recording gate and
+    // vision frames are set in handleSessionStart before any policy check, and the pending
+    // outbound entry exists before any session attaches. (Review B3)
+    this.releaseCallState(providerCallId);
     return state;
   }
 
