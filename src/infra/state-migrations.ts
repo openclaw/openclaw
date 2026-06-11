@@ -61,7 +61,8 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { expandHomePrefix } from "./home-dir.js";
+import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -128,8 +129,15 @@ export type LegacyStateDetection = {
     sessionPath: string;
     hasLegacy: boolean;
   };
+  execApprovals: {
+    sourcePath: string;
+    targetPath: string;
+    hasLegacy: boolean;
+  };
   preview: string[];
 };
+
+type LegacyExecApprovalsMigrationDetection = LegacyStateDetection["execApprovals"];
 
 type MigrationLogger = {
   info: (message: string) => void;
@@ -173,6 +181,8 @@ const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
   { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
 ] as const;
+const EXEC_APPROVALS_FILENAME = "exec-approvals.json";
+const EXEC_APPROVALS_SOCKET_FILENAME = "exec-approvals.sock";
 type LegacyDeliveryQueueFile = {
   sourcePath: string;
   status: "pending" | "failed";
@@ -230,6 +240,43 @@ function resolveLegacyTaskRunsSidecarPath(stateDir: string): string {
 
 function resolveLegacyFlowRunsSidecarPath(stateDir: string): string {
   return path.join(stateDir, "flows", "registry.sqlite");
+}
+
+function resolveDefaultExecApprovalsStateDir(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string {
+  return path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+}
+
+function resolveDefaultExecApprovalsPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  return path.join(resolveDefaultExecApprovalsStateDir(env, homedir), EXEC_APPROVALS_FILENAME);
+}
+
+function resolveExecApprovalsPathForStateDir(stateDir: string): string {
+  return path.join(stateDir, EXEC_APPROVALS_FILENAME);
+}
+
+function resolveExecApprovalsSocketPathForStateDir(stateDir: string): string {
+  return path.join(stateDir, EXEC_APPROVALS_SOCKET_FILENAME);
+}
+
+function detectLegacyExecApprovalsMigration(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  stateDir: string;
+}): LegacyExecApprovalsMigrationDetection {
+  const sourcePath = resolveDefaultExecApprovalsPath(params.env, params.homedir);
+  const targetPath = resolveExecApprovalsPathForStateDir(params.stateDir);
+  return {
+    sourcePath,
+    targetPath,
+    hasLegacy:
+      Boolean(params.env.OPENCLAW_STATE_DIR?.trim()) &&
+      path.resolve(sourcePath) !== path.resolve(targetPath) &&
+      fileExists(sourcePath) &&
+      !fileExists(targetPath),
+  };
 }
 
 function readLegacyPluginStateSidecarRows(sourcePath: string): LegacyPluginStateSidecarRow[] {
@@ -2583,22 +2630,29 @@ export async function autoMigrateLegacyTaskStateSidecars(params: {
 
   const stateDir = resolveStateDir(params.env ?? process.env, params.homedir);
   const result = await migrateLegacyTaskStateSidecars({ stateDir });
+  const execApprovals = migrateLegacyExecApprovals(
+    detectLegacyExecApprovalsMigration({
+      env: params.env ?? process.env,
+      homedir: params.homedir ?? os.homedir,
+      stateDir,
+    }),
+  );
+  const changes = [...result.changes, ...execApprovals.changes];
+  const warnings = [...result.warnings, ...execApprovals.warnings];
   const logger = params.log ?? createSubsystemLogger("state-migrations");
-  if (result.changes.length > 0) {
-    logger.info(
-      `Auto-migrated legacy task state:\n${result.changes.map((entry) => `- ${entry}`).join("\n")}`,
-    );
+  if (changes.length > 0) {
+    logger.info(`Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`);
   }
-  if (result.warnings.length > 0) {
+  if (warnings.length > 0) {
     logger.warn(
-      `Legacy task state migration warnings:\n${result.warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
     );
   }
   return {
-    migrated: result.changes.length > 0,
+    migrated: changes.length > 0,
     skipped: false,
-    changes: result.changes,
-    warnings: result.warnings,
+    changes,
+    warnings,
   };
 }
 
@@ -2684,6 +2738,7 @@ export async function detectLegacyStateMigrations(params: {
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
+  const execApprovals = detectLegacyExecApprovalsMigration({ env, homedir, stateDir });
 
   const targetAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
   const rawMainKey = params.cfg.session?.mainKey;
@@ -2797,6 +2852,9 @@ export async function detectLegacyStateMigrations(params: {
   if (hasDeliveryQueues) {
     preview.push("- Delivery queues: legacy JSON queue files → shared SQLite state");
   }
+  if (execApprovals.hasLegacy) {
+    preview.push(`- Exec approvals: ${execApprovals.sourcePath} → ${execApprovals.targetPath}`);
+  }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
   }
@@ -2852,6 +2910,7 @@ export async function detectLegacyStateMigrations(params: {
       ...deliveryQueuePaths,
       hasLegacy: hasDeliveryQueues,
     },
+    execApprovals,
     preview,
   };
 }
@@ -3146,6 +3205,192 @@ async function runPluginDoctorStateMigrationPlans(params: {
   return { changes, warnings };
 }
 
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isDefaultLegacyExecApprovalsSocketPath(params: {
+  socketPath: string;
+  sourcePath: string;
+}): boolean {
+  const expanded = expandHomePrefix(params.socketPath);
+  return (
+    path.resolve(expanded) ===
+    path.join(path.dirname(params.sourcePath), EXEC_APPROVALS_SOCKET_FILENAME)
+  );
+}
+
+function prepareMigratedExecApprovalsFile(params: {
+  raw: string;
+  sourcePath: string;
+  targetPath: string;
+}): { raw: string; warning?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.raw) as unknown;
+  } catch {
+    return {
+      raw: "",
+      warning: `Legacy exec approvals file unreadable; left in place at ${params.sourcePath}`,
+    };
+  }
+  if (!isPlainJsonObject(parsed) || parsed.version !== 1) {
+    return {
+      raw: "",
+      warning: `Legacy exec approvals file has unsupported shape; left in place at ${params.sourcePath}`,
+    };
+  }
+
+  const next: Record<string, unknown> = { ...parsed };
+  const socket = isPlainJsonObject(next.socket) ? { ...next.socket } : {};
+  const rawSocketPath = typeof socket.path === "string" ? socket.path.trim() : "";
+  if (
+    !rawSocketPath ||
+    isDefaultLegacyExecApprovalsSocketPath({
+      socketPath: rawSocketPath,
+      sourcePath: params.sourcePath,
+    })
+  ) {
+    socket.path = resolveExecApprovalsSocketPathForStateDir(path.dirname(params.targetPath));
+  }
+  next.socket = socket;
+  return { raw: `${JSON.stringify(next, null, 2)}\n` };
+}
+
+function assertSafeExecApprovalsMigrationTarget(targetPath: string): void {
+  const targetDir = path.dirname(targetPath);
+  assertNoSymlinkParentsSync({
+    rootDir: resolveRequiredHomeDir(),
+    targetPath: targetDir,
+    allowOutsideRoot: true,
+    messagePrefix: "Refusing to traverse symlink in exec approvals migration path",
+  });
+  try {
+    const targetStat = fs.lstatSync(targetPath);
+    if (targetStat.isSymbolicLink()) {
+      throw new Error(`Refusing to migrate exec approvals via symlink: ${targetPath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+}
+
+function writeMigratedExecApprovalsFile(targetPath: string, raw: string): boolean {
+  const targetDir = path.dirname(targetPath);
+  assertSafeExecApprovalsMigrationTarget(targetPath);
+  fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  assertSafeExecApprovalsMigrationTarget(targetPath);
+  const dirStat = fs.lstatSync(targetDir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error(`Refusing to migrate exec approvals into unsafe directory: ${targetDir}`);
+  }
+  try {
+    fs.chmodSync(targetDir, 0o700);
+  } catch {
+    // best-effort on platforms without chmod
+  }
+  const tempPath = path.join(targetDir, `.exec-approvals.migration.${process.pid}.tmp`);
+  fs.writeFileSync(tempPath, raw, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  try {
+    try {
+      fs.copyFileSync(tempPath, targetPath, fs.constants.COPYFILE_EXCL);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        return false;
+      }
+      try {
+        fs.rmSync(targetPath, { force: true });
+      } catch {
+        // best-effort cleanup for an incomplete exclusive copy target
+      }
+      throw err;
+    }
+    try {
+      fs.chmodSync(targetPath, 0o600);
+    } catch {
+      // best-effort on platforms without chmod
+    }
+    return true;
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
+function archiveMigratedExecApprovalsSource(sourcePath: string): string {
+  let archivePath = `${sourcePath}.migrated`;
+  if (fileExists(archivePath)) {
+    archivePath = `${archivePath}-${Date.now()}`;
+  }
+  fs.renameSync(sourcePath, archivePath);
+  return archivePath;
+}
+
+function migrateLegacyExecApprovals(detected: LegacyExecApprovalsMigrationDetection): {
+  changes: string[];
+  warnings: string[];
+} {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!detected.hasLegacy) {
+    return { changes, warnings };
+  }
+  if (fileExists(detected.targetPath)) {
+    return { changes, warnings };
+  }
+  try {
+    const sourceStat = fs.lstatSync(detected.sourcePath);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+      warnings.push(
+        `Legacy exec approvals file is not a regular file; left in place at ${detected.sourcePath}`,
+      );
+      return { changes, warnings };
+    }
+    try {
+      const targetStat = fs.lstatSync(detected.targetPath);
+      if (targetStat.isSymbolicLink()) {
+        warnings.push(
+          `Target exec approvals path is a symlink; skipped migration at ${detected.targetPath}`,
+        );
+        return { changes, warnings };
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+    const prepared = prepareMigratedExecApprovalsFile({
+      raw: fs.readFileSync(detected.sourcePath, "utf8"),
+      sourcePath: detected.sourcePath,
+      targetPath: detected.targetPath,
+    });
+    if (prepared.warning) {
+      warnings.push(prepared.warning);
+      return { changes, warnings };
+    }
+    if (!writeMigratedExecApprovalsFile(detected.targetPath, prepared.raw)) {
+      return { changes, warnings };
+    }
+    changes.push(`Migrated exec approvals → ${detected.targetPath}`);
+    try {
+      const archivePath = archiveMigratedExecApprovalsSource(detected.sourcePath);
+      changes.push(`Archived legacy exec approvals → ${archivePath}`);
+    } catch (err) {
+      warnings.push(
+        `Failed archiving legacy exec approvals at ${detected.sourcePath}: ${String(err)}`,
+      );
+    }
+  } catch (err) {
+    warnings.push(
+      `Failed migrating exec approvals (${detected.sourcePath} → ${detected.targetPath}): ${String(
+        err,
+      )}`,
+    );
+  }
+  return { changes, warnings };
+}
+
 function migrateLegacyStateSchema(detected: LegacyStateDetection): {
   changes: string[];
   warnings: string[];
@@ -3179,6 +3424,7 @@ export async function runLegacyStateMigrations(params: {
   const deliveryQueues = await migrateLegacyDeliveryQueues({
     stateDir: detected.stateDir,
   });
+  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -3207,6 +3453,7 @@ export async function runLegacyStateMigrations(params: {
       ...pluginInstallIndex.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
+      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
       ...sessions.changes,
@@ -3220,6 +3467,7 @@ export async function runLegacyStateMigrations(params: {
       ...pluginInstallIndex.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
+      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
       ...sessions.warnings,
@@ -3551,6 +3799,7 @@ export async function autoMigrateLegacyState(params: {
     const deliveryQueues = await migrateLegacyDeliveryQueues({
       stateDir: detected.stateDir,
     });
+    const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
@@ -3567,6 +3816,7 @@ export async function autoMigrateLegacyState(params: {
       ...pluginInstallIndex.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
+      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
     ];
@@ -3579,6 +3829,7 @@ export async function autoMigrateLegacyState(params: {
       ...pluginInstallIndex.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
+      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
@@ -3593,6 +3844,7 @@ export async function autoMigrateLegacyState(params: {
         pluginInstallIndex.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
         deliveryQueues.changes.length > 0 ||
+        execApprovals.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
         pluginPlans.changes.length > 0,
       skipped: true,
@@ -3609,7 +3861,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.pluginInstallIndex.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
     !detected.taskStateSidecars.hasLegacy &&
-    !detected.deliveryQueues.hasLegacy
+    !detected.deliveryQueues.hasLegacy &&
+    !detected.execApprovals.hasLegacy
   ) {
     const changes = [
       ...stateDirResult.changes,
@@ -3649,6 +3902,7 @@ export async function autoMigrateLegacyState(params: {
   const deliveryQueues = await migrateLegacyDeliveryQueues({
     stateDir: detected.stateDir,
   });
+  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -3677,6 +3931,7 @@ export async function autoMigrateLegacyState(params: {
     ...pluginInstallIndex.changes,
     ...taskStateSidecars.changes,
     ...deliveryQueues.changes,
+    ...execApprovals.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
     ...sessions.changes,
@@ -3693,6 +3948,7 @@ export async function autoMigrateLegacyState(params: {
     ...pluginInstallIndex.warnings,
     ...taskStateSidecars.warnings,
     ...deliveryQueues.warnings,
+    ...execApprovals.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,
     ...sessions.warnings,
