@@ -16,6 +16,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
+import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
@@ -327,6 +328,19 @@ export function buildGatewayCronService(params: {
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
       });
+    },
+    resolveOriginDeliveryContext: (opts) => {
+      // Resolve the wake target the same way the enqueue/heartbeat deps do,
+      // then read the channel-correct delivery context from that session's
+      // store entry (NOT by string-splitting the composite session key).
+      const { runtimeConfig, sessionKey } = resolveCronTarget({
+        ...opts,
+        preserveUntargeted: true,
+      });
+      if (!sessionKey) {
+        return undefined;
+      }
+      return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, sessionKey });
     },
     requestHeartbeat: (opts) => {
       const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });

@@ -1,5 +1,8 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
-import { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+} from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 export {
   resolveClaudeFable5ModelIdentity,
@@ -46,6 +49,21 @@ export function usesClaudeFable5MessagesContract(model: {
   return (
     normalizeApi(model.api) === "anthropic-messages" &&
     resolveClaudeFable5ModelIdentity(model) !== undefined
+  );
+}
+
+export function requiresClaudeAdaptiveThinking(model: {
+  id?: string;
+  params?: Record<string, unknown>;
+  api?: string;
+}): boolean {
+  if (normalizeApi(model.api) !== "anthropic-messages") {
+    return false;
+  }
+  const modelId = resolveClaudeModelIdentity(model);
+  return (
+    resolveClaudeFable5ModelIdentity(model) !== undefined ||
+    /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(modelId)
   );
 }
 

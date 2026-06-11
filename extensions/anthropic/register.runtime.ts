@@ -34,6 +34,7 @@ import {
   resolveClaudeModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
@@ -292,6 +293,11 @@ function buildAnthropicForwardCompatModel(
     maxTokens: isAnthropic128kOutputModel(trimmedModelId)
       ? ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS
       : 64_000,
+    ...(supportsClaudeNativeXhighEffort({ id: trimmedModelId })
+      ? { thinkingLevelMap: { xhigh: "xhigh", max: "max" } }
+      : supportsAnthropicNativeMaxEffort(trimmedModelId)
+        ? { thinkingLevelMap: { max: "max" } }
+        : {}),
   };
 }
 
@@ -359,6 +365,16 @@ function isAnthropic128kOutputModel(modelId: string): boolean {
 
 function isAnthropicOpus47OrNewerModel(modelId: string): boolean {
   return supportsClaudeNativeXhighEffort({ id: modelId }) && !isAnthropicFable5Model(modelId);
+}
+
+function isAnthropicMythosPreviewModel(modelId: string): boolean {
+  return /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(
+    resolveClaudeModelIdentity({ id: modelId }),
+  );
+}
+
+function supportsAnthropicNativeMaxEffort(modelId: string): boolean {
+  return supportsClaudeNativeMaxEffort({ id: modelId }) || isAnthropicMythosPreviewModel(modelId);
 }
 
 function hasConfiguredModelContextOverride(
@@ -455,15 +471,17 @@ function applyAnthropicThinkingLevelMap(params: {
 }): ProviderRuntimeModel | undefined {
   const fable5 = isAnthropicFable5Model(params.modelId);
   const nativeXhigh = fable5 || isAnthropicOpus47OrNewerModel(params.modelId);
-  if (!matchesAnthropicModernModel(params.modelId)) {
+  if (!supportsAnthropicNativeMaxEffort(params.modelId)) {
     return undefined;
   }
   const current = params.model.thinkingLevelMap;
-  const nativeDefaults = {
-    ...(fable5 ? { off: "low" as const, minimal: "low" as const } : {}),
-    xhigh: nativeXhigh ? ("xhigh" as const) : null,
-    max: "max" as const,
-  };
+  const nativeDefaults = isAnthropicMythosPreviewModel(params.modelId)
+    ? { max: "max" as const }
+    : {
+        ...(fable5 ? { off: "low" as const, minimal: "low" as const } : {}),
+        xhigh: nativeXhigh ? ("xhigh" as const) : null,
+        max: "max" as const,
+      };
   const currentEfforts = current as Record<string, string | null | undefined> | undefined;
   if (Object.keys(nativeDefaults).every((level) => currentEfforts?.[level] !== undefined)) {
     return undefined;
@@ -478,7 +496,7 @@ function applyAnthropicThinkingLevelMap(params: {
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId });
+  return supportsClaudeAdaptiveThinking({ id: modelId }) || isAnthropicMythosPreviewModel(modelId);
 }
 
 function hasImageInput(input: unknown): boolean {

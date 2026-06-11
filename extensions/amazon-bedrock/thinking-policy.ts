@@ -43,6 +43,28 @@ export function isOpus47OrNewerBedrockModelRef(modelRef: string): boolean {
   return isOpus47BedrockModelRef(modelRef) || isOpus48BedrockModelRef(modelRef);
 }
 
+function isMythosPreviewBedrockModelRef(modelRef: string): boolean {
+  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-mythos-preview(?:$|[-.:/])/i.test(
+    modelRef,
+  );
+}
+
+/** Return whether a Bedrock Claude ref needs latest adaptive-thinking request shaping. */
+export function isLatestAdaptiveBedrockModelRef(
+  modelId: string,
+  params?: Record<string, unknown>,
+): boolean {
+  const modelRef = { id: modelId, params };
+  const canonicalModelId = resolveClaudeModelIdentity(modelRef);
+  return (
+    resolveClaudeFable5ModelIdentity(modelRef) !== undefined ||
+    [modelId, canonicalModelId].some(
+      (candidate) =>
+        isOpus47OrNewerBedrockModelRef(candidate) || isMythosPreviewBedrockModelRef(candidate),
+    )
+  );
+}
+
 /** Return whether a Bedrock Claude ref supports max effort. */
 export function supportsBedrockNativeMaxEffort(
   modelId: string,
@@ -106,6 +128,12 @@ export function resolveBedrockClaudeThinkingProfile(
   if (modelRefs.some(isOpus46BedrockModelRef)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "adaptive" }, { id: "max" }],
+      defaultLevel: "adaptive",
+    };
+  }
+  if (modelRefs.some(isMythosPreviewBedrockModelRef)) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "adaptive" }],
       defaultLevel: "adaptive",
     };
   }

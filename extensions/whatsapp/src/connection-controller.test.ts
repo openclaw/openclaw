@@ -8,7 +8,7 @@ import {
   waitForWhatsAppLoginResult,
   WhatsAppConnectionController,
 } from "./connection-controller.js";
-import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
+import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
@@ -24,20 +24,11 @@ vi.mock("./session.js", async () => {
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
-function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
-
 function createListenerStub(messageId = "ok") {
   return {
-    sendMessage: vi.fn(async () => acceptedSendResult("text", messageId)),
-    sendPoll: vi.fn(async () => acceptedSendResult("poll", messageId)),
-    sendReaction: vi.fn(async () => acceptedSendResult("reaction", messageId)),
+    sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", messageId)),
+    sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", messageId)),
+    sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", messageId)),
     sendComposingTo: vi.fn(async () => {}),
   };
 }

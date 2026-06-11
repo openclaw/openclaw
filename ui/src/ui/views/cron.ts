@@ -1733,12 +1733,12 @@ function renderJobPayload(job: CronJob) {
     return html`
       <div class="cron-job-detail">
         <div class="cron-job-detail-section">
-          <span class="cron-job-detail-label">Command</span>
+          <span class="cron-job-detail-label">${t("cron.jobDetail.command")}</span>
           <code class="muted cron-job-detail-value">${payload.argv.join(" ")}</code>
         </div>
         ${payload.cwd
           ? html`<div class="cron-job-detail-section">
-              <span class="cron-job-detail-label">CWD</span>
+              <span class="cron-job-detail-label">${t("cron.jobDetail.cwd")}</span>
               <span class="muted cron-job-detail-value">${payload.cwd}</span>
             </div>`
           : nothing}

@@ -16,6 +16,23 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 
+    private func withTempHomeAndStateDir(
+        _ body: @escaping @Sendable (URL, URL) async throws -> Void) async throws
+    {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-home-state-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let stateDir = root.appendingPathComponent("state", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_HOME": home.path,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            try await body(home, stateDir)
+        }
+    }
+
     @Test
     func `ensure file skips rewrite when unchanged`() async throws {
         try await self.withTempStateDir { _ in
@@ -27,6 +44,50 @@ struct ExecApprovalsStoreRefactorTests {
             let secondIdentity = try Self.fileIdentity(at: url)
 
             #expect(firstIdentity == secondIdentity)
+        }
+    }
+
+    @Test
+    func `ensure file migrates default approvals into custom state dir`() async throws {
+        try await self.withTempHomeAndStateDir { home, stateDir in
+            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
+            try FileManager().createDirectory(
+                at: legacyDir,
+                withIntermediateDirectories: true)
+            let legacySocket = legacyDir.appendingPathComponent("exec-approvals.sock").path
+            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
+            let legacyJson = """
+            {
+              "version": 1,
+              "socket": {
+                "path": "\(legacySocket)",
+                "token": "legacy-token"
+              },
+              "defaults": {
+                "security": "deny",
+                "ask": "always"
+              },
+              "agents": {
+                "main": {
+                  "allowlist": [{ "pattern": "git status" }]
+                }
+              }
+            }
+            """
+            try Data(legacyJson.utf8).write(to: legacyFile)
+
+            let file = ExecApprovalsStore.ensureFile()
+            let targetURL = ExecApprovalsStore.fileURL()
+
+            #expect(targetURL.path == stateDir.appendingPathComponent("exec-approvals.json").path)
+            #expect(FileManager().fileExists(atPath: targetURL.path))
+            #expect(file.socket?.path == stateDir.appendingPathComponent("exec-approvals.sock").path)
+            #expect(file.socket?.token == "legacy-token")
+            #expect(file.defaults?.security == .deny)
+            #expect(file.defaults?.ask == .always)
+            #expect(file.agents?["main"]?.allowlist?.map(\.pattern) == ["git status"])
+            #expect(!FileManager().fileExists(atPath: legacyFile.path))
+            #expect(FileManager().fileExists(atPath: "\(legacyFile.path).migrated"))
         }
     }
 

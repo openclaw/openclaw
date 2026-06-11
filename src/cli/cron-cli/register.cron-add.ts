@@ -10,7 +10,10 @@ import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { parsePositiveIntOrUndefined } from "../program/helpers.js";
+import {
+  parsePositiveIntOrUndefined,
+  parseStrictPositiveIntOrUndefined,
+} from "../program/helpers.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -217,7 +220,10 @@ export function registerCronAddCommand(cron: Command) {
               if (systemEvent) {
                 return { kind: "systemEvent" as const, text: systemEvent };
               }
-              const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
+              const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
+              if (opts.timeoutSeconds !== undefined && timeoutSeconds === undefined) {
+                throw new Error("Invalid --timeout-seconds (must be a positive integer).");
+              }
               if (commandShell || commandArgv) {
                 const rawNoOutputTimeoutSeconds =
                   opts.noOutputTimeoutSeconds ??
