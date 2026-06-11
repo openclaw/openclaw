@@ -452,10 +452,10 @@ async function resolveUnownedCliPrimaryMessage(params: {
       resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
     },
   );
-  const suggestion = formatCliCommandSuggestions(params.primary);
   if (pluginPolicyMessage) {
-    return [pluginPolicyMessage, suggestion].filter(Boolean).join("\n");
+    return pluginPolicyMessage;
   }
+  const suggestion = formatCliCommandSuggestions(params.primary);
   return [
     `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`,
     suggestion,
