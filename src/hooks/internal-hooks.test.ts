@@ -179,6 +179,164 @@ describe("hooks", () => {
       await triggerInternalHook(event);
       expect(injectedHandler).toHaveBeenCalledWith(event);
     });
+
+    it("should prevent re-entrant triggers within the same handler chain", async () => {
+      const callCount = { value: 0 };
+      const reentrantHandler = vi.fn(async () => {
+        callCount.value++;
+        // Simulate a re-entrant trigger (e.g., embedded agent turn re-triggering the same hook)
+        if (callCount.value < 5) {
+          const event = createInternalHookEvent("command", "new", "test-session");
+          await triggerInternalHook(event);
+        }
+      });
+
+      registerInternalHook("command:new", reentrantHandler);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      // The handler should only be called once; re-entrant calls are blocked
+      expect(reentrantHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it("should allow sequential triggers after the first completes", async () => {
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it("should allow concurrent triggers for the same key from independent contexts", async () => {
+      // This is the key scenario flagged by ClawSweeper: two independent
+      // message:received events for the same session arriving concurrently
+      // via fireAndForgetHook must both be delivered.
+      const handler = vi.fn();
+      registerInternalHook("message:received", handler);
+
+      const event1 = createInternalHookEvent("message", "received", "session-a");
+      const event2 = createInternalHookEvent("message", "received", "session-a");
+
+      // Fire both concurrently (simulating fireAndForgetHook behavior)
+      await Promise.all([triggerInternalHook(event1), triggerInternalHook(event2)]);
+
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it("should not block different session keys", async () => {
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler);
+
+      const event1 = createInternalHookEvent("command", "new", "session-a");
+      const event2 = createInternalHookEvent("command", "new", "session-b");
+
+      await Promise.all([triggerInternalHook(event1), triggerInternalHook(event2)]);
+
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it("should not block different event types", async () => {
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
+      registerInternalHook("command:new", handler1);
+      registerInternalHook("command:reset", handler2);
+
+      const event1 = createInternalHookEvent("command", "new", "test-session");
+      const event2 = createInternalHookEvent("command", "reset", "test-session");
+
+      await Promise.all([triggerInternalHook(event1), triggerInternalHook(event2)]);
+
+      expect(handler1).toHaveBeenCalledTimes(1);
+      expect(handler2).toHaveBeenCalledTimes(1);
+    });
+
+    it("should block re-entrant trigger even with a slow handler and concurrent independent trigger", async () => {
+      // Handler A is slow (still running). An independent concurrent trigger
+      // for the same key should be delivered. But a re-entrant call from
+      // within Handler A's chain should be blocked.
+      const resolvers: Array<() => void> = [];
+      const slowHandler = vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        });
+      });
+      const reentrantCount = { value: 0 };
+      const reentrantHandler = vi.fn(async () => {
+        reentrantCount.value++;
+        if (reentrantCount.value < 3) {
+          await triggerInternalHook(createInternalHookEvent("message", "received", "session-a"));
+        }
+      });
+
+      registerInternalHook("message", slowHandler);
+      registerInternalHook("message:received", reentrantHandler);
+
+      // Start first dispatch (slow handler will not complete until we resolve)
+      const firstDispatch = triggerInternalHook(
+        createInternalHookEvent("message", "received", "session-a"),
+      );
+
+      // Start independent concurrent dispatch for the same key
+      const independentDispatch = triggerInternalHook(
+        createInternalHookEvent("message", "received", "session-a"),
+      );
+
+      // Resolve all slow handler invocations to let both dispatches complete
+      for (const resolve of resolvers) {
+        resolve();
+      }
+
+      await Promise.all([firstDispatch, independentDispatch]);
+
+      // slowHandler called twice (both independent dispatches)
+      expect(slowHandler).toHaveBeenCalledTimes(2);
+      // reentrantHandler called twice (both independent dispatches), not more
+      expect(reentrantHandler).toHaveBeenCalledTimes(2);
+    });
+
+    it("should deliver a delayed same-key hook scheduled from within a handler after dispatch completes", async () => {
+      // Regression test for ClawSweeper finding: a handler that schedules a
+      // delayed same-key redispatch (e.g. via setTimeout) should have that
+      // delayed call delivered after the original dispatch returns, not blocked
+      // by the guard.
+      //
+      // The handler uses fire-and-forget for the setTimeout (does not await it),
+      // so the dispatch completes and the guard key is cleared before the
+      // delayed trigger fires.
+      let delayedTriggered = false;
+      const handler = vi.fn(async (event) => {
+        if (event.context.fromDelayed) {
+          delayedTriggered = true;
+          return;
+        }
+        // Fire-and-forget: schedule a delayed trigger but don't await it.
+        // This simulates a handler that schedules follow-up work without
+        // blocking on it (common in real-world fireAndForgetHook patterns).
+        setTimeout(() => {
+          const delayedEvent = createInternalHookEvent("command", "new", "test-session", {
+            fromDelayed: true,
+          });
+          void triggerInternalHook(delayedEvent);
+        }, 10);
+      });
+
+      registerInternalHook("command:new", handler);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+
+      // At this point, dispatch is complete and guard key is cleared.
+      // Wait for the delayed trigger to fire and complete.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Handler should be called twice: once for the original, once for the delayed
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(delayedTriggered).toBe(true);
+    });
   });
 
   describe("createInternalHookEvent", () => {
