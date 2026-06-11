@@ -2,10 +2,15 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
-  DEFAULT_GROUP_PROMPT,
+  resolveGroupCommandLevelFromAccountConfig,
   resolveGroupConfig,
+  resolveGroupName,
+  resolveGroupPrompt,
   resolveGroupSettings,
+  resolveHistoryLimit,
+  resolveIgnoreOtherMentions,
   resolveMentionPatterns,
+  resolveRequireMention,
 } from "./group.js";
 
 describe("engine/config/group", () => {
@@ -15,6 +20,7 @@ describe("engine/config/group", () => {
       expect(cfg).toStrictEqual({
         requireMention: true,
         ignoreOtherMentions: false,
+        commandLevel: "safety",
         name: "",
         prompt: undefined,
         historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
@@ -29,6 +35,7 @@ describe("engine/config/group", () => {
             groups: {
               "*": {
                 requireMention: false,
+                commandLevel: "strict",
                 historyLimit: 20,
                 name: "wild",
               },
@@ -38,6 +45,7 @@ describe("engine/config/group", () => {
       };
       const resolved = resolveGroupConfig(cfg, "G1");
       expect(resolved.requireMention).toBe(false);
+      expect(resolved.commandLevel).toBe("strict");
       expect(resolved.historyLimit).toBe(20);
       expect(resolved.name).toBe("wild");
     });
@@ -48,14 +56,15 @@ describe("engine/config/group", () => {
           qqbot: {
             appId: "1",
             groups: {
-              "*": { requireMention: true, historyLimit: 20 },
-              GROUPA: { requireMention: false, historyLimit: 5, name: "A" },
+              "*": { requireMention: true, commandLevel: "strict", historyLimit: 20 },
+              GROUPA: { requireMention: false, commandLevel: "all", historyLimit: 5, name: "A" },
             },
           },
         },
       };
       const resolved = resolveGroupConfig(cfg, "GROUPA");
       expect(resolved.requireMention).toBe(false);
+      expect(resolved.commandLevel).toBe("all");
       expect(resolved.historyLimit).toBe(5);
       expect(resolved.name).toBe("A");
     });
@@ -66,7 +75,7 @@ describe("engine/config/group", () => {
           qqbot: { appId: "1", groups: { "*": { historyLimit: -3.7 } } },
         },
       };
-      expect(resolveGroupConfig(cfg, "G").historyLimit).toBe(0);
+      expect(resolveHistoryLimit(cfg, "G")).toBe(0);
     });
 
     it("non-finite historyLimit falls back to default", () => {
@@ -75,7 +84,7 @@ describe("engine/config/group", () => {
           qqbot: { appId: "1", groups: { "*": { historyLimit: "not a number" } } },
         },
       };
-      expect(resolveGroupConfig(cfg, "G").historyLimit).toBe(DEFAULT_GROUP_HISTORY_LIMIT);
+      expect(resolveHistoryLimit(cfg, "G")).toBe(DEFAULT_GROUP_HISTORY_LIMIT);
     });
 
     describe("account-level defaultRequireMention layer", () => {
@@ -99,7 +108,7 @@ describe("engine/config/group", () => {
             },
           },
         };
-        expect(resolveGroupConfig(cfg, "G1", "bot2").requireMention).toBe(false);
+        expect(resolveRequireMention(cfg, "G1", "bot2")).toBe(false);
       });
 
       it("wildcard overrides account-level defaultRequireMention", () => {
@@ -149,28 +158,47 @@ describe("engine/config/group", () => {
           },
         },
       };
-      const resolved = resolveGroupConfig(cfg, "G", "bot2");
-      expect(resolved.requireMention).toBe(false);
-      expect(resolved.historyLimit).toBe(7);
+      expect(resolveRequireMention(cfg, "G", "bot2")).toBe(false);
+      expect(resolveHistoryLimit(cfg, "G", "bot2")).toBe(7);
     });
   });
 
-  describe("resolveGroupSettings name", () => {
+  describe("resolveGroupCommandLevelFromAccountConfig", () => {
+    it("defaults to safety when unset", () => {
+      expect(resolveGroupCommandLevelFromAccountConfig({}, "G")).toBe("safety");
+    });
+
+    it("uses specific group before wildcard", () => {
+      expect(
+        resolveGroupCommandLevelFromAccountConfig(
+          {
+            groups: {
+              "*": { commandLevel: "strict" },
+              G1: { commandLevel: "all" },
+            },
+          },
+          "G1",
+        ),
+      ).toBe("all");
+    });
+  });
+
+  describe("resolveGroupName", () => {
     it("uses the first 8 chars of openid when name is unset", () => {
-      expect(resolveGroupSettings({ cfg: {}, groupOpenid: "ABCDEFGH1234" }).name).toBe("ABCDEFGH");
+      expect(resolveGroupName({}, "ABCDEFGH1234")).toBe("ABCDEFGH");
     });
 
     it("prefers the configured name", () => {
       const cfg = {
         channels: { qqbot: { appId: "1", groups: { ABCDEFGH1234: { name: "Foo" } } } },
       };
-      expect(resolveGroupSettings({ cfg, groupOpenid: "ABCDEFGH1234" }).name).toBe("Foo");
+      expect(resolveGroupName(cfg, "ABCDEFGH1234")).toBe("Foo");
     });
   });
 
-  describe("resolveGroupConfig prompt", () => {
+  describe("resolveGroupPrompt", () => {
     it("returns the default prompt when nothing configured", () => {
-      expect(resolveGroupConfig({}, "G").prompt ?? DEFAULT_GROUP_PROMPT).toContain("bot");
+      expect(resolveGroupPrompt({}, "G")).toContain("bot");
     });
 
     it("prefers specific over wildcard", () => {
@@ -182,21 +210,21 @@ describe("engine/config/group", () => {
           },
         },
       };
-      expect(resolveGroupConfig(cfg, "G1").prompt).toBe("SPEC");
-      expect(resolveGroupConfig(cfg, "G2").prompt).toBe("WILD");
+      expect(resolveGroupPrompt(cfg, "G1")).toBe("SPEC");
+      expect(resolveGroupPrompt(cfg, "G2")).toBe("WILD");
     });
   });
 
-  describe("resolveGroupConfig ignoreOtherMentions", () => {
+  describe("resolveIgnoreOtherMentions", () => {
     it("defaults to false", () => {
-      expect(resolveGroupConfig({}, "G").ignoreOtherMentions).toBe(false);
+      expect(resolveIgnoreOtherMentions({}, "G")).toBe(false);
     });
 
     it("honours wildcard override", () => {
       const cfg = {
         channels: { qqbot: { appId: "1", groups: { "*": { ignoreOtherMentions: true } } } },
       };
-      expect(resolveGroupConfig(cfg, "G").ignoreOtherMentions).toBe(true);
+      expect(resolveIgnoreOtherMentions(cfg, "G")).toBe(true);
     });
   });
 

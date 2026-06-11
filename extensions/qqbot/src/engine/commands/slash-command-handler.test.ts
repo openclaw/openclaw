@@ -27,6 +27,17 @@ function createStreamingMessage(): QueuedMessage {
   };
 }
 
+function createGroupStopMessage(): QueuedMessage {
+  return {
+    type: "group",
+    senderId: "TRUSTED_OPENID",
+    content: "/stop",
+    messageId: "msg-stop",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    groupOpenid: "GROUP_OPENID",
+  };
+}
+
 function createAccount(): GatewayAccount {
   return {
     accountId: "default",
@@ -79,5 +90,42 @@ describe("trySlashCommand", () => {
     expect(writes).toHaveLength(1);
     expect(qqbot?.streaming).toBe(true);
     expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("已开启");
+  });
+
+  it("does not treat group /stop as urgent when command level is strict", async () => {
+    const account = createAccount();
+    account.config.groups = {
+      GROUP_OPENID: { commandLevel: "strict" },
+    };
+
+    const result = await trySlashCommand(createGroupStopMessage(), {
+      account,
+      cfg: {},
+      getMessagePeerId: () => "group:GROUP_OPENID",
+      getQueueSnapshot: () => ({
+        totalPending: 0,
+        activeUsers: 0,
+        maxConcurrentUsers: 1,
+        senderPending: 0,
+      }),
+    });
+
+    expect(result).toBe("enqueue");
+  });
+
+  it("keeps group /stop urgent outside strict command level", async () => {
+    const result = await trySlashCommand(createGroupStopMessage(), {
+      account: createAccount(),
+      cfg: {},
+      getMessagePeerId: () => "group:GROUP_OPENID",
+      getQueueSnapshot: () => ({
+        totalPending: 0,
+        activeUsers: 0,
+        maxConcurrentUsers: 1,
+        senderPending: 0,
+      }),
+    });
+
+    expect(result).toBe("urgent");
   });
 });

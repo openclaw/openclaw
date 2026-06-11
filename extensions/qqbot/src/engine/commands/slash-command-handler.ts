@@ -5,6 +5,7 @@
  * Handles urgent commands, normal slash commands, and file delivery.
  */
 
+import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
 import type { QueuedMessage } from "../gateway/message-queue.js";
 import type { GatewayAccount, EngineLogger } from "../gateway/types.js";
 import { sendDocument } from "../messaging/outbound.js";
@@ -58,12 +59,23 @@ export async function trySlashCommand(
     return "enqueue";
   }
 
+  const isGroup = msg.type === "group" || msg.type === "guild";
+  const groupCommandLevel = isGroup
+    ? resolveGroupCommandLevelFromAccountConfig(
+        account.config,
+        msg.groupOpenid ?? msg.channelId ?? null,
+      )
+    : undefined;
+
   // Urgent command detection — bypass queue and execute immediately.
   const contentLower = content.toLowerCase();
   const isUrgentCommand = URGENT_COMMANDS.some(
     (cmd) => contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
   );
   if (isUrgentCommand) {
+    if (isGroup && groupCommandLevel === "strict") {
+      return "enqueue";
+    }
     log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
     return "urgent";
   }
@@ -71,7 +83,6 @@ export async function trySlashCommand(
   // Normal slash command — try to match and execute.
   const receivedAt = Date.now();
   const peerId = ctx.getMessagePeerId(msg);
-  const isGroup = msg.type === "group" || msg.type === "guild";
   const commandsAllowFrom = resolveQQBotCommandsAllowFrom(ctx.cfg);
   const commandAuthorized = ctx.resolveCommandAuthorized
     ? await ctx.resolveCommandAuthorized({
@@ -104,6 +115,7 @@ export async function trySlashCommand(
     appId: account.appId,
     accountConfig: account.config,
     commandAuthorized,
+    groupCommandLevel,
     queueSnapshot: ctx.getQueueSnapshot(peerId),
   };
 
