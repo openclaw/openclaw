@@ -110,6 +110,7 @@ function humanizeId(value) {
     ["codex", "Codex"],
     ["cli", "CLI"],
     ["comfy", "ComfyUI"],
+    ["coreweave", "CoreWeave"],
     ["dashscope", "DashScope"],
     ["deepgram", "Deepgram"],
     ["deepinfra", "DeepInfra"],

@@ -385,6 +385,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/cloudflare-ai-gateway/**"
+"extensions: coreweave":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/coreweave/**"
+          - "docs/providers/coreweave.md"
 "extensions: minimax-portal-auth":
   - changed-files:
       - any-glob-to-any-file:
