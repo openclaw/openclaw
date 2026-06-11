@@ -271,6 +271,68 @@ describe("ensurePluginRegistryLoaded", () => {
     });
     expect(requireRecord(load.env, "load env").PIONEER_API_KEY).toBe("resolved-runtime-key");
     expect(load.resolveRawConfigEnvVars).toBeUndefined();
+    expect(load.rawConfigEnvVarsResolved).toBe(true);
+  });
+
+  it("reloads raw-config registries when env-resolved values change between loads", () => {
+    const rawConfig = {
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    mocks.applyPluginAutoEnable.mockImplementation((params) => ({
+      config: params.config as never,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["pioneer"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: rawConfig as never,
+      env: { PIONEER_API_KEY: "first-secret" } as NodeJS.ProcessEnv,
+      resolveRawConfigEnvVars: true,
+    });
+
+    // An active registry that satisfies the scope by plugin ids alone would
+    // normally short-circuit the second load; raw-config mode must not reuse
+    // it because the env-resolved values changed underneath the same ids.
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.channels.push({ plugin: { id: "pioneer" } } as never);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: rawConfig as never,
+      env: { PIONEER_API_KEY: "second-secret" } as NodeJS.ProcessEnv,
+      resolveRawConfigEnvVars: true,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
+    for (const [index, expectedApiKey] of [
+      [0, "first-secret"],
+      [1, "second-secret"],
+    ] as const) {
+      const load = loadOptions(index);
+      const loadConfig = requireRecord(load.config, "load config");
+      expect(pluginEntries(loadConfig).pioneer).toEqual({
+        enabled: true,
+        config: {
+          apiKey: expectedApiKey,
+        },
+      });
+      expect(load.rawConfigEnvVarsResolved).toBe(true);
+      expect(load.resolveRawConfigEnvVars).toBeUndefined();
+    }
   });
 
   it("leaves prepared configs untouched so escaped placeholders stay literal", () => {
@@ -318,6 +380,7 @@ describe("ensurePluginRegistryLoaded", () => {
       },
     });
     expect(load.resolveRawConfigEnvVars).toBeUndefined();
+    expect(load.rawConfigEnvVarsResolved).toBeUndefined();
   });
 
   it("temporarily activates configured-channel owners before loading them", () => {
