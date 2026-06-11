@@ -19,6 +19,7 @@ import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -134,6 +135,7 @@ vi.mock("./model.static-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./model.static-catalog.js")>();
   return {
     ...actual,
+    resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
     resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
   };
 });
@@ -187,6 +189,7 @@ beforeEach(() => {
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
   resolveBundledStaticCatalogModelMock.mockReset();
+  resolveBundledProviderStaticCatalogModelMock.mockReset();
 });
 
 function createRuntimeHooks() {
@@ -565,6 +568,58 @@ describe("resolveModel", () => {
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "mistral",
       modelId: "mistral-medium-3-5",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
+    resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+
+    const result = await resolveModelAsync(
+      "google",
+      "gemini-3.1-pro-preview",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
     });
