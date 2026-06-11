@@ -42,4 +42,34 @@ describe("resolveWindowsCommandShim", () => {
       }),
     ).toBe("npm.cmd");
   });
+
+  it("appends .cmd for Claude CLI on Windows so npm shims resolve", () => {
+    expect(
+      resolveWindowsCommandShim({
+        command: "claude",
+        cmdCommands: ["npm", "pnpm", "yarn", "npx", "claude", "gemini"],
+        platform: "win32",
+      }),
+    ).toBe("claude.cmd");
+  });
+
+  it("appends .cmd for Gemini CLI on Windows so npm shims resolve", () => {
+    expect(
+      resolveWindowsCommandShim({
+        command: "gemini",
+        cmdCommands: ["npm", "pnpm", "yarn", "npx", "claude", "gemini"],
+        platform: "win32",
+      }),
+    ).toBe("gemini.cmd");
+  });
+
+  it("leaves Claude CLI untouched on non-Windows platforms", () => {
+    expect(
+      resolveWindowsCommandShim({
+        command: "claude",
+        cmdCommands: ["claude", "gemini"],
+        platform: "darwin",
+      }),
+    ).toBe("claude");
+  });
 });
