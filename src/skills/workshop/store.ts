@@ -1,4 +1,3 @@
-// Workshop store persists generated skill drafts and metadata under the workspace.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -35,7 +34,6 @@ const MANIFEST_LOCK_REL_PATH = path.join(TARGET_LOCKS_REL_DIR, "proposals-manife
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
-/** Maximum bytes accepted for a proposal draft. */
 export const MAX_PROPOSAL_BYTES = 1024 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
 export const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
