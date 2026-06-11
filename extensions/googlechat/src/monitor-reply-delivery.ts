@@ -18,7 +18,8 @@ export async function deliverGoogleChatReply(params: {
     text?: string;
     mediaUrls?: string[];
     mediaUrl?: string;
-    replyToId?: string;
+    // null mirrors OutboundReplyPayload.replyToId: explicit suppression of inherited reply metadata.
+    replyToId?: string | null;
   };
   account: ResolvedGoogleChatAccount;
   spaceId: string;
