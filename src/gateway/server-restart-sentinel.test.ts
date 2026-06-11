@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
         },
       },
     })),
+    finalizeUpdateRestartSentinelRunningVersion: vi.fn(async () => null),
     removeRestartSentinelFile: vi.fn(async () => undefined),
     resolveRestartSentinelPath: vi.fn(() => "/tmp/restart-sentinel.json"),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
@@ -173,6 +174,7 @@ vi.mock("../agents/agent-scope.js", async () => {
 });
 
 vi.mock("../infra/restart-sentinel.js", () => ({
+  finalizeUpdateRestartSentinelRunningVersion: mocks.finalizeUpdateRestartSentinelRunningVersion,
   readRestartSentinel: mocks.readRestartSentinel,
   removeRestartSentinelFile: mocks.removeRestartSentinelFile,
   resolveRestartSentinelPath: mocks.resolveRestartSentinelPath,
@@ -292,8 +294,11 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
-const { getLatestUpdateRestartSentinel, scheduleRestartSentinelWake } =
-  await import("./server-restart-sentinel.js");
+const {
+  getLatestUpdateRestartSentinel,
+  refreshLatestUpdateRestartSentinel,
+  scheduleRestartSentinelWake,
+} = await import("./server-restart-sentinel.js");
 
 function expectRecordFields(
   record: unknown,
@@ -409,6 +414,8 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
     mocks.removeRestartSentinelFile.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
@@ -1342,6 +1349,28 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.removeRestartSentinelFile).toHaveBeenCalledWith("/tmp/restart-sentinel.json");
+    expect(getLatestUpdateRestartSentinel()).toEqual(payload);
+  });
+
+  it("does not rewrite pending update sentinels during status refresh", async () => {
+    const payload = {
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: {
+        mode: "git",
+        handoffId: "handoff-1",
+        reason: "managed-service-handoff-started",
+      },
+    } as const;
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload,
+    });
+
+    await expect(refreshLatestUpdateRestartSentinel()).resolves.toEqual(payload);
+
+    expect(mocks.finalizeUpdateRestartSentinelRunningVersion).not.toHaveBeenCalled();
     expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
