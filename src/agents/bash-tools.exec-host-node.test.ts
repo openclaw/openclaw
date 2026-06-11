@@ -1821,6 +1821,64 @@ describe("executeNodeHostCommand", () => {
     expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
+  it("offers allow-always for prepared node commands with complete node coverage", async () => {
+    const preparedWrapperPlan = {
+      ...preparedPlan,
+      argv: ["/bin/sh", "-lc", "git status"],
+      commandText: '/bin/sh -lc "git status"',
+      commandPreview: "git status",
+    };
+    mockGatewayInvokesWithNodeApprovals({ version: 1, agents: {} });
+    usePolicyApprovalRequirementMock();
+    parsePreparedSystemRunPayloadMock.mockReturnValueOnce({
+      plan: preparedWrapperPlan,
+      execPolicy: { security: "full", ask: "off" },
+      allowAlwaysCoverage: {
+        complete: true,
+        patterns: [{ pattern: "/node/bin/git" }],
+      },
+    });
+    resolveAllowAlwaysPersistenceDecisionMock.mockReturnValue({
+      kind: "one-shot",
+      reasons: ["no-reusable-pattern"],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+
+    const result = await executeNodeHostCommand({
+      command: "git status",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "on-miss",
+      allowAlwaysPersistence: {
+        kind: "patterns",
+        commandText: '/bin/sh -lc "git status"',
+        patterns: [{ pattern: "/node/bin/git" }],
+      },
+    });
+    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual([
+      "allow-once",
+      "allow-always",
+      "deny",
+    ]);
+  });
+
   it("does not use fallback-full when node auto-review cannot parse the command", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
