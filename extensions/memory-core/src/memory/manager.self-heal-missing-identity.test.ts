@@ -32,9 +32,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   let manager: MemoryIndexManager | null = null;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-mem-self-heal-91167-"),
-    );
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-self-heal-91167-"));
   });
 
   beforeEach(async () => {
@@ -91,7 +89,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     return manager;
   }
 
-  async function seedFtsOnlyChunksWithNoMeta(): Promise<void> {
+  async function seedChunksWithNoMeta(model = "fts-only"): Promise<void> {
     const db = new DatabaseSync(indexPath);
     db.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -115,7 +113,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
         size INTEGER NOT NULL
       );
       INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', 'fts-only', 'Alpha topic keep note', '[]', ${Date.now()});
+        VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', '[]', ${Date.now()});
       INSERT INTO files (path, source, hash, mtime, size)
         VALUES ('MEMORY.md', 'memory', 'hash-1', ${Date.now()}, 100);
     `);
@@ -123,7 +121,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   }
 
   it("self-heals missing identity on non-forced gateway sync when all chunks are FTS-only and provider is unavailable", async () => {
-    await seedFtsOnlyChunksWithNoMeta();
+    await seedChunksWithNoMeta();
     const memoryManager = await createManager({ vectorEnabled: false });
 
     const statusBefore = memoryManager.status();
@@ -136,5 +134,17 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     expect(statusAfter.custom?.indexIdentity?.status).toBe("valid");
     expect(statusAfter.chunks).toBeGreaterThan(0);
     expect(statusAfter.dirty).toBe(false);
+  });
+
+  it("does not rebuild missing-identity semantic chunks when the provider is unavailable", async () => {
+    await seedChunksWithNoMeta("text-embedding-3-small");
+    const memoryManager = await createManager({ vectorEnabled: false });
+
+    await memoryManager.sync();
+
+    const statusAfter = memoryManager.status();
+    expect(statusAfter.custom?.indexIdentity?.status).toBe("missing");
+    expect(statusAfter.chunks).toBe(1);
+    expect(statusAfter.dirty).toBe(true);
   });
 });
