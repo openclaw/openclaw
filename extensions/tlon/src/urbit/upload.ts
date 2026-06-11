@@ -3,6 +3,7 @@
  */
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uploadFile } from "../tlon-api.js";
+import { redactTextForLog, redactUrlForLog } from "../url-redaction.js";
 import { getDefaultSsrFPolicy } from "./context.js";
 
 /**
@@ -16,7 +17,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
     // Validate URL is http/https before fetching
     const url = new URL(imageUrl);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-      console.warn(`[tlon] Rejected non-http(s) URL: ${imageUrl}`);
+      console.warn(`[tlon] Rejected non-http(s) URL: ${redactUrlForLog(imageUrl)}`);
       return imageUrl;
     }
 
@@ -31,7 +32,9 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
 
     try {
       if (!response.ok) {
-        console.warn(`[tlon] Failed to fetch image from ${imageUrl}: ${response.status}`);
+        console.warn(
+          `[tlon] Failed to fetch image from ${redactUrlForLog(imageUrl)}: ${response.status}`,
+        );
         return imageUrl;
       }
 
@@ -54,7 +57,9 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
       await release();
     }
   } catch (err) {
-    console.warn(`[tlon] Failed to upload image, using original URL: ${String(err)}`);
+    console.warn(
+      `[tlon] Failed to upload image, using original URL: ${redactTextForLog(String(err))}`,
+    );
     return imageUrl;
   }
 }

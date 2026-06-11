@@ -28,6 +28,7 @@ import {
   resolveQQBotPayloadLocalFilePath,
 } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty, sanitizeFileName } from "../utils/string-normalize.js";
+import { redactTextForLog, redactUrlForLog } from "../utils/url-redaction.js";
 import { audioFileToSilkBase64, shouldTranscodeVoice, waitForFile } from "./outbound-audio-port.js";
 import {
   buildDailyLimitExceededResult,
@@ -191,7 +192,10 @@ export async function sendPhoto(
     if (localFile) {
       return await sendPhotoFromLocal(ctx, localFile);
     }
-    return { channel: "qqbot", error: `Failed to download image: ${mediaPath.slice(0, 80)}` };
+    return {
+      channel: "qqbot",
+      error: `Failed to download image: ${redactUrlForLog(mediaPath, 80)}`,
+    };
   }
 
   if (isLocal) {
@@ -228,7 +232,7 @@ export async function sendPhoto(
     debugLog(`sendPhoto: channel does not support local/Base64 images`);
     return { channel: "qqbot", error: "Channel does not support local/Base64 images" };
   } catch (err) {
-    const msg = formatErrorMessage(err);
+    const msg = redactTextForLog(formatErrorMessage(err));
 
     // Fall back to plugin-managed download + local upload when QQ fails to
     // fetch the URL directly. One-shot, non-recursive.
@@ -332,7 +336,7 @@ export async function sendVoice(
         debugLog(`sendVoice: voice not supported in channel`);
         return { channel: "qqbot", error: "Voice not supported in channel" };
       } catch (err) {
-        const msg = formatErrorMessage(err);
+        const msg = redactTextForLog(formatErrorMessage(err));
         debugWarn(
           `sendVoice: URL direct upload failed (${msg}), downloading locally and retrying...`,
         );
@@ -345,7 +349,10 @@ export async function sendVoice(
     if (localFile) {
       return await sendVoiceFromLocal(ctx, localFile, directUploadFormats, transcodeEnabled);
     }
-    return { channel: "qqbot", error: `Failed to download audio: ${mediaPath.slice(0, 80)}` };
+    return {
+      channel: "qqbot",
+      error: `Failed to download audio: ${redactUrlForLog(mediaPath, 80)}`,
+    };
   }
 
   return await sendVoiceFromLocal(ctx, mediaPath, directUploadFormats, transcodeEnabled);
@@ -444,7 +451,10 @@ export async function sendVideoMsg(
     if (localFile) {
       return await sendVideoFromLocal(ctx, localFile);
     }
-    return { channel: "qqbot", error: `Failed to download video: ${mediaPath.slice(0, 80)}` };
+    return {
+      channel: "qqbot",
+      error: `Failed to download video: ${redactUrlForLog(mediaPath, 80)}`,
+    };
   }
 
   try {
@@ -467,7 +477,7 @@ export async function sendVideoMsg(
 
     return await sendVideoFromLocal(ctx, mediaPath);
   } catch (err) {
-    const msg = formatErrorMessage(err);
+    const msg = redactTextForLog(formatErrorMessage(err));
 
     // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
@@ -551,7 +561,10 @@ export async function sendDocument(
     if (localFile) {
       return await sendDocumentFromLocal(ctx, localFile);
     }
-    return { channel: "qqbot", error: `Failed to download file: ${mediaPath.slice(0, 80)}` };
+    return {
+      channel: "qqbot",
+      error: `Failed to download file: ${redactUrlForLog(mediaPath, 80)}`,
+    };
   }
 
   try {
@@ -575,7 +588,7 @@ export async function sendDocument(
 
     return await sendDocumentFromLocal(ctx, mediaPath);
   } catch (err) {
-    const msg = formatErrorMessage(err);
+    const msg = redactTextForLog(formatErrorMessage(err));
 
     // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
@@ -646,7 +659,7 @@ async function downloadToFallbackDir(httpUrl: string, caller: string): Promise<s
     const downloadDir = getQQBotMediaDir("downloads", "url-fallback");
     const localFile = await downloadFile(httpUrl, downloadDir);
     if (!localFile) {
-      debugError(`${caller} fallback: download also failed for ${httpUrl.slice(0, 80)}`);
+      debugError(`${caller} fallback: download also failed for ${redactUrlForLog(httpUrl, 80)}`);
       return null;
     }
     debugLog(`${caller} fallback: downloaded → ${localFile}`);
