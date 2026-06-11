@@ -462,7 +462,7 @@ function runHotQueries(params: {
       `SELECT job_id, name, updated_at
          FROM cron_jobs
         WHERE store_key = ?
-        ORDER BY sort_order ASC, updated_at DESC, job_id
+        ORDER BY sort_order ASC, updated_at ASC, job_id
         LIMIT 50`,
       ["/state/cron/jobs-0.json"],
       params.config.queryRuns,
@@ -502,7 +502,17 @@ function runHotQueries(params: {
       `SELECT key, value_json
          FROM cache_entries
         WHERE scope = ?
-        ORDER BY updated_at DESC, key
+        ORDER BY key ASC
+        LIMIT 100`,
+      ["session_entries"],
+      params.config.queryRuns,
+    ),
+    runTimedQuery(
+      params.agentDb,
+      `SELECT key, expires_at
+         FROM cache_entries
+        WHERE scope = ? AND expires_at IS NOT NULL
+        ORDER BY expires_at ASC, key
         LIMIT 100`,
       ["session_entries"],
       params.config.queryRuns,

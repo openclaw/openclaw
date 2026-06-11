@@ -39,6 +39,15 @@ function expectPlanUsesIndex(params: {
   expect(explainQueryPlan(params.db, params.sql, params.params)).toContain(params.indexName);
 }
 
+function expectPlanIncludes(params: {
+  db: DatabaseSync;
+  expected: string;
+  params?: readonly (number | string | null)[];
+  sql: string;
+}): void {
+  expect(explainQueryPlan(params.db, params.sql, params.params)).toContain(params.expected);
+}
+
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -53,13 +62,13 @@ describe("sqlite hot query plans", () => {
 
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_cron_jobs_store_updated",
+      indexName: "idx_cron_jobs_store_order",
       params: ["/state/cron/jobs.json"],
       sql: `
         SELECT job_id, name, updated_at
           FROM cron_jobs
          WHERE store_key = ?
-         ORDER BY sort_order ASC, updated_at DESC, job_id
+         ORDER BY sort_order ASC, updated_at ASC, job_id
          LIMIT 25
       `,
     });
@@ -156,15 +165,15 @@ describe("sqlite hot query plans", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expectPlanUsesIndex({
+    expectPlanIncludes({
       db: database.db,
-      indexName: "idx_agent_cache_updated",
+      expected: "sqlite_autoindex_cache_entries_1",
       params: ["session_entries"],
       sql: `
         SELECT key, value_json
           FROM cache_entries
          WHERE scope = ?
-         ORDER BY updated_at DESC, key
+         ORDER BY key ASC
          LIMIT 50
       `,
     });
