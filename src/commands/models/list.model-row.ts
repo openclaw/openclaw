@@ -54,10 +54,12 @@ export function toModelRow(params: {
   // Prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available,
   // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
-  const available =
+  // Local providers (e.g. Ollama) serve on loopback without API keys — always available when present.
+  const authFallbackAvailable =
     availableKeys !== undefined && !allowProviderAvailabilityFallback
       ? modelIsAvailable
       : modelIsAvailable || (params.hasAuthForProvider?.(model.provider) ?? false);
+  const available = local || authFallbackAvailable;
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

@@ -56,4 +56,36 @@ describe("toModelRow", () => {
       expect(row.local).toBe(true);
     }
   });
+
+  it("marks local models available even without auth", () => {
+    const row = toModelRow({
+      model: {
+        ...OPENROUTER_MODEL,
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434/v1",
+      } as never,
+      key: "ollama/qwen3.6:35b-a3b",
+      tags: [],
+      // No availableKeys and no auth — simulates the Ollama case
+    });
+
+    expect(row.local).toBe(true);
+    expect(row.available).toBe(true);
+  });
+
+  it("marks local models available even when availableKeys excludes them", () => {
+    const row = toModelRow({
+      model: {
+        ...OPENROUTER_MODEL,
+        provider: "ollama",
+        baseUrl: "http://localhost:11434/v1",
+      } as never,
+      key: "ollama/qwen3.6:35b-a3b",
+      tags: [],
+      availableKeys: new Set(), // empty — no auth profiles
+    });
+
+    expect(row.local).toBe(true);
+    expect(row.available).toBe(true);
+  });
 });
