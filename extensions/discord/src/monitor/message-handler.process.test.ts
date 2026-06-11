@@ -148,6 +148,7 @@ type DispatchInboundParams = {
       title?: string;
       name?: string;
     }) => Promise<void> | void;
+    onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
       explanation?: string;
