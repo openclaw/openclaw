@@ -6,11 +6,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
+  autoRestartOnRequired: boolean;
 };
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
   debounceMs: 300,
+  autoRestartOnRequired: false,
 };
 
 /** Resolves gateway reload mode/debounce from config with bounded defaults. */
@@ -25,5 +27,9 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
     typeof debounceRaw === "number" && Number.isFinite(debounceRaw)
       ? Math.max(0, Math.floor(debounceRaw))
       : DEFAULT_RELOAD_SETTINGS.debounceMs;
-  return { mode, debounceMs };
+  const autoRestartOnRequired =
+    cfg.gateway?.reload?.autoRestartOnRequired === true
+      ? true
+      : DEFAULT_RELOAD_SETTINGS.autoRestartOnRequired;
+  return { mode, debounceMs, autoRestartOnRequired };
 }

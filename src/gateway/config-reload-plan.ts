@@ -132,6 +132,14 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "session", kind: "none" },
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
+  // Provider SecretRef storage rotations need a supervised restart so the
+  // running runtime stops resolving the old credential. The hot-mode
+  // security carve-out at config-reload.ts:79 relies on this classification
+  // to recognize `secrets.providers.*` rotations as restart-required.
+  // Other `secrets.*` namespaces (defaults, plugin shared storage that does
+  // not touch live credentials) remain no-op so non-credential edits keep
+  // the existing hot-reload behavior.
+  { prefix: "secrets.providers", kind: "restart" },
   { prefix: "secrets", kind: "none" },
   { prefix: "plugins", kind: "hot", actions: ["reload-plugins", "dispose-mcp-runtimes"] },
   { prefix: "tui", kind: "none" },

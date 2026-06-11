@@ -63,6 +63,38 @@ export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): 
   return firstSkillsChangedPath(changedPaths) !== undefined;
 }
 
+/**
+ * Path prefixes whose restart-required edits must never be deferred by the
+ * hot-mode warn-and-keep contract. A live runtime that keeps the old token
+ * after `gateway.auth.token` rotates is a credential-rotation-bypass risk:
+ * the operator rotates on disk to respond to a leak, but the gateway
+ * continues to accept the compromised token until manual restart.
+ *
+ * - `gateway.auth.*` covers the gateway access boundary itself (token,
+ *   password, trusted-proxy headers).
+ * - `secrets.*` covers the top-level provider/channel SecretRef storage,
+ *   including `secrets.providers.<provider>.apiKey` rotations. Provider
+ *   credentials are declared at the config root under `secrets`, not under
+ *   `gateway.secrets`; an earlier draft of this list used the wrong prefix
+ *   and a `secrets.providers.openai.apiKey` rotation would slip past the
+ *   carve-out.
+ *
+ * The set is intentionally conservative; non-auth restart-required reasons
+ * keep the warn-and-keep contract unless
+ * `gateway.reload.autoRestartOnRequired` is opted in.
+ */
+const SECURITY_CRITICAL_RESTART_PREFIXES = ["gateway.auth", "secrets"] as const;
+
+function isSecurityCriticalRestartReason(reason: string): boolean {
+  return SECURITY_CRITICAL_RESTART_PREFIXES.some(
+    (prefix) => reason === prefix || reason.startsWith(`${prefix}.`),
+  );
+}
+
+function hasSecurityCriticalRestartReason(reasons: readonly string[]): boolean {
+  return reasons.some(isSecurityCriticalRestartReason);
+}
+
 function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
   return (
     !plan.restartGateway &&
@@ -291,12 +323,41 @@ export function startGatewayConfigReloader(opts: {
     }
     if (plan.restartGateway) {
       if (settings.mode === "hot") {
-        opts.log.warn(
-          `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
-            ", ",
-          )})`,
-        );
-        return;
+        // Security-critical restart reasons (auth/secrets) must never sit on
+        // disk while the runtime still uses the old credentials. Examples:
+        // `gateway.auth.token`, `gateway.auth.password`,
+        // `gateway.auth.trustedProxy.*`, plugin/channel `*.token`/`*.password`
+        // SecretRefs. Without an auto-restart here, a token rotation in
+        // response to a leaked credential would warn and silently keep the
+        // compromised token live until the operator notices.
+        const securityRestart = hasSecurityCriticalRestartReason(plan.restartReasons);
+        // Routine restart-required edits (model/provider changes, plugin
+        // installs that don't touch auth, etc.) honor the shipped warn-and-
+        // keep contract by default. `gateway.reload.autoRestartOnRequired`
+        // is the explicit opt-in that delegates the routine-edit decision
+        // to the gateway, matching `mode: "hybrid"` for the restart-required
+        // branch while keeping hot-safe edits hot.
+        if (!securityRestart && !settings.autoRestartOnRequired) {
+          opts.log.warn(
+            `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
+              ", ",
+            )})`,
+          );
+          return;
+        }
+        if (securityRestart) {
+          opts.log.warn(
+            `config reload requires gateway restart; hot mode scheduling restart for security-critical change (${plan.restartReasons.join(
+              ", ",
+            )})`,
+          );
+        } else {
+          opts.log.warn(
+            `config reload requires gateway restart; hot mode scheduling restart per gateway.reload.autoRestartOnRequired=true (${plan.restartReasons.join(
+              ", ",
+            )})`,
+          );
+        }
       }
       queueRestart(plan, nextConfig);
       return;

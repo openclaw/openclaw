@@ -272,6 +272,15 @@ export type GatewayReloadConfig = {
    * @see https://github.com/openclaw/openclaw/issues/65485
    */
   deferralTimeoutMs?: number;
+  /**
+   * When `mode: "hot"` encounters a restart-required config change, the
+   * default behavior is to warn and keep running so the operator can decide
+   * when to restart. Set this to true to opt in to automatic supervised
+   * restart scheduling for those changes; equivalent to `mode: "hybrid"` for
+   * the restart-required branch while keeping hot-safe edits hot. Default:
+   * false (preserves the existing warn-and-keep semantic).
+   */
+  autoRestartOnRequired?: boolean;
 };
 
 export type GatewayHttpChatCompletionsConfig = {

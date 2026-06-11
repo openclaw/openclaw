@@ -583,10 +583,12 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.images.timeoutMs":
     "Timeout in milliseconds for `image_url` URL fetches (default: 10000).",
   "gateway.reload.mode":
-    'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
+    'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies hot-safe changes in-process and warns when a routine restart-required change lands (use gateway.reload.autoRestartOnRequired to opt in to automatic restart for those; security-critical changes under gateway.auth.* and top-level secrets.* always auto-restart), and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
   "gateway.reload.deferralTimeoutMs":
     "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+  "gateway.reload.autoRestartOnRequired":
+    'When gateway.reload.mode is "hot", opt in to automatic supervised restart scheduling for routine restart-required external config edits (default: false; preserves the shipped warn-and-keep semantic). Security-critical changes under gateway.auth.* (gateway access) and top-level secrets.* (provider/channel SecretRef storage) always auto-restart and are not subject to this opt-in.',
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
