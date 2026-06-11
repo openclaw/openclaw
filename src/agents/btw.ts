@@ -258,12 +258,25 @@ async function resolveRuntimeModel(params: {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
-  const model = resolveModelWithRegistry({
+  let model = resolveModelWithRegistry({
     provider: params.provider,
     modelId: params.model,
     modelRegistry,
     cfg: params.cfg,
   });
+  if (!model) {
+    // When the agent's primary model is configured as a canonical alias
+    // routed via agentRuntime (e.g. anthropic/claude-opus-4-7 with
+    // agentRuntime.id: claude-cli), the model won't be in the standard
+    // registry.  Synthesize a minimal model so the downstream harness
+    // selection (selectAgentHarness) can route through the configured
+    // runtime (issue #92168).
+    const agentDefaultsModels = params.cfg?.agents?.defaults?.models;
+    const agentModelKey = `${params.provider}/${params.model}`;
+    if (agentDefaultsModels?.[agentModelKey]?.agentRuntime) {
+      model = { id: params.model, provider: params.provider };
+    }
+  }
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
