@@ -3,6 +3,7 @@ import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
   WAMessage,
+  WAMessageKey,
   WAPresence,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -49,6 +50,22 @@ function recordWhatsAppOutbound(accountId: string) {
 
 function supportsForcedDocumentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || mediaType.startsWith("video/");
+}
+
+function buildOwnMessageKey(params: { jid: string; messageId: string }): WAMessageKey & {
+  id: string;
+  remoteJid: string;
+  fromMe: true;
+} {
+  const id = params.messageId.trim();
+  if (!id) {
+    throw new Error("WhatsApp messageId is required.");
+  }
+  return {
+    remoteJid: params.jid,
+    id,
+    fromMe: true,
+  };
 }
 
 export function createWebSendApi(params: {
@@ -272,6 +289,26 @@ export function createWebSendApi(params: {
         },
       } as AnyMessageContent);
       return normalizeWhatsAppSendResult(result, "reaction");
+    },
+    editMessage: async (
+      to: string,
+      messageId: string,
+      text: string,
+    ): Promise<{ messageId: string }> => {
+      const jid = resolveOutboundJid(to);
+      const key = buildOwnMessageKey({ jid, messageId });
+      await params.sock.sendMessage(jid, {
+        text,
+        edit: key,
+      } as AnyMessageContent);
+      recordWhatsAppOutbound(params.defaultAccountId);
+      return { messageId: key.id };
+    },
+    unsendMessage: async (to: string, messageId: string): Promise<void> => {
+      const jid = resolveOutboundJid(to);
+      const key = buildOwnMessageKey({ jid, messageId });
+      await params.sock.sendMessage(jid, { delete: key } as AnyMessageContent);
+      recordWhatsAppOutbound(params.defaultAccountId);
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = resolveOutboundJid(to);
