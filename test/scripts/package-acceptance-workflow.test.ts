@@ -42,6 +42,7 @@ type WorkflowJob = {
   name?: string;
   needs?: string | string[];
   permissions?: Record<string, string>;
+  "runs-on"?: string;
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -1394,9 +1395,12 @@ describe("package artifact reuse", () => {
       "run_live_matrix_sharded",
       "run_live_telegram",
       "run_live_discord",
+      "run_live_whatsapp",
+      "run_live_slack",
+      "run_live_runtime_token_efficiency",
     ]) {
-      expect(qaWorkflow).toMatch(
-        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName)["runs-on"]).toBe(
+        "blacksmith-16vcpu-ubuntu-2404",
       );
     }
     expectTextToIncludeAll(liveE2eWorkflow, [
@@ -1564,7 +1568,29 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
+    expect(clawHubWorkflow).toContain('CLAWHUB_REF: "c9bb13023598dcc547fdf4a93b9d42512b8c8854"');
+    expect(clawHubWorkflow).toContain("pack_plugins_clawhub_artifacts:");
+    expect(clawHubWorkflow).toContain("Pack ClawHub package artifact");
+    expect(clawHubWorkflow).toContain("Upload ClawHub package artifact");
+    expect(clawHubWorkflow).toContain("dry_run:");
+    expect(clawHubWorkflow).toContain("default: false");
+    expect(clawHubWorkflow).toContain("approve_plugin_clawhub_release:");
+    expect(clawHubWorkflow).toContain("inputs.dry_run != true");
+    expect(clawHubWorkflow).toContain("Approve ClawHub package publish");
+    expect(clawHubWorkflow).toContain(
+      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugin_clawhub_release.result == 'success')",
+    );
+    expect(clawHubWorkflow).toContain(
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@c9bb13023598dcc547fdf4a93b9d42512b8c8854",
+    );
+    expect(clawHubWorkflow).toContain("dry_run: ${{ inputs.dry_run }}");
+    expect(clawHubWorkflow).toContain("package_artifact_name: ${{ matrix.plugin.artifactName }}");
+    expect(clawHubWorkflow).toContain("clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}");
+    expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
+    expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
+    expect(clawHubWorkflow).not.toContain("bash scripts/plugin-clawhub-publish.sh --publish");
+    expect(clawHubWorkflow).not.toContain("Write ClawHub token config");
     expect(clawHubWorkflow).toContain("bun install failed while preparing ClawHub CLI; retrying");
     expect(clawHubWorkflow).toContain("max-parallel: 32");
     expect(clawHubResolveRefIndex).toBeGreaterThanOrEqual(0);
@@ -1600,11 +1626,6 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("already_published=true");
     expect(pluginNpmWorkflow).toContain(
       "steps.npm_package_version.outputs.already_published != 'true'",
-    );
-    expect(clawHubWorkflow).toContain("Check ClawHub package version");
-    expect(clawHubWorkflow).toContain("already_published=true");
-    expect(clawHubWorkflow).toContain(
-      "steps.clawhub_package_version.outputs.already_published != 'true'",
     );
     expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release dispatch");
     expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release dispatch");

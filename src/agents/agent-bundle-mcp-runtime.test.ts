@@ -523,6 +523,21 @@ describe("session MCP runtime", () => {
     expect(dynamicRefValidator(1).valid).toBe(false);
   });
 
+  it("compiles draft-2020-12 patterns with redundant unicode-invalid escapes", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        url: { type: "string", pattern: "^https\\:\\/\\/" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    });
+
+    expect(validator({ url: "https://example.com/path" }).valid).toBe(true);
+    expect(validator({ url: "http://example.com" }).valid).toBe(false);
+  });
+
   it("accepts draft-2020-12 local refs into schema arrays", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator({
       $schema: "https://json-schema.org/draft/2020-12/schema",

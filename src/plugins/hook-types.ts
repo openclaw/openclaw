@@ -1,4 +1,3 @@
-// Defines plugin hook payload and message contracts.
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -420,8 +419,10 @@ export type PluginHookBeforeDispatchEvent = {
   sessionKey?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  replyToIsQuote?: boolean;
   isGroup?: boolean;
   timestamp?: number;
 };
@@ -433,8 +434,10 @@ export type PluginHookBeforeDispatchContext = {
   sessionKey?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  replyToIsQuote?: boolean;
 };
 
 export type PluginHookBeforeDispatchResult = {

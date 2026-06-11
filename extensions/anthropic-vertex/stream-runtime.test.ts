@@ -32,12 +32,21 @@ function createStreamDeps(): {
 let createAnthropicVertexStreamFn: typeof import("./stream-runtime.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./stream-runtime.js").createAnthropicVertexStreamFnForModel;
 
-function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic-messages"> {
+function makeModel(params: {
+  id: string;
+  maxTokens?: number;
+  params?: Record<string, unknown>;
+  reasoning?: boolean;
+  thinkingLevelMap?: Model<"anthropic-messages">["thinkingLevelMap"];
+}): Model<"anthropic-messages"> {
   return {
     id: params.id,
     api: "anthropic-messages",
     provider: "anthropic-vertex",
+    reasoning: params.reasoning ?? true,
     ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
+    ...(params.params ? { params: params.params } : {}),
+    ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
   } as Model<"anthropic-messages">;
 }
 
@@ -171,7 +180,7 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(128000);
   });
 
-  it.each(["claude-opus-4-8", "claude-opus-4-7"])(
+  it.each(["claude-opus-4-8", "claude-opus-4-7", "claude-fable-5", "claude-mythos-5"])(
     "omits unsupported temperature for %s",
     (modelId) => {
       const { deps, streamAnthropicMock } = createStreamDeps();
@@ -195,7 +204,81 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock).temperature).toBe(0.7);
   });
 
-  it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
+  it("uses Fable 5's always-adaptive Vertex contract", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "high",
+      maxTokens: 128000,
+    });
+    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+  });
+
+  it("uses Mythos 5's mandatory adaptive Vertex contract by default", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-mythos-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "high",
+      maxTokens: 128000,
+    });
+    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+  });
+
+  it("uses canonical Claude policy for Vertex deployment aliases", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({
+      id: "production-claude",
+      maxTokens: 128000,
+      params: { canonicalModelId: "claude-opus-4-8" },
+    });
+
+    void streamFn(model, { messages: [] }, { reasoning: "xhigh", temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "xhigh",
+    });
+    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+  });
+
+  it("preserves Fable 5 low effort on Vertex", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "low" });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "low",
+    });
+  });
+
+  it("preserves Fable 5 xhigh effort on Vertex", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "xhigh",
+    });
+  });
+
+  it("maps unsupported xhigh reasoning to high effort for Opus 4.6", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-opus-4-6", maxTokens: 64000 });
@@ -204,7 +287,7 @@ describe("createAnthropicVertexStreamFn", () => {
 
     const transportOptions = streamTransportOptions(streamAnthropicMock);
     expect(transportOptions.thinkingEnabled).toBe(true);
-    expect(transportOptions.effort).toBe("max");
+    expect(transportOptions.effort).toBe("high");
   });
 
   it("maps xhigh reasoning to xhigh effort for Opus 4.8", () => {
@@ -231,7 +314,7 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions.effort).toBe("max");
   });
 
-  it("clamps max reasoning for adaptive models without native max support", () => {
+  it("preserves native max reasoning for Sonnet 4.6", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
@@ -240,7 +323,24 @@ describe("createAnthropicVertexStreamFn", () => {
 
     const transportOptions = streamTransportOptions(streamAnthropicMock);
     expect(transportOptions.thinkingEnabled).toBe(true);
+    expect(transportOptions.effort).toBe("max");
+  });
+
+  it("honors explicit max opt-outs for Vertex aliases", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({
+      id: "production-claude",
+      params: { canonicalModelId: "claude-sonnet-4-6" },
+      reasoning: false,
+      thinkingLevelMap: { xhigh: null, max: null },
+    });
+
+    void streamFn(model, { messages: [] }, { reasoning: "max", temperature: 0.2 });
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
     expect(transportOptions.effort).toBe("high");
+    expect(transportOptions).not.toHaveProperty("temperature");
   });
 
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {

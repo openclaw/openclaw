@@ -18,7 +18,6 @@ import {
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
-  readSessionStore,
   rpcReq,
   testState,
   writeSessionStore,
@@ -1826,6 +1825,158 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send emits first-assistant timing for direct final replies", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const broadcast = vi.fn();
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast,
+        broadcastToConnIds,
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const dispatcher = (
+          args as {
+            dispatcher?: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+            };
+          }
+        ).dispatcher;
+        dispatcher?.sendFinalReply({ text: "direct reply" });
+        dispatcher?.markComplete();
+        await dispatcher?.waitForIdle();
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "operator-direct-timing",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "measure direct",
+            idempotencyKey: "idem-direct-server-timing",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "measure direct",
+          idempotencyKey: "idem-direct-server-timing",
+        },
+        client: {
+          connId: "conn-control-ui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-direct-server-timing",
+            status: "started",
+          }),
+          error: undefined,
+        },
+      ]);
+      await vi.waitFor(
+        () => {
+          expect(broadcastToConnIds).toHaveBeenCalledWith(
+            "chat.send_timing",
+            expect.objectContaining({
+              phase: "first-assistant-event",
+              runId: "idem-direct-server-timing",
+              sessionKey: "agent:main:main",
+              ackToPhaseMs: expect.any(Number),
+              dispatchStartedToPhaseMs: expect.any(Number),
+              receivedToPhaseMs: expect.any(Number),
+            }),
+            new Set(["conn-control-ui"]),
+            { dropIfSlow: true },
+          );
+          expect(broadcast).toHaveBeenCalledWith(
+            "chat",
+            expect.objectContaining({
+              runId: "idem-direct-server-timing",
+              state: "final",
+              message: expect.objectContaining({
+                content: expect.arrayContaining([
+                  expect.objectContaining({
+                    text: "direct reply",
+                  }),
+                ]),
+              }),
+            }),
+          );
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+
+      const firstAssistantTimingCallIndex = broadcastToConnIds.mock.calls.findIndex(
+        ([event, payload]) =>
+          event === "chat.send_timing" &&
+          (payload as { phase?: unknown }).phase === "first-assistant-event",
+      );
+      expect(firstAssistantTimingCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        broadcastToConnIds.mock.invocationCallOrder[firstAssistantTimingCallIndex],
+      ).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test("chat.history backfills claude-cli sessions from Claude project files", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -2078,7 +2229,10 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = readSessionStore(sessionStorePath);
+      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+        string,
+        { lastChannel?: string; lastTo?: string } | undefined
+      >;
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
     });

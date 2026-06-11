@@ -444,6 +444,7 @@ export function runAgentAttempt(params: {
   resolvedThinkLevel: ThinkLevel;
   fastMode?: boolean;
   timeoutMs: number;
+  runTimeoutOverrideMs?: number;
   runId: string;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
@@ -614,7 +615,9 @@ export function runAgentAttempt(params: {
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
         timeoutMs: params.timeoutMs,
+        runTimeoutOverrideMs: params.runTimeoutOverrideMs,
         runId: params.runId,
+        lane: params.opts.lane,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
         cliSessionId: nextCliSessionId,

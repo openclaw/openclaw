@@ -15,6 +15,7 @@ const ROOT_SECTIONS = [
   "commitments",
   "browser",
   "ui",
+  "tui",
   "auth",
   "models",
   "nodeHost",

@@ -3565,6 +3565,76 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
   });
 
+  it("routes queued compaction hook messages alongside notifyUser notices (#90185)", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "start", messages: ["Hook before"] },
+        });
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true, messages: ["Hook after"] },
+        });
+        return { payloads: [], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        messageId: "current-msg-1",
+        run: {
+          config: {
+            channels: { discord: { replyToMode: "all" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(4);
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "hook start"),
+    ).toMatchObject({
+      text: "Hook before",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 1).payload, "notice start"),
+    ).toMatchObject({
+      text: "🧹 Compacting context...",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(requireRecord(requireMockCallArg(routeReplyMock, 2).payload, "hook end")).toMatchObject({
+      text: "Hook after",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 3).payload, "notice end"),
+    ).toMatchObject({
+      text: "🧹 Compaction complete",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+  });
+
   it("applies reply-to mode filtering to queued compaction notices", async () => {
     runPreflightCompactionIfNeededMock.mockImplementationOnce(
       async (params: {

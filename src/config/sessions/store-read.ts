@@ -1,17 +1,30 @@
-// Read-only session store loading uses SQLite without creating or repairing state.
-import { cloneSessionStoreRecord } from "./store-cache.js";
-import { normalizeSessionStore } from "./store-load.js";
-import { loadExistingSqliteSessionStoreReadOnly } from "./store-sqlite.js";
+// Read-only session store loading parses JSON without repairing or writing the store.
+import fs from "node:fs";
+import { z } from "zod";
+import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
+import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
+
+const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
+  Record<string, SessionEntry | undefined>
+>;
 
 /** Reads a session store without mutating it and drops malformed entries. */
 export function readSessionStoreReadOnly(
   storePath: string,
 ): Record<string, SessionEntry | undefined> {
   try {
-    const store = loadExistingSqliteSessionStoreReadOnly(storePath);
-    normalizeSessionStore(store);
-    return cloneSessionStoreRecord(store);
+    const raw = fs.readFileSync(storePath, "utf-8");
+    if (!raw.trim()) {
+      return {};
+    }
+    const parsed = safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([key, entry]) => {
+        const normalized = normalizePersistedSessionEntryShape(entry);
+        return normalized ? [[key, normalized]] : [];
+      }),
+    );
   } catch {
     return {};
   }

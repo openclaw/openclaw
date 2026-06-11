@@ -40,6 +40,7 @@ import {
 } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -483,12 +484,7 @@ export async function runBtwSideQuestion(
         profileId: resolvedAuthProfileId,
       },
     });
-    if (preparedAuth?.baseUrl) {
-      runtimeModel = {
-        ...runtimeModel,
-        baseUrl: preparedAuth.baseUrl,
-      };
-    }
+    runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
     if (preparedAuth?.apiKey) {
       apiKey = preparedAuth.apiKey;
     }
