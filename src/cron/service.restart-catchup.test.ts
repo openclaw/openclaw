@@ -248,6 +248,78 @@ describe("CronService restart catch-up", () => {
     }
   });
 
+  it("does not defer a cron slot that predates a schedule update (#91944)", async () => {
+    const store = await makeStorePath();
+    const updateNow = Date.parse("2026-06-09T22:30:00.000Z");
+    const restartNow = Date.parse("2026-06-10T20:33:00.000Z");
+    const nextMonthlyRun = Date.parse("2026-06-11T15:18:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "monthly-agent-report",
+        name: "monthly agent report",
+        enabled: true,
+        createdAtMs: Date.parse("2026-04-10T15:18:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-10T15:18:00.000Z"),
+        schedule: { kind: "cron", expr: "18 15 10 * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "monthly report" },
+        state: {
+          lastRunAtMs: Date.parse("2026-05-10T15:18:00.000Z"),
+          lastRunStatus: "ok",
+          nextRunAtMs: Date.parse("2026-06-10T15:18:00.000Z"),
+        },
+      },
+    ]);
+
+    const updateCron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      nowMs: () => updateNow,
+      runIsolatedAgentJob,
+    });
+
+    try {
+      const updated = await updateCron.update("monthly-agent-report", {
+        schedule: { kind: "cron", expr: "18 15 11 * *", tz: "UTC" },
+      });
+      expect(updated.state.nextRunAtMs).toBe(nextMonthlyRun);
+      expect(updated.state.scheduleUpdatedAtMs).toBe(updateNow);
+    } finally {
+      updateCron.stop();
+    }
+
+    const restartCron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      nowMs: () => restartNow,
+      runIsolatedAgentJob,
+      startupDeferredMissedAgentJobDelayMs: 120_000,
+    });
+
+    try {
+      await restartCron.start();
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+
+      const listedJobs = await restartCron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "monthly-agent-report");
+      expect(updated?.state.nextRunAtMs).toBe(nextMonthlyRun);
+      expect(updated?.state.lastRunAtMs).toBe(Date.parse("2026-05-10T15:18:00.000Z"));
+    } finally {
+      restartCron.stop();
+      await store.cleanup();
+    }
+  });
+
   it("marks interrupted recurring jobs failed instead of replaying them on startup", async () => {
     const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
     const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");

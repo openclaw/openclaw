@@ -1066,7 +1066,19 @@ function isRunnableJob(params: {
     // Only replay a "missed slot" when there is concrete run history.
     return false;
   }
+  if (scheduleActivatedAfterCandidateSlot(job, previousRunAtMs)) {
+    return false;
+  }
   return previousRunAtMs > lastRunAtMs;
+}
+
+function scheduleActivatedAfterCandidateSlot(job: CronJob, previousRunAtMs: number): boolean {
+  const scheduleUpdatedAtMs = job.state.scheduleUpdatedAtMs;
+  return (
+    typeof scheduleUpdatedAtMs === "number" &&
+    Number.isFinite(scheduleUpdatedAtMs) &&
+    previousRunAtMs < scheduleUpdatedAtMs
+  );
 }
 
 function isErrorBackoffPending(state: CronServiceState, job: CronJob, nowMs: number): boolean {
@@ -1141,6 +1153,7 @@ function deferPendingBackoffMissedCronSlots(
       !Number.isFinite(previousRunAtMs) ||
       typeof lastRunAtMs !== "number" ||
       !Number.isFinite(lastRunAtMs) ||
+      scheduleActivatedAfterCandidateSlot(job, previousRunAtMs) ||
       previousRunAtMs <= lastRunAtMs
     ) {
       continue;

@@ -283,6 +283,8 @@ type CronCommandPayloadPatch = {
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
+  /** Last schedule/enabled update; catch-up must not replay older inferred slots. */
+  scheduleUpdatedAtMs?: number;
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
