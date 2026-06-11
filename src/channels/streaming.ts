@@ -12,6 +12,7 @@ import type {
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
+import { logWarn } from "../logger.js";
 import { asBoolean } from "../utils/boolean.js";
 
 export type {
@@ -555,8 +556,9 @@ export function createChannelProgressDraftGate(params: {
   initialDelayMs?: number;
   /**
    * Observes a timer-fired startup rejection. The explicit start/noteWork/startNow
-   * paths re-throw to their awaiting caller, but the timer path has no awaiter, so
-   * without this the failure would be silently dropped.
+   * paths re-throw to their awaiting caller, but the timer path has no awaiter. When a
+   * caller does not supply this, the gate logs a warning at the helper boundary so the
+   * failure is never silently dropped regardless of which channel built the gate.
    */
   onStartError?: (error: unknown) => void;
   /** Timer implementation, injectable for tests. */
@@ -567,6 +569,13 @@ export function createChannelProgressDraftGate(params: {
   const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
+  // Boundary default: callers that do not pass onStartError still get an observable
+  // warning for a swallowed timer-fired start failure instead of a silent drop.
+  const reportStartError =
+    params.onStartError ??
+    ((error: unknown) => {
+      logWarn(`channel progress draft failed to start: ${String(error)}`);
+    });
   let started = false;
   let disposed = false;
   let workEvents = 0;
@@ -618,10 +627,10 @@ export function createChannelProgressDraftGate(params: {
     }
     timer = setTimeoutFn(() => {
       timer = undefined;
-      // Timer start has no awaiter; route the rejection to onStartError so it is
-      // observed rather than silently dropped.
+      // Timer start has no awaiter; route the rejection to the (defaulted) reporter so
+      // it is observed rather than silently dropped.
       void start().catch((error: unknown) => {
-        params.onStartError?.(error);
+        reportStartError(error);
       });
     }, initialDelayMs);
   };
