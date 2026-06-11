@@ -15,7 +15,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -177,7 +177,7 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : undefined;
   if (channelInput && !normalizedChannel) {
     const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
     if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
