@@ -1,8 +1,10 @@
 // Openrouter tests cover index plugin behavior.
+import { readFileSync } from "node:fs";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
+  resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   expectPassthroughReplayPolicy,
@@ -74,6 +76,25 @@ function createOpenRouterAbortedStream() {
   return stream;
 }
 
+type OpenRouterManifest = {
+  providerAuthChoices?: Array<{
+    provider?: string;
+    method?: string;
+    choiceId?: string;
+    choiceLabel?: string;
+    choiceHint?: string;
+    groupId?: string;
+    groupLabel?: string;
+    groupHint?: string;
+    onboardingScopes?: string[];
+    onboardingFeatured?: boolean;
+  }>;
+};
+
+function readManifest(): OpenRouterManifest {
+  return JSON.parse(readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"));
+}
+
 describe("openrouter provider hooks", () => {
   it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const {
@@ -103,6 +124,73 @@ describe("openrouter provider hooks", () => {
     expect(musicProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(videoProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(modelCatalogProvider.liveCatalog).toBeTypeOf("function");
+  });
+
+  it("registers OAuth and API-key auth methods", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const manifestChoices = readManifest().providerAuthChoices?.map((choice) => ({
+      provider: choice.provider,
+      method: choice.method,
+      choiceId: choice.choiceId,
+      choiceLabel: choice.choiceLabel,
+      choiceHint: choice.choiceHint,
+      groupId: choice.groupId,
+      groupLabel: choice.groupLabel,
+      groupHint: choice.groupHint,
+      onboardingScopes: choice.onboardingScopes,
+      onboardingFeatured: choice.onboardingFeatured,
+    }));
+
+    expect(
+      provider.auth.map((method) => ({
+        id: method.id,
+        kind: method.kind,
+        choiceId: method.wizard?.choiceId,
+      })),
+    ).toEqual([
+      { id: "api-key", kind: "api_key", choiceId: "openrouter-api-key" },
+      { id: "oauth", kind: "oauth", choiceId: "openrouter-oauth" },
+    ]);
+    expect(
+      provider.auth.map((method) => ({
+        provider: provider.id,
+        method: method.id,
+        choiceId: method.wizard?.choiceId,
+        choiceLabel: method.wizard?.choiceLabel,
+        choiceHint: method.wizard?.choiceHint,
+        groupId: method.wizard?.groupId,
+        groupLabel: method.wizard?.groupLabel,
+        groupHint: method.wizard?.groupHint,
+        onboardingScopes: method.wizard?.onboardingScopes,
+        onboardingFeatured: method.wizard?.onboardingFeatured,
+      })),
+    ).toEqual(manifestChoices);
+
+    const bareProviderChoice = resolveProviderPluginChoice({
+      providers: [provider],
+      choice: "openrouter",
+    });
+    const oauthChoice = resolveProviderPluginChoice({
+      providers: [provider],
+      choice: "openrouter-oauth",
+    });
+
+    expect(bareProviderChoice?.method.id).toBe("api-key");
+    expect(oauthChoice?.method.id).toBe("oauth");
+  });
+
+  it("features OpenRouter OAuth in the top-level onboarding picker", () => {
+    const oauthChoice = readManifest().providerAuthChoices?.find(
+      (choice) => choice.choiceId === "openrouter-oauth",
+    );
+
+    expect(oauthChoice).toMatchObject({
+      provider: "openrouter",
+      method: "oauth",
+      groupId: "openrouter",
+      groupLabel: "OpenRouter",
+      onboardingFeatured: true,
+    });
   });
 
   it("includes current Kimi models in the bundled catalog", () => {

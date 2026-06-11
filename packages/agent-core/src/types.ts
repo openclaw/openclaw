@@ -56,9 +56,12 @@ export interface BeforeToolCallResult {
   reason?: string;
 }
 
-export interface MissingToolCallContext {
+export interface DeferredToolCallContext {
+  /** The assistant message that requested the deferred tool call. */
   assistantMessage: AssistantMessage;
+  /** The raw tool call block whose authorized tool definition is deferred. */
   toolCall: AgentToolCall;
+  /** Current agent context before the deferred tool is hydrated. */
   context: AgentContext;
 }
 
@@ -139,6 +142,8 @@ export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
+  /** Logical thinking level retained across model changes before provider mapping. */
+  thinkingLevel?: ThinkingLevel;
 
   /**
    * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -270,14 +275,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   ) => Promise<BeforeToolCallResult | undefined>;
 
   /**
-   * Called when an assistant emits a tool call whose name is not in the current context.
-   *
-   * Return a tool to execute that call, or undefined to keep the normal
-   * "Tool <name> not found" result. The hook must only resolve tools that are
-   * already authorized for this run.
+   * Hydrates an already-authorized tool that was deferred out of the current
+   * provider-visible tool set. Return undefined for every other unknown name so
+   * the loop keeps the normal "Tool <name> not found" result.
    */
-  resolveMissingTool?: (
-    context: MissingToolCallContext,
+  resolveDeferredTool?: (
+    context: DeferredToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AgentTool | undefined> | AgentTool | undefined;
 

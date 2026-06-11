@@ -148,6 +148,7 @@ type DispatchInboundParams = {
       title?: string;
       name?: string;
     }) => Promise<void> | void;
+    onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
       explanation?: string;
@@ -2781,6 +2782,50 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates).not.toContain("reply_to_current");
     expect(updates).not.toContain("NO_REPLY");
   });
+
+  it.each([
+    ["active", true],
+    ["inactive", false],
+  ])(
+    "renders Discord commentary in the draft exactly when durable verbose progress is %s",
+    async (_label, durableLaneActive) => {
+      const draftStream = createMockDraftStreamForTest();
+
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        params?.replyOptions?.onVerboseProgressVisibility?.(() => durableLaneActive);
+        await params?.replyOptions?.onItemEvent?.({
+          itemId: "preamble-1",
+          kind: "preamble",
+          progressText: "Checking the current weather source before summarizing.",
+        });
+        return createNoQueuedDispatchResult();
+      });
+
+      const ctx = await createAutomaticSourceDeliveryContext({
+        discordConfig: {
+          streaming: {
+            mode: "progress",
+            progress: {
+              label: false,
+              toolProgress: false,
+              commentary: true,
+            },
+          },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+      if (durableLaneActive) {
+        // The durable verbose lane owns commentary: the ephemeral draft must
+        // not render it a second time.
+        expect(updates).toBe("");
+      } else {
+        expect(updates).toContain("Checking the current weather source");
+      }
+    },
+  );
 
   it("keeps Discord progress drafts usable after the last commentary line becomes silent", async () => {
     const draftStream = createMockDraftStreamForTest();

@@ -949,6 +949,7 @@ async function finalizeCronRun(params: {
     runMeta: finalRunResult.meta?.agentMeta,
   });
   const usage = finalRunResult.meta?.agentMeta?.usage;
+  const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;
   const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
   const modelUsed =
     finalRunResult.meta?.agentMeta?.model ??
@@ -985,11 +986,15 @@ async function finalizeCronRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const totalTokens = deriveSessionTotalTokens({
-      usage,
+    const lastCallTotalTokens = deriveSessionTotalTokens({
+      usage: lastCallUsage,
       contextTokens,
       promptTokens,
     });
+    const totalTokens =
+      typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
+        ? lastCallTotalTokens
+        : deriveSessionTotalTokens({ usage, contextTokens, promptTokens });
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
         usage,
@@ -1006,10 +1011,13 @@ async function finalizeCronRun(params: {
       input_tokens: input,
       output_tokens: output,
     };
+    const aggregateTotalTokens = input + output + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+    if (aggregateTotalTokens > 0) {
+      telemetryUsage.total_tokens = aggregateTotalTokens;
+    }
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
-      telemetryUsage.total_tokens = totalTokens;
     } else {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;

@@ -456,7 +456,10 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     const nextJob = structuredClone(job);
-    applyJobPatch(nextJob, patch, { defaultAgentId: state.deps.defaultAgentId });
+    applyJobPatch(nextJob, patch, {
+      defaultAgentId: state.deps.defaultAgentId,
+      scheduleValidationNowMs: now,
+    });
     if (nextJob.schedule.kind === "every") {
       const anchor = nextJob.schedule.anchorMs;
       if (typeof anchor !== "number" || !Number.isFinite(anchor)) {
@@ -959,7 +962,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
 /** Enqueues manual wake text through the cron wake API. */
 export function wakeNow(
   state: CronServiceState,
-  opts: { mode: CronWakeMode; text: string; sessionKey?: string },
+  opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string },
 ) {
   return wake(state, opts);
 }

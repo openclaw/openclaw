@@ -116,6 +116,8 @@ final class NodeAppModel {
         self.operatorConnected
     }
 
+    private(set) var hasOperatorAdminScope: Bool = false
+
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
@@ -297,6 +299,7 @@ final class NodeAppModel {
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
         self.talkMode.attachGateway(self.operatorGateway)
+        self.refreshOperatorAdminScopeFromStore()
         self.refreshLastShareEventFromRelay()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.setTalkEnabled(talkEnabled)
@@ -2757,6 +2760,15 @@ extension NodeAppModel {
     private func setOperatorConnected(_ connected: Bool) {
         self.operatorConnected = connected
         self.operatorStatusText = connected ? "Connected" : "Offline"
+        self.refreshOperatorAdminScopeFromStore()
+    }
+
+    private func refreshOperatorAdminScopeFromStore() {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        self.hasOperatorAdminScope = DeviceAuthStore
+            .loadToken(deviceId: identity.deviceId, role: "operator")?
+            .scopes
+            .contains("operator.admin") == true
     }
 }
 
@@ -4634,6 +4646,10 @@ extension NodeAppModel {
 
     func _test_isGatewayConnected() -> Bool {
         self.gatewayConnected
+    }
+
+    func _test_refreshOperatorAdminScopeFromStore() {
+        self.refreshOperatorAdminScopeFromStore()
     }
 
     func _test_applyPendingForegroundNodeActions(

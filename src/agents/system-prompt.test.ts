@@ -985,30 +985,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
   });
 
-  it("describes message-tool-only source delivery without requiring target", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["message"],
-      sourceReplyDeliveryMode: "message_tool_only",
-      runtimeInfo: {
-        channel: "discord",
-      },
-    });
+  it.each(["group", "channel"] as const)(
+    "describes message-tool-only source delivery for Discord %s without requiring target",
+    (chatType) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["message"],
+        sourceReplyDeliveryMode: "message_tool_only",
+        runtimeInfo: {
+          channel: "discord",
+          chatType,
+        },
+      });
 
-    expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
-    expect(prompt).toContain(
-      "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
-    );
-    expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
-    expect(prompt).toContain("The target defaults to the current source channel");
-    expect(prompt).toContain("do not repeat that visible content in your final answer");
-    expect(prompt).not.toContain("## Silent Replies");
-    expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
-    expect(prompt).not.toContain(
-      `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
-    );
-    expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
-  });
+      expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+      expect(prompt).toContain(
+        "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
+      );
+      expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
+      expect(prompt).toContain(
+        "Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output",
+      );
+      expect(prompt).toContain("The target defaults to the current source channel");
+      expect(prompt).toContain("do not repeat that visible content in your final answer");
+      expect(prompt).not.toContain("## Silent Replies");
+      expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
+      expect(prompt).not.toContain(
+        `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
+      );
+      expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
+    },
+  );
 
   it("tells automatic source delivery to expose generated media as MEDIA directives", () => {
     const prompt = buildAgentSystemPrompt({
@@ -1025,6 +1032,34 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Tool/generated media paths are attachments, not prose; emit each as its own `MEDIA:<path-or-url>` line.",
     );
+  });
+
+  it("keeps Discord group etiquette scoped to group message-tool-only delivery", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "discord",
+        chatType: "group",
+      },
+    });
+
+    expect(prompt).not.toContain("Discord group/thread etiquette");
+  });
+
+  it("omits Discord group etiquette for direct message-tool-only delivery", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      runtimeInfo: {
+        channel: "discord",
+        chatType: "direct",
+      },
+    });
+
+    expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+    expect(prompt).not.toContain("Discord group/thread etiquette");
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {

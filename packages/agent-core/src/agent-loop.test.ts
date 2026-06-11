@@ -165,8 +165,8 @@ describe("agentLoop streaming updates", () => {
   });
 });
 
-describe("runAgentLoop missing tool resolution", () => {
-  it("hydrates an authorized missing tool for execution and the continuation", async () => {
+describe("runAgentLoop deferred tool hydration", () => {
+  it("hydrates an authorized deferred tool for execution and the continuation", async () => {
     const execute = vi.fn(
       async (): Promise<AgentToolResult<unknown>> => ({
         content: [{ type: "text", text: "hidden ok" }],
@@ -224,7 +224,7 @@ describe("runAgentLoop missing tool resolution", () => {
       });
       return stream;
     };
-    const resolveMissingTool = vi.fn(() => hiddenTool);
+    const resolveDeferredTool = vi.fn(() => hiddenTool);
 
     const messages = await runAgentLoop(
       [{ role: "user", content: "search penguin", timestamp: Date.now() }],
@@ -232,14 +232,14 @@ describe("runAgentLoop missing tool resolution", () => {
       {
         model,
         convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
-        resolveMissingTool,
+        resolveDeferredTool,
       },
       (_event: AgentEvent) => {},
       undefined,
       streamFn,
     );
 
-    expect(resolveMissingTool).toHaveBeenCalledTimes(1);
+    expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(
       "call-hidden",
       { query: "penguin" },
@@ -253,7 +253,7 @@ describe("runAgentLoop missing tool resolution", () => {
     expect(messages.some((message) => message.role === "toolResult")).toBe(true);
   });
 
-  it("hydrates sequential missing tools before choosing the executor", async () => {
+  it("hydrates sequential deferred tools before choosing the executor", async () => {
     let activeExecutions = 0;
     let maxActiveExecutions = 0;
     const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => {
@@ -324,7 +324,7 @@ describe("runAgentLoop missing tool resolution", () => {
       });
       return stream;
     };
-    const resolveMissingTool = vi.fn(() => hiddenTool);
+    const resolveDeferredTool = vi.fn(() => hiddenTool);
 
     await runAgentLoop(
       [{ role: "user", content: "search twice", timestamp: Date.now() }],
@@ -332,15 +332,100 @@ describe("runAgentLoop missing tool resolution", () => {
       {
         model,
         convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
-        resolveMissingTool,
+        resolveDeferredTool,
       },
       (_event: AgentEvent) => {},
       undefined,
       streamFn,
     );
 
-    expect(resolveMissingTool).toHaveBeenCalledTimes(1);
+    expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledTimes(2);
     expect(maxActiveExecutions).toBe(1);
+  });
+});
+
+describe("agentLoop thinking state", () => {
+  function makeAssistantMessage(
+    activeModel: Model,
+    content: AssistantMessage["content"],
+  ): AssistantMessage {
+    return {
+      role: "assistant",
+      content,
+      api: activeModel.api,
+      provider: activeModel.provider,
+      model: activeModel.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+  }
+
+  it.each([
+    {
+      name: "disables reasoning after leaving Fable",
+      initialModel: { ...model, id: "claude-fable-5", thinkingLevelMap: { off: "low" } },
+      nextModel: model,
+      expected: ["low", undefined],
+    },
+    {
+      name: "uses Fable's low fallback after entering Fable",
+      initialModel: model,
+      nextModel: { ...model, id: "claude-fable-5", thinkingLevelMap: { off: "low" } },
+      expected: [undefined, "low"],
+    },
+  ])("$name", async ({ initialModel, nextModel, expected }) => {
+    const observedReasoning: Array<string | undefined> = [];
+    let callCount = 0;
+    const streamFn: StreamFn = (activeModel, _context, options) => {
+      observedReasoning.push(options?.reasoning);
+      callCount += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const content: AssistantMessage["content"] =
+          callCount === 1
+            ? [{ type: "toolCall", id: "tool-1", name: "missing_tool", arguments: {} }]
+            : [{ type: "text", text: "done" }];
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: makeAssistantMessage(activeModel, content),
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    let prepared = false;
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      {
+        ...config,
+        model: initialModel,
+        thinkingLevel: "off",
+        reasoning: initialModel.thinkingLevelMap?.off === "low" ? "low" : undefined,
+        prepareNextTurn: () => {
+          if (prepared) {
+            return undefined;
+          }
+          prepared = true;
+          return { model: nextModel };
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    await collectEvents(stream);
+
+    expect(observedReasoning).toEqual(expected);
   });
 });

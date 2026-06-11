@@ -9,6 +9,7 @@ import type {
   ToolResultMessage,
 } from "../../llm-core/src/index.js";
 import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
+import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AgentContext,
@@ -341,14 +342,19 @@ async function runLoop(
       const nextTurnSnapshot = await config.prepareNextTurn?.(nextTurnContext);
       if (nextTurnSnapshot) {
         currentContext = nextTurnSnapshot.context ?? currentContext;
+        const nextModel = nextTurnSnapshot.model ?? config.model;
+        const nextThinkingLevel = nextTurnSnapshot.thinkingLevel ?? config.thinkingLevel;
+        const shouldResolveReasoning =
+          nextTurnSnapshot.thinkingLevel !== undefined ||
+          (nextTurnSnapshot.model !== undefined && nextThinkingLevel !== undefined);
+        const nextReasoning =
+          shouldResolveReasoning && nextThinkingLevel !== undefined
+            ? resolveAgentReasoningOption(nextModel, nextThinkingLevel)
+            : config.reasoning;
         config = Object.assign({}, config, {
-          model: nextTurnSnapshot.model ?? config.model,
-          reasoning:
-            nextTurnSnapshot.thinkingLevel === undefined
-              ? config.reasoning
-              : nextTurnSnapshot.thinkingLevel === "off"
-                ? undefined
-                : nextTurnSnapshot.thinkingLevel,
+          model: nextModel,
+          thinkingLevel: nextThinkingLevel,
+          reasoning: nextReasoning,
         });
       }
 
@@ -731,7 +737,7 @@ async function resolveToolCallTool(
 ): Promise<AgentTool | undefined> {
   let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
   if (!tool) {
-    tool = await config.resolveMissingTool?.(
+    tool = await config.resolveDeferredTool?.(
       {
         assistantMessage,
         toolCall,

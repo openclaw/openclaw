@@ -82,8 +82,8 @@ export interface CreateAgentSessionOptions {
   tools?: string[];
   /** Custom tools to register (in addition to built-in tools). */
   customTools?: ToolDefinition[];
-  /** Resolve a tool call that is not visible in the current provider tool set. */
-  resolveMissingTool?: AgentOptions["resolveMissingTool"];
+  /** Hydrate an authorized tool deferred out of the current provider-visible tool set. */
+  resolveDeferredTool?: AgentOptions["resolveDeferredTool"];
 
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
@@ -410,7 +410,7 @@ export async function createAgentSession(
       }
       return runner.emitContext(messages);
     },
-    resolveMissingTool: options.resolveMissingTool,
+    resolveDeferredTool: options.resolveDeferredTool,
     steeringMode: settingsManager.getSteeringMode(),
     followUpMode: settingsManager.getFollowUpMode(),
     transport: settingsManager.getTransport(),

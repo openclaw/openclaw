@@ -67,6 +67,12 @@ describe("resolveSendPolicy", () => {
       sessionKey: "agent:main:other-channel:group:dev",
       expected: "allow",
     },
+    {
+      name: "channel-scoped deny fires for direct session key without explicit channel field",
+      cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
+      sessionKey: "demo-channel:direct:user-1",
+      expected: "deny",
+    },
   ])("$name", ({ cfg, entry, sessionKey, expected }) => {
     expect(resolveSendPolicy({ cfg, entry, sessionKey })).toBe(expected);
   });

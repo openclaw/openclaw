@@ -1020,20 +1020,21 @@ describe("generateAndAppendDreamNarrative", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     const orphanPath = path.join(sessionsDir, "orphan.jsonl");
     const livePath = path.join(sessionsDir, "still-live.jsonl");
+    const updatedAt = Date.now();
     await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
       {
         "agent:main:dreaming-narrative-light-1": {
           sessionId: "missing",
-          updatedAt: Date.now(),
+          updatedAt,
         },
         "agent:main:kept-session": {
           sessionId: "still-live",
-          updatedAt: Date.now(),
+          updatedAt,
         },
         "agent:main:telegram:group:dreaming-narrative-room": {
           sessionId: "still-missing-non-dreaming",
-          updatedAt: Date.now(),
+          updatedAt,
         },
       },
       { skipMaintenance: true },
@@ -1090,20 +1091,21 @@ describe("generateAndAppendDreamNarrative", () => {
     // A second dreaming row whose transcript is fresh (a live/just-started run)
     // must be preserved.
     const liveTranscript = path.join(sessionsDir, "live-dreaming.jsonl");
+    const updatedAt = Date.now();
     await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
       {
         "agent:main:dreaming-narrative-deep-orphan": {
           sessionId: "orphan-dreaming",
-          updatedAt: Date.now(),
+          updatedAt,
         },
         "agent:main:dreaming-narrative-deep-live": {
           sessionId: "live-dreaming",
-          updatedAt: Date.now(),
+          updatedAt,
         },
         "agent:main:kept-session": {
           sessionId: "still-live",
-          updatedAt: Date.now(),
+          updatedAt,
         },
       },
       { skipMaintenance: true },

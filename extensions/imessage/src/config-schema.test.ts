@@ -110,6 +110,38 @@ describe("imessage config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("accepts send transport overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      sendTransport: "auto",
+      accounts: {
+        bridge: {
+          sendTransport: "bridge",
+        },
+        applescript: {
+          sendTransport: "applescript",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.sendTransport).toBe("auto");
+      expect(res.data.accounts?.bridge?.sendTransport).toBe("bridge");
+      expect(res.data.accounts?.applescript?.sendTransport).toBe("applescript");
+    }
+  });
+
+  it("rejects invalid send transport overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      sendTransport: "private-api",
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("sendTransport");
+    }
+  });
+
   it("rejects invalid reaction notification modes", () => {
     const res = IMessageConfigSchema.safeParse({
       reactionNotifications: "allowlist",

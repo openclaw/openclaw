@@ -152,7 +152,7 @@ function buildRequestScopedFallbackNarrative(_data: NarrativePhaseData): string 
   return "A memory trace surfaced, but details were unavailable in this run.";
 }
 
-async function appendFallbackNarrativeEntry(params: {
+export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
   data: NarrativePhaseData;
   nowMs: number;

@@ -561,7 +561,7 @@ function renderSidebarSessions(state: AppViewState) {
           if (newSessionDisabled) {
             return;
           }
-          if (await createChatSession(state)) {
+          if (await createChatSession(state, { source: "user" })) {
             state.setTab("chat" as import("./navigation.ts").Tab);
           }
         }}
@@ -2314,11 +2314,16 @@ export function renderApp(state: AppViewState) {
               <button
                 type="button"
                 class="nav-collapse-toggle"
-                @click=${() =>
+                @click=${() => {
+                  if (navDrawerOpen) {
+                    state.navDrawerOpen = false;
+                    return;
+                  }
                   state.applySettings({
                     ...state.settings,
                     navCollapsed: !state.settings.navCollapsed,
-                  })}
+                  });
+                }}
                 title="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
                 aria-label="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
               >
@@ -3577,7 +3582,7 @@ export function renderApp(state: AppViewState) {
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },
-                  onNewSession: () => void createChatSession(state),
+                  onNewSession: () => void createChatSession(state, { source: "user" }),
                   onClearHistory: runUiTask(async () => {
                     if (!state.client || !state.connected) {
                       return;
