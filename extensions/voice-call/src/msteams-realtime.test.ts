@@ -611,6 +611,23 @@ describe("createMsteamsRealtimeCall", () => {
     expect(mock.triggerGreeting).toHaveBeenCalledWith("Deliver the Dubai time.");
   });
 
+  it("injects the caller's name into the realtime instructions (roster greeting)", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        instructions: "You are a helpful assistant.",
+      },
+    });
+    const req = mock.getRequest();
+    expect(req.instructions).toContain("You are a helpful assistant.");
+    expect(req.instructions).toContain("CALLER IDENTITY");
+    expect(req.instructions).toContain("Caller"); // session.caller.displayName
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();

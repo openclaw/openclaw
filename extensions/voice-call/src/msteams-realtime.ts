@@ -339,6 +339,29 @@ const MSTEAMS_RECORDING_BLOCKED = {
  * exposes no response-suppression hook, so the gate is enforced by telling the model to stay silent
  * in a meeting until addressed by name. Inert when the gate is off or has no wake phrases.
  */
+/**
+ * Roster-aware presence (#20): tell the model who it's talking to so it can greet the caller by
+ * name and address participants by name. The caller's display name comes from the Teams roster
+ * (worker → session.caller); per-utterance speaker labels already arrive as a "Name:" transcript
+ * prefix, so this preamble just teaches the model to use them.
+ */
+function withRosterInstruction(
+  instructions: string | undefined,
+  callerName: string | undefined,
+): string | undefined {
+  const name = callerName?.trim();
+  if (!name) {
+    return instructions;
+  }
+  const clause = [
+    `CALLER IDENTITY: You are speaking with ${name}. Greet them by their first name once, warmly`,
+    "and briefly, then continue naturally — do not repeat their name every turn. In a group call,",
+    'each caller turn is prefixed with the speaker\'s name (e.g. "Sara: ..."); use those names to',
+    "address people directly when it helps, but never read the prefix aloud as part of your reply.",
+  ].join(" ");
+  return instructions ? `${instructions}\n\n${clause}` : clause;
+}
+
 function withGroupGateInstruction(
   instructions: string | undefined,
   gate: GroupCallGateConfig | undefined,
@@ -640,7 +663,10 @@ export function createMsteamsRealtimeCall(params: {
     cfg: deps.cfg,
     providerConfig: deps.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    instructions: withGroupGateInstruction(deps.instructions, deps.groupCallGate),
+    instructions: withGroupGateInstruction(
+      withRosterInstruction(deps.instructions, session.caller.displayName ?? undefined),
+      deps.groupCallGate,
+    ),
     initialGreetingInstructions: deps.greetingInstructions,
     // Outbound call-backs greet on ANSWER (setRecordingActive), not on connect — the bridge is ready
     // while the phone still rings, so greeting-on-ready would deliver the result to nobody.
