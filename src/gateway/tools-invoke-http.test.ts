@@ -213,6 +213,10 @@ vi.mock("../agents/openclaw-tools.js", () => {
 
 vi.mock("../agents/agent-tools.js", () => ({
   resolveToolLoopDetectionConfig: hookMocks.resolveToolLoopDetectionConfig,
+  // tool-resolution.ts imports this for the dual-key direct-invoke coding-tool
+  // materialization (PR #85664). These suites never enable the
+  // gateway.tools.directInvoke opt-ins, so an empty tool list is correct.
+  createOpenClawCodingToolsRaw: vi.fn(() => []),
 }));
 
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({

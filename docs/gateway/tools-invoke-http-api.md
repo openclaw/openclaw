@@ -184,8 +184,10 @@ read access:
 
 **Security:** When enabled, `read` can access any file the gateway process can
 open, **outside the configured workspace** unless `tools.fs.workspaceOnly: true`
-is set. The default-deny config audit (`gateway.tools_invoke_http.host_read_allow`)
-warns when both keys are set without workspace confinement.
+is set. The config audit (`gateway.tools_invoke_http.host_read_allow`) warns
+whenever both keys are set — regardless of `tools.fs.workspaceOnly` — so the
+exposure is always visible in audit output; workspace confinement is the
+recommended remediation, not a condition that silences the warning.
 
 Only the `read` tool is exposed via this mechanism. Mutating coding primitives
 (`write`/`edit`/`apply_patch`/`exec`/`process`) remain unavailable on the
