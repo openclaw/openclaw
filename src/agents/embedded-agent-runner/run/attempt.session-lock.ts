@@ -314,6 +314,9 @@ async function sessionFenceCtimeDriftIsBenign(params: {
     return false;
   }
   if (params.previous.text === undefined) {
+    if (params.previous.digest === undefined) {
+      return false;
+    }
     const currentDigest = await readSessionFileDigest(params.sessionFile);
     return currentDigest !== undefined && currentDigest === params.previous.digest;
   }
