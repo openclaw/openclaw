@@ -334,6 +334,10 @@ export class MediaAttachmentCache {
       return path.resolve(this.workspaceDir, rawPath);
     }
     if (!path.isAbsolute(rawPath)) {
+      const cwdCandidate = path.resolve(rawPath);
+      if (pathExists(cwdCandidate)) {
+        return cwdCandidate;
+      }
       const stateCandidate = path.resolve(resolveStateDir(), rawPath);
       if (
         pathExists(stateCandidate) &&

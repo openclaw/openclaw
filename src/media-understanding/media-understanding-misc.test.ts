@@ -209,6 +209,30 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
+  it("prefers an existing cwd-relative attachment over a state-relative collision", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-relative-collision-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const cwd = path.join(base, "cwd");
+      const relativePath = "media/inbound/photo.jpg";
+      const cwdPath = path.join(cwd, relativePath);
+      const statePath = path.join(stateDir, relativePath);
+      await fs.mkdir(path.dirname(cwdPath), { recursive: true });
+      await fs.mkdir(path.dirname(statePath), { recursive: true });
+      await fs.writeFile(cwdPath, "cwd-media");
+      await fs.writeFile(statePath, "state-media");
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+
+      const cache = new MediaAttachmentCache({
+        attachments: [{ index: 0, path: relativePath }],
+        localPathRoots: [path.join(cwd, "media"), path.join(stateDir, "media")],
+      });
+      const result = await cache.getBuffer(0);
+
+      expect(result.buffer.toString()).toBe("cwd-media");
+    });
+  });
+
   it("blocks local attachments outside configured roots", async () => {
     if (process.platform === "win32") {
       return;
