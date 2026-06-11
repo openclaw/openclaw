@@ -34,7 +34,6 @@ Docs: https://docs.openclaw.ai
 - UI: require explicit user intent before opening chat sessions and drain restored chat queues after session switches. (#91480) Thanks @TurboTheTurtle.
 - Android: avoid the `dataSync` foreground-service type for persistent nodes. (#80082) Thanks @davelutztx.
 - Native hooks: bound relay lifetimes so abandoned native hook connections cannot linger indefinitely. (#91550) Thanks @joshavant.
-- QQBot: flush buffered tool-visible output before suppressing a silent non-streaming final block (empty, `NO_REPLY`, or `[SKIP]`), so tool progress visible with streaming enabled is no longer dropped when streaming is disabled. (#92074) Thanks @sliverp.
 
 ## 2026.6.5
 

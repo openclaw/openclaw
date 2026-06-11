@@ -109,6 +109,7 @@ function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
+  skipFreshSettledDelivery?: boolean;
   onDispatch?: (dispatcherOptions: {
     deliver: (
       payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
@@ -119,6 +120,7 @@ function makeRuntime(params: {
       info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
     ) => void;
     onSettled?: () => unknown;
+    onFreshSettledDelivery?: () => unknown;
   }) => Promise<void>;
   onDeliver?: (
     deliver: (
@@ -160,6 +162,7 @@ function makeRuntime(params: {
                   info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
                 ) => void;
                 onSettled?: () => unknown;
+                onFreshSettledDelivery?: () => unknown;
               };
             }
           ).dispatcherOptions;
@@ -169,6 +172,9 @@ function makeRuntime(params: {
             await params.onDeliver?.(dispatcherOptions.deliver);
           }
           await dispatcherOptions.onSettled?.();
+          if (!params.skipFreshSettledDelivery) {
+            await dispatcherOptions.onFreshSettledDelivery?.();
+          }
         }),
         finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => {
           params.onFinalize?.(rawCtx);
@@ -476,6 +482,96 @@ describe("dispatchOutbound", () => {
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
     expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for fresh settled delivery after a skipped silent block", async () => {
+    vi.useFakeTimers();
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver, onSkip }) => {
+        await deliver({ text: "visible tool message" }, { kind: "tool" });
+        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(sendTextMock).not.toHaveBeenCalled();
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send stale tool fallback when fresh settled delivery is suppressed", async () => {
+    vi.useFakeTimers();
+    const runtime = makeRuntime({
+      skipFreshSettledDelivery: true,
+      onDispatch: async ({ deliver, onSkip }) => {
+        await deliver({ text: "stale visible tool message" }, { kind: "tool" });
+        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendMediaMock).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds tool media flushes without racing the fallback timer", async () => {
+    vi.useFakeTimers();
+    sendMediaMock.mockImplementationOnce(() => new Promise(() => {}));
+    sendMediaMock.mockImplementationOnce(() => new Promise(() => {}));
+    const firstMediaUrl = "https://example.com/progress-1.png";
+    const secondMediaUrl = "https://example.com/progress-2.png";
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver, onSkip }) => {
+        await deliver({ mediaUrl: firstMediaUrl }, { kind: "tool" });
+        await deliver({ mediaUrl: secondMediaUrl }, { kind: "tool" });
+        await deliver({ text: "visible tool message" }, { kind: "tool" });
+        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+      },
+    });
+
+    const dispatchPromise = dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    await dispatchPromise;
+
+    expect(sendMediaMock).toHaveBeenCalledTimes(2);
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
+  });
+
+  it("clears the media timeout after a successful silent-final flush", async () => {
+    vi.useFakeTimers();
+    const mediaUrl = "https://example.com/progress.png";
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver, onSkip }) => {
+        await deliver({ mediaUrl }, { kind: "tool" });
+        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendMediaMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([

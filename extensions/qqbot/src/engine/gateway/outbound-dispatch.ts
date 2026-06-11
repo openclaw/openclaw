@@ -175,38 +175,53 @@ export async function dispatchOutbound(
   };
 
   // ---- Tool fallback ----
+  const sendToolMediaWithTimeout = async (
+    mediaUrl: string,
+    labels: { resultError: string; thrownError: string },
+  ): Promise<void> => {
+    const ac = new AbortController();
+    let mediaTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const result = await Promise.race([
+        sendMedia({
+          to: qualifiedTarget,
+          text: "",
+          mediaUrl,
+          accountId: account.accountId,
+          replyToId: event.messageId,
+          account,
+        }).then((r) => {
+          if (ac.signal.aborted) {
+            return { channel: "qqbot", error: "suppressed" } as OutboundResult;
+          }
+          return r;
+        }),
+        new Promise<OutboundResult>((resolve) => {
+          mediaTimeoutId = setTimeout(() => {
+            ac.abort();
+            resolve({ channel: "qqbot", error: "timeout" });
+          }, TOOL_MEDIA_SEND_TIMEOUT);
+        }),
+      ]);
+      if (result.error) {
+        log?.error(`${labels.resultError}: ${result.error}`);
+      }
+    } catch (err) {
+      log?.error(`${labels.thrownError}: ${String(err)}`);
+    } finally {
+      if (mediaTimeoutId) {
+        clearTimeout(mediaTimeoutId);
+      }
+    }
+  };
+
   const sendToolFallback = async (): Promise<void> => {
     if (toolMediaUrls.length > 0) {
       for (const mediaUrl of toolMediaUrls) {
-        const ac = new AbortController();
-        try {
-          const result = await Promise.race([
-            sendMedia({
-              to: qualifiedTarget,
-              text: "",
-              mediaUrl,
-              accountId: account.accountId,
-              replyToId: event.messageId,
-              account,
-            }).then((r) => {
-              if (ac.signal.aborted) {
-                return { channel: "qqbot", error: "suppressed" } as OutboundResult;
-              }
-              return r;
-            }),
-            new Promise<OutboundResult>((resolve) => {
-              setTimeout(() => {
-                ac.abort();
-                resolve({ channel: "qqbot", error: "timeout" });
-              }, TOOL_MEDIA_SEND_TIMEOUT);
-            }),
-          ]);
-          if (result.error) {
-            log?.error(`Tool fallback error: ${result.error}`);
-          }
-        } catch (err) {
-          log?.error(`Tool fallback failed: ${String(err)}`);
-        }
+        await sendToolMediaWithTimeout(mediaUrl, {
+          resultError: "Tool fallback error",
+          thrownError: "Tool fallback failed",
+        });
       }
       return;
     }
@@ -240,7 +255,7 @@ export async function dispatchOutbound(
       toolRenewalCount++;
     }
     toolOnlyTimeoutId = setTimeout(() => {
-      if (!hasBlockResponse && !toolFallbackSent) {
+      if (!hasBlockResponse && !toolFallbackSent && !skippedSilentBlockResponse) {
         toolFallbackSent = true;
         void sendToolFallback().catch(() => {});
       }
@@ -286,21 +301,10 @@ export async function dispatchOutbound(
       const urlsToSend = [...toolMediaUrls];
       toolMediaUrls.length = 0;
       for (const mediaUrl of urlsToSend) {
-        try {
-          const result = await sendMedia({
-            to: qualifiedTarget,
-            text: "",
-            mediaUrl,
-            accountId: account.accountId,
-            replyToId: event.messageId,
-            account,
-          });
-          if (result.error) {
-            log?.error(`Tool media forward error: ${result.error}`);
-          }
-        } catch (err) {
-          log?.error(`Tool media forward failed: ${String(err)}`);
-        }
+        await sendToolMediaWithTimeout(mediaUrl, {
+          resultError: "Tool media forward error",
+          thrownError: "Tool media forward failed",
+        });
       }
     }
 
@@ -620,16 +624,14 @@ export async function dispatchOutbound(
                   (info.reason === "silent" || info.reason === "empty")
                 ) {
                   skippedSilentBlockResponse = true;
-                  markBlockResponse();
                 }
               },
-              onSettled: async () => {
-                if (
-                  skippedSilentBlockResponse &&
-                  !hasVisibleBlockResponse &&
-                  (await flushPendingToolDeliveriesOnce())
-                ) {
-                  return { visibleReplySent: true };
+              onFreshSettledDelivery: async () => {
+                if (skippedSilentBlockResponse && !hasVisibleBlockResponse) {
+                  markBlockResponse();
+                  if (await flushPendingToolDeliveriesOnce()) {
+                    return { visibleReplySent: true };
+                  }
                 }
                 return undefined;
               },
@@ -668,13 +670,23 @@ export async function dispatchOutbound(
   } catch {
     if (timeoutId) {
       clearTimeout(timeoutId);
+      timeoutId = null;
     }
   } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
     if (toolOnlyTimeoutId) {
       clearTimeout(toolOnlyTimeoutId);
       toolOnlyTimeoutId = null;
     }
-    if (toolDeliverCount > 0 && !hasBlockResponse && !toolFallbackSent) {
+    if (
+      toolDeliverCount > 0 &&
+      !hasBlockResponse &&
+      !toolFallbackSent &&
+      !skippedSilentBlockResponse
+    ) {
       toolFallbackSent = true;
       await sendToolFallback();
     }
