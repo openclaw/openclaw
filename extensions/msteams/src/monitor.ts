@@ -472,6 +472,27 @@ export async function monitorMSTeamsProvider(
     }
   });
 
+  // Message action ("Ask OpenClaw about this", #10): Teams delivers a message-context command as a
+  // composeExtension/submitAction invoke. Acknowledge immediately with a small task message (sending
+  // a chat reply *during* the invoke causes "unable to reach app"), and dispatch the selected message
+  // into the agent via handler.run — the monitor-handler wrapper turns it into a normal message so
+  // the answer posts back into the conversation.
+  app.on("message.ext.submit", async (ctx) => {
+    const adaptedCtx = adaptSdkContext(ctx, app);
+    try {
+      if (!(await isCardActionInvokeAuthorized(adaptedCtx, handlerDeps))) {
+        return { task: { type: "message", value: "Not authorized." } };
+      }
+      void handler.run!(adaptedCtx).catch((err: unknown) => {
+        log.error("msteams message-action dispatch failed", { error: formatUnknownError(err) });
+      });
+      return { task: { type: "message", value: "On it — I'll reply here in the chat." } };
+    } catch (err) {
+      log.error("msteams message-action failed", { error: formatUnknownError(err) });
+      return { task: { type: "message", value: "Something went wrong." } };
+    }
+  });
+
   // File-consent invokes (large-file upload accept/decline). We register
   // typed handlers so the SDK writes the HTTP InvokeResponse for us — the
   // old `ctx.sendActivity({ type: "invokeResponse" })` shape no longer
@@ -597,6 +618,11 @@ export async function monitorMSTeamsProvider(
           return;
         }
         if (activity?.name === "signin/tokenExchange" || activity?.name === "signin/verifyState") {
+          return;
+        }
+        // Message action is acknowledged by the message.ext.submit route, which dispatches the work
+        // via handler.run itself — don't double-dispatch it here.
+        if (activity?.name === "composeExtension/submitAction") {
           return;
         }
       }

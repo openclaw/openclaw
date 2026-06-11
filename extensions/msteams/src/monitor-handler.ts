@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
+import { buildMessageActionPrompt, type MSTeamsMessageActionValue } from "./message-action.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
@@ -199,6 +200,27 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
               ...ctx.activity,
               type: "message",
               text,
+            },
+          });
+        }
+        return;
+      }
+
+      // Message action ("Ask OpenClaw about this", #10): the selected message arrives on a
+      // composeExtension/submitAction invoke. Quote it into a prompt and dispatch as a normal
+      // message so the reply lands in the conversation (same path as adaptiveCard/action above).
+      if (
+        ctx.activity?.type === "invoke" &&
+        ctx.activity?.name === "composeExtension/submitAction"
+      ) {
+        const prompt = buildMessageActionPrompt(ctx.activity?.value as MSTeamsMessageActionValue);
+        if (prompt) {
+          await handleTeamsMessage({
+            ...ctx,
+            activity: {
+              ...ctx.activity,
+              type: "message",
+              text: prompt,
             },
           });
         }
