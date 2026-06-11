@@ -25,7 +25,7 @@ import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/st
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import ipaddr from "ipaddr.js";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3, buildDeviceAuthPayloadV4 } from "./device-auth.js";
 import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
 
 export type DeviceIdentity = {
@@ -417,6 +417,7 @@ export type GatewayClientOptions = {
   password?: string;
   approvalRuntimeToken?: string;
   instanceId?: string;
+  nodeId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
@@ -522,6 +523,8 @@ export class GatewayClient {
   private deviceTokenRetryBudgetUsed = false;
   private approvalRuntimeTokenCompatibilityDisabled = false;
   private approvalRuntimeTokenRetryBudgetUsed = false;
+  private nodeIdCompatibilityDisabled = false;
+  private nodeIdCompatibilityRetryBudgetUsed = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private pendingConnectErrorDetailCode: string | null = null;
   private pendingConnectErrorDetails: unknown = null;
@@ -937,6 +940,19 @@ export class GatewayClient {
           this.ws?.close(1008, "connect retry");
           return;
         }
+        if (
+          this.shouldRetryWithoutNodeId({
+            error: err,
+            nodeId: assembled.params.nodeId,
+          })
+        ) {
+          this.nodeIdCompatibilityDisabled = true;
+          this.nodeIdCompatibilityRetryBudgetUsed = true;
+          this.backoffMs = Math.min(this.backoffMs, 250);
+          this.logDebug("gateway rejected nodeId connect field; retrying without it");
+          this.ws?.close(1008, "connect retry");
+          return;
+        }
         this.notifyConnectError(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${formatGatewayClientErrorForLog(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
@@ -991,6 +1007,9 @@ export class GatewayClient {
     });
     const platform = this.opts.platform ?? process.platform;
 
+    const nodeId = this.nodeIdCompatibilityDisabled
+      ? undefined
+      : normalizeOptionalString(this.opts.nodeId);
     return {
       params: {
         minProtocol: this.opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
@@ -1010,6 +1029,7 @@ export class GatewayClient {
           this.opts.permissions && typeof this.opts.permissions === "object"
             ? this.opts.permissions
             : undefined,
+        nodeId,
         pathEnv: this.opts.pathEnv,
         auth,
         role,
@@ -1021,6 +1041,7 @@ export class GatewayClient {
           signatureToken,
           signedAtMs,
           platform,
+          nodeId,
         }),
       },
       authApprovalRuntimeToken,
@@ -1037,14 +1058,15 @@ export class GatewayClient {
     signatureToken: string | undefined;
     signedAtMs: number;
     platform: string;
+    nodeId?: string;
   }): ConnectParams["device"] {
     if (!this.opts.deviceIdentity) {
       return undefined;
     }
-    const { nonce, role, scopes, signatureToken, signedAtMs, platform } = params;
+    const { nonce, role, scopes, signatureToken, signedAtMs, platform, nodeId } = params;
     // The signed payload mirrors server verification exactly; keep metadata
     // normalized here so different hosts sign the same logical device facts.
-    const payload = buildDeviceAuthPayloadV3({
+    const payloadParams = {
       deviceId: this.opts.deviceIdentity.deviceId,
       clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
@@ -1055,7 +1077,10 @@ export class GatewayClient {
       nonce,
       platform,
       deviceFamily: this.opts.deviceFamily,
-    });
+    };
+    const payload = nodeId
+      ? buildDeviceAuthPayloadV4({ ...payloadParams, nodeId })
+      : buildDeviceAuthPayloadV3(payloadParams);
     const signature = this.deps.signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
     return {
       id: this.opts.deviceIdentity.deviceId,
@@ -1215,6 +1240,23 @@ export class GatewayClient {
     }
     const message = normalizeLowercaseStringOrEmpty(params.error.message);
     return message.includes("invalid connect params") && message.includes("approvalruntimetoken");
+  }
+
+  private shouldRetryWithoutNodeId(params: { error: unknown; nodeId?: string }): boolean {
+    if (this.nodeIdCompatibilityRetryBudgetUsed) {
+      return false;
+    }
+    if (!params.nodeId) {
+      return false;
+    }
+    if (!(params.error instanceof GatewayClientRequestError)) {
+      return false;
+    }
+    if (params.error.gatewayCode !== "INVALID_REQUEST") {
+      return false;
+    }
+    const message = normalizeLowercaseStringOrEmpty(params.error.message);
+    return message.includes("invalid connect params") && message.includes("nodeid");
   }
 
   private isTrustedDeviceRetryEndpoint(): boolean {

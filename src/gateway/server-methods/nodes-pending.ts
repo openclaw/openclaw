@@ -6,6 +6,7 @@ import {
   validateNodePendingDrainParams,
   validateNodePendingEnqueueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveClientNodeId } from "../node-id.js";
 import {
   drainNodePendingWork,
   enqueueNodePendingWork,
@@ -21,14 +22,6 @@ import {
   waitForNodeReconnect,
 } from "./nodes.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function resolveClientNodeId(
-  client: { connect?: { device?: { id?: string }; client?: { id?: string } } } | null,
-): string | null {
-  const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "";
-  const trimmed = nodeId.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
 
 /** Gateway handlers for queueing work until a paired node reconnects. */
 export const nodePendingHandlers: GatewayRequestHandlers = {

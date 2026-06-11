@@ -199,12 +199,15 @@ describe("attachGatewayWsConnectionHandler", () => {
 
   it("skips node presence disconnects for stale reconnected sockets", async () => {
     const unregister = vi.fn(() => null);
+    const hasLivePresenceKey = vi.fn(() => true);
     const { socket } = attachGatewayWsForTest({
       attach: attachGatewayWsConnectionHandler,
       options: {
         refreshHealthSnapshot: vi.fn(),
         buildRequestContext: () =>
-          createGatewayWsTestRequestContext({ nodeRegistry: { unregister } }) as never,
+          createGatewayWsTestRequestContext({
+            nodeRegistry: { unregister, hasLivePresenceKey },
+          }) as never,
       },
     });
     await waitForLazyMessageHandler();
@@ -229,7 +232,51 @@ describe("attachGatewayWsConnectionHandler", () => {
     socket.emit("close", 1000, Buffer.from("stale"));
 
     expect(unregister).toHaveBeenCalledTimes(1);
+    expect(hasLivePresenceKey).toHaveBeenCalledWith("node-1");
     expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(broadcastPresenceSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("marks replaced node device presence disconnected without clearing active node state", async () => {
+    const unregister = vi.fn(() => ({
+      nodeId: "shared-custom-node",
+      nodeDisconnected: false,
+      presenceDisconnected: true,
+    }));
+    const context = createGatewayWsTestRequestContext({
+      nodeRegistry: { unregister, hasLivePresenceKey: vi.fn(() => false) },
+    });
+    const { socket } = attachGatewayWsForTest({
+      attach: attachGatewayWsConnectionHandler,
+      options: {
+        refreshHealthSnapshot: vi.fn(),
+        buildRequestContext: () => context as never,
+      },
+    });
+    await waitForLazyMessageHandler();
+
+    const passed = firstAttachedHandlerParams() as {
+      setClient: (client: unknown) => boolean;
+    };
+    expect(
+      passed.setClient({
+        socket,
+        connect: {
+          role: "node",
+          client: { id: "openclaw-macos", mode: "node" },
+          nodeId: "shared-custom-node",
+          device: { id: "device-b" },
+        },
+        connId: "conn-b",
+        presenceKey: "device-b",
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
+
+    socket.emit("close", 4001, Buffer.from("node pairing superseded"));
+
+    expect(upsertPresenceMock).toHaveBeenCalledWith("device-b", { reason: "disconnect" });
+    expect(broadcastPresenceSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(context.nodeUnsubscribeAll).not.toHaveBeenCalled();
   });
 });

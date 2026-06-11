@@ -877,6 +877,7 @@ type ConnectReqOptions = {
   scopes?: string[];
   caps?: string[];
   commands?: string[];
+  nodeId?: string;
   permissions?: Record<string, boolean>;
   device?: ConnectReqDevice | null;
   deviceIdentityPath?: string;
@@ -1075,6 +1076,7 @@ export async function connectReq(
         client,
         caps: opts?.caps ?? [],
         commands: opts?.commands ?? [],
+        nodeId: opts?.nodeId,
         permissions: opts?.permissions ?? undefined,
         role,
         scopes: requestedScopes,

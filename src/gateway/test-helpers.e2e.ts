@@ -47,6 +47,7 @@ export async function connectGatewayClient(params: {
   caps?: string[];
   commands?: string[];
   instanceId?: string;
+  nodeId?: string;
   deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
   connectChallengeTimeoutMs?: number;
@@ -109,6 +110,7 @@ export async function connectGatewayClient(params: {
       caps: params.caps,
       commands: params.commands,
       instanceId: params.instanceId,
+      nodeId: params.nodeId,
       deviceIdentity,
       onEvent: params.onEvent,
       onHelloOk: () => stop(undefined, client),

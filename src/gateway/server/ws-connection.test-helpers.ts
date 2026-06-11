@@ -41,12 +41,18 @@ export function createResolvedGatewayTokenAuth(token: string): ResolvedGatewayAu
 
 export function createGatewayWsTestRequestContext(
   overrides: {
-    nodeRegistry?: { unregister: ReturnType<typeof vi.fn> };
+    nodeRegistry?: {
+      unregister: ReturnType<typeof vi.fn>;
+      hasLivePresenceKey?: ReturnType<typeof vi.fn>;
+    };
   } = {},
 ) {
   return {
     unsubscribeAllSessionEvents: vi.fn(),
-    nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
+    nodeRegistry: overrides.nodeRegistry ?? {
+      unregister: vi.fn(),
+      hasLivePresenceKey: vi.fn(() => false),
+    },
     nodeUnsubscribeAll: vi.fn(),
   };
 }

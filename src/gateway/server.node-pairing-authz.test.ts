@@ -17,8 +17,10 @@ import {
 } from "./device-authz.test-helpers.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
+  connectReq,
   connectOk,
   installGatewayTestHooks,
+  onceMessage,
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
@@ -44,6 +46,7 @@ async function connectNodeClient(params: {
   port: number;
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
+  nodeId?: string;
 }) {
   return await connectGatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
@@ -57,6 +60,7 @@ async function connectNodeClient(params: {
     mode: GATEWAY_CLIENT_MODES.NODE,
     scopes: [],
     commands: params.commands,
+    nodeId: params.nodeId,
     deviceIdentity: params.deviceIdentity,
     timeoutMessage: "timeout waiting for paired node to connect",
   });
@@ -293,6 +297,56 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("rpc approval scopes", (getStarted) => {
+    test("broadcasts rejected resolutions for conflicting pending custom node ids", async () => {
+      const started = getStarted();
+      const ws = await openTrackedWs(started.port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.pairing"],
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/operator-conflict.json`,
+        });
+        const first = await requestNodePairing({
+          nodeId: "custom-conflict-node",
+          deviceId: "device-a",
+          platform: "macos",
+        });
+        const second = await requestNodePairing({
+          nodeId: "custom-conflict-node",
+          deviceId: "device-b",
+          platform: "macos",
+        });
+        const rejectedResolution = onceMessage<{
+          type?: string;
+          event?: string;
+          payload?: { requestId?: string; nodeId?: string; decision?: string };
+        }>(
+          ws,
+          (obj) =>
+            obj.type === "event" &&
+            obj.event === "node.pair.resolved" &&
+            obj.payload?.requestId === second.request.requestId,
+        );
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: first.request.requestId,
+        });
+        expect(approve.ok).toBe(true);
+
+        await expect(rejectedResolution).resolves.toMatchObject({
+          type: "event",
+          event: "node.pair.resolved",
+          payload: {
+            requestId: second.request.requestId,
+            nodeId: "custom-conflict-node",
+            decision: "rejected",
+          },
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
     test("rejects system.run node pairing approval without admin scope through rpc", async () => {
       await expectRpcNodePairingApprovalRejected({
         started: getStarted(),
@@ -315,6 +369,96 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("rejects node-host node ids that were not covered by device auth", async () => {
+      const started = getStarted();
+      const pairedNode = await pairDeviceIdentity({
+        name: "unsigned-custom-node-id",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const ws = await openTrackedWs(started.port);
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          role: "node",
+          client: {
+            id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+            displayName: "unsigned-node-id",
+            version: "1.0.0",
+            platform: "macos",
+            deviceFamily: "Mac",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+          scopes: [],
+          commands: [],
+          nodeId: "my-mac-node",
+          deviceIdentityPath: pairedNode.identityPath,
+        });
+
+        expect(res.ok).toBe(false);
+        expect(res.error?.details).toMatchObject({
+          reason: "node-id-signature",
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("uses an explicit node-host node id for catalog and describe", async () => {
+      const started = getStarted();
+      const customNodeId = "my-mac-node";
+      const pairedNode = await pairDeviceIdentity({
+        name: "custom-node-host",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+
+      let controlWs: WebSocket | undefined;
+      let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        controlWs = await openTrackedWs(started.port);
+        await connectOk(controlWs, { token: "secret" });
+        nodeClient = await connectNodeClient({
+          port: started.port,
+          deviceIdentity: pairedNode.identity,
+          commands: [],
+          nodeId: customNodeId,
+        });
+
+        const connectedControlWs = controlWs;
+        await vi.waitFor(async () => {
+          const list = await rpcReq<{
+            nodes?: Array<{ nodeId: string; connected?: boolean; displayName?: string }>;
+          }>(connectedControlWs, "node.list", {});
+          const node = (list.payload?.nodes ?? []).find((entry) => entry.nodeId === customNodeId);
+          if (node?.connected) {
+            return;
+          }
+          throw new Error(`custom node id not visible yet: ${JSON.stringify(list.payload)}`);
+        });
+
+        const describeResult = await rpcReq<{ nodeId?: string; connected?: boolean }>(
+          connectedControlWs,
+          "node.describe",
+          { nodeId: customNodeId },
+        );
+        expect(describeResult.ok).toBe(true);
+        expect(describeResult.payload?.nodeId).toBe(customNodeId);
+        expect(describeResult.payload?.connected).toBe(true);
+
+        const pairing = await listNodePairing();
+        const pending = pairing.pending?.find((entry) => entry.nodeId === customNodeId);
+        expect(pending?.nodeId).toBe(customNodeId);
+      } finally {
+        controlWs?.close();
+        await nodeClient?.stopAndWait();
+      }
+    });
+
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
       await expectRePairingRequest({
         started: getStarted(),

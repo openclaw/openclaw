@@ -8,12 +8,14 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { resolveNodeConnectDeviceId, resolveNodeConnectId } from "./node-id.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 /** Connected node session advertised over Gateway websocket. */
 export type NodeSession = {
   nodeId: string;
+  deviceId?: string;
   connId: string;
   client: GatewayWsClient;
   clientId?: string;
@@ -34,6 +36,12 @@ export type NodeSession = {
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   connectedAtMs: number;
+};
+
+export type NodeUnregisterResult = {
+  nodeId: string;
+  nodeDisconnected: boolean;
+  presenceDisconnected: boolean;
 };
 
 /** Pending invoke awaiting a node.invoke.response. */
@@ -175,13 +183,18 @@ function withSystemRunEventRunId(params: { command: string; params?: unknown }):
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
+  private sessionsByConn = new Map<string, NodeSession>();
+  // Internal closes unregister immediately; the WS close event consumes this once
+  // so presence/node cleanup still runs in the transport owner.
+  private preclosedUnregisterResults = new Map<string, NodeUnregisterResult>();
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
   /** Register a websocket client as the current connection for its node id. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
-    const nodeId = connect.device?.id ?? connect.client.id;
+    const nodeId = resolveNodeConnectId(connect);
+    const deviceId = resolveNodeConnectDeviceId(connect) ?? undefined;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
       ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
@@ -210,6 +223,7 @@ export class NodeRegistry {
         : undefined;
     const session: NodeSession = {
       nodeId,
+      deviceId,
       connId: client.connId,
       client,
       clientId: connect.client.id,
@@ -233,19 +247,38 @@ export class NodeRegistry {
     };
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
+    this.sessionsByConn.set(client.connId, session);
+    if (deviceId) {
+      this.disconnectSessionsForSameDevice(deviceId, client.connId);
+    }
     return session;
   }
 
   /** Unregister one connection and reject invokes tied to that connection. */
-  unregister(connId: string): string | null {
-    const nodeId = this.nodesByConn.get(connId);
+  unregister(connId: string): NodeUnregisterResult | null {
+    const preclosed = this.preclosedUnregisterResults.get(connId);
+    if (preclosed) {
+      this.preclosedUnregisterResults.delete(connId);
+      return preclosed;
+    }
+    const session = this.sessionsByConn.get(connId);
+    const nodeId = session?.nodeId ?? this.nodesByConn.get(connId);
     if (!nodeId) {
       return null;
     }
     this.nodesByConn.delete(connId);
+    this.sessionsByConn.delete(connId);
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
+    let replacement: NodeSession | undefined;
     if (unregistersCurrentNode) {
-      this.nodesById.delete(nodeId);
+      replacement = this.findLatestSessionForNode(nodeId) ?? undefined;
+      if (replacement) {
+        this.nodesById.set(nodeId, replacement);
+      } else {
+        this.nodesById.delete(nodeId);
+      }
+    } else {
+      replacement = this.nodesById.get(nodeId);
     }
     for (const [id, pending] of this.pendingInvokes.entries()) {
       if (pending.connId !== connId) {
@@ -260,7 +293,11 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
-    return unregistersCurrentNode ? nodeId : null;
+    return {
+      nodeId,
+      nodeDisconnected: unregistersCurrentNode && !replacement,
+      presenceDisconnected: this.shouldMarkPresenceDisconnected(session),
+    };
   }
 
   /** List connected node sessions. */
@@ -271,6 +308,15 @@ export class NodeRegistry {
   /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
+  }
+
+  hasLivePresenceKey(presenceKey: string): boolean {
+    for (const session of this.sessionsByConn.values()) {
+      if (session.client.presenceKey === presenceKey) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Probe websocket liveness with ping/pong when the socket supports it. */
@@ -373,10 +419,21 @@ export class NodeRegistry {
       commands: readonly string[];
       permissions?: Record<string, boolean> | undefined;
     },
+    opts: { deviceId?: string | undefined } = {},
   ): NodeSession | null {
-    const node = this.nodesById.get(nodeId);
+    let node = this.nodesById.get(nodeId);
     if (!node) {
       return null;
+    }
+    const expectedDeviceId = normalizeString(opts.deviceId);
+    if (expectedDeviceId) {
+      this.disconnectSessionsForOtherDevices(nodeId, expectedDeviceId);
+      const replacement = this.findLatestSessionForNode(nodeId, expectedDeviceId);
+      if (!replacement) {
+        return null;
+      }
+      this.nodesById.set(nodeId, replacement);
+      node = replacement;
     }
 
     // Runtime approvals can only narrow capabilities/commands/permissions declared at connect.
@@ -396,28 +453,29 @@ export class NodeRegistry {
       if (surface.permissions === undefined) {
         node.permissions = undefined;
         (node.client.connect as { permissions?: Record<string, boolean> }).permissions = undefined;
-        return node;
+      } else {
+        const declared = node.declaredPermissions ?? {};
+        const nextEntries: Array<[string, boolean]> = [];
+        for (const [key, declaredValue] of Object.entries(declared)) {
+          if (!declaredValue) {
+            nextEntries.push([key, false]);
+            continue;
+          }
+          const approvedValue = surface.permissions?.[key];
+          if (approvedValue) {
+            nextEntries.push([key, true]);
+            continue;
+          }
+          if (approvedValue !== undefined) {
+            nextEntries.push([key, false]);
+          }
+        }
+        const nextPermissions =
+          nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
+        node.permissions = nextPermissions;
+        (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
+          nextPermissions;
       }
-      const declared = node.declaredPermissions ?? {};
-      const nextEntries: Array<[string, boolean]> = [];
-      for (const [key, declaredValue] of Object.entries(declared)) {
-        if (!declaredValue) {
-          nextEntries.push([key, false]);
-          continue;
-        }
-        const approvedValue = surface.permissions?.[key];
-        if (approvedValue) {
-          nextEntries.push([key, true]);
-          continue;
-        }
-        if (approvedValue !== undefined) {
-          nextEntries.push([key, false]);
-        }
-      }
-      const nextPermissions = nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
-      node.permissions = nextPermissions;
-      (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
-        nextPermissions;
     }
 
     return node;
@@ -637,6 +695,60 @@ export class NodeRegistry {
     sessionKey?: string;
   }): string {
     return `${params.nodeId}\0${params.connId}\0${params.sessionKey ?? ""}\0${params.runId}`;
+  }
+
+  private findLatestSessionForNode(nodeId: string, deviceId?: string): NodeSession | null {
+    let match: NodeSession | null = null;
+    for (const session of this.sessionsByConn.values()) {
+      if (session.nodeId !== nodeId) {
+        continue;
+      }
+      if (deviceId && session.deviceId !== deviceId) {
+        continue;
+      }
+      match = session;
+    }
+    return match;
+  }
+
+  private disconnectSessionsForOtherDevices(nodeId: string, deviceId: string): void {
+    // Approval closes stale same-node owners while unregister mutates the session map.
+    // Snapshot first so no superseded connection can survive and later be promoted.
+    for (const session of Array.from(this.sessionsByConn.values())) {
+      if (session.nodeId === nodeId && session.deviceId !== deviceId) {
+        this.disconnectSession(session, 4001, "node pairing superseded");
+      }
+    }
+  }
+
+  private disconnectSessionsForSameDevice(deviceId: string, exceptConnId: string): void {
+    // Reconnects from one authenticated device replace older sockets for that device.
+    // Leaving them promotable can resurrect stale command approvals after removal.
+    for (const session of Array.from(this.sessionsByConn.values())) {
+      if (session.connId !== exceptConnId && session.deviceId === deviceId) {
+        this.disconnectSession(session, 4001, "node connection superseded");
+      }
+    }
+  }
+
+  private disconnectSession(session: NodeSession, code: number, reason: string): void {
+    const unregisterResult = this.unregister(session.connId);
+    if (unregisterResult) {
+      this.preclosedUnregisterResults.set(session.connId, unregisterResult);
+    }
+    try {
+      session.client.socket.close(code, reason);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private shouldMarkPresenceDisconnected(session: NodeSession | undefined): boolean {
+    const presenceKey = session?.client.presenceKey;
+    if (!presenceKey) {
+      return false;
+    }
+    return !this.hasLivePresenceKey(presenceKey);
   }
 
   handleInvokeResult(params: {

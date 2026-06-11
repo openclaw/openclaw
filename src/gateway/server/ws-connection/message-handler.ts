@@ -105,7 +105,11 @@ import {
   isTrustedProxyAddress,
   resolveClientIp,
 } from "../../net.js";
-import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import {
+  NodePairingDeviceMismatchError,
+  reconcileNodePairingOnConnect,
+} from "../../node-connect-reconcile.js";
+import { resolveNodeConnectId } from "../../node-id.js";
 import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
@@ -752,7 +756,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
         const deviceRaw = connectParams.device;
         let devicePublicKey: string | null = null;
-        let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
+        let deviceAuthPayloadVersion: "v2" | "v3" | "v4" | null = null;
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
@@ -1000,6 +1004,26 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             rejectDeviceAuthInvalid("device-public-key", "device public key invalid");
             return;
           }
+        }
+        if (
+          typeof connectParams.nodeId === "string" &&
+          connectParams.nodeId.trim().length > 0 &&
+          deviceAuthPayloadVersion !== "v4"
+        ) {
+          setHandshakeState("failed");
+          setCloseCause("device-auth-invalid", {
+            reason: "node-id-signature",
+            client: connectParams.client.id,
+            deviceId: device?.id,
+          });
+          sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "node id signature required", {
+            details: {
+              code: ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID,
+              reason: "node-id-signature",
+            },
+          });
+          close(1008, "node id signature required");
+          return;
         }
 
         const authDecision = await resolveConnectAuthDecision({
@@ -1615,9 +1639,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         if (role === "node") {
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
-          const pairedNode = await getPairedNode(
-            connectParams.device?.id ?? connectParams.client.id,
-          );
+          const pairedNode = await getPairedNode(resolveNodeConnectId(connectParams));
           try {
             reconciliation = await reconcileNodePairingOnConnect({
               cfg: getRuntimeConfig(),
@@ -1642,6 +1664,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               },
             });
           } catch (error) {
+            if (error instanceof NodePairingDeviceMismatchError) {
+              markHandshakeFailure("node-pairing-device-mismatch", {
+                nodeId: error.nodeId,
+                deviceId: error.deviceId ?? undefined,
+              });
+              sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, "node pairing required", {
+                details: {
+                  code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+                  reason: "node-device-mismatch",
+                  nodeId: error.nodeId,
+                  deviceId: error.deviceId,
+                },
+              });
+              close(1008, "node pairing required");
+              return;
+            }
             if (error instanceof NodePairingRateLimitError) {
               rejectUnauthorized({
                 ok: false,

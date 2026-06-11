@@ -22,6 +22,7 @@ export type NodeHostGatewayConfig = {
 type NodeHostConfig = {
   version: 1;
   nodeId: string;
+  nodeIdSource?: "generated" | "user";
   token?: string;
   displayName?: string;
   gateway?: NodeHostGatewayConfig;
@@ -37,6 +38,7 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
   const base: NodeHostConfig = {
     version: 1,
     nodeId: "",
+    nodeIdSource: config?.nodeIdSource,
     token: config?.token,
     displayName: config?.displayName,
     gateway: config?.gateway,
@@ -46,6 +48,9 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
   }
   if (!base.nodeId) {
     base.nodeId = crypto.randomUUID();
+    base.nodeIdSource = "generated";
+  } else if (base.nodeIdSource !== "generated" && base.nodeIdSource !== "user") {
+    base.nodeIdSource = "generated";
   }
   return base;
 }

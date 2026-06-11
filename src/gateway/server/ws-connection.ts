@@ -476,21 +476,27 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
-      let currentDisconnectedNodeId: string | null = null;
+      let disconnectedNodeId: string | null = null;
+      let shouldMarkPresenceDisconnected = client?.connect?.role !== "node";
       if (client?.connect?.role === "node") {
-        currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+        const unregisterResult = context.nodeRegistry.unregister(connId);
+        if (unregisterResult) {
+          shouldMarkPresenceDisconnected = unregisterResult.presenceDisconnected;
+          disconnectedNodeId = unregisterResult.nodeDisconnected ? unregisterResult.nodeId : null;
+        } else {
+          shouldMarkPresenceDisconnected = client.presenceKey
+            ? !context.nodeRegistry.hasLivePresenceKey(client.presenceKey)
+            : false;
+        }
       }
-      if (
-        client?.presenceKey &&
-        (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
-      ) {
+      if (client?.presenceKey && shouldMarkPresenceDisconnected) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
         broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
-      if (currentDisconnectedNodeId) {
-        removeRemoteNodeInfo(currentDisconnectedNodeId);
-        context.nodeUnsubscribeAll(currentDisconnectedNodeId);
-        clearNodeWakeState(currentDisconnectedNodeId);
+      if (disconnectedNodeId) {
+        removeRemoteNodeInfo(disconnectedNodeId);
+        context.nodeUnsubscribeAll(disconnectedNodeId);
+        clearNodeWakeState(disconnectedNodeId);
       }
       logWs("out", "close", {
         connId,

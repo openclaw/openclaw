@@ -141,6 +141,50 @@ describe("gateway/node-catalog", () => {
     expect(node?.connected).toBe(true);
   });
 
+  it("uses the custom node id as the catalog row for one authenticated device", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        pairedDevice({
+          deviceId: "device-fingerprint",
+          displayName: "Mac",
+          approvedAtMs: 99,
+        }),
+      ],
+      pairedNodes: [
+        pairedNode({
+          nodeId: "my-mac-node",
+          deviceId: "device-fingerprint",
+          displayName: "Mac",
+          approvedAtMs: 100,
+        }),
+      ],
+      connectedNodes: [
+        {
+          nodeId: "my-mac-node",
+          deviceId: "device-fingerprint",
+          connId: "conn-1",
+          client: {} as never,
+          clientId: "openclaw-macos",
+          clientMode: "node",
+          displayName: "Mac",
+          platform: "macos",
+          declaredCaps: ["camera"],
+          caps: ["camera"],
+          declaredCommands: ["system.run"],
+          commands: ["system.run"],
+          connectedAtMs: 123,
+        } as unknown as CatalogInput["connectedNodes"][number],
+      ],
+    });
+
+    expect(listKnownNodes(catalog).map((node) => node.nodeId)).toEqual(["my-mac-node"]);
+    const node = getKnownNode(catalog, "my-mac-node");
+    expect(node?.paired).toBe(true);
+    expect(node?.connected).toBe(true);
+    expect(node?.approvedAtMs).toBe(100);
+    expect(getKnownNode(catalog, "device-fingerprint")).toBeNull();
+  });
+
   it("surfaces node-pair metadata even when the node is offline", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],

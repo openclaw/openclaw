@@ -58,6 +58,7 @@ import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../node-command-policy.js";
+import { resolveClientNodeId } from "../node-id.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
@@ -801,13 +802,32 @@ export const nodeHandlers: GatewayRequestHandlers = {
         declaredCommands: approvedNode.commands ?? [],
         allowlist: currentAllowlist,
       });
-      const updatedNode = context.nodeRegistry.updateSurface(approvedNode.nodeId, {
-        caps: approvedNode.caps ?? [],
-        commands: currentAllowedCommands,
-        permissions: approvedNode.permissions,
-      });
+      const updatedNode = context.nodeRegistry.updateSurface(
+        approvedNode.nodeId,
+        {
+          caps: approvedNode.caps ?? [],
+          commands: currentAllowedCommands,
+          permissions: approvedNode.permissions,
+        },
+        {
+          deviceId: approvedNode.deviceId,
+        },
+      );
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
+      }
+      const resolvedAt = Date.now();
+      for (const superseded of approved.superseded ?? []) {
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId: superseded.requestId,
+            nodeId: superseded.nodeId,
+            decision: "rejected",
+            ts: resolvedAt,
+          },
+          { dropIfSlow: true },
+        );
       }
       context.broadcast(
         "node.pair.resolved",
@@ -815,7 +835,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           requestId,
           nodeId: approvedNode.nodeId,
           decision: "approved",
-          ts: Date.now(),
+          ts: resolvedAt,
         },
         { dropIfSlow: true },
       );
@@ -1009,8 +1029,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
+    const trimmedNodeId = resolveClientNodeId(client) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -1044,8 +1063,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
+    const trimmedNodeId = resolveClientNodeId(client) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -1384,7 +1402,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           : null;
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
-      const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const nodeId = resolveClientNodeId(client) ?? "node";
       const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,

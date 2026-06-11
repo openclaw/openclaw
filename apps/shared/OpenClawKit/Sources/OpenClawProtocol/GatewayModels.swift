@@ -53,6 +53,7 @@ public struct ConnectParams: Codable, Sendable {
     public let caps: [String]?
     public let commands: [String]?
     public let permissions: [String: AnyCodable]?
+    public let nodeid: String?
     public let pathenv: String?
     public let role: String?
     public let scopes: [String]?
@@ -68,6 +69,7 @@ public struct ConnectParams: Codable, Sendable {
         caps: [String]?,
         commands: [String]?,
         permissions: [String: AnyCodable]?,
+        nodeid: String?,
         pathenv: String?,
         role: String?,
         scopes: [String]?,
@@ -82,6 +84,7 @@ public struct ConnectParams: Codable, Sendable {
         self.caps = caps
         self.commands = commands
         self.permissions = permissions
+        self.nodeid = nodeid
         self.pathenv = pathenv
         self.role = role
         self.scopes = scopes
@@ -98,6 +101,7 @@ public struct ConnectParams: Codable, Sendable {
         case caps
         case commands
         case permissions
+        case nodeid = "nodeId"
         case pathenv = "pathEnv"
         case role
         case scopes

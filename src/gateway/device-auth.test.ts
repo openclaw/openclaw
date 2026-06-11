@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDeviceAuthPayload,
   buildDeviceAuthPayloadV3,
+  buildDeviceAuthPayloadV4,
   normalizeDeviceMetadataForAuth,
 } from "./device-auth.js";
 
@@ -57,6 +58,25 @@ describe("device-auth payload vectors", () => {
           nonce: "nonce-def",
         }),
       expected: "v3|dev-2|openclaw-ios|ui|operator|operator.read|1700000000001||nonce-def||",
+    },
+    {
+      name: "builds canonical v4 payloads with signed node ids",
+      build: () =>
+        buildDeviceAuthPayloadV4({
+          deviceId: "dev-3",
+          clientId: "node-host",
+          clientMode: "node",
+          role: "node",
+          scopes: [],
+          signedAtMs: 1_700_000_000_002,
+          token: "tok-456",
+          nonce: "nonce-ghi",
+          platform: "  MACOS  ",
+          deviceFamily: "  Mac  ",
+          nodeId: "  my-mac-node  ",
+        }),
+      expected:
+        "v4|dev-3|node-host|node|node||1700000000002|tok-456|nonce-ghi|macos|mac|my-mac-node",
     },
   ])("$name", ({ build, expected }) => {
     expect(build()).toBe(expected);

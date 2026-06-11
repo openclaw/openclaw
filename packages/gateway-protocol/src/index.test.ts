@@ -80,6 +80,7 @@ describe("lazy protocol validators", () => {
           platform: "test",
           mode: "test",
         },
+        nodeId: "my-mac-node",
       }),
     ).toBe(true);
     expect(validateConnectParams.errors).toBeNull();
