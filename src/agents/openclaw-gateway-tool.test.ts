@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -391,31 +392,12 @@ describe("gateway tool", () => {
     });
   });
 
-  it("keeps explicit terminal array consent while not widening indexed consent", async () => {
-    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: { bindings: [{ agentId: "main", match: { channel: "telegram" } }] },
-        };
-      }
-      return { ok: true };
-    });
-    const tool = requireGatewayTool();
-    const raw = '{ bindings: [{ agentId: "work", match: { channel: "discord" } }] }';
-
-    await tool.execute("call-array-replace-path", {
-      action: "config.patch",
-      raw,
-      replacePaths: ["bindings[]"],
-    });
-
-    expectConfigMutationCall({
-      callGatewayTool: vi.mocked(callGatewayTool),
-      action: "config.patch",
-      raw,
-      replacePaths: ["bindings"],
-    });
+  it("distinguishes explicit terminal array consent from indexed consent", () => {
+    expect(normalizeConfigPatchReplacePath("bindings[]")).toBe("bindings");
+    expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[]");
+    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe(
+      "agents.list[].skills",
+    );
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {
