@@ -817,6 +817,41 @@ describe("commands registry args", () => {
     expect(formatCommandArgMenuTitle({ command, menu })).toContain("xhigh");
   });
 
+  it("resolves configured models for /model arg menus", () => {
+    const command = requireNativeCommand("model");
+
+    const menu = requireCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5", name: "GPT-5.5" }, { id: "gpt-5.4-mini" }],
+            },
+            anthropic: {
+              models: [{ id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" }],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(menu.arg.name).toBe("model");
+    expect(menu.choices).toEqual([
+      { label: "anthropic/Claude Sonnet 4.6", value: "anthropic/claude-sonnet-4.6" },
+      { label: "openai/gpt-5.4-mini", value: "openai/gpt-5.4-mini" },
+      { label: "openai/GPT-5.5", value: "openai/gpt-5.5" },
+    ]);
+    expect(formatCommandArgMenuTitle({ command, menu })).toBe("Choose a model for /model.");
+  });
+
+  it("keeps bare /model status dispatch when no configured model choices exist", () => {
+    const command = requireNativeCommand("model");
+
+    expect(resolveCommandArgMenu({ command, args: undefined, cfg: {} as never })).toBeNull();
+  });
+
   it("does not show menus when args were provided as raw text only", () => {
     const command = createUsageModeCommand("none", "on or off");
 
