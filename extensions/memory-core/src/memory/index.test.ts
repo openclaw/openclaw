@@ -1671,6 +1671,34 @@ describe("memory index", () => {
     expect(status.vector?.available).toBeUndefined();
   });
 
+  it("reports an indexed vector store from plain status without probing embeddings", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-status-only.sqlite"),
+      vectorEnabled: true,
+    });
+    const indexManager = await getFreshManager(cfg);
+    try {
+      await indexManager.sync({ reason: "test", force: true });
+    } finally {
+      await indexManager.close?.();
+    }
+
+    providerCalls = [];
+    forceNoProvider = true;
+    const statusManager = await getFreshManager(cfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(providerCalls).toStrictEqual([]);
+      expect(status.vector?.enabled).toBe(true);
+      expect(status.vector?.storeAvailable).toBe(true);
+      expect(status.vector?.semanticAvailable).toBeUndefined();
+      expect(status.vector?.available).toBeUndefined();
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
   it("marks older vector indexes dirty after vector store probing", async () => {
     const dbPath = path.join(workspaceDir, "index-vector-missing-dims.sqlite");
     const legacyCfg = createCfg({

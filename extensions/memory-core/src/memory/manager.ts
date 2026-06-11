@@ -1139,6 +1139,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
+    const storeAvailable =
+      this.vector.available ?? (this.vector.enabled && this.hasIndexedChunks() ? true : undefined);
 
     return {
       backend: "builtin",
@@ -1175,7 +1177,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
-        storeAvailable: this.vector.available ?? undefined,
+        storeAvailable,
         semanticAvailable: this.vector.semanticAvailable,
         available: this.vector.semanticAvailable,
         extensionPath: this.vector.extensionPath,
