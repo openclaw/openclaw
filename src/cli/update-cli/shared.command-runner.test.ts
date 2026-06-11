@@ -1,13 +1,18 @@
 // Shared command runner tests cover update helper command execution and error capture.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
-import { createGlobalCommandRunner, parseTimeoutMsOrExit } from "./shared.js";
+import { createGlobalCommandRunner, parseTimeoutMsOrExit, resolveTargetVersion } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
+const updateCheckMocks = vi.hoisted(() => ({
+  fetchNpmPackageTargetStatus: vi.fn(),
+  fetchNpmTagVersion: vi.fn(),
+}));
 
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
+vi.mock("../../infra/update-check.js", () => updateCheckMocks);
 
 describe("createGlobalCommandRunner", () => {
   beforeEach(() => {
@@ -19,6 +24,15 @@ describe("createGlobalCommandRunner", () => {
       signal: null,
       killed: false,
       termination: "exit",
+    });
+    updateCheckMocks.fetchNpmPackageTargetStatus.mockResolvedValue({
+      target: "2026.5.26",
+      version: "2026.5.26",
+      nodeEngine: null,
+    });
+    updateCheckMocks.fetchNpmTagVersion.mockResolvedValue({
+      tag: "latest",
+      version: "2026.5.26",
     });
   });
 
@@ -89,5 +103,38 @@ describe("createGlobalCommandRunner", () => {
       error.mockRestore();
       exit.mockRestore();
     }
+  });
+});
+
+describe("resolveTargetVersion", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("requires exact version tags to exist on npm before reporting a target version", async () => {
+    updateCheckMocks.fetchNpmPackageTargetStatus.mockResolvedValueOnce({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+
+    await expect(resolveTargetVersion("2026.5.26", 1000)).resolves.toBeNull();
+    expect(updateCheckMocks.fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: 1000,
+    });
+    expect(updateCheckMocks.fetchNpmTagVersion).not.toHaveBeenCalled();
+  });
+
+  it("keeps exact version dry-runs usable when the registry probe is inconclusive", async () => {
+    updateCheckMocks.fetchNpmPackageTargetStatus.mockResolvedValueOnce({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "TypeError: fetch failed",
+    });
+
+    await expect(resolveTargetVersion("v2026.5.26", 1000)).resolves.toBe("2026.5.26");
   });
 });
