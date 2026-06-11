@@ -131,24 +131,38 @@ describe("security audit gateway HTTP tool findings", () => {
     });
   });
 
-  // PR #85664 [P2] regression: inert `allow: ["read"]` (legacy config shape,
-  // without directInvoke.hostFsRead) must NOT trigger the generic
-  // `dangerous_allow` finding. The `read` tool is dual-key gated and stays
-  // unreachable in that state, so the generic warning is a false positive.
-  describe("dangerous_allow exempts dual-key-gated tools", () => {
-    it("does NOT fire dangerous_allow when only allow:['read'] is set (inert config)", () => {
+  // PR #85664 [P1] regression: `dangerous_allow` suppression for `read` is
+  // source-aware. Suppress ONLY when the `hostFsRead` class opt-in is active
+  // (then the more specific `host_read_allow` finding fires instead). Without
+  // the opt-in, `allow: ["read"]` still removes `read` from the HTTP deny list,
+  // which can make a same-named PLUGIN tool reachable while the built-in stays
+  // unmaterialized — so the generic warning MUST fire.
+  describe("dangerous_allow source-aware suppression for read", () => {
+    it("fires dangerous_allow when only allow:['read'] is set (no hostFsRead opt-in)", () => {
       const cfg: OpenClawConfig = {
         gateway: {
-          bind: "lan", // would normally trigger critical if read were counted
+          bind: "lan",
           auth: { token: "secret" },
           tools: { allow: ["read"] },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(true);
+    });
+
+    it("does NOT fire dangerous_allow when allow:['read'] AND hostFsRead opt-in is set", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          auth: { token: "secret" },
+          tools: { allow: ["read"], directInvoke: { hostFsRead: true } },
         },
       };
       const findings = collectGatewayConfigFindings(cfg, cfg, {});
       expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(false);
     });
 
-    it("still fires dangerous_allow when allow includes a non-dual-key-gated tool alongside read", () => {
+    it("still fires dangerous_allow when allow includes a non-coding-tool name alongside read", () => {
       const cfg: OpenClawConfig = {
         gateway: {
           bind: "loopback",

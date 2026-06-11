@@ -139,6 +139,15 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, result: "apply_patch" }),
     },
     {
+      // A same-named PLUGIN `read` tool. `read` is HTTP-denied by default, so
+      // this is only reachable once `gateway.tools.allow: ["read"]` lifts it.
+      // The collision-precedence tests (PR #85664 [P1]) assert that the opted-in
+      // BUILT-IN reader wins over this plugin when both are present.
+      name: "read",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "PLUGIN-read" }),
+    },
+    {
       name: "nodes",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "nodes" }),
@@ -224,6 +233,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
+const { createOpenClawCodingToolsRaw } = await import("../agents/agent-tools.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
 
@@ -283,6 +293,10 @@ beforeEach(() => {
   lastCreateOpenClawToolsContext = undefined;
   pluginToolMetaState.clear();
   pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
+  // Default: no direct-invoke coding tools materialized. Collision tests opt in
+  // per-case via mockReturnValueOnce.
+  vi.mocked(createOpenClawCodingToolsRaw).mockReset();
+  vi.mocked(createOpenClawCodingToolsRaw).mockImplementation(() => []);
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -1041,6 +1055,50 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: "browser" });
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  // PR #85664 [P1]: collision precedence between the opt-in built-in `read`
+  // coding tool and a same-named PLUGIN tool. The mocked tool set already
+  // registers a plugin `read` (returns "PLUGIN-read"); here we materialize a
+  // built-in `read` (returns "BUILTIN-read") via the direct-invoke opt-in.
+  describe("read coding-tool collision precedence", () => {
+    const builtinRead = {
+      name: "read",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "BUILTIN-read" }),
+    };
+
+    it("resolves `read` to the opted-in built-in over a same-named plugin", async () => {
+      // Mark the mocked `read` entry as plugin-originated.
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinRead] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: {
+          tools: { allow: ["read"], directInvoke: { hostFsRead: true } },
+        },
+      };
+
+      const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("BUILTIN-read");
+    });
+
+    it("leaves the same-named plugin reachable when the hostFsRead opt-in is OFF", async () => {
+      // No opt-in → built-in is not materialized (default mock returns []), so
+      // the same-named plugin executes. This is the exposure that the config
+      // audit's `dangerous_allow` finding now warns about (see
+      // audit-gateway-tools-http.test.ts).
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: { tools: { allow: ["read"] } },
+      };
+
+      const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-read");
+    });
   });
 });
 
