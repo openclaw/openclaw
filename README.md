@@ -10,9 +10,17 @@
 > - **`overlay/multitenant/`** — `entrypoint.sh` (mode router:
 >   `MODE=subscription|byok|open-weights`, `BINARY=claude|codex`) and
 >   `assemble-skills.sh` (canonical-source: `../platform-skills/skills/`).
-> - **`apps/broker/`** — Go binary; PTY-WS bridge; `GET /ws`, `POST /spawn`,
->   `POST /chat?binary=...` (Phase 5 h.5), and read-only runtime filesystem
->   endpoints `GET /fs/tree` / `GET /fs/file`.
+> - **`apps/broker/`** — Go binary; PTY-WS bridge and runtime endpoint
+>   inventory:
+>   - `GET /healthz` — liveness probe.
+>   - `GET /ws` — broker-token-authenticated PTY WebSocket.
+>   - `POST /spawn` — broker-token-authenticated headless one-shot.
+>   - `POST /chat?binary=...` — Phase 5 h.5 chat endpoint.
+>   - `GET /fs/tree` / `GET /fs/file` — broker-token-authenticated,
+>     read-only runtime filesystem tree and file content. Optional `path`
+>     defaults to `<runtime-root>/work`; reads are constrained to the
+>     runtime root, reject traversal or symlink escapes, and `/fs/file`
+>     returns only UTF-8 files up to 1 MiB.
 > - **`AGENTS.md` / `CLAUDE.md` (symlink)** — process doc; the Rockie
 >   appendix is at the bottom under `## Multitenant runtime (Rockie additions)`.
 >
