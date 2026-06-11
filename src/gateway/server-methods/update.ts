@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
@@ -29,6 +30,7 @@ import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-pl
 import {
   getLatestUpdateRestartSentinel,
   recordLatestUpdateRestartSentinel,
+  refreshLatestUpdateRestartSentinel,
 } from "../server-restart-sentinel.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -66,13 +68,50 @@ function resolveManagedServiceHandoffRestartDelayMs(
   );
 }
 
+function hasManagedServiceHandoffContext(
+  env: NodeJS.ProcessEnv,
+  supervisor: ReturnType<typeof detectRespawnSupervisor>,
+): boolean {
+  if (supervisor === "launchd") {
+    return Boolean(
+      env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+      env.LAUNCH_JOB_LABEL?.trim() ||
+      env.LAUNCH_JOB_NAME?.trim() ||
+      env.XPC_SERVICE_NAME?.trim(),
+    );
+  }
+  if (supervisor === "systemd") {
+    // Ambient systemd markers only prove that a service manager started this
+    // process. The detached CLI needs the durable unit name to stop the same
+    // gateway before mutating the install root.
+    return Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
+  }
+  if (supervisor === "schtasks") {
+    return Boolean(
+      env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+      (env.OPENCLAW_SERVICE_MARKER?.trim() === GATEWAY_SERVICE_MARKER &&
+        env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND),
+    );
+  }
+  return false;
+}
+
 export const updateHandlers: GatewayRequestHandlers = {
-  "update.status": async ({ params, respond }) => {
+  "update.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
+    let sentinel: RestartSentinelPayload | null;
+    try {
+      sentinel = await refreshLatestUpdateRestartSentinel();
+    } catch (err) {
+      context?.logGateway?.warn(
+        `update.status sentinel refresh failed: ${formatUpdateRunErrorMessage(err)}`,
+      );
+      sentinel = getLatestUpdateRestartSentinel();
+    }
     respond(true, {
-      sentinel: getLatestUpdateRestartSentinel(),
+      sentinel,
     });
   },
   "update.run": async ({ params, respond, client, context }) => {
@@ -129,6 +168,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         argv1: process.argv[1],
       });
       supervisor = detectRespawnSupervisor(process.env, process.platform);
+      const hasHandoffContext = supervisor
+        ? hasManagedServiceHandoffContext(process.env, supervisor)
+        : false;
+      const requiresManagedServiceHandoff =
+        installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
       if (!isRestartEnabled(config) && !supervisor) {
         // Package updates need a restart path to finish safely. Dev/git installs
         // can report the disabled restart directly, but global installs must not
@@ -145,22 +189,25 @@ export const updateHandlers: GatewayRequestHandlers = {
           steps: [],
           durationMs: 0,
         };
-      } else if (installSurface.kind === "global") {
+      } else if (requiresManagedServiceHandoff) {
+        const handoffChannel =
+          installSurface.kind === "git" ? undefined : (configChannel ?? undefined);
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,
-          channel: configChannel ?? undefined,
+          ...(handoffChannel ? { channel: handoffChannel } : {}),
         });
-        if (supervisor) {
+        if (supervisor && hasHandoffContext) {
           try {
             const startedAt = Date.now();
             const handoffId = randomUUID();
             sentinelMeta.handoffId = handoffId;
             // Managed services update from a detached helper so the running
-            // gateway does not replace its own package while still serving RPCs.
+            // gateway does not replace its own package or git-built dist tree
+            // while still serving RPCs.
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
-              channel: configChannel ?? undefined,
+              ...(handoffChannel ? { channel: handoffChannel } : {}),
               restartDelayMs,
               meta: sentinelMeta,
               handoffId,

@@ -34,5 +34,10 @@ export interface CronServiceContract {
   getJob(id: string): CronJob | undefined;
   readJob(id: string): Promise<CronJob | undefined>;
   getDefaultAgentId(): string | undefined;
-  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string }): CronWakeResult;
+  wake(opts: {
+    mode: CronWakeMode;
+    text: string;
+    sessionKey?: string;
+    agentId?: string;
+  }): CronWakeResult;
 }

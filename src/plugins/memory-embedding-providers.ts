@@ -31,6 +31,7 @@ export type MemoryEmbeddingProviderRuntime = {
   cacheKeyData?: Record<string, unknown>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
+  sourceWideBatchEmbed?: boolean;
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 

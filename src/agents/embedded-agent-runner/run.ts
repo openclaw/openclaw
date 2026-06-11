@@ -152,9 +152,12 @@ import {
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
+  MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
+  resolveNextSameModelRateLimitRetryCount,
+  resolveSameModelRateLimitRetryDelayMs,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -1055,6 +1058,8 @@ export async function runEmbeddedAgent(
       const profileFailureStore = pluginHarnessOwnsTransport ? attemptAuthProfileStore : authStore;
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
+      const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
+        attempt.result === "rotate_profile" || attempt.result === "fallback_model";
 
       const initialThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
@@ -1212,6 +1217,7 @@ export async function runEmbeddedAgent(
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let consecutiveSameModelRateLimitRetries = 0;
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
@@ -1371,6 +1377,35 @@ export async function runEmbeddedAgent(
           }
           throw err;
         }
+      };
+      const maybeRetrySameModelRateLimit = async (retry?: {
+        retryAfterSeconds?: number;
+      }): Promise<boolean> => {
+        if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+          return false;
+        }
+        const delayMs = resolveSameModelRateLimitRetryDelayMs({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retryAfterSeconds: retry?.retryAfterSeconds,
+        });
+        log.warn(
+          `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
+        );
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (err) {
+          if (params.abortSignal?.aborted) {
+            const abortErr = new Error("Operation aborted", { cause: err });
+            abortErr.name = "AbortError";
+            throw abortErr;
+          }
+          throw err;
+        }
+        consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retriedSameModelRateLimit: true,
+        });
+        return true;
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
@@ -1596,6 +1631,7 @@ export async function runEmbeddedAgent(
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
+            chatType: params.chatType,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
@@ -1958,6 +1994,7 @@ export async function runEmbeddedAgent(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
@@ -2150,6 +2187,7 @@ export async function runEmbeddedAgent(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
@@ -2862,6 +2900,7 @@ export async function runEmbeddedAgent(
               !fallbackConfigured &&
               canRestartForLiveSwitch &&
               sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
+            allowSameModelRateLimitRetry: rateLimitProfileRotations < rateLimitProfileRotationLimit,
             assistantProfileFailureReason,
             lastProfileId,
             modelId,
@@ -2882,28 +2921,42 @@ export async function runEmbeddedAgent(
             warn: (message) => log.warn(message),
             maybeMarkAuthProfileFailure,
             maybeEscalateRateLimitProfileFallback,
+            maybeRetrySameModelRateLimit,
             maybeBackoffBeforeOverloadFailover,
             advanceAuthProfile: advanceAttemptAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {
+            const retryTraceResult =
+              assistantFailoverOutcome.retryKind === "same_model_rate_limit"
+                ? "same_model_rate_limit"
+                : assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
+                    assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : "rotate_profile";
             traceAttempts.push({
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
-              result:
-                assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
-                assistantFailoverReason === "timeout"
-                  ? "timeout"
-                  : "rotate_profile",
+              result: retryTraceResult,
               ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
               stage: "assistant",
             });
             if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
               sameModelIdleTimeoutRetries += 1;
             }
+            if (assistantFailoverOutcome.retryKind !== "same_model_rate_limit") {
+              consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+                retriesSoFar: consecutiveSameModelRateLimitRetries,
+                retriedSameModelRateLimit: false,
+              });
+            }
             lastRetryFailoverReason = assistantFailoverOutcome.lastRetryFailoverReason;
             continue;
           }
+          consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+            retriesSoFar: consecutiveSameModelRateLimitRetries,
+            retriedSameModelRateLimit: false,
+          });
           if (assistantFailoverOutcome.action === "throw") {
             traceAttempts.push({
               provider: activeErrorContext.provider,
@@ -2963,12 +3016,14 @@ export async function runEmbeddedAgent(
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
+            assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
+            isHeartbeatTrigger: params.trigger === "heartbeat",
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
@@ -3653,7 +3708,7 @@ export async function runEmbeddedAgent(
                         },
                       ]
                     : undefined,
-                fallbackUsed: traceAttempts.length > 0,
+                fallbackUsed: traceAttempts.some(traceAttemptUsesFallback),
                 runner: "embedded",
               },
               requestShaping: {

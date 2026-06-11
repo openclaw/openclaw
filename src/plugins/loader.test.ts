@@ -1178,6 +1178,128 @@ describe("loadOpenClawPlugins", () => {
     expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
   });
 
+  it("rolls back trusted policies when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "trusted-policy-register-fail",
+      filename: "trusted-policy-register-fail.cjs",
+      body: `module.exports = { id: "trusted-policy-register-fail", register(api) {
+  api.registerTrustedToolPolicy({
+    id: "failed-policy",
+    description: "Must be removed after register failure",
+    evaluate: () => ({ block: true, blockReason: "stale failed policy" })
+  });
+  throw new Error("register boom");
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { trustedToolPolicies: ["failed-policy"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["trusted-policy-register-fail"],
+      },
+    });
+
+    expect(registry.trustedToolPolicies ?? []).toHaveLength(0);
+    const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("register boom");
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "trusted-policy-register-fail",
+      message: "plugin failed during register: Error: register boom",
+    });
+  });
+
+  it("loads declared installed trusted policies through plugin manifests", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "trusted-policy-success",
+      filename: "trusted-policy-success.cjs",
+      body: `module.exports = { id: "trusted-policy-success", register(api) {
+  api.registerTrustedToolPolicy({
+    id: "declared-policy",
+    description: "Declared installed policy",
+    evaluate: () => ({ allow: true })
+  });
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { trustedToolPolicies: ["declared-policy"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["trusted-policy-success"],
+      },
+    });
+
+    expect(
+      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
+    ).toEqual([["trusted-policy-success", "declared-policy"]]);
+    expect(registry.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        pluginId: "trusted-policy-success",
+        message: "plugin must declare contracts.trustedToolPolicies for: declared-policy",
+      }),
+    );
+  });
+
+  it("keeps earlier trusted policies when a later plugin register fails", () => {
+    useNoBundledPlugins();
+    const stablePlugin = writePlugin({
+      id: "stable-trusted-policy",
+      filename: "stable-trusted-policy.cjs",
+      body: `module.exports = { id: "stable-trusted-policy", register(api) {
+  api.registerTrustedToolPolicy({
+    id: "stable-policy",
+    description: "Stable policy must survive later failures",
+    evaluate: () => ({ allow: true })
+  });
+} };`,
+    });
+    updatePluginManifest(stablePlugin, {
+      contracts: { trustedToolPolicies: ["stable-policy"] },
+    });
+    const failingPlugin = writePlugin({
+      id: "later-trusted-policy-register-fail",
+      filename: "later-trusted-policy-register-fail.cjs",
+      body: `module.exports = { id: "later-trusted-policy-register-fail", register(api) {
+  api.registerTrustedToolPolicy({
+    id: "failed-policy",
+    description: "Must be removed after register failure",
+    evaluate: () => ({ block: true, blockReason: "stale failed policy" })
+  });
+  throw new Error("register boom");
+} };`,
+    });
+    updatePluginManifest(failingPlugin, {
+      contracts: { trustedToolPolicies: ["failed-policy"] },
+    });
+
+    const registry = loadRegistryFromAllowedPlugins([stablePlugin, failingPlugin]);
+
+    expect(
+      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
+    ).toEqual([["stable-trusted-policy", "stable-policy"]]);
+    const failed = registry.plugins.find(
+      (entry) => entry.id === "later-trusted-policy-register-fail",
+    );
+    expect(failed?.status).toBe("error");
+    expect(failed?.error).toContain("register boom");
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "later-trusted-policy-register-fail",
+      message: "plugin failed during register: Error: register boom",
+    });
+  });
+
   it("can load scoped plugins from a supplied manifest registry without rereading manifests", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -5366,7 +5488,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins.map((entry) => entry.id)).toEqual(["target-plugin"]);
   });
 
-  it("only setup-loads a disabled channel plugin when the caller scopes to the selected plugin", () => {
+  it("does not setup-load an explicitly disabled channel plugin even when the caller scopes to it", () => {
     useNoBundledPlugins();
     const marker = path.join(makeTempDir(), "lazy-channel-imported.txt");
     const plugin = writePlugin({
@@ -5451,8 +5573,8 @@ module.exports = {
       onlyPluginIds: ["lazy-channel-plugin"],
     });
 
-    expect(fs.existsSync(marker)).toBe(true);
-    expect(scopedSetupRegistry.channelSetups).toHaveLength(1);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(scopedSetupRegistry.channelSetups).toHaveLength(0);
     expect(scopedSetupRegistry.channels).toHaveLength(0);
     expect(
       scopedSetupRegistry.plugins.find((entry) => entry.id === "lazy-channel-plugin")?.status,
@@ -5593,6 +5715,381 @@ module.exports = {
     );
   });
 
+  it("does not setup-load an untrusted config-origin channel plugin when the caller scopes to it", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "untrusted-load-path-channel-imported.txt");
+    const plugin = writePlugin({
+      id: "untrusted-load-path-channel",
+      filename: "untrusted-load-path-channel.cjs",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "untrusted-load-path-channel",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "untrusted-load-path-channel",
+        meta: {
+          id: "untrusted-load-path-channel",
+          label: "Untrusted Load Path Channel",
+          selectionLabel: "Untrusted Load Path Channel",
+          docsPath: "/channels/untrusted-load-path-channel",
+          blurb: "untrusted load-path setup gate",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "untrusted-load-path-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["untrusted-load-path-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const scopedSetupRegistry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+        },
+      },
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["untrusted-load-path-channel"],
+    });
+
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(scopedSetupRegistry.channelSetups).toHaveLength(0);
+    expect(scopedSetupRegistry.channels).toHaveLength(0);
+    expect(
+      scopedSetupRegistry.plugins.find((entry) => entry.id === "untrusted-load-path-channel")
+        ?.status,
+    ).toBe("disabled");
+  });
+
+  it("does not setup-load a denylisted config-origin channel plugin even when explicitly allowed", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "denylisted-load-path-channel-imported.txt");
+    const plugin = writePlugin({
+      id: "denylisted-load-path-channel",
+      filename: "denylisted-load-path-channel.cjs",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "denylisted-load-path-channel",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "denylisted-load-path-channel",
+        meta: {
+          id: "denylisted-load-path-channel",
+          label: "Denylisted Load Path Channel",
+          selectionLabel: "Denylisted Load Path Channel",
+          docsPath: "/channels/denylisted-load-path-channel",
+          blurb: "denylisted load-path setup gate",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "denylisted-load-path-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["denylisted-load-path-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const scopedSetupRegistry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["denylisted-load-path-channel"],
+          deny: ["denylisted-load-path-channel"],
+        },
+      },
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["denylisted-load-path-channel"],
+    });
+
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(scopedSetupRegistry.channelSetups).toHaveLength(0);
+    expect(scopedSetupRegistry.channels).toHaveLength(0);
+    expect(
+      scopedSetupRegistry.plugins.find((entry) => entry.id === "denylisted-load-path-channel")
+        ?.status,
+    ).toBe("disabled");
+  });
+
+  it("does not setup-load an untrusted global channel plugin when the caller scopes to it", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "untrusted-global-channel-imported.txt");
+    withStateDir((stateDir) => {
+      const globalDir = path.join(stateDir, "extensions", "untrusted-global-channel");
+      mkdirSafe(globalDir);
+      fs.writeFileSync(
+        path.join(globalDir, "index.cjs"),
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "untrusted-global-channel",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "untrusted-global-channel",
+        meta: {
+          id: "untrusted-global-channel",
+          label: "Untrusted Global Channel",
+          selectionLabel: "Untrusted Global Channel",
+          docsPath: "/channels/untrusted-global-channel",
+          blurb: "untrusted global setup gate",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(globalDir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: "untrusted-global-channel",
+            configSchema: EMPTY_PLUGIN_SCHEMA,
+            channels: ["untrusted-global-channel"],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(globalDir, "package.json"),
+        JSON.stringify(
+          {
+            name: "@openclaw/untrusted-global-channel",
+            version: "0.0.0-test",
+            main: "./index.cjs",
+            openclaw: {
+              extensions: ["./index.cjs"],
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const scopedSetupRegistry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+        includeSetupOnlyChannelPlugins: true,
+        onlyPluginIds: ["untrusted-global-channel"],
+      });
+
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(scopedSetupRegistry.channelSetups).toHaveLength(0);
+      expect(scopedSetupRegistry.channels).toHaveLength(0);
+      expect(
+        scopedSetupRegistry.plugins.find((entry) => entry.id === "untrusted-global-channel")
+          ?.status,
+      ).toBe("disabled");
+    });
+  });
+
+  it("setup-loads a trusted global channel plugin when the caller scopes to it", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "trusted-global-channel-imported.txt");
+    withStateDir((stateDir) => {
+      const globalDir = path.join(stateDir, "extensions", "trusted-global-channel");
+      mkdirSafe(globalDir);
+      fs.writeFileSync(
+        path.join(globalDir, "index.cjs"),
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "trusted-global-channel",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "trusted-global-channel",
+        meta: {
+          id: "trusted-global-channel",
+          label: "Trusted Global Channel",
+          selectionLabel: "Trusted Global Channel",
+          docsPath: "/channels/trusted-global-channel",
+          blurb: "trusted global setup gate",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(globalDir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: "trusted-global-channel",
+            configSchema: EMPTY_PLUGIN_SCHEMA,
+            channels: ["trusted-global-channel"],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(globalDir, "package.json"),
+        JSON.stringify(
+          {
+            name: "@openclaw/trusted-global-channel",
+            version: "0.0.0-test",
+            main: "./index.cjs",
+            openclaw: {
+              extensions: ["./index.cjs"],
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const scopedSetupRegistry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+            allow: ["trusted-global-channel"],
+          },
+        },
+        includeSetupOnlyChannelPlugins: true,
+        forceSetupOnlyChannelPlugins: true,
+        onlyPluginIds: ["trusted-global-channel"],
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(scopedSetupRegistry.channelSetups.map((entry) => entry.plugin.meta.label)).toEqual([
+        "Trusted Global Channel",
+      ]);
+      expect(scopedSetupRegistry.channels).toHaveLength(0);
+      expect(
+        scopedSetupRegistry.plugins.find((entry) => entry.id === "trusted-global-channel")?.status,
+      ).toBe("loaded");
+    });
+  });
+
+  it("does not setup-load an auto-enabled config-origin channel plugin without explicit trust", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "auto-enabled-load-path-channel-imported.txt");
+    const plugin = writePlugin({
+      id: "auto-enabled-load-path-channel",
+      filename: "auto-enabled-load-path-channel.cjs",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "auto-enabled-load-path-channel",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "auto-enabled-load-path-channel",
+        meta: {
+          id: "auto-enabled-load-path-channel",
+          label: "Auto Enabled Load Path Channel",
+          selectionLabel: "Auto Enabled Load Path Channel",
+          docsPath: "/channels/auto-enabled-load-path-channel",
+          blurb: "auto-enabled load-path setup gate",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "auto-enabled-load-path-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["auto-enabled-load-path-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const scopedSetupRegistry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        channels: {
+          "auto-enabled-load-path-channel": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [plugin.file] },
+        },
+      },
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["auto-enabled-load-path-channel"],
+    });
+
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(scopedSetupRegistry.channelSetups).toHaveLength(0);
+    expect(scopedSetupRegistry.channels).toHaveLength(0);
+    expect(
+      scopedSetupRegistry.plugins.find((entry) => entry.id === "auto-enabled-load-path-channel")
+        ?.status,
+    ).toBe("disabled");
+  });
+
   it.each([
     {
       name: "uses package setupEntry for selected setup-only channel loads",
@@ -5620,7 +6117,8 @@ module.exports = {
           onlyPluginIds: ["setup-entry-test"],
         }),
       expectFullLoaded: false,
-      expectSetupLoaded: true,
+      expectSetupLoaded: false,
+      expectedChannelSetups: 0,
       expectedChannels: 0,
     },
     {
@@ -5650,7 +6148,8 @@ module.exports = {
           onlyPluginIds: ["setup-only-bundled-contract-test"],
         }),
       expectFullLoaded: false,
-      expectSetupLoaded: true,
+      expectSetupLoaded: false,
+      expectedChannelSetups: 0,
       expectedChannels: 0,
     },
     {
@@ -5891,6 +6390,7 @@ module.exports = {
       load,
       expectFullLoaded,
       expectSetupLoaded,
+      expectedChannelSetups,
       expectedChannels,
       expectedSetupSecretId,
       expectSetupRuntimeLoaded,
@@ -5902,7 +6402,7 @@ module.exports = {
 
       expect(fs.existsSync(built.fullMarker)).toBe(expectFullLoaded);
       expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
-      expect(registry.channelSetups).toHaveLength(1);
+      expect(registry.channelSetups).toHaveLength(expectedChannelSetups ?? 1);
       expect(registry.channels).toHaveLength(expectedChannels);
       if (fixture.bundledSetupRuntimeMarker) {
         expect(fs.existsSync(fixture.bundledSetupRuntimeMarker)).toBe(

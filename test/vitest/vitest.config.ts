@@ -50,6 +50,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.media-understanding.config.ts",
   "test/vitest/vitest.shared-core.config.ts",
   "test/vitest/vitest.tasks.config.ts",
+  "test/vitest/vitest.tooling-docker.config.ts",
   "test/vitest/vitest.tooling-isolated.config.ts",
   "test/vitest/vitest.tooling.config.ts",
   "test/vitest/vitest.tui.config.ts",
