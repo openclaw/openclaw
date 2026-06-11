@@ -1,5 +1,5 @@
 ---
-summary: "Inert audit model for source-aware Security Matrix decisions"
+summary: "Audit model for source-aware Security Matrix decisions"
 title: "Security Matrix"
 read_when:
   - Reviewing source-aware security model groundwork
@@ -8,19 +8,19 @@ read_when:
 
 # Security Matrix
 
-Status: audit model only
+Status: audit model plus before-tool-call fact adapter
 
 ## Purpose
 
-The Security Matrix defines an inert audit classification model for runtime tool facts. It answers which actor requested a tool, which external or stored content influenced that decision, which capability the tool exposes, and which audit decision policy data assigns to those facts.
+The Security Matrix defines an audit classification model for runtime tool facts. It answers which actor requested a tool, which external or stored content influenced that decision, which capability the tool exposes, and which audit decision policy data assigns to those facts.
 
-The model is intentionally audit-only. It provides types, default policy data, a deterministic evaluator, concrete tool-fact helpers, tests, and this documentation so future PRs can add opt-in runtime visibility from a shared contract.
+The model is intentionally non-enforcing in this PR. It provides types, default policy data, a deterministic evaluator, concrete tool-fact helpers, a before-tool-call fact adapter, tests, and this documentation so future PRs can add opt-in runtime visibility from a shared contract.
 
-This PR does not currently block tool calls, require confirmation, emit runtime diagnostic events, add config, change UI, alter runtime tool execution, or change plugin behavior.
+This PR does not block tool calls, require confirmation at runtime, change UI, alter runtime tool execution, or change plugin behavior. The before-tool-call adapter only builds the audit event shape from explicit runtime facts; a runtime caller must opt in before publishing that event.
 
 ## Runtime Facts
 
-The model is designed around facts that a real before-tool-call consumer can supply later:
+The model is designed around facts that a real before-tool-call consumer can supply:
 
 | Fact             | Meaning                                                                   |
 | ---------------- | ------------------------------------------------------------------------- |
@@ -99,6 +99,12 @@ Multiple influence sources are evaluated independently, and the strictest decisi
 
 Custom policy overlays cannot weaken the default decision unless `allowPolicyWeakening` is set explicitly by the caller. This keeps ordinary custom policy from turning an external `exec` block into allow by accident.
 
+## Before-Tool-Call Adapter
+
+`createSecurityMatrixBeforeToolCallAuditEvent` converts explicit before-tool-call facts into the shared audit event shape. It defaults the actor to `agent`, the approval state to `not_required`, and the operator policy to `unknown` when the caller does not supply stronger runtime facts.
+
+`isSecurityMatrixBeforeToolCallAuditEnabled` defines the future opt-in config gate shape: `security.matrix.audit.enabled=true`. The adapter does not read global config, emit diagnostics, block, request confirmation, or mutate execution by itself.
+
 ## Example Evaluations
 
 - `actor=agent`, `influencedBy=[web_fetch]`, `capability=exec` = `block`
@@ -107,16 +113,16 @@ Custom policy overlays cannot weaken the default decision unless `allowPolicyWea
 - `actor=user`, `influencedBy=[]`, `capability=exec`, `operatorPolicy=allowed` = `allow`
 - unknown external source plus `exec` = `block` through `unknown_external`
 
-## Non-enforcement Note
+## Non-Enforcement Note
 
-This document describes the inert audit model introduced by the Security Matrix PR. It does not mean OpenClaw currently blocks, confirms, warns, audits, or emits runtime events based on these decisions. Runtime wiring and enforcement must be added in later opt-in PRs.
+This document describes the audit model introduced by the Security Matrix PR. It does not mean OpenClaw currently blocks, confirms, warns, emits runtime diagnostics, or exposes UI based on these decisions. Runtime diagnostic wiring and enforcement must be added in later opt-in PRs.
 
 Runtime audit wiring must use real tool-call facts from the existing before-tool-call policy path. Enforcement must also be a future opt-in PR.
 
 ## Future PR Sequence
 
-1. Inert runtime-fact model, evaluator, and audit event builder.
-2. Opt-in runtime audit event wiring through the real tool-call policy path.
+1. Inert runtime-fact model, evaluator, audit event builder, and before-tool-call fact adapter.
+2. Opt-in runtime diagnostic event wiring through the real tool-call policy path.
 3. User-invoked CLI visibility.
 4. Opt-in narrow enforcement for high-confidence dangerous transitions.
 5. Optional opt-in plugin or UI visualization.
