@@ -1042,17 +1042,55 @@ function visibleCatalogEntries(
     : catalog.entries;
 }
 
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[] = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = temp;
+    }
+  }
+  return dp[n];
+}
+
+function formatUnknownToolError(
+  needle: string,
+  entries: ToolSearchCatalogEntry[],
+): string {
+  if (entries.length === 0) {
+    return `Unknown tool id: ${needle}`;
+  }
+  const scored = entries
+    .map((e) => ({
+      entry: e,
+      dist: Math.min(
+        levenshtein(needle, e.id),
+        levenshtein(needle, e.name),
+      ),
+    }))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 3);
+  const hints = scored.map((s) => `  - ${s.entry.name} (${s.entry.description})`).join("\n");
+  return `Unknown tool id: ${needle}. Did you mean:\n${hints}\nUse tool_search to discover available tools.`;
+}
+
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
   options?: CatalogVisibilityOptions,
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
-  const entry = visibleCatalogEntries(catalog, options).find(
+  const entries = visibleCatalogEntries(catalog, options);
+  const entry = entries.find(
     (candidate) => candidate.id === needle || candidate.name === needle,
   );
   if (!entry) {
-    throw new ToolInputError(`Unknown tool id: ${needle}`);
+    throw new ToolInputError(formatUnknownToolError(needle, entries));
   }
   return entry;
 }
@@ -1061,7 +1099,7 @@ function findEntryByExactId(catalog: ToolSearchCatalogSession, id: string): Tool
   const needle = id.trim();
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
-    throw new ToolInputError(`Unknown tool id: ${needle}`);
+    throw new ToolInputError(formatUnknownToolError(needle, catalog.entries));
   }
   return entry;
 }
