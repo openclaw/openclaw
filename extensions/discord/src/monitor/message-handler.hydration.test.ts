@@ -48,7 +48,7 @@ function createDefaultReplyPayload(overrides = {}) {
   });
 }
 
-function createReferencedMessagePayload(content: string) {
+function createReferencedMessagePayload(content: string, overrides = {}) {
   return createMessagePayload({
     id: "m0",
     content,
@@ -58,6 +58,7 @@ function createReferencedMessagePayload(content: string) {
       discriminator: "0",
       avatar: null,
     },
+    ...overrides,
   });
 }
 
@@ -180,5 +181,91 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     });
 
     expect(rest.calls).toHaveLength(0);
+  });
+
+  it("does not hydrate reply messages that already include referenced_message", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient([]);
+    const message = new Message(
+      client,
+      createDefaultReplyPayload({
+        id: "m2",
+        content: "normal reply",
+        message_reference: {
+          type: MessageReferenceType.Default,
+          channel_id: "c1",
+          message_id: "m1",
+        },
+        referenced_message: createReferencedMessagePayload("bot reply", {
+          id: "m1",
+          author: {
+            id: "bot-1",
+            username: "OpenClaw",
+            discriminator: "0",
+            global_name: null,
+            avatar: null,
+            bot: true,
+          },
+        }),
+      }),
+    );
+
+    const hydrated = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(rest.calls).toHaveLength(0);
+    expect(hydrated).toBe(message);
+  });
+
+  it("hydrates reply messages that have content but are missing referenced_message", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient([
+      createDefaultReplyPayload({
+        id: "m2",
+        content: "why did this get ignored?",
+        message_reference: {
+          type: MessageReferenceType.Default,
+          channel_id: "c1",
+          message_id: "m1",
+        },
+        referenced_message: createReferencedMessagePayload("bot reply", {
+          id: "m1",
+          author: {
+            id: "bot-1",
+            username: "OpenClaw",
+            discriminator: "0",
+            global_name: null,
+            avatar: null,
+            bot: true,
+          },
+        }),
+      }),
+    ]);
+    const message = new Message(
+      client,
+      createDefaultReplyPayload({
+        id: "m2",
+        content: "why did this get ignored?",
+        message_reference: {
+          type: MessageReferenceType.Default,
+          channel_id: "c1",
+          message_id: "m1",
+        },
+        referenced_message: null,
+      }),
+    );
+
+    const hydrated = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(rest.calls).toHaveLength(1);
+    expect(hydrated.referencedMessage?.author?.id).toBe("bot-1");
+    expect(hydrated.messageReference?.message_id).toBe("m1");
   });
 });

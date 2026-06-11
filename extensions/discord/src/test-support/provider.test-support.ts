@@ -507,6 +507,8 @@ vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
   DiscordInteractionListener: function DiscordInteractionListener() {},
   DiscordMessageListener: function DiscordMessageListener() {},
   DiscordPresenceListener: function DiscordPresenceListener() {},
+  DiscordReconnectBackfillReadyListener: function DiscordReconnectBackfillReadyListener() {},
+  DiscordReconnectBackfillResumedListener: function DiscordReconnectBackfillResumedListener() {},
   DiscordReactionListener: function DiscordReactionListener() {},
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},

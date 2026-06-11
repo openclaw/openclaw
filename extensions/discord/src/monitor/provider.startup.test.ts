@@ -77,6 +77,12 @@ vi.mock("./listeners.js", () => ({
   DiscordPresenceListener: function DiscordPresenceListener() {
     return { type: "presence" };
   },
+  DiscordReconnectBackfillReadyListener: function DiscordReconnectBackfillReadyListener() {
+    return { type: "ready" };
+  },
+  DiscordReconnectBackfillResumedListener: function DiscordReconnectBackfillResumedListener() {
+    return { type: "resumed" };
+  },
   DiscordReactionListener: function DiscordReactionListener() {
     return { type: "reaction-add" };
   },
@@ -380,7 +386,13 @@ describe("registerDiscordMonitorListeners", () => {
   it("skips reaction listeners when every configured guild disables reactions and DMs are off", () => {
     registerDiscordMonitorListeners(createListenerParams());
 
-    expect(registeredListenerTypes()).toEqual(["interaction", "message", "thread-update"]);
+    expect(registeredListenerTypes()).toEqual([
+      "interaction",
+      "message",
+      "ready",
+      "resumed",
+      "thread-update",
+    ]);
   });
 
   it("keeps reaction listeners when direct messages can emit reaction notifications", () => {

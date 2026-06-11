@@ -12,6 +12,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { recordRecentDiscordOutboundMessage } from "./recent-outbound.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { createDiscordSendResult, type DiscordReceiptResultSource } from "./send.receipt.js";
 import {
@@ -305,6 +306,11 @@ export async function sendMessageDiscord(
       accountId: accountInfo.accountId,
       direction: "outbound",
     });
+    recordRecentDiscordOutboundMessage({
+      accountId: accountInfo.accountId,
+      channelId: resultChannelId,
+      messageId,
+    });
     return toDiscordSendResult(
       {
         id: messageId,
@@ -368,6 +374,11 @@ export async function sendMessageDiscord(
     channel: "discord",
     accountId: accountInfo.accountId,
     direction: "outbound",
+  });
+  recordRecentDiscordOutboundMessage({
+    accountId: accountInfo.accountId,
+    channelId: result.channel_id ?? channelId,
+    messageId: result.id,
   });
   return toDiscordSendResult(result, channelId, {
     kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",

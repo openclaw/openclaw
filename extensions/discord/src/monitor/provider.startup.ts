@@ -31,6 +31,8 @@ import {
   DiscordMessageListener,
   DiscordInteractionListener,
   DiscordPresenceListener,
+  DiscordReconnectBackfillReadyListener,
+  DiscordReconnectBackfillResumedListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   DiscordThreadUpdateListener,
@@ -261,7 +263,27 @@ export function registerDiscordMonitorListeners(params: {
   );
   registerDiscordListener(
     params.client.listeners,
-    new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
+    new DiscordMessageListener(
+      params.messageHandler,
+      params.logger,
+      params.trackInboundEvent,
+      params.accountId,
+    ),
+  );
+  const reconnectBackfillParams = {
+    accountId: params.accountId,
+    messageHandler: params.messageHandler,
+    botUserId: params.botUserId,
+    logger: params.logger,
+    onEvent: params.trackInboundEvent,
+  };
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordReconnectBackfillReadyListener(reconnectBackfillParams),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordReconnectBackfillResumedListener(reconnectBackfillParams),
   );
 
   if (shouldRegisterDiscordReactionListeners(params)) {
