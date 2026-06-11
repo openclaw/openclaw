@@ -643,6 +643,18 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
+  // A deliberate silent-reply token (e.g. NO_REPLY) with no deliverable payloads
+  // should be treated as a successful silent turn regardless of the silence flag.
+  // This prevents empty-response retries and model-fallback cascades when the
+  // assistant intentionally chose silence. (#92038)
+  if (
+    params.payloadCount === 0 &&
+    !params.aborted &&
+    !params.timedOut &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
+  ) {
+    return true;
+  }
   if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipPlanningOnlyRetry(params)) {
     return false;
   }
