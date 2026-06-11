@@ -223,11 +223,10 @@ describe("media understanding attachments SSRF", () => {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
-      const cache = new MediaAttachmentCache({
-        attachments: [{ index: 0, path: relativePath }],
+      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
         localPathRoots: [path.join(cwd, "media"), path.join(stateDir, "media")],
       });
-      const result = await cache.getBuffer(0);
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
 
       expect(result.buffer.toString()).toBe("cwd-media");
     });
