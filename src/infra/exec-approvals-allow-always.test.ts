@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import {
+  makeExecutable,
   makeMockCommandResolution,
   makeMockExecutableResolution,
   makePathEnv,
@@ -20,14 +21,6 @@ import {
 import { matchAllowlist } from "./exec-command-resolution.js";
 
 describe("resolveAllowAlwaysPatterns", () => {
-  function makeExecutable(dir: string, name: string): string {
-    const fileName = process.platform === "win32" ? `${name}.exe` : name;
-    const exe = path.join(dir, fileName);
-    fs.writeFileSync(exe, "");
-    fs.chmodSync(exe, 0o755);
-    return exe;
-  }
-
   function resolvePersistedPatterns(params: {
     command: string;
     dir: string;

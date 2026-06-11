@@ -1,21 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { detectPolicyInlineEval } from "./command-analysis/policy.js";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateShellAllowlistWithAuthorization,
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalAllowedDecisions,
 } from "./exec-approvals.js";
-
-function makeExecutable(dir: string, name: string): string {
-  const fileName = process.platform === "win32" ? `${name}.exe` : name;
-  const exe = path.join(dir, fileName);
-  fs.writeFileSync(exe, "");
-  fs.chmodSync(exe, 0o755);
-  return exe;
-}
 
 describe("authorization-backed exec allowlist", () => {
   it("keeps later inline-eval segments visible when durable planning fails", async () => {

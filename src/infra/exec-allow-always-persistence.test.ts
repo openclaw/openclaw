@@ -1,22 +1,12 @@
 // Tests shared allow-always persistence decisions for command authorization plans.
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveCommandResolutionFromArgv } from "./exec-approvals-analysis.js";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalAllowedDecisions,
 } from "./exec-approvals.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
-
-function makeExecutable(dir: string, name: string): string {
-  const fileName = process.platform === "win32" ? `${name}.exe` : name;
-  const exe = path.join(dir, fileName);
-  fs.writeFileSync(exe, "");
-  fs.chmodSync(exe, 0o755);
-  return exe;
-}
 
 function plannedSegments(plan: Awaited<ReturnType<typeof planShellAuthorization>>) {
   return plan.ok

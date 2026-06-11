@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "./exec-authorization-render.js";
 
@@ -13,14 +13,6 @@ function renderOk(result: ReturnType<typeof buildAuthorizedShellCommandFromPlan>
     throw new Error(result.reason);
   }
   return result.command;
-}
-
-function makeExecutable(dir: string, name: string): string {
-  const fileName = process.platform === "win32" ? `${name}.exe` : name;
-  const exe = path.join(dir, fileName);
-  fs.writeFileSync(exe, "");
-  fs.chmodSync(exe, 0o755);
-  return exe;
 }
 
 describe("exec authorization renderer", () => {
