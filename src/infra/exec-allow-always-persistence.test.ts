@@ -47,7 +47,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("uses exact-command fallback for shell wrappers without reusable patterns", async () => {
+  it("keeps shell wrappers without reusable patterns one-shot", async () => {
     const command = "sh -c './scripts/run.sh'";
     const plan = await planShellAuthorization({ command });
 
@@ -58,11 +58,18 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       authorizationPlan: plan,
     });
 
-    expect(decision).toEqual({ kind: "exact-command", commandText: command });
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
+      "allow-once",
+      "deny",
+    ]);
   });
 
   it.each(["bash --login -c 'echo ok'", "bash -i -c 'echo ok'"])(
-    "uses exact-command fallback for startup shell wrappers: %s",
+    "keeps startup shell wrappers one-shot: %s",
     async (command) => {
       const plan = await planShellAuthorization({ command });
 
@@ -73,7 +80,14 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
         authorizationPlan: plan,
       });
 
-      expect(decision).toEqual({ kind: "exact-command", commandText: command });
+      expect(decision).toEqual({
+        kind: "one-shot",
+        reasons: expect.arrayContaining(["no-reusable-pattern"]),
+      });
+      expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
+        "allow-once",
+        "deny",
+      ]);
     },
   );
 

@@ -1614,7 +1614,6 @@ export type AllowAlwaysPersistenceReason =
 
 export type AllowAlwaysPersistenceDecision =
   | { kind: "patterns"; patterns: AllowAlwaysPattern[]; commandText?: string }
-  | { kind: "exact-command"; commandText: string }
   | { kind: "one-shot"; reasons: AllowAlwaysPersistenceReason[] };
 
 function hasRuntimeShellPayload(argv: readonly string[]): boolean {
@@ -1637,6 +1636,9 @@ function resolvePlanPersistenceState(plan: ExecAuthorizationPlan | undefined): {
   for (const candidate of plan.groups.flatMap((group) => group.candidates)) {
     if (candidate.trustMode === "prompt-only") {
       reasons.add("prompt-only");
+    }
+    if (candidate.trustMode === "exact-command") {
+      reasons.add("no-reusable-pattern");
     }
     if (candidate.trustMode === "executable" && !candidate.allowAlways) {
       reasons.add("no-reusable-pattern");
@@ -1692,11 +1694,7 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
     }
   }
 
-  const commandText = params.commandText?.trim();
-  if (commandText) {
-    return { kind: "exact-command", commandText };
-  }
-  return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
+  return { kind: "one-shot", reasons: [...reasons, "no-reusable-pattern"] };
 }
 
 export function persistAllowAlwaysDecision(params: {
@@ -1705,10 +1703,6 @@ export function persistAllowAlwaysDecision(params: {
   decision: AllowAlwaysPersistenceDecision;
 }): void {
   if (params.decision.kind === "one-shot") {
-    return;
-  }
-  if (params.decision.kind === "exact-command") {
-    addDurableCommandApproval(params.approvals, params.agentId, params.decision.commandText);
     return;
   }
   for (const pattern of params.decision.patterns) {
