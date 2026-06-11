@@ -240,6 +240,8 @@ function formatSessionRunStatus(status: SessionRunStatus): string {
       return t("sessionsView.statusKilled");
     case "timeout":
       return t("sessionsView.statusTimeout");
+    case "paused":
+      return t("sessionsView.statusPaused");
     default:
       return t("sessionsView.statusUnknown");
   }
@@ -249,6 +251,13 @@ function resolveSessionStatusBadge(row: GatewaySessionRow): {
   label: string;
   tone: "live" | "idle" | "done" | "failed" | "muted";
 } {
+  // Paused (sessions_yield) sessions are nonterminal but not actively running.
+  // Render them with the explicit Paused label and the idle tone instead of
+  // falling through to the live badge, which would misrepresent the yielded
+  // run as still streaming output.
+  if (row.status === "paused") {
+    return { label: formatSessionRunStatus("paused"), tone: "idle" };
+  }
   if (isSessionRunActive(row)) {
     return { label: t("sessionsView.statusLive"), tone: "live" };
   }

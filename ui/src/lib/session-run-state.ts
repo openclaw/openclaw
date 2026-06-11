@@ -7,6 +7,15 @@ type SessionRunState = {
 };
 
 export function isSessionRunActive(state: SessionRunState): boolean {
+  // Paused (sessions_yield) sessions are nonterminal: the run ended via yield
+  // but a queued continuation is still pending. UI consumers (reconciler,
+  // restart-recovery, sessions-list selection) must not treat them like a
+  // finished run, otherwise the yield + continuation flow looks like an
+  // interrupted/killed run in the UI. Mirrors the gateway-side nonterminal
+  // set (running + paused).
+  if (state.status === "paused") {
+    return true;
+  }
   if (state.status && state.status !== "running") {
     return false;
   }

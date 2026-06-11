@@ -214,6 +214,15 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (candidateSessionKey !== configuredMainSessionKey) {
     return undefined;
   }
+  if (params.entry.status === "paused") {
+    // A yielded paused main session can carry a positive `endedAt` from the
+    // sessions_yield event even though its queued continuation has not landed
+    // yet. Treating it as terminal would let agent dispatch, auto-reply, and
+    // session-command callers run transcript freshness/rotation logic while
+    // the queued continuation is still pending, defeating the nonterminal
+    // invariant the paused status preserves.
+    return undefined;
+  }
   const hasTerminalLifecycle =
     isTerminalSessionStatus(params.entry.status) ||
     resolvePositiveTimestamp(params.entry.endedAt) !== undefined;

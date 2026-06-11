@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { isFailedSessionStatus, staleSessionState, workboardCardSessionKey } from "./card-state.ts";
 import { isRecord } from "./normalization-utils.ts";
 import { getWorkboardRuntime, type WorkboardHost } from "./runtime.ts";
@@ -78,7 +79,11 @@ export function getWorkboardLifecycle(
       sourceUpdatedAt: sessionUpdatedAtValue(session),
     };
   }
-  if (session.hasActiveRun === true || session.status === "running") {
+  // Shared `isSessionRunActive` keeps paused (sessions_yield) sessions in the
+  // running lifecycle: a paused session still has a queued continuation, so
+  // reporting it done/review would mark the yield resolved while the runner
+  // is about to drain the continuation.
+  if (isSessionRunActive(session)) {
     return {
       session,
       state: "running",

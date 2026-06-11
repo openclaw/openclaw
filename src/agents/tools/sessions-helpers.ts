@@ -38,7 +38,7 @@ type SessionListDeliveryContext = {
 };
 
 /** Compact run status shown by session tools. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout" | "paused";
 
 /** Full Gateway session row consumed by session orchestration internals. */
 export type GatewaySessionListRow = {

@@ -40,7 +40,14 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
-  "updatedAt" | "status" | "lastRunError" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  | "updatedAt"
+  | "status"
+  | "lastRunError"
+  | "startedAt"
+  | "endedAt"
+  | "runtimeMs"
+  | "abortedLastRun"
+  | "pauseReason"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
@@ -179,6 +186,10 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
       endedAt: undefined,
       runtimeMs: undefined,
       abortedLastRun: false,
+      // A fresh run drains the previously queued yield continuation, so the
+      // paused marker no longer applies. Mirrors how the subagent registry
+      // clears `pauseReason` on completion (see subagent-registry-lifecycle).
+      pauseReason: undefined,
     };
   }
 
@@ -196,7 +207,16 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
     error: params.event.data?.error,
   });
   const terminal = yieldedWaiting ? undefined : resolveTerminalOutcome(params.event);
-  const status = terminal ? mapAgentRunTerminalOutcomeToSessionStatus(terminal) : "running";
+  // A yielded run ended cleanly but the session is awaiting a queued
+  // continuation: project it as paused (not running/done) so restart
+  // recovery, dashboards, and channels do not race the follow-up turn. The
+  // canonical yield derivation stays in isAgentLifecycleYieldedWaiting, so
+  // error end-events carrying `yielded: true` still resolve terminally.
+  const status = terminal
+    ? mapAgentRunTerminalOutcomeToSessionStatus(terminal)
+    : yieldedWaiting
+      ? "paused"
+      : "running";
   return {
     updatedAt,
     status,
@@ -209,6 +229,9 @@ function deriveGatewaySessionLifecycleSnapshot(params: {
       existingRuntimeMs: existing?.runtimeMs,
     }),
     abortedLastRun: status === "killed",
+    // Gate the marker on the derived status so error end-events carrying
+    // `yielded: true` do not leak `sessions_yield` into failed rows.
+    pauseReason: status === "paused" ? "sessions_yield" : undefined,
   };
 }
 
