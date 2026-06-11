@@ -11,7 +11,8 @@ DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
-OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"
+RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"
 
 resolve_credential_source() {
   if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
@@ -214,10 +215,10 @@ done
 
 run_logged() {
   if ! "$@" >"$run_log" 2>&1; then
-    cat "$run_log"
+    docker_e2e_print_log "$run_log"
     exit 1
   fi
-  cat "$run_log"
+  docker_e2e_print_log "$run_log"
   >"$run_log"
 }
 
@@ -296,7 +297,7 @@ dump_hotpath_logs() {
     /tmp/openclaw-npm-telegram-doctor-check.log; do
     if [ -f "$file" ]; then
       echo "--- $file ---" >&2
-      sed -n '1,220p' "$file" >&2 || true
+      openclaw_e2e_print_log "$file" >&2
     fi
   done
 }

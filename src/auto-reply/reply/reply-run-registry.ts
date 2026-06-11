@@ -1,3 +1,4 @@
+// Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   markDiagnosticEmbeddedRunEnded,
@@ -515,6 +516,11 @@ export function resolveActiveReplyRunThreadId(sessionKey: string): string | numb
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
+}
+
+export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  return Boolean(operation && operation.phase !== "queued");
 }
 
 export function isReplyRunStreamingForSessionId(sessionId: string): boolean {

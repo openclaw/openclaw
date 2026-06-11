@@ -1,3 +1,4 @@
+/** Collects and renders gateway health for channels, agents, plugins, and sessions. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
@@ -13,14 +14,17 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import {
   buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
+  isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -38,6 +42,11 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import {
+  buildCredentialsRequiredHealthDiagnostic,
+  GATEWAY_HEALTH_REACHABLE_LINE,
+  gatewayProbeResultSawGateway,
+} from "./gateway-health-auth-diagnostic.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type {
   AgentHealthSummary,
@@ -93,6 +102,8 @@ const buildNonSensitiveProbeFailure = (
     return undefined;
   }
 
+  // Preserve the actionable Full Disk Access failure while stripping the local
+  // username path before health leaves the gateway.
   const error = redactIMessageProbeErrorMessage(record.error);
   if (
     !/\bimsg\b/i.test(error) ||
@@ -147,6 +158,7 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
+/** Formats optional model-pricing cache degradation for text health output. */
 export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
   const modelPricing = summary.modelPricing;
   if (!modelPricing || modelPricing.state === "disabled") {
@@ -176,6 +188,7 @@ function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefin
   return quarantined.length > 0 ? { quarantined } : undefined;
 }
 
+/** Formats context engine quarantine state for text health output. */
 export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
   const quarantined = summary.contextEngines?.quarantined ?? [];
   if (quarantined.length === 0) {
@@ -395,6 +408,7 @@ async function resolveHealthAccountContext(params: {
   };
 }
 
+/** Builds the gateway-side health snapshot for channels, agents, plugins, and sessions. */
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
@@ -463,6 +477,8 @@ export async function getHealthSnapshot(params?: {
         ),
       ),
     );
+    // Probe preferred/default/bound accounts first, but include all configured
+    // accounts so verbose health can explain account-specific failures.
     debugHealth("channel", {
       id: plugin.id,
       accountIds,
@@ -615,6 +631,7 @@ export async function getHealthSnapshot(params?: {
   return summary;
 }
 
+/** Runs the `openclaw health` command against the gateway and renders JSON or text. */
 export async function healthCommand(
   opts: {
     json?: boolean;
@@ -647,6 +664,36 @@ export async function healthCommand(
         }),
     );
   } catch (error) {
+    if (isGatewayCredentialsRequiredError(error)) {
+      const details = await buildGatewayProbeConnectionDetails({
+        config: cfg,
+        token: opts.token,
+        password: opts.password,
+      });
+      const probe = await probeGatewayStatus({
+        url: details.url,
+        token: opts.token,
+        password: opts.password,
+        tlsFingerprint: details.tlsFingerprint,
+        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+        timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        config: cfg,
+        json: opts.json,
+      });
+      if (gatewayProbeResultSawGateway(probe)) {
+        const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+        if (opts.json) {
+          writeRuntimeJson(runtime, diagnostic);
+          runtime.exit(1);
+          return;
+        }
+        runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+        runtime.log(diagnostic.error.message);
+        runtime.exit(1);
+        return;
+      }
+      throw error;
+    }
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
       if (payload) {
@@ -676,18 +723,21 @@ export async function healthCommand(
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const fallbackAgents: AgentHealthSummary[] = [];
-    for (const entry of localAgents.ordered) {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-      fallbackAgents.push({
-        agentId: entry.id,
-        name: entry.name,
-        isDefault: entry.id === localAgents.defaultAgentId,
-        heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-        sessions: await buildSessionSummary(storePath),
-      });
-    }
-    const resolvedAgents = agents.length > 0 ? agents : fallbackAgents;
+    const resolvedAgents =
+      agents.length > 0
+        ? agents
+        : await Promise.all(
+            localAgents.ordered.map(async (entry) => {
+              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              return {
+                agentId: entry.id,
+                name: entry.name,
+                isDefault: entry.id === localAgents.defaultAgentId,
+                heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+                sessions: await buildSessionSummary(storePath),
+              } satisfies AgentHealthSummary;
+            }),
+          );
     const displayAgents = opts.verbose
       ? resolvedAgents
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);

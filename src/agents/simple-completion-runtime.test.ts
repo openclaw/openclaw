@@ -1,7 +1,11 @@
+// Simple completion runtime tests cover model resolution, provider auth, and
+// one-shot completion wiring before requests reach the shared LLM stream path.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 
+// Hoisted mocks keep Vitest module replacement stable while the implementation
+// under test imports auth, model resolution, and transport helpers at module load.
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
@@ -271,8 +275,8 @@ describe("prepareSimpleCompletionModel", () => {
       return;
     }
 
-    // The returned auth.apiKey should be the exchanged runtime token,
-    // not the original GitHub token
+    // Callers must only receive the short-lived Copilot runtime token. The
+    // original GitHub token is broader auth material and must not leave prep.
     expect(result.auth.apiKey).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
   });
@@ -468,6 +472,26 @@ describe("prepareSimpleCompletionModel", () => {
       {
         skipAgentDiscovery: true,
       },
+    );
+  });
+
+  it("can preserve asynchronous provider model discovery", async () => {
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      useAsyncModelResolution: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
+    });
+
+    expectPreparedModelResult(result);
+    expect(hoisted.resolveModelMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      {},
     );
   });
 

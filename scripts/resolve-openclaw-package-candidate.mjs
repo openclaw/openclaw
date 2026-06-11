@@ -185,14 +185,11 @@ function run(command, args, options = {}) {
     };
     const terminateChild = () => {
       killChild("SIGTERM");
-      killTimer = setTimeout(
-        () => {
-          killTimer = undefined;
-          killChild("SIGKILL");
-          timeoutReject?.();
-        },
-        options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
-      );
+      killTimer = setTimeout(() => {
+        killTimer = undefined;
+        killChild("SIGKILL");
+        timeoutReject?.();
+      }, options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS);
     };
     const timeout =
       options.timeoutMs === undefined
@@ -441,6 +438,25 @@ async function preparePackageSourceWorktree(ref) {
   await run("git", ["worktree", "add", "--detach", sourceDir, selectedSha]);
   return { selectedSha, sourceDir, trustedReason };
 }
+
+async function cleanupPackageSourceWorktree(
+  sourceDir,
+  { resolveError, runImpl = run, consoleError = console.error } = {},
+) {
+  try {
+    await runImpl("git", ["worktree", "remove", "--force", sourceDir]);
+  } catch (cleanupError) {
+    if (!resolveError) {
+      throw cleanupError;
+    }
+    const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    consoleError(
+      `warning: failed to remove temporary package source worktree ${sourceDir}: ${message}`,
+    );
+  }
+}
+
+export const cleanupPackageSourceWorktreeForTest = cleanupPackageSourceWorktree;
 
 async function installPackageSourceDeps(sourceDir) {
   await run(
@@ -1122,6 +1138,7 @@ async function resolveCandidate(options) {
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
   let artifactMetadata = {};
+  let resolveError;
 
   try {
     if (options.source === "ref") {
@@ -1198,9 +1215,12 @@ async function resolveCandidate(options) {
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
+  } catch (error) {
+    resolveError = error;
+    throw error;
   } finally {
     if (packageWorktreeDir) {
-      await run("git", ["worktree", "remove", "--force", packageWorktreeDir]).catch(() => {});
+      await cleanupPackageSourceWorktree(packageWorktreeDir, { resolveError });
     }
   }
 

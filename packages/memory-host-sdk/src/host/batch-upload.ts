@@ -1,3 +1,4 @@
+// Memory Host SDK module implements batch upload behavior.
 import {
   buildBatchHeaders,
   normalizeBatchBaseUrl,
@@ -7,6 +8,9 @@ import { hashText } from "./hash.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import { readResponseJsonWithLimit, readResponseTextSnippet } from "./response-snippet.js";
 
+// Uploads provider batch JSONL payloads through the shared remote HTTP guard.
+
+/** Upload embedding batch requests and return the provider file id. */
 export async function uploadBatchJsonlFile(params: {
   client: BatchHttpClientConfig;
   requests: unknown[];
@@ -26,6 +30,7 @@ export async function uploadBatchJsonlFile(params: {
   const filePayload = await withRemoteHttpResponse({
     url: `${baseUrl}/files`,
     ssrfPolicy: params.client.ssrfPolicy,
+    fetchImpl: params.client.fetchImpl,
     init: {
       method: "POST",
       headers: buildBatchHeaders(params.client, { json: false }),

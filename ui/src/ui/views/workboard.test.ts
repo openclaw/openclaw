@@ -1,10 +1,32 @@
-import { render } from "lit";
+// Control UI tests cover workboard behavior.
+import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getWorkboardState } from "../controllers/workboard.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { renderWorkboard } from "./workboard.ts";
 
 type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
+
+function nextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function renderInto(container: HTMLElement, props: WorkboardRenderProps) {
+  render(renderWorkboard(props), container);
+}
+
+function dispatchKey(target: EventTarget, key: string, options: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
 
 describe("renderWorkboard", () => {
   it("renders board columns and preloaded cards", () => {
@@ -172,6 +194,251 @@ describe("renderWorkboard", () => {
     expect(onOpenSession).not.toHaveBeenCalled();
   });
 
+  it("keeps focus inside the card modal and restores focus on Escape", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      const launcher = container.querySelector<HTMLButtonElement>(
+        ".workboard-toolbar__actions .primary",
+      );
+      expect(launcher).toBeInstanceOf(HTMLButtonElement);
+      launcher?.focus();
+      launcher?.click();
+      await nextFrame();
+
+      const modal = container.querySelector<HTMLElement>(".workboard-draft");
+      const titleInput = container.querySelector<HTMLInputElement>(".workboard-draft__title");
+      const main = container.querySelector<HTMLElement>(".workboard-main");
+      expect(modal?.getAttribute("role")).toBe("dialog");
+      expect(modal?.getAttribute("aria-modal")).toBe("true");
+      expect(modal?.getAttribute("aria-labelledby")).toBe("workboard-card-modal-title");
+      expect(modal?.getAttribute("aria-describedby")).toBe("workboard-card-modal-description");
+      expect(container.querySelector("#workboard-card-modal-title")?.textContent).toContain(
+        "New card",
+      );
+      expect(container.querySelector("#workboard-card-modal-description")?.textContent).toContain(
+        "Queue work",
+      );
+      expect(document.activeElement).toBe(titleInput);
+      expect(main?.hasAttribute("inert")).toBe(true);
+      expect(main?.getAttribute("aria-hidden")).toBe("true");
+
+      const cancel = [...modal!.querySelectorAll<HTMLButtonElement>("button")].at(-1);
+      const close = modal!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
+      expect(cancel).toBeInstanceOf(HTMLButtonElement);
+      expect(close).toBeInstanceOf(HTMLButtonElement);
+      cancel?.focus();
+      const tab = dispatchKey(cancel!, "Tab");
+      expect(tab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(close);
+
+      const shiftTab = dispatchKey(close!, "Tab", { shiftKey: true });
+      expect(shiftTab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(cancel);
+
+      dispatchKey(titleInput!, "Escape");
+      await nextFrame();
+      expect(container.querySelector(".workboard-draft")).toBeNull();
+      expect(main?.hasAttribute("inert")).toBe(false);
+      expect(document.activeElement).toBe(launcher);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it("treats the detail drawer as a labelled keyboard-modal dialog", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Inspect drawer focus",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      const launcher = container.querySelector<HTMLButtonElement>(
+        "button[aria-label='View details']",
+      );
+      expect(launcher).toBeInstanceOf(HTMLButtonElement);
+      launcher?.focus();
+      launcher?.click();
+      await nextFrame();
+
+      const drawer = container.querySelector<HTMLElement>(".workboard-detail-drawer");
+      const main = container.querySelector<HTMLElement>(".workboard-main");
+      expect(drawer?.getAttribute("role")).toBe("dialog");
+      expect(drawer?.getAttribute("aria-modal")).toBe("true");
+      expect(drawer?.getAttribute("aria-labelledby")).toBe("workboard-card-detail-title");
+      expect(drawer?.getAttribute("aria-describedby")).toBe("workboard-card-detail-description");
+      expect(container.querySelector("#workboard-card-detail-title")?.textContent).toContain(
+        "Card details: Inspect drawer focus",
+      );
+      expect(container.querySelector("#workboard-card-detail-description")?.textContent).toContain(
+        "Start or link a session",
+      );
+      expect(document.activeElement).toBe(drawer);
+      expect(main?.hasAttribute("inert")).toBe(true);
+      expect(main?.getAttribute("aria-hidden")).toBe("true");
+
+      const close = drawer!.querySelector<HTMLButtonElement>("button[aria-label='Cancel']");
+      const tab = dispatchKey(drawer!, "Tab");
+      expect(tab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(close);
+
+      const lastFocusable = [
+        ...drawer!.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href]"),
+      ]
+        .toReversed()
+        .find((element) => !element.hasAttribute("disabled"));
+      const shiftTab = dispatchKey(close!, "Tab", { shiftKey: true });
+      expect(shiftTab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(lastFocusable);
+
+      dispatchKey(drawer!, "Escape");
+      await nextFrame();
+      expect(container.querySelector(".workboard-detail-drawer")).toBeNull();
+      expect(main?.hasAttribute("inert")).toBe(false);
+      expect(document.activeElement).toBe(launcher);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it("does not restore focus to a disconnected modal opener", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      const launcher = container.querySelector<HTMLButtonElement>(
+        ".workboard-toolbar__actions .primary",
+      );
+      launcher?.focus();
+      launcher?.click();
+      await nextFrame();
+
+      const titleInput = container.querySelector<HTMLInputElement>(".workboard-draft__title");
+      expect(document.activeElement).toBe(titleInput);
+
+      launcher?.remove();
+      dispatchKey(titleInput!, "Escape");
+      await nextFrame();
+
+      expect(container.querySelector(".workboard-draft")).toBeNull();
+      expect(document.activeElement).not.toBe(launcher);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it("restores focus when the detail drawer is removed by state", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Remove drawer externally",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      const launcher = container.querySelector<HTMLButtonElement>(
+        "button[aria-label='View details']",
+      );
+      launcher?.focus();
+      launcher?.click();
+      await nextFrame();
+
+      expect(document.activeElement).toBe(
+        container.querySelector<HTMLElement>(".workboard-detail-drawer"),
+      );
+
+      state.detailCardId = null;
+      renderInto(container, props);
+      await nextFrame();
+
+      expect(container.querySelector(".workboard-detail-drawer")).toBeNull();
+      expect(document.activeElement).toBe(launcher);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
   it("keeps cards compact and puts model-specific execution actions in details", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -206,7 +473,7 @@ describe("renderWorkboard", () => {
     const startButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
-    expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start"]);
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
     expect(startButtons.map((button) => button.title)).toEqual(["Run default agent"]);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
@@ -229,13 +496,89 @@ describe("renderWorkboard", () => {
     const detailStartButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-detail .workboard-card__start"),
     ];
-    expect(detailStartButtons.map((button) => button.textContent?.trim())).toEqual([
+    expect(detailStartButtons.map((button) => button.textContent?.replace(/\s+/g, ""))).toEqual([
       "Start",
-      "codex",
-      "claude",
-      "codex",
-      "claude",
+      "OpenAIRun",
+      "ClaudeRun",
+      "OpenAIOpen",
+      "ClaudeOpen",
     ]);
+  });
+
+  it("shows unfinished parent dependencies without blocking stale local starts", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "parent-1",
+        title: "Finish art pass",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "child-1",
+        title: "Ship game shell",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          links: [{ id: "link-1", type: "parent", targetCardId: "parent-1", createdAt: 1 }],
+        },
+      },
+    ];
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    } satisfies WorkboardRenderProps;
+
+    render(renderWorkboard(props), container);
+
+    const childCard = [...container.querySelectorAll<HTMLElement>(".workboard-card")].find((card) =>
+      card.textContent?.includes("Ship game shell"),
+    );
+    const start = childCard?.querySelector<HTMLButtonElement>(".workboard-card__start");
+    expect(childCard?.textContent).toContain("1 blocked");
+    expect(start?.disabled).toBe(false);
+    expect(start?.title).toBe("Run default agent");
+
+    childCard
+      ?.querySelector<HTMLButtonElement>('button[title="View details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    const detail = container.querySelector(".workboard-detail");
+    expect(detail?.textContent).toContain("Dependencies");
+    expect(detail?.textContent).toContain("Finish art pass");
+    expect(detail?.textContent).toContain("Todo");
+    const detailRunButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workboard-detail .workboard-card__start--autonomous",
+      ),
+    ];
+    const detailOpenButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workboard-detail .workboard-card__start--manual",
+      ),
+    ];
+    expect(detailRunButtons.length).toBeGreaterThan(0);
+    expect(detailRunButtons.every((button) => button.disabled)).toBe(false);
+    expect(detailOpenButtons.length).toBeGreaterThan(0);
+    expect(detailOpenButtons.every((button) => button.disabled)).toBe(false);
   });
 
   it("hides autonomous model override actions for non-admin operators", () => {
@@ -273,7 +616,7 @@ describe("renderWorkboard", () => {
     const startButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
     ];
-    expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start"]);
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([""]);
     expect(startButtons.map((button) => button.title)).toEqual(["Run default agent"]);
 
     container
@@ -295,10 +638,10 @@ describe("renderWorkboard", () => {
     const detailStartButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".workboard-detail .workboard-card__start"),
     ];
-    expect(detailStartButtons.map((button) => button.textContent?.trim())).toEqual([
+    expect(detailStartButtons.map((button) => button.textContent?.replace(/\s+/g, ""))).toEqual([
       "Start",
-      "codex",
-      "claude",
+      "OpenAIOpen",
+      "ClaudeOpen",
     ]);
   });
 
@@ -903,6 +1246,26 @@ describe("renderWorkboard", () => {
     expect(container.textContent).not.toContain("Archived task");
 
     container
+      .querySelector<HTMLButtonElement>('button[title="Show archived cards"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+    expect(container.textContent).toContain("Archived task");
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Hide archived cards"]'),
+    ).not.toBeNull();
+
+    container
       .querySelector<HTMLButtonElement>('button[title="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render(
@@ -936,6 +1299,136 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Workspace: worktree /tmp/workboard proof",
     );
+  });
+
+  it("filters cards by linked agent", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Main work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "main",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "card-2",
+        title: "Ops work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "ops",
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "ops", name: "Ops" },
+          ],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const agentFilter = [...container.querySelectorAll<HTMLSelectElement>("select")].find(
+      (select) => select.title === "Filter by agent",
+    );
+    agentFilter!.value = "ops";
+    agentFilter!.dispatchEvent(new Event("change", { bubbles: true }));
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "ops", name: "Ops" },
+          ],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("Main work");
+    expect(container.textContent).toContain("Ops work");
+    expect(container.textContent).toContain("Ops");
+  });
+
+  it("preflights model-specific starts for ACP runtime agents", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "ACP-backed work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "main",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "test",
+          agents: [{ id: "main", name: "Main", agentRuntime: { id: "codex", source: "agent" } }],
+        },
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const engineButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workboard-detail .workboard-card__start:not(.workboard-card__start--default)",
+      ),
+    ];
+    expect(engineButtons).toHaveLength(4);
+    expect(engineButtons.every((button) => button.disabled)).toBe(true);
+    expect(engineButtons[0]?.title).toContain("uses the codex ACP runtime");
   });
 
   it("does not render details for archived selected cards", () => {
@@ -1183,6 +1676,22 @@ describe("renderWorkboard", () => {
         priority: "high",
       }),
     });
+    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
+
+    render(renderWorkboard(props), container);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    container
+      .querySelector<HTMLButtonElement>('button[title="Edit card"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Renamed",
+    );
+    expect(
+      [...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select")].at(1)
+        ?.value,
+    ).toBe("high");
   });
 
   it("locks edit-modal actions while a comment request is in flight", () => {

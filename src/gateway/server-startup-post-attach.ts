@@ -1,3 +1,5 @@
+// Gateway post-attach startup sidecars.
+// Schedules warmups, sentinels, update checks, memory backend, and plugin services.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,7 +31,7 @@ const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
-const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
+const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
@@ -153,9 +155,6 @@ function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemorySt
   if (cfg.memory?.backend !== "qmd") {
     return { mode: "off" };
   }
-  if (cfg.memory.qmd?.update?.onBoot === false) {
-    return { mode: "off" };
-  }
   const startup = cfg.memory.qmd?.update?.startup;
   if (startup === "immediate") {
     return { mode: "immediate" };
@@ -233,9 +232,11 @@ function scheduleProviderAuthStatePrewarm(params: {
   const isStopped = () => stopped;
   const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
   void (async () => {
-    const { clearCurrentProviderAuthState, warmCurrentProviderAuthStateOffMainThread } =
-      await import("../agents/model-provider-auth.js");
-    const { setAuthProfileFailureHook } = await import("../agents/auth-profiles.js");
+    const [{ setAuthProfileFailureHook }, { clearCurrentProviderAuthState }] = await Promise.all([
+      import("../agents/auth-profiles/failure-hook.js"),
+      import("../agents/model-provider-auth-state.js"),
+    ]);
+    const loadProviderAuthWarmModule = () => import("../agents/model-provider-auth.js");
     const runRewarm = async (reason: string) => {
       if (isStopped()) {
         return;
@@ -243,6 +244,7 @@ function scheduleProviderAuthStatePrewarm(params: {
       const cfg = params.getConfig();
       rewarmInFlight = true;
       try {
+        const { warmCurrentProviderAuthStateOffMainThread } = await loadProviderAuthWarmModule();
         const metrics = await measureProviderAuthWarm(() =>
           warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
         );
@@ -298,6 +300,7 @@ function scheduleProviderAuthStatePrewarm(params: {
             return;
           }
           const cfg = params.getConfig();
+          const { warmCurrentProviderAuthStateOffMainThread } = await loadProviderAuthWarmModule();
           const metrics = await measureProviderAuthWarm(() =>
             warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
           );
@@ -775,6 +778,17 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    try {
+      const { markStartupOrphanedMainSessionsForRecovery } =
+        await loadMainSessionRestartRecoveryModule();
+      await markStartupOrphanedMainSessionsForRecovery({ cfg: params.cfg });
+    } catch (err) {
+      params.log.warn(
+        `main-session startup orphan marking failed before channel startup: ${String(err)}`,
+      );
+    }
+  });
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
@@ -938,17 +952,6 @@ export async function startGatewaySidecars(params: {
     run: async () => {
       const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
       scheduleSubagentOrphanRecovery();
-    },
-  });
-
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.main-session-recovery",
-    log: params.log,
-    run: async () => {
-      const { scheduleRestartAbortedMainSessionRecovery } =
-        await loadMainSessionRestartRecoveryModule();
-      scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfg });
     },
   });
 
@@ -1327,6 +1330,13 @@ export async function startGatewayPostAttachRuntime(
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
+        try {
+          const { scheduleRestartAbortedMainSessionRecovery } =
+            await loadMainSessionRestartRecoveryModule();
+          scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfgAtStart });
+        } catch (err) {
+          params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
+        }
         if (!pluginServicesReported) {
           reportPluginServices(result.pluginServices);
         }
@@ -1446,6 +1456,7 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const testing = {
+  providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFileFast,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,

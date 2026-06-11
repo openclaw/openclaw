@@ -1,3 +1,4 @@
+// Happy path prompt snapshot helper reads expected prompt snapshot files.
 import fs from "node:fs";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -14,6 +15,7 @@ import {
 import { buildReplyPromptBodies } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
+import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type {
   AnyAgentTool,
@@ -26,6 +28,8 @@ import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
 } from "./prompt-snapshot-paths.js";
+
+// Builds Codex happy-path prompt snapshot fixtures for agent prompt regression tests.
 
 export { CODEX_MODEL_PROMPT_FIXTURE_DIR, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR };
 
@@ -123,6 +127,7 @@ const CODEX_TEST_API_MODULE_ID = resolveRelativeBundledPluginPublicModuleId({
   artifactBasename: "test-api.js",
 });
 
+/** Load the Codex public test API without hardcoding plugin-private paths. */
 async function loadCodexPromptSnapshotApi(): Promise<CodexPromptSnapshotApi> {
   return (await import(CODEX_TEST_API_MODULE_ID)) as CodexPromptSnapshotApi;
 }
@@ -363,6 +368,7 @@ function createAttempt(params: {
     trigger: params.scenario.trigger,
     messageProvider: params.scenario.ctx.Provider,
     messageChannel: params.scenario.ctx.OriginatingChannel,
+    chatType: normalizeChatType(params.scenario.ctx.ChatType),
     agentAccountId: params.scenario.ctx.AccountId,
     messageTo: params.scenario.ctx.OriginatingTo,
     messageThreadId: params.scenario.ctx.MessageThreadId,
@@ -917,6 +923,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
   ].join("\n");
 }
 
+/** Build all Codex happy-path prompt snapshot files without writing them. */
 export async function createHappyPathPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
   const codexApi = await loadCodexPromptSnapshotApi();
   const scenarios = createScenarios(codexApi);

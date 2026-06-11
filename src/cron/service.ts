@@ -1,3 +1,4 @@
+/** Stateful CronService facade around the locked service operation helpers. */
 import type { CronServiceContract, CronServiceRunResult } from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
 import * as ops from "./service/ops.js";
@@ -76,7 +77,7 @@ export class CronService implements CronServiceContract {
     return this.state.deps.defaultAgentId;
   }
 
-  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string }) {
+  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {
     return ops.wakeNow(this.state, opts);
   }
 }

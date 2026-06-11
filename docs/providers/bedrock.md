@@ -310,6 +310,25 @@ openclaw models list
     the request options object and the `inferenceConfig` payload field.
   </Accordion>
 
+  <Accordion title="Claude Fable 5">
+    Use `amazon-bedrock/anthropic.claude-fable-5` in `us-east-1`, or the
+    regional inference ids such as `us.anthropic.claude-fable-5`.
+    OpenClaw applies Fable's 1M context window, 128K output limit, always-on
+    adaptive thinking, and supported effort mapping. `/think off` and
+    `/think minimal` map to `low`; unsupported temperature and forced tool
+    choice controls are omitted. Streaming output is held until Bedrock
+    returns a terminal status so mid-stream refusals do not expose partial text.
+    Fable supports only the standard service tier; OpenClaw ignores configured
+    `flex`, `priority`, and `reserved` tiers for this model.
+
+    AWS requires an explicit `provider_data_share` data-retention opt-in before
+    Fable is available. Prompts and completions are shared with Anthropic and
+    retained for up to 30 days for trust and safety. Review and configure
+    [Bedrock data retention](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html)
+    before enabling the model.
+
+  </Accordion>
+
   <Accordion title="Guardrails">
     You can apply [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html)
     to all Bedrock model invocations by adding a `guardrail` object to the

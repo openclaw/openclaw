@@ -1,3 +1,4 @@
+// Persists and formats per-session cost and usage records.
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -90,6 +91,11 @@ const USAGE_COST_CACHE_VERSION = 4;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
+// Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
+// serialization when scanning thousands of session files. Smaller of the two
+// limits triggers the next durable write.
+const USAGE_COST_CACHE_CHECKPOINT_FILES = 256;
+const USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -1526,9 +1532,11 @@ async function refreshCostUsageCacheForPath(params?: {
           ? files
           : files.filter((file) => file.mtimeMs >= refreshStartMs);
     const livePaths = new Set(files.map((file) => file.filePath));
+    let cacheMutated = false;
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
         delete cache.files[filePath];
+        cacheMutated = true;
       }
     }
 
@@ -1550,6 +1558,14 @@ async function refreshCostUsageCacheForPath(params?: {
       .slice(0, maxFiles);
     const resolveCost = createUsageCostResolver(params?.config);
 
+    // Throttle full cache rewrites: writing a 100MB+ JSON cache after every
+    // single scanned session balloons CPU/IO into O(N * cacheSize). Instead,
+    // checkpoint at most once every USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+    // (or every USAGE_COST_CACHE_CHECKPOINT_FILES files) so an interrupted
+    // refresh still makes durable forward progress while a normal refresh of
+    // thousands of files only pays the serialization cost a handful of times.
+    let dirtyCount = 0;
+    let lastCheckpointMs = Date.now();
     for (const file of staleFiles) {
       cache.files[file.filePath] = await scanUsageFileForCache({
         file,
@@ -1558,12 +1574,24 @@ async function refreshCostUsageCacheForPath(params?: {
         previous: cache.files[file.filePath],
         includeSessionSummary: sessionSummaryFiles.has(file.filePath),
       });
+      dirtyCount += 1;
+      cacheMutated = true;
+      const now = Date.now();
+      if (
+        dirtyCount >= USAGE_COST_CACHE_CHECKPOINT_FILES ||
+        now - lastCheckpointMs >= USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+      ) {
+        cache.updatedAt = now;
+        await writeUsageCostCache(cachePath, cache);
+        dirtyCount = 0;
+        lastCheckpointMs = Date.now();
+      }
+    }
+
+    if (cacheMutated || dirtyCount > 0) {
       cache.updatedAt = Date.now();
       await writeUsageCostCache(cachePath, cache);
     }
-
-    cache.updatedAt = Date.now();
-    await writeUsageCostCache(cachePath, cache);
     return "refreshed";
   } finally {
     await lock.release();

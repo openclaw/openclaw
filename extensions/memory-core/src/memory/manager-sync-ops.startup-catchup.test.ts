@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync ops.startup catchup plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -112,6 +113,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   protected resetProviderInitializationForRetry(): void {}
 
+  protected assertRequiredProviderAvailable(): void {}
+
   protected async indexFile(
     _entry: MemoryIndexEntry,
     _options: { source: MemorySource; content?: string },
@@ -190,9 +193,7 @@ describe("session startup catch-up", () => {
       });
 
     try {
-      await expect((harness as any).syncSessionFiles({ needsFullReindex: true })).resolves.toBe(
-        undefined,
-      );
+      await (harness as any).syncSessionFiles({ needsFullReindex: true });
       expect(attempts).toBe(2);
     } finally {
       openSpy.mockRestore();

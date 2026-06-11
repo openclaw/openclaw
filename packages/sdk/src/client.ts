@@ -1,3 +1,4 @@
+// OpenClaw SDK module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
@@ -28,10 +29,13 @@ import type {
   ToolInvokeResult,
 } from "./types.js";
 
+// High-level OpenClaw SDK client. Namespaces below translate friendly SDK calls
+// into current Gateway RPC methods and normalize event streams for consumers.
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;
 const MAX_NORMALIZED_REPLAY_EVENTS = 2000;
 
+/** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
   gateway?: "auto" | (string & {});
   url?: string;
@@ -52,6 +56,8 @@ function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
 }
 
 function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
+  // Gateway wait payloads come from several runtime paths. Preserve timeout vs
+  // cancellation semantics from metadata instead of trusting one status field.
   const record =
     typeof payload === "object" && payload !== null
       ? (payload as Record<string, unknown> & { aborted?: unknown; status?: unknown })
@@ -300,6 +306,7 @@ function normalizeChatProjectionEvent(
   };
 }
 
+/** Root SDK client with namespaces for agents, sessions, runs, and gateway APIs. */
 export class OpenClaw {
   readonly agents: AgentsNamespace;
   readonly sessions: SessionsNamespace;
@@ -438,7 +445,6 @@ export class OpenClaw {
     const matches = (event: OpenClawEvent) => event.runId === runId;
     const liveSource = this.normalizedEvents.stream(matches, { replay: true });
     const live = liveSource[Symbol.asyncIterator]();
-    let nextLive = live.next();
     const seen = new Set<string>();
     try {
       for (const event of replayEvents) {
@@ -453,11 +459,10 @@ export class OpenClaw {
         yield runEvent;
       }
       while (true) {
-        const next = await nextLive;
+        const next = await live.next();
         if (next.done) {
           break;
         }
-        nextLive = live.next();
         if (seen.has(next.value.id)) {
           continue;
         }
@@ -489,8 +494,11 @@ export class OpenClaw {
       };
     });
     this.eventPumpPromise = (async () => {
-      const iterator = this.transport.events()[Symbol.asyncIterator]();
+      let iterator: AsyncIterator<GatewayEvent> | undefined;
+      let pumpError: unknown;
+      let hasPumpError = false;
       try {
+        iterator = this.transport.events()[Symbol.asyncIterator]();
         while (true) {
           const next = iterator.next();
           await Promise.resolve();
@@ -503,14 +511,28 @@ export class OpenClaw {
           this.recordReplayEvent(normalized);
           this.normalizedEvents.publish(normalized);
         }
+      } catch (error) {
+        pumpError = error;
+        hasPumpError = true;
       } finally {
         markReady();
-        await iterator.return?.();
-        this.normalizedEvents.close();
+        try {
+          await iterator?.return?.();
+        } catch (error) {
+          if (!hasPumpError) {
+            pumpError = error;
+            hasPumpError = true;
+          }
+        }
       }
-    })().catch(() => {
-      markReady();
+      if (hasPumpError) {
+        this.normalizedEvents.close(pumpError);
+        return;
+      }
       this.normalizedEvents.close();
+    })().catch((error: unknown) => {
+      markReady();
+      this.normalizedEvents.close(error);
     });
     return this.eventPumpReady;
   }
@@ -541,6 +563,7 @@ export class OpenClaw {
   }
 }
 
+/** Agent-scoped helper for runs and identity lookups. */
 export class Agent {
   constructor(
     private readonly client: OpenClaw,
@@ -561,6 +584,7 @@ export class Agent {
   }
 }
 
+/** Run handle for streaming events, waiting, and cancellation. */
 export class Run {
   constructor(
     private readonly client: OpenClaw,
@@ -607,6 +631,7 @@ export class Run {
   }
 }
 
+/** Session handle for sending messages and session-scoped mutations. */
 export class Session {
   constructor(
     private readonly client: OpenClaw,
@@ -642,6 +667,7 @@ export class Session {
   }
 }
 
+/** Agent management namespace. */
 export class AgentsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -666,6 +692,7 @@ export class AgentsNamespace {
   }
 }
 
+/** Session management namespace. */
 export class SessionsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -698,6 +725,7 @@ export class SessionsNamespace {
   }
 }
 
+/** Run creation and lifecycle namespace. */
 export class RunsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -746,6 +774,7 @@ class RpcNamespace {
   }
 }
 
+/** Task query and cancellation namespace. */
 export class TasksNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "tasks");
@@ -767,6 +796,7 @@ export class TasksNamespace extends RpcNamespace {
   }
 }
 
+/** Model catalog and auth status namespace. */
 export class ModelsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "models");
@@ -781,6 +811,7 @@ export class ModelsNamespace extends RpcNamespace {
   }
 }
 
+/** Tool catalog, effective tool, and direct invocation namespace. */
 export class ToolsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "tools");
@@ -806,6 +837,7 @@ export class ToolsNamespace extends RpcNamespace {
   }
 }
 
+/** Run/session artifact listing and download namespace. */
 export class ArtifactsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "artifacts");
@@ -830,6 +862,7 @@ export class ArtifactsNamespace extends RpcNamespace {
   }
 }
 
+/** Approval request listing and response namespace. */
 export class ApprovalsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -842,6 +875,7 @@ export class ApprovalsNamespace {
   }
 }
 
+/** Environment discovery namespace. */
 export class EnvironmentsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "environments");

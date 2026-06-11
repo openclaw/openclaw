@@ -1,6 +1,8 @@
+// Host Command script supports OpenClaw repository automation.
 import { spawn, spawnSync, type SpawnOptions, type SpawnSyncReturns } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { resolveNpmRunner } from "../../npm-runner.mjs";
 import { resolvePnpmRunner } from "../../pnpm-runner.mjs";
@@ -15,6 +17,7 @@ const HOST_COMMAND_WRAPPER_BACKSTOP_MS = 5_000;
 const HOST_COMMAND_CHILD_PID_PREFIX = "__OPENCLAW_HOST_COMMAND_CHILD_PID__";
 const HOST_COMMAND_SPAWN_ERROR_PREFIX = "__OPENCLAW_HOST_COMMAND_SPAWN_ERROR__";
 const HOST_COMMAND_TIMEOUT_PREFIX = "__OPENCLAW_HOST_COMMAND_TIMEOUT__";
+let progressStderrDepth = 0;
 
 type HostCommandInvocation = {
   args: string[];
@@ -42,11 +45,21 @@ function hostInvocationFromRunner(runner: HostCommandInvocation): HostCommandInv
 }
 
 export function say(message: string): void {
-  process.stdout.write(`==> ${message}\n`);
+  const stream = progressStderrDepth > 0 ? process.stderr : process.stdout;
+  stream.write(`==> ${message}\n`);
 }
 
 export function warn(message: string): void {
   process.stderr.write(`warn: ${message}\n`);
+}
+
+export async function withProgressOnStderr<T>(fn: () => Promise<T>): Promise<T> {
+  progressStderrDepth++;
+  try {
+    return await fn();
+  } finally {
+    progressStderrDepth--;
+  }
 }
 
 export function die(message: string): never {
@@ -68,9 +81,7 @@ function signalHostCommandProcess(pid: number | undefined, signal: NodeJS.Signal
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ESRCH") {
       warn(
-        `failed to send ${signal} to timed host command process ${pid}: ${
-          code ?? String(error)
-        }`,
+        `failed to send ${signal} to timed host command process ${pid}: ${code ?? String(error)}`,
       );
     }
   }
@@ -242,6 +253,7 @@ export function resolveHostCommandInvocation(
   if (isBareCommand(command, "pnpm")) {
     const runner = resolvePnpmRunner({
       comSpec,
+      env,
       npmExecPath: env.npm_execpath,
       nodeExecPath: options.execPath ?? process.execPath,
       platform,
@@ -279,21 +291,20 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
   const env = { ...process.env, ...options.env };
   const invocation = resolveHostCommandInvocation(command, args, { env });
   const usesPosixTimedWrapper = process.platform !== "win32" && options.timeoutMs !== undefined;
-  const result =
-    usesPosixTimedWrapper
-      ? runPosixTimedCommandSync(invocation, env, options)
-      : spawnSync(invocation.command, invocation.args, {
-          cwd: options.cwd ?? repoRoot,
-          encoding: "utf8",
-          env: invocation.env ?? env,
-          input: options.input,
-          killSignal: "SIGKILL",
-          maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
-          stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-          shell: invocation.shell,
-          timeout: options.timeoutMs,
-          windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-        });
+  const result = usesPosixTimedWrapper
+    ? runPosixTimedCommandSync(invocation, env, options)
+    : spawnSync(invocation.command, invocation.args, {
+        cwd: options.cwd ?? repoRoot,
+        encoding: "utf8",
+        env: invocation.env ?? env,
+        input: options.input,
+        killSignal: "SIGKILL",
+        maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
+        stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+        shell: invocation.shell,
+        timeout: options.timeoutMs,
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      });
 
   let wrapperTimedOut = false;
   if (usesPosixTimedWrapper) {
@@ -422,15 +433,38 @@ export async function runStreaming(
   return await new Promise((resolve, reject) => {
     const env = { ...process.env, ...options.env };
     const invocation = resolveHostCommandInvocation(command, args, { env });
+    const logStream = options.logPath
+      ? createWriteStream(options.logPath, { encoding: "utf8", flags: "w" })
+      : undefined;
+    let logStreamError: Error | undefined;
+    const detached = process.platform !== "win32" && options.timeoutMs != null;
     const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd ?? repoRoot,
-      detached: process.platform !== "win32" && options.timeoutMs != null,
+      detached,
       env: invocation.env ?? env,
       shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     } satisfies SpawnOptions);
     const childPid = child.pid;
+    const signalStreamingChild = (signal: NodeJS.Signals): void => {
+      if (detached) {
+        signalHostCommandProcess(childPid, signal);
+        return;
+      }
+      try {
+        child.kill(signal);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH") {
+          warn(`failed to send ${signal} to host command process: ${code ?? String(error)}`);
+        }
+      }
+    };
+    logStream?.on("error", (error) => {
+      logStreamError = error;
+      signalStreamingChild("SIGTERM");
+    });
     const parentSignalHandlers = new Map<NodeJS.Signals, () => void>();
     const removeParentSignalHandlers = (): void => {
       for (const [signal, handler] of parentSignalHandlers) {
@@ -450,10 +484,22 @@ export async function runStreaming(
       }
     }
 
-    let log = "";
+    const writeLogChunk = (chunk: Buffer): void => {
+      if (!logStream || logStream.destroyed) {
+        return;
+      }
+      if (!logStream.write(chunk)) {
+        child.stdout?.pause();
+        child.stderr?.pause();
+        logStream.once("drain", () => {
+          child.stdout?.resume();
+          child.stderr?.resume();
+        });
+      }
+    };
     const append = (chunk: Buffer): void => {
       const text = chunk.toString("utf8");
-      log += text;
+      writeLogChunk(chunk);
       if (!options.quiet) {
         process.stdout.write(text);
       }
@@ -461,7 +507,7 @@ export async function runStreaming(
     child.stdout?.on("data", append);
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      log += text;
+      writeLogChunk(chunk);
       if (!options.quiet) {
         process.stderr.write(text);
       }
@@ -489,6 +535,7 @@ export async function runStreaming(
         clearTimeout(killTimer);
       }
       removeParentSignalHandlers();
+      logStream?.destroy();
       reject(error);
     });
     child.on("close", (code, signal) => {
@@ -501,17 +548,26 @@ export async function runStreaming(
         }
         removeParentSignalHandlers();
         if (timedOut) {
-          signalHostCommandProcess(childPid, "SIGKILL");
+          signalStreamingChild("SIGKILL");
         }
-        if (options.logPath) {
-          await writeFile(options.logPath, log, "utf8");
+        if (logStream) {
+          logStream.end();
+          await finished(logStream);
+        }
+        if (logStreamError) {
+          throw logStreamError;
         }
         if (timedOut) {
           resolve(124);
         } else {
           resolve(code ?? (signal ? 128 : 1));
         }
-      })();
+      })().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        reject(
+          new Error(`failed to write Parallels host command log: ${message}`, { cause: error }),
+        );
+      });
     });
   });
 }

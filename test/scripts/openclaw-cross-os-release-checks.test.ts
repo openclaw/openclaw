@@ -1,3 +1,4 @@
+// Openclaw Cross Os Release Checks tests cover openclaw cross os release checks script behavior.
 import { spawn } from "node:child_process";
 import {
   existsSync,
@@ -20,6 +21,8 @@ import {
   agentOutputHasExpectedOkMarker,
   agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseSmokePluginAllowlist,
+  buildCrossOsReleaseSmokeMemorySlotConfigArgs,
+  buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
@@ -31,6 +34,7 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  dashboardHtmlMarkerStatus,
   CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
@@ -41,6 +45,7 @@ import {
   CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
+  CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   isImmutableReleaseRef,
@@ -58,6 +63,7 @@ import {
   readInstalledVersion,
   readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
+  resolveDashboardAssetUrls,
   resolveCrossOsAgentTurnOptional,
   runCommand,
   resolveCommandSpawnInvocation,
@@ -82,6 +88,7 @@ import {
   shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
+  verifyDashboardAssetUrls,
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
@@ -156,6 +163,40 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
   });
 
+  it("requires dashboard root markers and same-origin asset URLs", () => {
+    const html = [
+      "<title>OpenClaw Control</title>",
+      "<openclaw-app></openclaw-app>",
+      '<link rel="stylesheet" href="/assets/index.css">',
+      '<script type="module" src="assets/index.js"></script>',
+      '<script type="module" src="https://example.com/assets/ignored.js"></script>',
+    ].join("\n");
+
+    expect(dashboardHtmlMarkerStatus(html)).toEqual({ app: true, ready: true, title: true });
+    expect(resolveDashboardAssetUrls("http://127.0.0.1:18789/", html)).toEqual([
+      "http://127.0.0.1:18789/assets/index.css",
+      "http://127.0.0.1:18789/assets/index.js",
+    ]);
+  });
+
+  it("fails dashboard readiness when assets are missing or unreachable", async () => {
+    await expect(verifyDashboardAssetUrls([])).resolves.toEqual({
+      failures: ["no dashboard asset URLs found"],
+      ok: false,
+    });
+
+    const result = await verifyDashboardAssetUrls(
+      ["http://127.0.0.1:18789/assets/index.css", "http://127.0.0.1:18789/assets/index.js"],
+      async (url) =>
+        new Response("", {
+          status: String(url).endsWith(".js") ? 404 : 200,
+        }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual(["http://127.0.0.1:18789/assets/index.js status=404"]);
+  });
+
   it("keeps gateway RPC status probes patient enough for live release startup", () => {
     expect(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
     expect(CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS).toBeGreaterThan(
@@ -204,9 +245,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("rejects malformed cross-OS positive integer environment values", () => {
-    expect(parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {})).toBe(
-      60,
-    );
+    expect(parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {})).toBe(60);
     expect(
       parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {
         OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS: "25",
@@ -255,6 +294,29 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it("ignores stale OK markers outside the recent agent log tail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-tail-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        [
+          JSON.stringify({
+            payloads: [{ type: "text", text: "OK" }],
+          }),
+          "x".repeat(2_200_000),
+          JSON.stringify({
+            payloads: [{ type: "text", text: "still working" }],
+          }),
+        ].join("\n"),
+      );
+
+      expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("retries transient agent-turn failures", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
@@ -281,6 +343,20 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
         new Error("Agent turn used embedded fallback instead of gateway."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "GatewayClientRequestError: FailoverError: Rate limit reached for gpt-5.5: code=rate_limit_exceeded",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "OpenAI image generation failed (HTTP 503): upstream connect error or disconnect/reset before headers. reset reason: connection timeout",
+        ),
       ),
     ).toBe(true);
   });
@@ -358,6 +434,33 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         shouldSkipOptionalCrossOsAgentTurnError(
           new Error("Agent output did not contain the expected OK marker."),
           join(dir, "missing.log"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not classify stale timeout logs as current optional agent-turn failures", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-skip-tail-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        [
+          JSON.stringify({
+            status: "timeout",
+            result: { payloads: [{ text: "Request timed out before a response was generated." }] },
+          }),
+          "x".repeat(2_200_000),
+          JSON.stringify({ status: "error", message: "document-extract failed" }),
+        ].join("\n"),
+      );
+
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("Agent output did not contain the expected OK marker."),
+          logPath,
         ),
       ).toBe(false);
     } finally {
@@ -444,6 +547,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "phone-control",
       "talk-voice",
     ]);
+    expect(allowlist).not.toContain("memory-core");
+    expect(buildCrossOsReleaseSmokeMemorySlotConfigArgs()).toEqual([
+      "config",
+      "set",
+      "plugins.slots.memory",
+      JSON.stringify("none"),
+      "--strict-json",
+    ]);
   });
 
   it("can stage packaged-upgrade baselines without npm lifecycle scripts", () => {
@@ -495,6 +606,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(source).toContain('agentRuntime: { id: "openclaw" }');
     expect(source).toContain('"--merge"');
     expect(source).toContain(providerOverride);
+    expect(source.match(/args: buildCrossOsReleaseSmokeMemorySlotConfigArgs\(\)/g)).toHaveLength(2);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     const agentTurnArgCalls = source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g) ?? [];
@@ -819,6 +931,31 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it("flushes static release artifact logs before close resolves", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-log-flush-"));
+    const filePath = join(dir, "openclaw-2026.4.14.tgz");
+    const logPath = join(dir, "server.log");
+    let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
+
+    try {
+      writeFileSync(filePath, Buffer.alloc(128, "x"));
+      server = await startStaticFileServer({ filePath, logPath });
+      const marker = `flush-${"x".repeat(512)}-done`;
+
+      for (let index = 0; index < 8; index += 1) {
+        const response = await fetch(`${server.url}?${marker}-${index}`);
+        await response.text();
+      }
+      await server.close();
+      server = undefined;
+
+      expect(readFileSync(logPath, "utf8")).toContain(`${marker}-7`);
+    } finally {
+      await server?.close().catch(() => {});
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not preload static release artifacts before serving them", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
     const serverSource = source.slice(
@@ -1035,6 +1172,35 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it("flushes command logs before resolving", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-flush-"));
+    try {
+      const logPath = join(dir, "flush.log");
+      const marker = `flush-start-${"x".repeat(128 * 1024)}-flush-end`;
+
+      await runCommand(
+        process.execPath,
+        [
+          "-e",
+          [
+            "const marker = `flush-start-${'x'.repeat(128 * 1024)}-flush-end`;",
+            "process.stdout.write(marker);",
+          ].join(""),
+        ],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 64,
+        },
+      );
+
+      expect(readFileSync(logPath, "utf8")).toContain(marker);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("kills timed-out command process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -1213,6 +1379,28 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         },
       },
     });
+  });
+
+  it("bounds Discord API calls with a timeout signal", () => {
+    expect(CROSS_OS_DISCORD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+
+    const init = buildDiscordFetchInit("discord-token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(init).toMatchObject({
+      method: "POST",
+      body: "{}",
+      headers: {
+        Authorization: "Bot discord-token",
+        "Content-Type": "application/json",
+      },
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("keeps the dev-update lane for main only", () => {

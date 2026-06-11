@@ -37,8 +37,10 @@ This is good for auditability if commits are clearly machine-authored and gated 
 - Branch name: `tideclaw/alpha/YYYY-MM-DD-HHMMZ`
 - Base: current `origin/main` SHA at trigger time.
 - State file: resolve from `$release-private` on the Tideclaw host.
-- Release tag: `vYYYY.M.D-alpha.N`
+- Release tag: `vYYYY.M.PATCH-alpha.N`
 - npm dist-tag: `alpha`
+
+`PATCH` is a sequential monthly release-train number, never the calendar day. Determine the alpha train from stable and beta releases; ignore alpha-only patch numbers when choosing the next train. Use one greater than the highest stable/beta patch for the month, then increment only `alpha.N` for repeated nightlies on that train. If a beta exists on that next patch, move alpha to the following train. Legacy alpha-only tags with inflated patch numbers do not advance beta/stable numbering.
 
 Do not reuse old alpha branches for a new run. If rerunning the same base SHA, create a new timestamped branch and record why.
 
@@ -98,7 +100,7 @@ Tideclaw may run beta releases from `#releases` or mentioned `#maintainers` comm
 Accepted shapes:
 
 ```text
-@Tideclaw beta release from vYYYY.M.D-alpha.N
+@Tideclaw beta release from vYYYY.M.PATCH-alpha.N
 @Tideclaw beta release from tideclaw/alpha/YYYY-MM-DD-HHMMZ
 @Tideclaw beta release from latest proven alpha
 ```
@@ -110,7 +112,7 @@ Rules:
 3. Verify the source alpha first: GitHub release, npm `alpha` package, release CI, recorded state file, and branch/tag SHA.
 4. Create a fresh beta branch `tideclaw/beta/YYYY-MM-DD-HHMMZ` from the proven alpha source, not directly from a moving `main`.
 5. Reuse/squash only stabilization fixes already proven on alpha. Do not import unrelated alpha release mechanics unless the beta release docs require them.
-6. Compute beta as `vYYYY.M.D-beta.N`, matching npm `--tag beta`.
+6. Compute beta as `vYYYY.M.PATCH-beta.N`, matching npm `--tag beta`. Ignore alpha-only patch numbers when selecting the beta train.
 7. Run beta release validation/preflight/full release CI and fix failures on the beta branch.
 8. Publish beta only after green beta gates. Use GitHub Actions/OIDC, never direct npm publish from the host.
 9. Final Discord summary must include source alpha, beta tag/version, branch, fix commits, workflow run IDs, npm/GitHub proof, and any skipped/blocked reason.
@@ -165,7 +167,7 @@ git push -u origin "$BRANCH"
 
 After local proof:
 
-1. Compute the next `vYYYY.M.D-alpha.N` from existing git tags, npm versions, and GitHub releases.
+1. Compute the next `vYYYY.M.PATCH-alpha.N` from existing git tags, npm versions, and GitHub releases. Select `PATCH` from stable/beta trains, not the date or the highest alpha-only patch. Reuse the same alpha train and increment `alpha.N` until that patch has a beta; after a beta exists, use the following patch for new alpha builds.
 2. Make the alpha branch package version and release metadata match that tag, commit it, and push the branch.
 3. Run release validation from the alpha branch, using GitHub CLI, not browser/fetch tools. On the Tideclaw host, bare `gh` is a read-only Codex sandbox wrapper; use `/usr/local/bin/gh-tideclaw-write` for write-capable commands such as `workflow run`, `run cancel`, and publish dispatch:
 

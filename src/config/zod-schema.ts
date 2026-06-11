@@ -1,3 +1,4 @@
+// Assembles the canonical Zod schema for OpenClaw config parsing.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -104,6 +105,32 @@ const SecuritySchema = z
       })
       .strict()
       .optional(),
+    installPolicy: z
+      .object({
+        enabled: z.boolean().optional(),
+        targets: z
+          .array(z.union([z.literal("skill"), z.literal("plugin")]))
+          .min(1)
+          .optional(),
+        exec: z
+          .object({
+            source: z.literal("exec"),
+            command: z.string().min(1),
+            args: z.array(z.string()).optional(),
+            timeoutMs: z.number().int().min(1).optional(),
+            noOutputTimeoutMs: z.number().int().min(1).optional(),
+            maxOutputBytes: z.number().int().min(1).optional(),
+            env: z.record(z.string(), z.string().register(sensitive)).optional(),
+            passEnv: z.array(z.string()).optional(),
+            trustedDirs: z.array(z.string()).optional(),
+            allowInsecurePath: z.boolean().optional(),
+            allowSymlinkCommand: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -193,6 +220,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    rerank: z.boolean().optional(),
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -675,6 +703,17 @@ export const OpenClawSchema = z
           .object({
             name: z.string().max(50).optional(),
             avatar: z.string().max(2_000_000).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    tui: z
+      .object({
+        footer: z
+          .object({
+            showRemoteHost: z.boolean().optional(),
           })
           .strict()
           .optional(),

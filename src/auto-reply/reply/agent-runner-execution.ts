@@ -1,3 +1,4 @@
+/** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
 import {
   hasNonEmptyString,
@@ -92,6 +93,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
@@ -105,6 +107,12 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import {
+  createCompactionHookNoticePayload,
+  createCompactionNoticePayload,
+  readCompactionHookMessages,
+  shouldNotifyUserAboutCompaction,
+} from "./compaction-notice.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -272,6 +280,7 @@ function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined 
   return value === "turn" || value === "session" ? value : undefined;
 }
 
+/** One attempted runtime fallback candidate and its failure reason. */
 export type RuntimeFallbackAttempt = {
   provider: string;
   model: string;
@@ -281,6 +290,7 @@ export type RuntimeFallbackAttempt = {
   code?: string;
 };
 
+/** Result of running an agent turn through fallback/retry handling. */
 export type AgentRunLoopResult =
   | {
       kind: "success";
@@ -293,6 +303,8 @@ export type AgentRunLoopResult =
       autoCompactionCount: number;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
+      /** Payloads successfully sent directly during tool flush. */
+      directlySentBlockPayloads?: ReplyPayload[];
     }
   | { kind: "final"; payload: ReplyPayload };
 
@@ -437,6 +449,7 @@ function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: Foll
   return { provider: params.run.provider, model: params.run.model };
 }
 
+/** Persists the fallback candidate selection onto a session entry. */
 export function applyFallbackCandidateSelectionToEntry(params: {
   entry: SessionEntry;
   run: FollowupRun["run"];
@@ -652,17 +665,12 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
-  suppressInNonDirect?: boolean;
   cfg?: OpenClawConfig;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
-  if (
-    !params.suppressInNonDirect &&
-    !params.isGenericRunnerFailure &&
-    !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)
-  ) {
+  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
     return params.text;
   }
   // Match normal reply routing: default group/channel failures stay silent,
@@ -700,6 +708,7 @@ function buildCodexAppServerFailureText(message: string): string | null {
   return null;
 }
 
+/** Formats the reply shown when preflight compaction fails before a run. */
 export function buildPreflightCompactionFailureText(
   message: string,
   options?: { includeDetails?: boolean },
@@ -801,7 +810,7 @@ function buildExternalRunFailureReply(
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
-  const providerRequestError = classifyProviderRequestError(normalizedMessage);
+  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
     return {
       text: providerRequestError.userMessage,
@@ -850,9 +859,14 @@ function buildExternalRunFailureReply(
 }
 
 function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
-  return markReplyPayloadForSourceSuppressionDelivery(payload);
+  const marked = markReplyPayloadForSourceSuppressionDelivery(payload);
+  if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
+    marked.isError = true;
+  }
+  return marked;
 }
 
+/** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;
@@ -904,7 +918,6 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: buildRateLimitCooldownMessage(params.err),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
-        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -916,7 +929,6 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: rateLimitOrOverloadedCopy,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
-        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -943,6 +955,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
 
 const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
 
+/** Computes a reserve-token floor scaled to the selected context window. */
 export function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
   if (typeof contextWindow !== "number" || contextWindow <= 0) {
     return DEFAULT_RESERVE_TOKENS_FLOOR;
@@ -1202,6 +1215,7 @@ function resolveHeartbeatBleedHint(params: {
   );
 }
 
+/** Builds recovery instructions for context-overflow failures. */
 export function buildContextOverflowRecoveryText(params: {
   duringCompaction?: boolean;
   preserveSessionMapping?: boolean;
@@ -1369,6 +1383,7 @@ function emitModelFallbackStepLifecycle(params: {
   });
 }
 
+/** Resolves runtime provider override stored on the session entry. */
 export function resolveSessionRuntimeOverrideForProvider(params: {
   provider: string;
   entry?: Pick<SessionEntry, "agentRuntimeOverride">;
@@ -1384,6 +1399,7 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
   return undefined;
 }
 
+/** Decides whether to retry after rechecking auto-fallback primary probe state. */
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   run: FollowupRun["run"];
   entry?: SessionEntry;
@@ -1453,6 +1469,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   };
 }
 
+/** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1485,12 +1502,14 @@ export async function runAgentTurnWithFallback(params: {
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
+  onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
+  const directlySentBlockPayloads: Array<ReplyPayload | undefined> = [];
   const runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
     run: params.followupRun.run,
     entry: params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
@@ -1597,56 +1616,40 @@ export async function runAgentTurnWithFallback(params: {
     params.opts?.onAgentRunStart?.(runId);
   };
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-  const shouldNotifyUserAboutCompaction =
-    runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
-  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
-    if (!params.opts?.onBlockReply) {
-      return;
-    }
-    const text =
-      phase === "start"
-        ? "🧹 Compacting context..."
-        : phase === "end"
-          ? "🧹 Compaction complete"
-          : "🧹 Compaction incomplete";
-    const noticePayload = params.applyReplyToMode({
-      text,
-      replyToId: currentMessageId,
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
+  const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
+  const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
     try {
-      await params.opts.onBlockReply(noticePayload);
+      if (params.opts?.onBlockReply) {
+        await params.opts.onBlockReply(noticePayload);
+        return;
+      }
+      await params.onCompactionNoticePayload?.(noticePayload);
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
-      logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+      logVerbose(`compaction ${label} notice delivery failed (non-fatal): ${String(err)}`);
     }
   };
-  const readCompactionHookMessages = (value: unknown): string[] => {
-    if (!Array.isArray(value)) {
-      return [];
-    }
-    return value
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
+  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
+    await deliverCompactionNoticePayload(
+      createCompactionNoticePayload({
+        phase,
+        currentMessageId,
+        applyReplyToMode: params.applyReplyToMode,
+      }),
+      phase,
+    );
   };
   const sendCompactionHookMessages = async (messages: string[]) => {
-    if (!params.opts?.onBlockReply || messages.length === 0) {
+    const noticePayload = createCompactionHookNoticePayload({
+      messages,
+      currentMessageId,
+      applyReplyToMode: params.applyReplyToMode,
+    });
+    if (!noticePayload) {
       return;
     }
-    const noticePayload = params.applyReplyToMode({
-      text: messages.join("\n\n"),
-      replyToId: currentMessageId,
-      replyToCurrent: true,
-      isCompactionNotice: true,
-    });
-    try {
-      await params.opts.onBlockReply(noticePayload);
-    } catch (err) {
-      logVerbose(`compaction hook notice delivery failed (non-fatal): ${String(err)}`);
-    }
+    await deliverCompactionNoticePayload(noticePayload, "hook");
   };
   const shouldSurfaceToControlUi = isInternalMessageChannel(
     params.followupRun.run.messageProvider ??
@@ -1935,6 +1938,7 @@ export async function runAgentTurnWithFallback(params: {
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
+            directlySentBlockPayloads,
           })
         : undefined;
       let messageToolOnlyDeliveryCompleted = false;
@@ -2102,6 +2106,14 @@ export async function runAgentTurnWithFallback(params: {
               const cliCurrentMessageId = isRestartSentinelContinuation
                 ? params.sessionCtx.ReplyToId
                 : (params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid);
+              const cliToolSummaryTracker = createCliToolSummaryTracker({
+                detailMode: params.toolProgressDetail,
+                shouldEmitToolResult: params.shouldEmitToolResult,
+                shouldEmitToolOutput: params.shouldEmitToolOutput,
+                deliver: async (payload) => {
+                  await params.opts?.onToolResult?.(payload);
+                },
+              });
               const result = await agentTurnTiming.measure("cli_run", () =>
                 runCliAgentWithLifecycle({
                   runId,
@@ -2118,7 +2130,12 @@ export async function runAgentTurnWithFallback(params: {
                   onReasoningText: async (text) => {
                     await params.opts?.onReasoningStream?.({ text });
                   },
-                  onToolEvent: async ({ name, phase, args }) => {
+                  onToolEvent: async (payload) => {
+                    await cliToolSummaryTracker.noteToolEvent(payload);
+                    if (payload.phase === "result") {
+                      return;
+                    }
+                    const { name, phase, args } = payload;
                     await Promise.all([
                       params.typingSignals.signalToolStart(),
                       params.opts?.onToolStart?.({
@@ -2129,6 +2146,16 @@ export async function runAgentTurnWithFallback(params: {
                       }),
                     ]);
                   },
+                  onCommentaryText:
+                    params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+                      ? async ({ text, itemId }) => {
+                          await params.opts?.onItemEvent?.({
+                            kind: "preamble",
+                            progressText: text,
+                            itemId,
+                          });
+                        }
+                      : undefined,
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
@@ -2172,13 +2199,17 @@ export async function runAgentTurnWithFallback(params: {
                     inputProvenance: params.followupRun.run.inputProvenance,
                     provider: cliExecutionProvider,
                     model,
+                    classifyCommentaryText: params.opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: params.followupRun.run.thinkLevel,
                     timeoutMs: params.followupRun.run.timeoutMs,
+                    runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
                     runId,
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                    allowEmptyAssistantReplyAsSilent:
+                      params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
@@ -2204,6 +2235,7 @@ export async function runAgentTurnWithFallback(params: {
                     currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
+                    toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
                     abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
@@ -2231,6 +2263,7 @@ export async function runAgentTurnWithFallback(params: {
                 hasRepliedRef: params.opts?.hasRepliedRef,
                 provider,
                 runId,
+                promptCacheKey: params.opts?.promptCacheKey,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 model,
               });
@@ -2320,6 +2353,7 @@ export async function runAgentTurnWithFallback(params: {
                     suppressToolErrorWarnings:
                       params.opts?.shouldSuppressToolErrorWarnings ??
                       params.opts?.suppressToolErrorWarnings,
+                    toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
                     enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                     forceHeartbeatTool: params.opts?.forceHeartbeatTool,
@@ -2535,28 +2569,24 @@ export async function runAgentTurnWithFallback(params: {
                           summary: readStringValue(evt.data.summary),
                         });
                       }
-                      // Track auto-compaction and notify higher layers.
                       if (evt.stream === "compaction") {
                         const phase = readStringValue(evt.data.phase) ?? "";
                         const hookMessages = readCompactionHookMessages(evt.data.messages);
+                        const sendCompactionUserNotices = async (
+                          noticePhase: "start" | "end" | "incomplete",
+                        ) => {
+                          if (hookMessages.length > 0) {
+                            await sendCompactionHookMessages(hookMessages);
+                          }
+                          if (notifyUserAboutCompaction) {
+                            await sendCompactionNotice(noticePhase);
+                          }
+                        };
                         if (phase === "start") {
-                          // Three independent audiences: internal callbacks
-                          // (Control UI) fire regardless; hookMessages deliver
-                          // plugin-authored user-channel text (overlap with the
-                          // default notice, so they suppress it); notifyUser is
-                          // the opt-in user-channel notice. Internal callbacks
-                          // must not suppress the user notice — see #87107.
                           if (params.opts?.onCompactionStart) {
                             await params.opts.onCompactionStart();
                           }
-                          if (hookMessages.length > 0) {
-                            await sendCompactionHookMessages(hookMessages);
-                          } else if (shouldNotifyUserAboutCompaction) {
-                            // Send directly via opts.onBlockReply (bypassing the
-                            // pipeline) so the notice does not cause final payloads
-                            // to be discarded on non-streaming model paths.
-                            await sendCompactionNotice("start");
-                          }
+                          await sendCompactionUserNotices("start");
                         }
                         if (phase === "end") {
                           const completed = evt.data?.completed === true;
@@ -2565,15 +2595,9 @@ export async function runAgentTurnWithFallback(params: {
                             if (params.opts?.onCompactionEnd) {
                               await params.opts.onCompactionEnd();
                             }
-                            if (hookMessages.length > 0) {
-                              await sendCompactionHookMessages(hookMessages);
-                            } else if (shouldNotifyUserAboutCompaction) {
-                              await sendCompactionNotice("end");
-                            }
-                          } else if (hookMessages.length > 0) {
-                            await sendCompactionHookMessages(hookMessages);
-                          } else if (shouldNotifyUserAboutCompaction) {
-                            await sendCompactionNotice("incomplete");
+                            await sendCompactionUserNotices("end");
+                          } else {
+                            await sendCompactionUserNotices("incomplete");
                           }
                         }
                       }
@@ -2924,10 +2948,20 @@ export async function runAgentTurnWithFallback(params: {
         text: fallbackText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
-        suppressInNonDirect: Boolean(isRateLimit || rateLimitOrOverloadedCopy),
         cfg: params.followupRun.run.config,
       });
 
+      emitAgentEvent({
+        runId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: message,
+          endedAt: Date.now(),
+          fallbackExhaustedFailure: true,
+        },
+      });
       params.replyOperation?.fail("run_failed", err);
       return {
         kind: "final",
@@ -2993,7 +3027,6 @@ export async function runAgentTurnWithFallback(params: {
               text: formattedErrorCandidate,
               sessionCtx: params.sessionCtx,
               isGenericRunnerFailure: false,
-              suppressInNonDirect: true,
               cfg: params.followupRun.run.config,
             }),
             isError: true,
@@ -3013,5 +3046,8 @@ export async function runAgentTurnWithFallback(params: {
     didLogHeartbeatStrip,
     autoCompactionCount,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    directlySentBlockPayloads: directlySentBlockPayloads.filter(
+      (payload): payload is ReplyPayload => payload !== undefined,
+    ),
   };
 }

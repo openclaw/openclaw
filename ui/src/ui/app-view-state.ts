@@ -1,3 +1,4 @@
+// Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -233,6 +234,7 @@ export type AppViewState = {
   configActiveSection: string | null;
   configActiveSubsection: string | null;
   pendingUpdateExpectedVersion: string | null;
+  pendingUpdateHandoff: boolean;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   communicationsFormMode: "form" | "raw";
   communicationsSearchQuery: string;

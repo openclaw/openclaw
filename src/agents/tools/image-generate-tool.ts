@@ -1,3 +1,8 @@
+/**
+ * image_generate built-in tool.
+ *
+ * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -896,12 +901,17 @@ export function createImageGenerateTool(options?: {
         return createImageGenerateStatusActionResult(options?.agentSessionKey);
       }
 
-      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
-        cfg,
-        workspaceDir: options?.workspaceDir,
-        agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-      });
+      const model = readStringParam(params, "model");
+      const configuredImageGenerationModelConfig = coerceToolModelConfig(
+        cfg.agents?.defaults?.imageGenerationModel,
+      );
+      const imageGenerationModelConfig =
+        resolveImageGenerationModelConfigForTool({
+          cfg,
+          workspaceDir: options?.workspaceDir,
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
+        }) ?? (model ? { ...configuredImageGenerationModelConfig, primary: model } : null);
       if (!imageGenerationModelConfig) {
         throw new ToolInputError("No image-generation model configured.");
       }
@@ -920,7 +930,6 @@ export function createImageGenerateTool(options?: {
       }
 
       const imageInputs = normalizeReferenceImages(params);
-      const model = readStringParam(params, "model");
       const filename = readStringParam(params, "filename");
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));

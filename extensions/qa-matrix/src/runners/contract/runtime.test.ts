@@ -1,3 +1,4 @@
+// Qa Matrix tests cover runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
@@ -612,6 +613,7 @@ describe("matrix live qa runtime", () => {
     await liveTesting.patchMatrixQaGatewayConfig({
       gateway: gateway as never,
       patch,
+      replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
       restartDelayMs: 250,
     });
 
@@ -622,6 +624,7 @@ describe("matrix live qa runtime", () => {
       {
         baseHash: "hash-old",
         raw: JSON.stringify(patch, null, 2),
+        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
         restartDelayMs: 250,
       },
       { timeoutMs: 60_000 },
@@ -633,6 +636,7 @@ describe("matrix live qa runtime", () => {
       {
         baseHash: "hash-fresh",
         raw: JSON.stringify(patch, null, 2),
+        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
         restartDelayMs: 250,
       },
       { timeoutMs: 60_000 },

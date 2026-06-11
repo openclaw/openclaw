@@ -1,5 +1,12 @@
+// Test helpers for environment variable setup and restoration.
 import path from "node:path";
 
+/** Sets a test-owned env key; callers must capture/restore the key scope. */
+export function setTestEnvValue(key: string, value: string): void {
+  Reflect.set(process.env, key, value);
+}
+
+/** Captures selected process.env keys so tests can restore exact prior state. */
 export function captureEnv(keys: string[]) {
   const snapshot = new Map<string, string | undefined>();
   for (const key of keys) {
@@ -12,7 +19,7 @@ export function captureEnv(keys: string[]) {
         if (value === undefined) {
           delete process.env[key];
         } else {
-          process.env[key] = value;
+          setTestEnvValue(key, value);
         }
       }
     },
@@ -24,7 +31,7 @@ function applyEnvValues(env: Record<string, string | undefined>): void {
     if (value === undefined) {
       delete process.env[key];
     } else {
-      process.env[key] = value;
+      setTestEnvValue(key, value);
     }
   }
 }
@@ -40,6 +47,7 @@ const PATH_RESOLUTION_ENV_KEYS = [
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
 ] as const;
 
+// Windows home resolution depends on split drive/path env vars, not only HOME.
 function resolveWindowsHomeParts(homeDir: string): { homeDrive?: string; homePath?: string } {
   if (process.platform !== "win32") {
     return {};
@@ -107,7 +115,7 @@ export function captureFullEnv() {
         if (value === undefined) {
           delete process.env[key];
         } else {
-          process.env[key] = value;
+          setTestEnvValue(key, value);
         }
       }
     },

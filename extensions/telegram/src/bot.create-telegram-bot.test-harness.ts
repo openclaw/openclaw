@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot.create telegram bot harness behavior.
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -303,6 +304,7 @@ const grammySpies = vi.hoisted(() => ({
   sendChatActionSpy: vi.fn(),
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   editMessageReplyMarkupSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
+  deleteMessageSpy: vi.fn(async () => true) as AnyAsyncMock,
   setMessageReactionSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   setMyCommandsSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   getMeSpy: vi.fn(async () => ({
@@ -328,6 +330,7 @@ export const answerCallbackQuerySpy: AnyAsyncMock = grammySpies.answerCallbackQu
 export const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
 export const editMessageTextSpy: AnyAsyncMock = grammySpies.editMessageTextSpy;
 export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageReplyMarkupSpy;
+export const deleteMessageSpy: AnyAsyncMock = grammySpies.deleteMessageSpy;
 export const setMessageReactionSpy: AnyAsyncMock = grammySpies.setMessageReactionSpy;
 export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
 export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
@@ -357,6 +360,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       sendChatAction: grammySpies.sendChatActionSpy,
       editMessageText: grammySpies.editMessageTextSpy,
       editMessageReplyMarkup: grammySpies.editMessageReplyMarkupSpy,
+      deleteMessage: grammySpies.deleteMessageSpy,
       setMessageReaction: grammySpies.setMessageReactionSpy,
       setMyCommands: grammySpies.setMyCommandsSpy,
       getMe: grammySpies.getMeSpy,
@@ -576,6 +580,8 @@ beforeEach(() => {
   editMessageTextSpy.mockResolvedValue({ message_id: 88 });
   editMessageReplyMarkupSpy.mockReset();
   editMessageReplyMarkupSpy.mockResolvedValue({ message_id: 88 });
+  deleteMessageSpy.mockReset();
+  deleteMessageSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);

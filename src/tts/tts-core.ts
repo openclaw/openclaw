@@ -1,13 +1,13 @@
+// TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
-import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
+import { requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
+import { prepareSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
@@ -23,19 +23,15 @@ export {
 
 type SummarizeTextDeps = {
   completeSimple: typeof completeSimple;
-  getApiKeyForModel: typeof getApiKeyForModel;
-  prepareModelForSimpleCompletion: typeof prepareModelForSimpleCompletion;
+  prepareSimpleCompletionModel: typeof prepareSimpleCompletionModel;
   requireApiKey: typeof requireApiKey;
-  resolveModelAsync: typeof resolveModelAsync;
 };
 
 function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
   return {
     completeSimple,
-    getApiKeyForModel,
-    prepareModelForSimpleCompletion,
+    prepareSimpleCompletionModel,
     requireApiKey,
-    resolveModelAsync,
   };
 }
 
@@ -77,6 +73,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
+/** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
     text: string;
@@ -94,15 +91,19 @@ export async function summarizeText(
 
   const startTime = Date.now();
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const resolved = await deps.resolveModelAsync(ref.provider, ref.model, undefined, cfg);
-  if (!resolved.model) {
-    throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
+  // Dynamic model discovery precedes the request timeout, matching the established
+  // summarization contract. The timeout below bounds only the completion request.
+  const prepared = await deps.prepareSimpleCompletionModel({
+    cfg,
+    provider: ref.provider,
+    modelId: ref.model,
+    useAsyncModelResolution: true,
+  });
+  if ("error" in prepared) {
+    throw new Error(prepared.error);
   }
-  const completionModel = deps.prepareModelForSimpleCompletion({ model: resolved.model, cfg });
-  const apiKey = deps.requireApiKey(
-    await deps.getApiKeyForModel({ model: completionModel, cfg }),
-    ref.provider,
-  );
+  const completionModel = prepared.model;
+  const apiKey = deps.requireApiKey(prepared.auth, ref.provider);
 
   try {
     const controller = new AbortController();
@@ -110,6 +111,8 @@ export async function summarizeText(
     const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
     try {
+      // Keep summarization on the simple-completion path so provider auth,
+      // aliases, and timeout behavior match other lightweight model calls.
       const res = await deps.completeSimple(
         completionModel,
         {
