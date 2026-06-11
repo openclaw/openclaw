@@ -165,6 +165,23 @@ describe("exec authorization renderer", () => {
     expect(command).toMatch(/^\/.+\/head -c 16$/);
   });
 
+  it("rewrites quoted POSIX executable source spans", async () => {
+    const plan = await planShellAuthorization({
+      command: '"head" -c 16',
+      env: POSIX_ENV,
+    });
+
+    const command = renderOk(
+      buildAuthorizedShellCommandFromPlan({
+        plan,
+        mode: "safeBins",
+        segmentSatisfiedBy: ["safeBins"],
+      }),
+    );
+
+    expect(command).toMatch(/^\/.+\/head -c 16$/);
+  });
+
   it("fails closed for enforced POSIX commands with shell glob arguments", async () => {
     const plan = await planShellAuthorization({
       command: "ls *.ts",

@@ -103,6 +103,21 @@ function validateSpan(params: {
   return { ok: true, command: "" };
 }
 
+function sourceStepSlice(params: {
+  candidate: ExecAuthorizationCandidate;
+  span: SourceSpan;
+}): string {
+  const relativeStart = Math.max(
+    0,
+    params.span.startIndex - params.candidate.sourceStep.span.startIndex,
+  );
+  const relativeEnd = Math.max(
+    relativeStart,
+    params.span.endIndex - params.candidate.sourceStep.span.startIndex,
+  );
+  return params.candidate.sourceStep.text.slice(relativeStart, relativeEnd);
+}
+
 function shouldRewriteCandidate(params: {
   mode: AuthorizedShellRenderMode;
   satisfiedBy: ExecSegmentSatisfiedBy | undefined;
@@ -169,7 +184,10 @@ function replacementForCandidate(params: {
   const spanResult = validateSpan({
     command: params.command,
     span: params.candidate.sourceStep.executableSpan,
-    expectedText: params.candidate.sourceStep.executable,
+    expectedText: sourceStepSlice({
+      candidate: params.candidate,
+      span: params.candidate.sourceStep.executableSpan,
+    }),
   });
   if (!spanResult.ok) {
     return spanResult;

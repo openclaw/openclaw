@@ -302,6 +302,16 @@ describe("exec authorization planner", () => {
     });
   });
 
+  it("does not promote positional shell carriers with outer shell substitutions", async () => {
+    await expectSingleShellCandidate("sh -c '$0 \"$@\"' touch \"$(id)\"", {
+      sourceSegment: expect.objectContaining({
+        argv: ["sh", "-c", '$0 "$@"', "touch", "$(id)"],
+      }),
+      transport: { kind: "direct" },
+      trustMode: "exact-command",
+    });
+  });
+
   it("plans argv shell wrappers through the same candidate contract", async () => {
     const analysis = analyzeArgvCommand({ argv: ["sh", "-c", "whoami && ls"] });
     const plan = await planExecAuthorization({ analysis });

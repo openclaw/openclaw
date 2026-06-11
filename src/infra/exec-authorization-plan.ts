@@ -599,6 +599,9 @@ function wrapperPayloadPlan(params: {
   if (!canUseWrapperShellInvocation(wrapper.segment)) {
     return null;
   }
+  if (!params.allowNestedPayload) {
+    return null;
+  }
   const carriedSteps = positionalCarrierSteps({ wrapper, context: params.context });
   if (carriedSteps) {
     const transport: ExecAuthorizationTransport = {
@@ -614,9 +617,6 @@ function wrapperPayloadPlan(params: {
       risks: params.risks,
     });
     return groups.length > 0 ? applyWrapperPayloadPersistenceBoundary({ wrapper, groups }) : null;
-  }
-  if (!params.allowNestedPayload) {
-    return null;
   }
   if (
     !shouldUseWrapperPayload({

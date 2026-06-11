@@ -1638,6 +1638,9 @@ function resolvePlanPersistenceState(plan: ExecAuthorizationPlan | undefined): {
     if (candidate.trustMode === "prompt-only") {
       reasons.add("prompt-only");
     }
+    if (candidate.trustMode === "executable" && !candidate.allowAlways) {
+      reasons.add("no-reusable-pattern");
+    }
     reusablePatternsAllowed = reusablePatternsAllowed && candidate.allowAlways;
     if (hasRuntimeShellPayload(candidate.sourceSegment.argv)) {
       reasons.add("runtime-payload");
