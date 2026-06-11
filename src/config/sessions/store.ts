@@ -188,6 +188,10 @@ type SingleEntryPersistencePatch = {
   entry: SessionEntry;
 };
 
+// The entry workflow helpers below are the file-backend implementation behind
+// the session-accessor domain boundary and the plugin-SDK compatibility
+// surface (RFC 0007). Internal runtime callers use session-accessor.ts; these
+// become internal as direct callers migrate (#88838).
 type SessionEntryWorkflowOptions = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;

@@ -37,6 +37,13 @@ import type { SessionEntry } from "./types.js";
  * depending on the persisted store layout. Callers provide stable session
  * identity, and this module resolves the current entry/transcript target while
  * preserving canonical-key, transcript-linking, and update-notification rules.
+ *
+ * Ownership contract (#88838): this accessor is the permanent storage-neutral
+ * domain boundary for session/transcript runtime access; the SQLite storage
+ * flip implements this interface. The entry workflow helpers in store.ts are
+ * the file-backend implementation it delegates to plus the plugin-SDK
+ * deprecation-window surface (RFC 0007); they become internal as direct
+ * callers migrate here. New runtime callers use this module, not store.ts.
  */
 export type SessionAccessScope = {
   /** Agent owner used when the session key does not already encode one. */
