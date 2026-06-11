@@ -30,6 +30,18 @@ vi.mock("../config/sessions.js", async () => {
   };
 });
 
+vi.mock("../infra/state-migrations.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/state-migrations.js")>(
+    "../infra/state-migrations.js",
+  )),
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 import { sessionsCommand } from "./sessions.js";
 
 function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {

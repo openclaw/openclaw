@@ -53,6 +53,7 @@ const mockState = vi.hoisted(() => ({
       replyToId?: string;
       replyToCurrent?: boolean;
       isReasoning?: boolean;
+      isStatusNotice?: boolean;
       isError?: boolean;
     };
   }>,
@@ -1486,6 +1487,38 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
+  it("broadcasts agent-run status notices without source reply mirrors", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-status-notice-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "⚙️ Codex compaction started • Context 2k/200k",
+          isStatusNotice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-status-notice",
+      message: "/compact",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-status-notice",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(extractFirstTextBlock(broadcast)).toBe("⚙️ Codex compaction started • Context 2k/200k");
+    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    expect(assistantEntries).toStrictEqual([]);
+  });
+
   it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-agent-source-reply-media-",
@@ -2176,6 +2209,48 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       runId: "idem-agent-source-reply-error",
       status: "ok",
     });
+  });
+
+  it("broadcasts returned agent errors after status notices", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-status-notice-error-");
+    const errorMessage = "LLM idle timeout (120s): no response from model";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "⚙️ Codex compaction started • Context 2k/200k",
+          isStatusNotice: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: errorMessage,
+          isError: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-status-notice-error",
+      message: "/compact",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-status-notice-error",
+      sessionKey: "main",
+      state: "error",
+      errorMessage,
+    });
+    const finalBroadcasts = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "final");
+    expect(finalBroadcasts).toStrictEqual([]);
   });
 
   it("broadcasts returned agent-run error payloads after an agent starts", async () => {

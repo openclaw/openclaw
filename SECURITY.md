@@ -48,6 +48,7 @@ These patterns are usually not vulnerabilities by themselves:
 
 - Prompt injection without a policy, auth, approval, sandbox, or tool-boundary bypass.
 - A trusted operator using an intentional local feature, such as local shell access or browser/script execution.
+- A report whose only primitive is changing the process or child-process environment before running OpenClaw or an executable OpenClaw invokes.
 - A malicious plugin after a trusted operator installs or enables it.
 - Multiple adversarial users sharing one Gateway host/config and expecting per-user isolation.
 - Scanner-only, dependency-only, or stale-path reports without a working repro and demonstrated OpenClaw impact.
@@ -103,6 +104,7 @@ These are frequently reported but are typically closed with no code change:
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
 - Archive/install extraction claims that require pre-existing local filesystem priming in trusted state (for example planting symlink/hardlink aliases under destination directories such as skills/tools paths) without showing an untrusted path that can create/control that primitive.
 - Reports that depend on replacing or rewriting an already-approved executable path on a trusted host (same-path inode/content swap) without showing an untrusted path to perform that write.
+- Reports that depend on attacker-controlled environment variables changing executable behavior, including variables that redirect lookup paths, preload code, select wrappers/interpreters, alter package-manager or runtime hooks, or make one executable call another executable. Control of the process or child-process environment is trusted host/operator control in OpenClaw's model; these reports need a separate OpenClaw boundary bypass that lets untrusted input set or mutate that environment.
 - Reports that depend on pre-existing symlinked skill/workspace filesystem state (for example symlink chains involving `skills/*/SKILL.md`) without showing an untrusted path that can create/control that state.
 - Missing HSTS findings on default local/loopback deployments.
 - Reports against test-only harnesses, QA Lab, QE Lab, E2E fixtures, benchmark rigs, or maintainer-only debugging tools when the vulnerable code is not shipped as a supported production surface.
@@ -161,6 +163,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Reports where exploitability depends on attacker-controlled pre-existing symlink/hardlink filesystem state in trusted local paths (for example extraction/install target trees) unless a separate untrusted boundary bypass is shown that creates that state.
 - Reports whose only claim is sandbox/workspace read expansion through trusted local skill/workspace symlink state (for example `skills/*/SKILL.md` symlink chains) unless a separate untrusted boundary bypass is shown that creates/controls that state.
 - Reports whose only claim is post-approval executable identity drift on a trusted host via same-path file replacement/rewrite unless a separate untrusted boundary bypass is shown for that host write primitive.
+- Reports whose only claim is environment-variable-driven executable behavior change, including path lookup changes, preload hooks, wrapper/interpreter selection, package-manager/runtime hooks, or variables that make an executable invoke another executable, unless a separate OpenClaw boundary bypass lets untrusted input set or mutate that environment.
 - Reports where the only demonstrated impact is an already-authorized sender intentionally invoking a local-action command (for example `/export-session` writing to an absolute host path) without bypassing auth, sandbox, or another documented boundary
 - Reports whose only claim is use of an explicit trusted-operator control surface (for example `canvas.eval`, browser evaluate/script execution, or direct `node.invoke` execution) without demonstrating an auth, policy, allowlist, approval, or sandbox bypass.
 - Reports where the only claim is that a trusted-installed/enabled plugin can execute with gateway/host privileges (documented trust model behavior).
@@ -181,6 +184,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 OpenClaw security guidance assumes:
 
 - The host where OpenClaw runs is within a trusted OS/admin boundary.
+- Anyone who can set or mutate the OpenClaw process environment, launcher environment, or child-process environment is inside that trusted host/operator boundary.
 - Anyone who can modify `~/.openclaw` state/config (including `openclaw.json`) is effectively a trusted operator.
 - A single Gateway shared by mutually untrusted people is **not a recommended setup**. Use separate gateways (or at minimum separate OS users/hosts) per trust boundary.
 - Authenticated Gateway callers are treated as trusted operators. Session identifiers (for example `sessionKey`) are routing controls, not per-user authorization boundaries.

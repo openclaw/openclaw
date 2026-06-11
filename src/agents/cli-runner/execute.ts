@@ -36,6 +36,7 @@ import {
   enqueueCliRun,
   prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -449,9 +450,16 @@ export async function executePreparedCliRun(
           }
         }
 
+        const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
+          config: params.config,
+          lane: params.lane,
+          timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+        });
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
           timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs,
           useResume,
           trigger: params.trigger,
         });
@@ -491,6 +499,26 @@ export async function executePreparedCliRun(
               toolCallId: event.toolCallId,
               isError: event.isError,
               result: sanitizeToolResult(event.result),
+            },
+          });
+        };
+        let commentaryCounter = 0;
+        const emitCliCommentaryText = (text: string) => {
+          commentaryCounter += 1;
+          const transformedText = applyPluginTextReplacements(
+            text,
+            context.backendResolved.textTransforms?.output,
+          );
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "item",
+            data: {
+              kind: "preamble",
+              itemId: `commentary-${params.runId}-${commentaryCounter}`,
+              phase: "update",
+              title: "commentary",
+              status: "running",
+              progressText: transformedText,
             },
           });
         };
@@ -536,6 +564,8 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
+            classifyCommentaryText: context.params.classifyCommentaryText,
+            onCommentaryText: context.params.emitCommentaryText ? emitCliCommentaryText : undefined,
             cleanup: async () => {
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
@@ -580,6 +610,10 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
+              classifyCommentaryText: context.params.classifyCommentaryText,
+              onCommentaryText: context.params.emitCommentaryText
+                ? emitCliCommentaryText
+                : undefined,
             })
           : null;
         const supervisor = executeDeps.getProcessSupervisor();

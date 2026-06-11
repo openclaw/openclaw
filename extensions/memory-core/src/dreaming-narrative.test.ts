@@ -1020,20 +1020,24 @@ describe("generateAndAppendDreamNarrative", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     const orphanPath = path.join(sessionsDir, "orphan.jsonl");
     const livePath = path.join(sessionsDir, "still-live.jsonl");
-    await fs.writeFile(
+    const updatedAt = Date.now();
+    await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
-      `${JSON.stringify({
+      {
         "agent:main:dreaming-narrative-light-1": {
           sessionId: "missing",
+          updatedAt,
         },
         "agent:main:kept-session": {
           sessionId: "still-live",
+          updatedAt,
         },
         "agent:main:telegram:group:dreaming-narrative-room": {
           sessionId: "still-missing-non-dreaming",
+          updatedAt,
         },
-      })}\n`,
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
     await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
@@ -1063,10 +1067,9 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const updatedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      unknown
-    >;
+    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
+      skipCache: true,
+    }) as Record<string, unknown>;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
@@ -1088,20 +1091,24 @@ describe("generateAndAppendDreamNarrative", () => {
     // A second dreaming row whose transcript is fresh (a live/just-started run)
     // must be preserved.
     const liveTranscript = path.join(sessionsDir, "live-dreaming.jsonl");
-    await fs.writeFile(
+    const updatedAt = Date.now();
+    await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
-      `${JSON.stringify({
+      {
         "agent:main:dreaming-narrative-deep-orphan": {
           sessionId: "orphan-dreaming",
+          updatedAt,
         },
         "agent:main:dreaming-narrative-deep-live": {
           sessionId: "live-dreaming",
+          updatedAt,
         },
         "agent:main:kept-session": {
           sessionId: "still-live",
+          updatedAt,
         },
-      })}\n`,
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     await fs.writeFile(orphanTranscript, '{"runId":"dreaming-narrative-deep-orphan"}\n', "utf-8");
     await fs.writeFile(liveTranscript, '{"runId":"dreaming-narrative-deep-live"}\n', "utf-8");
@@ -1133,10 +1140,9 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const updatedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      unknown
-    >;
+    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
+      skipCache: true,
+    }) as Record<string, unknown>;
     // The aged orphan dreaming row is reclaimed even though its transcript existed.
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-deep-orphan");
     // The fresh dreaming row and the non-dreaming row survive.

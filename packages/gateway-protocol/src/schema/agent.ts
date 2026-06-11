@@ -219,6 +219,7 @@ export const AgentParamsSchema = Type.Object(
     ),
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
+    execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     suppressPromptPersistence: Type.Optional(Type.Boolean()),
@@ -274,6 +275,12 @@ export const WakeParamsSchema = Type.Object(
     // Typed field; misspelled variants remain opaque metadata because wake
     // senders already rely on additionalProperties.
     sessionKey: Type.Optional(NonEmptyString),
+    /**
+     * Optional agent id paired with `sessionKey`. Routes multi-agent setups
+     * to the agent that owns the targeted session — closes the related half
+     * of #46886 ("always routes to default agent").
+     */
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

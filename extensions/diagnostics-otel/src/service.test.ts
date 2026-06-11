@@ -408,6 +408,22 @@ function emitTrustedModelCallCompletedWithContent(
   );
 }
 
+function emitTrustedToolExecutionCompletedWithContent(
+  event: Omit<
+    Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "tool.execution.completed" }>,
+    "type"
+  >,
+  toolContent: NonNullable<DiagnosticEventPrivateData["toolContent"]>,
+) {
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "tool.execution.completed",
+      ...event,
+    },
+    { toolContent },
+  );
+}
+
 afterAll(() => {
   vi.doUnmock("@opentelemetry/api");
   vi.doUnmock("@opentelemetry/sdk-node");
@@ -3991,15 +4007,18 @@ describe("diagnostics-otel service", () => {
         systemPrompt: "private system prompt",
       },
     );
-    emitDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-1",
-      toolName: "read",
-      toolCallId: "tool-1",
-      durationMs: 20,
-      toolInput: "private tool input",
-      toolOutput: "private tool output",
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedToolExecutionCompletedWithContent(
+      {
+        runId: "run-1",
+        toolName: "read",
+        toolCallId: "tool-1",
+        durationMs: 20,
+      },
+      {
+        toolInput: "private tool input",
+        toolOutput: "private tool output",
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelOptions = startedSpanOptions("openclaw.model.call");
@@ -4052,15 +4071,18 @@ describe("diagnostics-otel service", () => {
         systemPrompt: "system prompt",
       },
     );
-    emitDiagnosticEvent({
-      type: "tool.execution.completed",
-      runId: "run-1",
-      toolName: "read",
-      toolCallId: "tool-1",
-      durationMs: 20,
-      toolInput: "tool input",
-      toolOutput: `${"x".repeat(4077)} Bearer ${"a".repeat(80)}`, // pragma: allowlist secret
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedToolExecutionCompletedWithContent(
+      {
+        runId: "run-1",
+        toolName: "read",
+        toolCallId: "tool-1",
+        durationMs: 20,
+      },
+      {
+        toolInput: "tool input",
+        toolOutput: `${"x".repeat(4077)} Bearer ${"a".repeat(80)}`, // pragma: allowlist secret
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
