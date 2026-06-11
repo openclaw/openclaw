@@ -703,6 +703,7 @@ describe("test-projects args", () => {
           "extensions/memory-core/src/memory/index.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
+          "extensions/memory-core/src/memory/manager.providerkey-auto-fix.test.ts",
           "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
         ],
         watchMode: false,
