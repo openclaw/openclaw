@@ -401,6 +401,26 @@ export type GatewayWsMessageHandlerParams = {
   logWsControl: SubsystemLogger;
 };
 
+export function formatAuditList(items: string[] | undefined): string {
+  if (!items || items.length === 0) {
+    return "<none>";
+  }
+  const out = new Set<string>();
+  for (const item of items) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    const trimmed = item.trim();
+    if (trimmed) {
+      out.add(trimmed);
+    }
+  }
+  if (out.size === 0) {
+    return "<none>";
+  }
+  return [...out].toSorted().join(",");
+}
+
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
@@ -1170,22 +1190,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         );
         let hasServerApprovedDeviceTokenBaseline = false;
         if (device && devicePublicKey) {
-          const formatAuditList = (items: string[] | undefined): string => {
-            if (!items || items.length === 0) {
-              return "<none>";
-            }
-            const out = new Set<string>();
-            for (const item of items) {
-              const trimmed = item.trim();
-              if (trimmed) {
-                out.add(trimmed);
-              }
-            }
-            if (out.size === 0) {
-              return "<none>";
-            }
-            return [...out].toSorted().join(",");
-          };
           const logUpgradeAudit = (
             reason: "role-upgrade" | "scope-upgrade",
             currentRoles: string[] | undefined,
@@ -2211,5 +2215,6 @@ function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
 
 export const testing = {
   resolvePinnedClientMetadata,
+  formatAuditList,
 };
 export { testing as __testing };
