@@ -1,6 +1,8 @@
-export const SECURITY_MATRIX_TRUST_SOURCES = [
-  "agent",
-  "user",
+export const SECURITY_MATRIX_ACTORS = ["user", "agent", "system", "tool", "unknown"] as const;
+
+export type SecurityMatrixActor = (typeof SECURITY_MATRIX_ACTORS)[number];
+
+export const SECURITY_MATRIX_INFLUENCE_SOURCES = [
   "web_fetch",
   "browser",
   "email",
@@ -9,10 +11,14 @@ export const SECURITY_MATRIX_TRUST_SOURCES = [
   "webhook",
   "memory",
   "skill",
+  "api",
+  "channel_metadata",
   "unknown_external",
 ] as const;
 
-export type SecurityMatrixTrustSource = (typeof SECURITY_MATRIX_TRUST_SOURCES)[number];
+export type SecurityMatrixInfluenceSource = (typeof SECURITY_MATRIX_INFLUENCE_SOURCES)[number];
+
+export type SecurityMatrixPolicySource = SecurityMatrixInfluenceSource | "none";
 
 export const SECURITY_MATRIX_TOOL_CAPABILITIES = [
   "read_file",
@@ -32,6 +38,20 @@ export const SECURITY_MATRIX_TOOL_CAPABILITIES = [
 
 export type SecurityMatrixToolCapability = (typeof SECURITY_MATRIX_TOOL_CAPABILITIES)[number];
 
+export const SECURITY_MATRIX_APPROVAL_STATES = [
+  "none",
+  "requested",
+  "approved",
+  "denied",
+  "not_required",
+] as const;
+
+export type SecurityMatrixApprovalState = (typeof SECURITY_MATRIX_APPROVAL_STATES)[number];
+
+export const SECURITY_MATRIX_OPERATOR_POLICIES = ["unknown", "allowed", "denied"] as const;
+
+export type SecurityMatrixOperatorPolicy = (typeof SECURITY_MATRIX_OPERATOR_POLICIES)[number];
+
 export const SECURITY_MATRIX_DECISIONS = ["allow", "warn", "require_confirm", "block"] as const;
 
 export type SecurityMatrixDecision = (typeof SECURITY_MATRIX_DECISIONS)[number];
@@ -43,24 +63,39 @@ export type SecurityMatrixRule = {
 
 export type SecurityMatrixPolicy = Partial<
   Record<
-    SecurityMatrixTrustSource,
+    SecurityMatrixPolicySource,
     Partial<Record<SecurityMatrixToolCapability, SecurityMatrixDecision | SecurityMatrixRule>>
   >
 >;
 
 export type SecurityMatrixEvaluationInput = {
-  readonly source: string;
+  /** Actor requesting the tool call. This is not a trust source. */
+  readonly actor?: string;
+  /** Compatibility shorthand for a single influence source. Actor-like values are ignored. */
+  readonly source?: string;
+  /** External or stored content sources that influenced the tool decision. */
+  readonly influencedBy?: readonly string[];
   readonly capability: string;
+  readonly approvalState?: string;
+  readonly operatorPolicy?: string;
   readonly policy?: SecurityMatrixPolicy;
   readonly defaultDecision?: SecurityMatrixDecision;
+  /** Explicit escape hatch for owner-approved policy experiments that weaken defaults. */
+  readonly allowPolicyWeakening?: boolean;
 };
 
 export type SecurityMatrixEvaluation = {
-  readonly source: SecurityMatrixTrustSource;
-  readonly originalSource: string;
+  readonly actor: SecurityMatrixActor;
+  readonly source: SecurityMatrixPolicySource;
+  readonly originalSource?: string;
+  readonly influencedBy: readonly SecurityMatrixInfluenceSource[];
+  readonly originalInfluences: readonly string[];
   readonly capability: SecurityMatrixToolCapability;
   readonly originalCapability: string;
+  readonly approvalState: SecurityMatrixApprovalState;
+  readonly operatorPolicy: SecurityMatrixOperatorPolicy;
+  readonly policyDecision: SecurityMatrixDecision;
   readonly decision: SecurityMatrixDecision;
   readonly reason: string;
-  readonly matched: "policy" | "fallback";
+  readonly matched: "policy" | "fallback" | "operator_policy" | "approval_state";
 };
