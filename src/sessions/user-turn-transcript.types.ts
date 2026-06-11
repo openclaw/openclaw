@@ -29,7 +29,6 @@ export type UserTurnInput = {
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
-  senderE164?: string | null;
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";
