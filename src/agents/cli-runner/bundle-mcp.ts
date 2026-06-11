@@ -149,6 +149,7 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  agentId?: string;
   additionalConfig?: BundleMcpConfig;
   env?: Record<string, string>;
   warn?: (message: string) => void;
@@ -180,6 +181,7 @@ export async function prepareCliBundleMcpConfig(params: {
   const bundleConfig = loadMergedBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.config,
+    agentId: params.agentId,
     mapConfiguredServer: toCliBundleMcpServerConfig,
   });
   for (const diagnostic of bundleConfig.diagnostics) {

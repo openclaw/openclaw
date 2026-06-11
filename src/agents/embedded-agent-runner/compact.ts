@@ -96,8 +96,8 @@ import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
-import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
+import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -1180,6 +1180,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
         pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
           config: params.config,
           env: process.env,

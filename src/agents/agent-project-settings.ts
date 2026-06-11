@@ -13,6 +13,7 @@ function createEmbeddedAgentSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): SettingsManager {
   const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
@@ -20,6 +21,7 @@ function createEmbeddedAgentSettingsManager(params: {
   const pluginSettings = loadEnabledBundleAgentSettingsSnapshot({
     cwd: params.cwd,
     cfg: params.cfg,
+    agentId: params.agentId,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   });
   const hasPluginSettings = Object.keys(pluginSettings).length > 0;
@@ -53,6 +55,7 @@ export function createPreparedEmbeddedAgentSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
