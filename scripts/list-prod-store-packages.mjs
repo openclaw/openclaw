@@ -6,11 +6,10 @@ import { parse } from "yaml";
 const parsed = JSON.parse(fs.readFileSync(0, "utf8"));
 const roots = Array.isArray(parsed) ? parsed : [parsed];
 const specs = new Set();
-const targetOs = process.env.OPENCLAW_STORE_PACKAGE_OS || process.platform;
 const target = {
-  cpu: process.env.OPENCLAW_STORE_PACKAGE_CPU || process.arch,
-  libc: process.env.OPENCLAW_STORE_PACKAGE_LIBC || detectLibc(targetOs),
-  os: targetOs,
+  cpu: process.arch,
+  libc: detectLibc(),
+  os: process.platform,
 };
 
 function packageSpec(name, version) {
@@ -28,12 +27,9 @@ function packageSpec(name, version) {
   return `${name}@${normalizedVersion}`;
 }
 
-function detectLibc(os = process.platform) {
-  if (os !== "linux") {
-    return undefined;
-  }
+function detectLibc() {
   if (process.platform !== "linux") {
-    return "glibc";
+    return undefined;
   }
   const report = process.report?.getReport?.();
   return report?.header?.glibcVersionRuntime ? "glibc" : "musl";

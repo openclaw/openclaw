@@ -16,20 +16,6 @@ function runListProdStorePackages(input: unknown, cwd = process.cwd()) {
   });
 }
 
-function runListProdStorePackagesForLinuxX64(input: unknown, cwd = process.cwd()) {
-  return spawnSync(process.execPath, [scriptPath], {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_STORE_PACKAGE_CPU: "x64",
-      OPENCLAW_STORE_PACKAGE_LIBC: "glibc",
-      OPENCLAW_STORE_PACKAGE_OS: "linux",
-    },
-    input: JSON.stringify(input),
-  });
-}
-
 describe("list-prod-store-packages", () => {
   afterEach(() => {
     cleanupTempDirs(tempDirs);
@@ -255,58 +241,5 @@ describe("list-prod-store-packages", () => {
     expect(result.stdout.split("\n").filter(Boolean)).toEqual(
       [expectedPlatformPackage, "@zed-industries/codex-acp@0.15.0"].filter(Boolean),
     );
-  });
-
-  it("skips pnpm list packages that cannot run on the target Docker platform", () => {
-    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
-    writeFileSync(
-      join(cwd, "pnpm-lock.yaml"),
-      [
-        "lockfileVersion: '10.0'",
-        "",
-        "packages:",
-        "  '@openai/codex@0.135.0':",
-        "    resolution: {integrity: sha512-test}",
-        "  '@openai/codex@0.135.0-darwin-arm64':",
-        "    resolution: {integrity: sha512-test}",
-        "    cpu: [arm64]",
-        "    os: [darwin]",
-        "  '@openai/codex@0.135.0-linux-x64':",
-        "    resolution: {integrity: sha512-test}",
-        "    cpu: [x64]",
-        "    os: [linux]",
-        "",
-        "snapshots: {}",
-        "",
-      ].join("\n"),
-    );
-    const result = runListProdStorePackagesForLinuxX64(
-      {
-        dependencies: {
-          codex: {
-            from: "@openai/codex",
-            resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0.tgz",
-            version: "0.135.0",
-            dependencies: {
-              codexDarwin: {
-                from: "@openai/codex",
-                resolved:
-                  "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-darwin-arm64.tgz",
-                version: "0.135.0-darwin-arm64",
-              },
-              codexLinux: {
-                from: "@openai/codex",
-                resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.135.0-linux-x64.tgz",
-                version: "0.135.0-linux-x64",
-              },
-            },
-          },
-        },
-      },
-      cwd,
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("@openai/codex@0.135.0\n@openai/codex@0.135.0-linux-x64");
   });
 });
