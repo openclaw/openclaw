@@ -12,6 +12,7 @@ describe("cron stagger helpers", () => {
     expect(isRecurringTopOfHourCronExpr("0 * * * *")).toBe(true);
     expect(isRecurringTopOfHourCronExpr("0 */2 * * *")).toBe(true);
     expect(isRecurringTopOfHourCronExpr("0 0 */3 * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0 */2,3 * * *")).toBe(true);
     expect(isRecurringTopOfHourCronExpr("0 7 * * *")).toBe(false);
     expect(isRecurringTopOfHourCronExpr("15 * * * *")).toBe(false);
   });
