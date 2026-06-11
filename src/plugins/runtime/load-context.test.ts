@@ -121,6 +121,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       logger: context.logger,
       manifestRegistry,
       installRecords: {},
+      rawConfigEnvVarsResolved: false,
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       allowWorkspaceScopedCurrent: true,
@@ -277,6 +278,11 @@ describe("resolvePluginRuntimeLoadContext", () => {
       apiKey: "resolved-from-config",
     });
     expect(options.resolveRawConfigEnvVars).toBeUndefined();
+    // The load options keep the raw-mode marker so the loader applies raw
+    // cache semantics (no registry reuse, redacted cache keys) without
+    // resolving a second time.
+    expect(context.rawConfigEnvVarsResolved).toBe(true);
+    expect(options.rawConfigEnvVarsResolved).toBe(true);
   });
 
   it("preserves $${VAR} escapes as literals when resolving a raw config", () => {
@@ -352,5 +358,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       apiKey: "${PIONEER_API_KEY}",
     });
     expect(context.activationSourceConfig).toBe(preparedConfig);
+    expect(context.rawConfigEnvVarsResolved).toBe(false);
+    expect(buildPluginRuntimeLoadOptions(context).rawConfigEnvVarsResolved).toBeUndefined();
   });
 });

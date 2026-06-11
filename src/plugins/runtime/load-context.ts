@@ -32,6 +32,12 @@ export type PluginRuntimeLoadContext = {
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   installRecords?: Record<string, PluginInstallRecord>;
+  /**
+   * True when this context performed the single raw-config env substitution
+   * pass. Loads built from it must keep raw-mode cache semantics: resolved
+   * values can change between calls and must never enter cache keys.
+   */
+  rawConfigEnvVarsResolved: boolean;
 };
 
 /** Runtime load option values that can be passed directly to plugin loading. */
@@ -45,6 +51,7 @@ export type PluginRuntimeResolvedLoadValues = Pick<
   | "logger"
   | "manifestRegistry"
   | "installRecords"
+  | "rawConfigEnvVarsResolved"
 >;
 
 /** Options accepted while resolving plugin runtime load context. */
@@ -81,12 +88,14 @@ export function resolvePluginRuntimeLoadContext(
 ): PluginRuntimeLoadContext {
   const baseEnv = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
-  const env = createConfigRuntimeEnv(rawConfig, baseEnv);
   // Env placeholders resolve only for caller-supplied raw config; the
   // getRuntimeConfig() default is already substituted and a second pass would
   // resolve escaped $${VAR} literals.
   const shouldResolveRawConfigEnvVars =
     options?.resolveRawConfigEnvVars === true && options.config !== undefined;
+  // Merge config env.vars only for that raw substitution pass; prepared
+  // contexts keep the caller env object untouched (callers rely on identity).
+  const env = shouldResolveRawConfigEnvVars ? createConfigRuntimeEnv(rawConfig, baseEnv) : baseEnv;
   const resolvedRawConfig = shouldResolveRawConfigEnvVars
     ? (resolveConfigEnvVars(rawConfig, env, {
         onMissing: () => undefined,
@@ -148,6 +157,7 @@ export function resolvePluginRuntimeLoadContext(
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
     manifestRegistry,
     installRecords,
+    rawConfigEnvVarsResolved: shouldResolveRawConfigEnvVars,
   };
 }
 
@@ -173,6 +183,7 @@ export function buildPluginRuntimeLoadOptionsFromValues(
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
+    ...(values.rawConfigEnvVarsResolved === true ? { rawConfigEnvVarsResolved: true } : {}),
     ...overrides,
   };
 }
