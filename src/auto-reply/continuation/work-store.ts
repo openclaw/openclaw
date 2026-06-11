@@ -41,6 +41,10 @@ const PendingWorkStateSchema = z.object({
   releasedAt: z.number().int().nonnegative().optional(),
   turnGrantedAt: z.number().int().nonnegative().optional(),
   retryCount: z.number().int().nonnegative().optional(),
+  // #990 Pillar-0: consecutive PRE-drive busy-skip (requests-in-flight/draining)
+  // count for exp-backoff on the re-arm. DISTINCT from retryCount — a busy-skip is
+  // a legit defer, never a failed attempt, so it must not feed the fail-bound.
+  busySkipCount: z.number().int().nonnegative().optional(),
 });
 
 type PendingWorkState = z.infer<typeof PendingWorkStateSchema>;
@@ -59,6 +63,9 @@ export type PendingContinuationWork = {
   chainId?: string;
   traceparent?: string;
   retryCount?: number;
+  // #990 Pillar-0: consecutive busy-skip count for exp-backoff on the busy re-arm.
+  // Distinct from retryCount (the transient-error fail-bound). Never penalizes.
+  busySkipCount?: number;
   flowId?: string;
   expectedRevision?: number;
   // Durable flow status carried onto the runtime object by the store reader
@@ -109,6 +116,7 @@ function workToRuntime(
     ...(state.chainId ? { chainId: state.chainId } : {}),
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.retryCount !== undefined ? { retryCount: state.retryCount } : {}),
+    ...(state.busySkipCount !== undefined ? { busySkipCount: state.busySkipCount } : {}),
     status,
     flowId: flow.flowId,
     expectedRevision: flow.revision,
@@ -159,15 +167,30 @@ export function consumePendingWork(
   const now = Date.now();
   const work: PendingContinuationWork[] = [];
   for (const flow of listTaskFlowsForOwnerKey(sessionKey)
-    .filter((candidate) =>
-      options.includeRunning
-        ? isContinuationWorkFlow(candidate) &&
-          (candidate.status === "queued" ||
-            (candidate.status === "running" &&
-              (options.includeRunningUpdatedAtOrBefore === undefined ||
-                candidate.updatedAt <= options.includeRunningUpdatedAtOrBefore)))
-        : isContinuationWorkFlow(candidate) && candidate.status === "queued",
-    )
+    .filter((candidate) => {
+      if (!isContinuationWorkFlow(candidate)) {
+        return false;
+      }
+      // #990 Pillar-0 (:259 dedup harden): a cancel-requested flow is terminating
+      // — never consume/drive it. cancelFlowById finalizes managed continuation
+      // work to `cancelled` synchronously, but a transient revision conflict can
+      // leave it cancelRequestedAt-marked yet not-yet-terminal until the
+      // maintenance reaper (task-flow-registry.maintenance.ts) finalizes it.
+      // Honoring the request here means a cancelled wake is never granted a turn
+      // out from under the cancel. Terminal statuses are already excluded below.
+      if (candidate.cancelRequestedAt != null) {
+        return false;
+      }
+      if (options.includeRunning) {
+        return (
+          candidate.status === "queued" ||
+          (candidate.status === "running" &&
+            (options.includeRunningUpdatedAtOrBefore === undefined ||
+              candidate.updatedAt <= options.includeRunningUpdatedAtOrBefore))
+        );
+      }
+      return candidate.status === "queued";
+    })
     .toSorted((a, b) => a.createdAt - b.createdAt)) {
     const state = decodeWorkState(flow);
     if (!state) {
@@ -238,6 +261,9 @@ export function markPendingWorkTurnGranted(work: PendingContinuationWork): boole
         maxChainLength: work.maxChainLength,
       }),
       turnGrantedAt: now,
+      // #990 Pillar-0: a flow that drove is no longer busy-deferred — clear the
+      // exp-backoff counter so the granted record never carries a stale rate-cap.
+      busySkipCount: 0,
     },
     updatedAt: now,
     endedAt: now,
@@ -252,7 +278,7 @@ export function markPendingWorkTurnGranted(work: PendingContinuationWork): boole
 
 export function requeuePendingWork(
   work: PendingContinuationWork,
-  params: { dueAt: number; summary: string; retryCount?: number },
+  params: { dueAt: number; summary: string; retryCount?: number; busySkipCount?: number },
 ): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
     return false;
@@ -271,6 +297,7 @@ export function requeuePendingWork(
     }),
     dueAt: params.dueAt,
     ...(params.retryCount !== undefined ? { retryCount: params.retryCount } : {}),
+    ...(params.busySkipCount !== undefined ? { busySkipCount: params.busySkipCount } : {}),
   };
   const updated = updateFlowRecordByIdExpectedRevision({
     flowId: work.flowId,

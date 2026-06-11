@@ -136,6 +136,7 @@ type MockFlow = {
   createdAt: number;
   updatedAt: number;
   endedAt?: number;
+  cancelRequestedAt?: number;
 };
 
 const mockFlows = new Map<string, MockFlow>();
@@ -229,6 +230,7 @@ import {
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   dispatchPendingContinuationWork,
+  computeBusySkipBackoffMs,
   partitionSupersededWork,
   recoverPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
@@ -786,8 +788,8 @@ describe("durable continuation_work dispatch", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await flushTimers();
 
-    const deliveredReasons = turnGrants.map((grant) =>
-      String((grant as { context: { Body: string } }).context.Body),
+    const deliveredReasons = turnGrants.map(
+      (grant) => (grant as { context: { Body: string } }).context.Body,
     );
     expect(deliveredReasons).toHaveLength(2);
     expect(deliveredReasons.some((body) => body.includes("fit-1"))).toBe(true);
@@ -886,6 +888,196 @@ describe("durable continuation_work dispatch", () => {
       false,
     );
   });
+
+  it("backs off exponentially on consecutive busy-skip re-arms instead of a flat 1s (#990 Pillar-0)", async () => {
+    // RED against the old flat BUSY_RETRY_MS: step 1 would re-arm at 1s again (and
+    // carry no busySkipCount) instead of doubling. The storm was exactly this flat
+    // ~1Hz re-arm on a chronically-busy seat.
+    const sessionKey = "agent:main:busy-backoff";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey); // chronically busy: every drive busy-skips
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "storm",
+    });
+
+    // 2^0..2^6 * 1s, capped at maxDelayMs (60s in test config), then flat at cap.
+    const expectedDelays = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000];
+    for (let i = 0; i < expectedDelays.length; i++) {
+      await dispatchPendingContinuationWork({ sessionKey });
+      // Drop the just-armed hedge so we drive each re-consume deterministically.
+      resetContinuationWorkDispatchForTests();
+      const flow = [...mockFlows.values()][0];
+      expect(flow?.status).toBe("queued");
+      const state = flow?.stateJson as {
+        dueAt: number;
+        busySkipCount?: number;
+        retryCount?: number;
+      };
+      expect(state.dueAt - Date.now()).toBe(expectedDelays[i]);
+      expect(state.busySkipCount).toBe(i + 1);
+      expect(state.retryCount).toBeUndefined(); // busy-skip never penalizes
+      // Mature the flow for the next consume (no hedge armed; clock-only advance).
+      await vi.advanceTimersByTimeAsync(expectedDelays[i]);
+    }
+
+    expect(turnGrants).toHaveLength(0); // never driven while busy, never dropped
+    expect(systemEvents).toEqual([]); // never failed
+  });
+
+  it("never increments retryCount or drops the flow across many busy-skips (rate-cap-forever, #952 never-penalize)", async () => {
+    const sessionKey = "agent:main:busy-forever";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "forever busy",
+    });
+
+    // Far more skips than MAX_TRANSIENT_ERROR_RETRY_COUNT (8): a busy-defer must
+    // never approach the fail-bound, never fail, never drop.
+    for (let i = 0; i < 20; i++) {
+      await dispatchPendingContinuationWork({ sessionKey });
+      resetContinuationWorkDispatchForTests();
+      await vi.advanceTimersByTimeAsync(60_000); // mature past the ceiling each loop
+    }
+
+    const flow = [...mockFlows.values()][0];
+    expect(flow?.status).toBe("queued"); // never failed/dropped — still deliverable
+    const state = flow?.stateJson as { busySkipCount?: number; retryCount?: number };
+    expect(state.busySkipCount).toBe(20);
+    expect(state.retryCount).toBeUndefined();
+    expect(turnGrants).toHaveLength(0);
+    expect(systemEvents).toEqual([]); // no failure warning ever enqueued
+  });
+
+  it("resets busySkipCount to 0 and delivers once a busy-deferred flow finally drives (#990 Pillar-0 + #952-preserve)", async () => {
+    const sessionKey = "agent:main:busy-then-drive";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "deferred then drives",
+    });
+
+    for (let i = 0; i < 3; i++) {
+      await dispatchPendingContinuationWork({ sessionKey });
+      resetContinuationWorkDispatchForTests();
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+    const deferredState = [...mockFlows.values()][0]?.stateJson as { busySkipCount?: number };
+    expect(deferredState.busySkipCount).toBe(3);
+
+    // Seat quiets: the legit-deferred flow delivers (never dropped, #952), and the
+    // granted record clears the backoff counter (rate-cap, never permanent).
+    activeSessions.clear();
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 1, failed: 0 });
+    const flow = [...mockFlows.values()][0];
+    expect(flow?.status).toBe("succeeded");
+    const state = flow?.stateJson as { busySkipCount?: number; turnGrantedAt?: number };
+    expect(state.busySkipCount).toBe(0);
+    expect(state.turnGrantedAt).toBeGreaterThan(0);
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("deferred then drives") }),
+      }),
+    ]);
+  });
+
+  it("does not re-consume a cancel-requested continuation work flow (:259 dedup harden, #990 Pillar-0)", async () => {
+    const sessionKey = "agent:main:cancel-requested";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "cancel requested",
+    });
+    const flow = [...mockFlows.values()][0];
+    if (!flow) {
+      throw new Error("expected mock flow");
+    }
+    // User requested cancel; the maintenance reaper has not yet finalized it.
+    flow.cancelRequestedAt = Date.now();
+
+    const result = await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0 });
+    expect(turnGrants).toHaveLength(0);
+    // Left untouched (still queued) for the reaper to finalize — not driven.
+    expect([...mockFlows.values()][0]?.status).toBe("queued");
+  });
+
+  it("does not re-consume a terminal (succeeded) continuation work flow (:259 structural dedup)", async () => {
+    const sessionKey = "agent:main:already-succeeded";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "already succeeded",
+    });
+    const flow = [...mockFlows.values()][0];
+    if (!flow) {
+      throw new Error("expected mock flow");
+    }
+    flow.status = "succeeded";
+
+    const result = await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0 });
+    expect(turnGrants).toHaveLength(0);
+  });
+});
+
+describe("#990 Pillar-0 computeBusySkipBackoffMs (exp-backoff)", () => {
+  it("doubles BUSY_RETRY_MS per consecutive busy-skip and caps at the ceiling", () => {
+    const ceiling = 60_000;
+    expect(computeBusySkipBackoffMs(0, ceiling)).toBe(1_000);
+    expect(computeBusySkipBackoffMs(1, ceiling)).toBe(2_000);
+    expect(computeBusySkipBackoffMs(2, ceiling)).toBe(4_000);
+    expect(computeBusySkipBackoffMs(3, ceiling)).toBe(8_000);
+    expect(computeBusySkipBackoffMs(4, ceiling)).toBe(16_000);
+    expect(computeBusySkipBackoffMs(5, ceiling)).toBe(32_000);
+    expect(computeBusySkipBackoffMs(6, ceiling)).toBe(60_000); // 64s clamped to 60s
+    expect(computeBusySkipBackoffMs(7, ceiling)).toBe(60_000);
+  });
+
+  it("clamps to the ceiling without overflow for very large counts", () => {
+    expect(computeBusySkipBackoffMs(1_000, 60_000)).toBe(60_000); // 2**1000 -> Infinity, clamped
+    expect(computeBusySkipBackoffMs(-5, 60_000)).toBe(1_000); // negative guarded to 2^0
+  });
 });
 
 function work(
@@ -940,7 +1132,7 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     ];
     const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
     expect(drive.map((w) => w.hop)).toEqual([3]); // newest-elected drives
-    expect(superseded.map((w) => w.hop).toSorted()).toEqual([1, 2]);
+    expect(superseded.map((w) => w.hop).toSorted((a, b) => a - b)).toEqual([1, 2]);
   });
 
   it("preserves a close burst that is not yet stale (within grace)", () => {
@@ -963,7 +1155,7 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     ];
     const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
     // newest (hop 3) always drives; hop 2 within grace drives; hop 1 stale folds.
-    expect(drive.map((w) => w.hop).toSorted()).toEqual([2, 3]);
+    expect(drive.map((w) => w.hop).toSorted((a, b) => a - b)).toEqual([2, 3]);
     expect(superseded.map((w) => w.hop)).toEqual([1]);
   });
 
@@ -979,7 +1171,7 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
     // The highest-hop (3) is the kept newest — NOT the first array row (hop 1).
     expect(drive.map((w) => w.hop)).toEqual([3]);
-    expect(superseded.map((w) => w.hop).toSorted()).toEqual([1, 2]);
+    expect(superseded.map((w) => w.hop).toSorted((a, b) => a - b)).toEqual([1, 2]);
   });
 
   it("never supersedes a recovered running member even when stale and not newest (#988-P2-1)", () => {
