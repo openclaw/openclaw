@@ -20,7 +20,10 @@ import {
 } from "../plugins/bundled-sources.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
-import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import {
+  enableExplicitlySelectedPluginInConfig,
+  type PluginEnableResult,
+} from "../plugins/enable.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -518,7 +521,7 @@ async function applyPluginEnablement(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 }): Promise<PluginEnableResult> {
-  const enableResult = enablePluginInConfig(params.cfg, params.pluginId);
+  const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, params.pluginId);
   if (enableResult.enabled) {
     return enableResult;
   }

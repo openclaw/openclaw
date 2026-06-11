@@ -1808,6 +1808,7 @@ export async function runEmbeddedAttempt(
         defaultModel: defaultModelLabel,
         shell: detectRuntimeShell(),
         channel: runtimeChannel,
+        chatType: params.chatType,
         capabilities: runtimeCapabilities,
         channelActions,
         activeProcessSessions,
@@ -2640,6 +2641,20 @@ export async function runEmbeddedAttempt(
           transformSystemPrompt: false,
         });
       }
+      const nativeWebSearchPolicyContext = {
+        sessionKey: sandboxSessionKey,
+        sandboxToolPolicy: sandbox?.tools,
+        messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+        agentAccountId: params.agentAccountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      };
 
       applyExtraParamsToAgent(
         activeSession.agent,
@@ -2653,7 +2668,10 @@ export async function runEmbeddedAttempt(
         params.model,
         agentDir,
         resolvedTransport,
-        { preparedExtraParams: effectiveExtraParams },
+        {
+          preparedExtraParams: effectiveExtraParams,
+          nativeWebSearchPolicyContext,
+        },
       );
       if (codeModeControlsEnabledForRun) {
         activeSession.agent.streamFn = createCodexNativeWebSearchWrapper(
@@ -2661,6 +2679,8 @@ export async function runEmbeddedAttempt(
           {
             config: params.config,
             agentDir,
+            agentId: sessionAgentId,
+            ...nativeWebSearchPolicyContext,
             codeModeToolSurfaceEnabled: true,
           },
         );
@@ -3311,6 +3331,7 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        getLastAssistantTextMessageIndex,
         toolMetas,
         getAcceptedSessionSpawns,
         runToolLifecycle,
@@ -5230,6 +5251,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot,
         ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
         assistantTexts,
+        lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
         toolMetas: toolMetasNormalized,
         acceptedSessionSpawns,
         lastAssistant,

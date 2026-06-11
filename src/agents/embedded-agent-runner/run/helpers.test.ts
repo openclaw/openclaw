@@ -7,6 +7,9 @@ import {
   buildErrorAgentMeta,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveNextSameModelRateLimitRetryCount,
+  resolveSameModelRateLimitBackoffMs,
+  resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
 
 function makeAssistantMessage(
@@ -82,6 +85,79 @@ describe("resolveFinalAssistantVisibleText", () => {
     ]);
 
     expect(resolveFinalAssistantRawText(lastAssistant)).toBe("<final>keep this</final>");
+  });
+});
+
+describe("resolveSameModelRateLimitBackoffMs", () => {
+  it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
+    expect(resolveSameModelRateLimitBackoffMs(0)).toBe(10_000);
+    expect(resolveSameModelRateLimitBackoffMs(1)).toBe(20_000);
+    expect(resolveSameModelRateLimitBackoffMs(2)).toBe(30_000);
+  });
+
+  it("caps at 60s if the retry count is ever raised further", () => {
+    expect(resolveSameModelRateLimitBackoffMs(10)).toBe(60_000);
+  });
+
+  it("is deterministic so RPM windows clear predictably", () => {
+    expect(resolveSameModelRateLimitBackoffMs(2)).toBe(resolveSameModelRateLimitBackoffMs(2));
+  });
+});
+
+describe("resolveSameModelRateLimitRetryDelayMs", () => {
+  it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 0,
+        retryAfterSeconds: 30,
+      }),
+    ).toBe(30_000);
+  });
+
+  it("keeps the existing fixed backoff when Retry-After is shorter", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 1,
+        retryAfterSeconds: 5,
+      }),
+    ).toBe(20_000);
+  });
+
+  it("caps provider Retry-After at the same short-window retry ceiling", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 0,
+        retryAfterSeconds: 120,
+      }),
+    ).toBe(60_000);
+  });
+});
+
+describe("resolveNextSameModelRateLimitRetryCount", () => {
+  it("counts only consecutive same-model rate-limit retries", () => {
+    let retriesSoFar = 0;
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    expect(retriesSoFar).toBe(2);
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: false,
+    });
+    expect(retriesSoFar).toBe(0);
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    expect(retriesSoFar).toBe(1);
   });
 });
 

@@ -5,10 +5,19 @@
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
+  clampThinkingLevel,
   stream as streamDefault,
   type Model,
+  type ModelThinkingLevel,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -42,44 +51,50 @@ const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
 };
 
 function isClaudeOpus47OrNewerModel(modelId: string): boolean {
-  return (
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("opus-4-7") ||
-    modelId.includes("opus-4.7")
-  );
+  return supportsClaudeNativeXhighEffort({ id: modelId });
 }
 
-function isClaudeOpus46Model(modelId: string): boolean {
-  return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
+function isClaudeFable5Model(modelId: string): boolean {
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
+}
+
+function isClaudeMythos5Model(modelId: string): boolean {
+  return /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
 }
 
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    isClaudeOpus47OrNewerModel(modelId) ||
-    isClaudeOpus46Model(modelId) ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+  return supportsClaudeAdaptiveThinking({ id: modelId }) || isClaudeMythos5Model(modelId);
 }
 
 function mapAnthropicAdaptiveEffort(
-  reasoning: string,
+  reasoning: ModelThinkingLevel,
+  model: Model<"anthropic-messages">,
   modelId: string,
 ): AnthropicVertexAdaptiveEffort {
+  const clampModel =
+    typeof model.params?.canonicalModelId === "string" ? { ...model, reasoning: true } : model;
+  const resolvedReasoning = clampThinkingLevel(clampModel, reasoning);
+  const mapped = model.thinkingLevelMap?.[resolvedReasoning];
+  if (typeof mapped === "string") {
+    return mapped as AnthropicVertexAdaptiveEffort;
+  }
   const effortMap: Record<string, AnthropicVertexAdaptiveEffort> = {
+    off: "low",
     minimal: "low",
     low: "low",
     medium: "medium",
     high: "high",
-    xhigh: isClaudeOpus47OrNewerModel(modelId)
+    xhigh: isClaudeFable5Model(modelId)
       ? "xhigh"
-      : isClaudeOpus46Model(modelId)
+      : isClaudeOpus47OrNewerModel(modelId) || isClaudeMythos5Model(modelId)
+        ? "xhigh"
+        : "high",
+    max:
+      supportsClaudeNativeMaxEffort({ id: modelId }) || isClaudeMythos5Model(modelId)
         ? "max"
         : "high",
-    max: isClaudeOpus47OrNewerModel(modelId) ? "max" : "high",
   };
-  return effortMap[reasoning] ?? "high";
+  return effortMap[resolvedReasoning] ?? "high";
 }
 
 function resolveAnthropicVertexMaxTokens(params: {
@@ -163,7 +178,20 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const temperature = isClaudeOpus47OrNewerModel(model.id) ? undefined : options?.temperature;
+    const contractModelId = resolveClaudeModelIdentity(model);
+    const fable5 = isClaudeFable5Model(contractModelId);
+    const mandatoryAdaptiveThinking = fable5 || isClaudeMythos5Model(contractModelId);
+    const reasoning =
+      (options?.reasoning as ModelThinkingLevel | undefined) ??
+      (mandatoryAdaptiveThinking ? "high" : undefined);
+    const adaptiveThinking =
+      mandatoryAdaptiveThinking || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
+    const temperature =
+      adaptiveThinking ||
+      isClaudeOpus47OrNewerModel(contractModelId) ||
+      isClaudeMythos5Model(contractModelId)
+        ? undefined
+        : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {
       client,
       ...(temperature !== undefined ? { temperature } : {}),
@@ -181,21 +209,25 @@ export function createAnthropicVertexStreamFn(
       metadata: options?.metadata,
     };
 
-    if (options?.reasoning) {
-      if (supportsAdaptiveThinking(model.id)) {
+    if (reasoning) {
+      if (supportsAdaptiveThinking(contractModelId)) {
         opts.thinkingEnabled = true;
         opts.effort = mapAnthropicAdaptiveEffort(
-          options.reasoning,
-          model.id,
+          reasoning,
+          transportModel,
+          contractModelId,
         ) as AnthropicVertexEffort;
       } else {
         opts.thinkingEnabled = true;
-        const budgets = options.thinkingBudgets;
+        const budgets = options?.thinkingBudgets;
         opts.thinkingBudgetTokens =
-          (budgets && options.reasoning in budgets
-            ? budgets[options.reasoning as keyof typeof budgets]
+          (budgets && reasoning in budgets
+            ? budgets[reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
       }
+    } else if (fable5) {
+      opts.thinkingEnabled = true;
+      opts.effort = "high";
     } else {
       opts.thinkingEnabled = false;
     }

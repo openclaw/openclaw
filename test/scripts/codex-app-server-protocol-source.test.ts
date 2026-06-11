@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexProtocolExportArgs,
+  canonicalizeCodexAppServerProtocolJson,
+  formatCodexAppServerProtocolJsonText,
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
@@ -158,6 +160,111 @@ describe("codex app-server protocol source resolver", () => {
     await expect(resolveCodexAppServerProtocolSource(worktreeRoot)).resolves.toEqual({
       codexRepo,
       sourceRoot: path.join(codexRepo, "codex-rs/app-server-protocol/schema"),
+    });
+  });
+});
+
+describe("Codex app-server protocol JSON canonicalizer", () => {
+  it("sorts object keys recursively before formatting", () => {
+    const source = JSON.stringify({
+      z: {
+        d: 1,
+        b: {
+          y: 2,
+          x: 3,
+        },
+      },
+      a: [
+        {
+          z: 4,
+          a: {
+            c: 5,
+            b: 6,
+          },
+        },
+      ],
+    });
+
+    expect(formatCodexAppServerProtocolJsonText(source)).toBe(`{
+  "a": [
+    {
+      "a": {
+        "b": 6,
+        "c": 5
+      },
+      "z": 4
+    }
+  ],
+  "z": {
+    "b": {
+      "x": 3,
+      "y": 2
+    },
+    "d": 1
+  }
+}
+`);
+  });
+
+  it("sorts typed-object arrays only for order-insensitive schema keywords", () => {
+    expect(
+      canonicalizeCodexAppServerProtocolJson({
+        anyOf: [
+          { z: 1, type: "string" },
+          { type: "integer", a: 2 },
+        ],
+        enum: [
+          { z: 1, type: "z" },
+          { type: "a", a: 2 },
+        ],
+        mixed: [{ type: "b" }, "item", { type: "a" }],
+        oneOf: [
+          { type: "object", z: true },
+          { a: true, type: "array" },
+          { type: "object", z: false },
+        ],
+        prefixItems: [
+          { z: 1, type: "string" },
+          { type: "number", a: 2 },
+        ],
+        required: [
+          { z: 1, type: "z" },
+          { type: "a", a: 2 },
+        ],
+        typed: [
+          { type: "beta", z: 1 },
+          { type: "alpha", z: 2 },
+          { type: "beta", z: 3 },
+        ],
+      }),
+    ).toEqual({
+      anyOf: [
+        { a: 2, type: "integer" },
+        { type: "string", z: 1 },
+      ],
+      enum: [
+        { a: 2, type: "a" },
+        { type: "z", z: 1 },
+      ],
+      mixed: [{ type: "b" }, "item", { type: "a" }],
+      oneOf: [
+        { a: true, type: "array" },
+        { type: "object", z: true },
+        { type: "object", z: false },
+      ],
+      prefixItems: [
+        { type: "string", z: 1 },
+        { a: 2, type: "number" },
+      ],
+      required: [
+        { a: 2, type: "a" },
+        { type: "z", z: 1 },
+      ],
+      typed: [
+        { type: "beta", z: 1 },
+        { type: "alpha", z: 2 },
+        { type: "beta", z: 3 },
+      ],
     });
   });
 });

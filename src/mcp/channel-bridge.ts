@@ -378,9 +378,15 @@ export class OpenClawChannelBridge {
     try {
       await this.server.server.notification(notification);
     } catch (error) {
-      if (this.verbose && !this.closed) {
+      if (this.closed) {
+        return;
+      }
+      // Always surface a single low-noise record so swallowed delivery failures
+      // remain observable; the spammy error detail stays behind --verbose.
+      process.stderr.write(`openclaw mcp: notification ${notification.method} failed\n`);
+      if (this.verbose) {
         process.stderr.write(
-          `openclaw mcp: notification ${notification.method} failed: ${String(error)}\n`,
+          `openclaw mcp: notification ${notification.method} error: ${String(error)}\n`,
         );
       }
     }

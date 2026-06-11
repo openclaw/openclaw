@@ -10,6 +10,7 @@ import {
   resolveSkillStatusEntry,
   type SkillStatusEntry,
 } from "../discovery/status.js";
+import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillContent, scanSource } from "../security/scanner.js";
 import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
@@ -20,6 +21,7 @@ import {
 } from "./frontmatter.js";
 import {
   assertInsideWorkspace,
+  assertWorkspaceSkillWriteTarget,
   createSkillProposalId,
   createSkillProposalRollback,
   hashSkillProposalContent,
@@ -530,6 +532,15 @@ export async function applySkillProposal(
 
     assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
     assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    const workshopConfig = resolveSkillWorkshopConfig(input.config);
+    const allowedSymlinkTargetRealPaths = workshopConfig.allowSymlinkTargetWrites
+      ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
+      : [];
+    await assertWorkspaceSkillWriteTarget({
+      workspaceDir: input.workspaceDir,
+      filePath: record.target.skillFile,
+      allowedSymlinkTargetRealPaths,
+    });
     const targetState = await readApplyTargetState(record, supportFiles);
     const rollback = createSkillProposalRollback({
       proposalId: record.id,
@@ -554,6 +565,7 @@ export async function applySkillProposal(
       skillContent,
       supportFiles,
       previousSupportFiles: targetState.previousSupportFiles,
+      allowedSymlinkTargetRealPaths,
     });
     bumpSkillsSnapshotVersion({
       workspaceDir: input.workspaceDir,
@@ -646,15 +658,18 @@ async function publishProposalTarget(params: {
   skillContent: string;
   supportFiles: readonly PreparedSkillProposalSupportFile[];
   previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
+  allowedSymlinkTargetRealPaths: readonly string[];
 }): Promise<void> {
   const writtenSupportPaths: string[] = [];
   try {
     for (const file of params.supportFiles) {
       await writeWorkspaceSupportFile({
+        workspaceDir: params.workspaceDir,
         skillDir: params.record.target.skillDir,
         relativePath: file.path,
         content: file.content,
         overwrite: params.record.kind === "update",
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
       });
       writtenSupportPaths.push(file.path);
     }
@@ -663,36 +678,53 @@ async function publishProposalTarget(params: {
       filePath: params.record.target.skillFile,
       content: params.skillContent,
       overwrite: params.record.kind === "update",
+      allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
     });
   } catch (error) {
     if (params.record.kind === "create") {
-      await cleanupCreatedSupportFiles(params.record, writtenSupportPaths);
+      await cleanupCreatedSupportFiles({
+        workspaceDir: params.workspaceDir,
+        record: params.record,
+        writtenSupportPaths,
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+      });
     } else {
       await restoreUpdatedSupportFiles({
+        workspaceDir: params.workspaceDir,
         record: params.record,
         writtenSupportPaths,
         previousSupportFiles: params.previousSupportFiles,
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
       });
     }
     throw error;
   }
 }
 
-async function cleanupCreatedSupportFiles(
-  record: SkillProposalRecord,
-  writtenSupportPaths: readonly string[],
-): Promise<void> {
+async function cleanupCreatedSupportFiles(params: {
+  workspaceDir: string;
+  record: SkillProposalRecord;
+  writtenSupportPaths: readonly string[];
+  allowedSymlinkTargetRealPaths: readonly string[];
+}): Promise<void> {
   await Promise.allSettled(
-    writtenSupportPaths.toReversed().map(async (relativePath) => {
-      await removeWorkspaceSupportFile({ skillDir: record.target.skillDir, relativePath });
+    params.writtenSupportPaths.toReversed().map(async (relativePath) => {
+      await removeWorkspaceSupportFile({
+        workspaceDir: params.workspaceDir,
+        skillDir: params.record.target.skillDir,
+        relativePath,
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+      });
     }),
   );
 }
 
 async function restoreUpdatedSupportFiles(params: {
+  workspaceDir: string;
   record: SkillProposalRecord;
   writtenSupportPaths: readonly string[];
   previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
+  allowedSymlinkTargetRealPaths: readonly string[];
 }): Promise<void> {
   const previousByPath = new Map(params.previousSupportFiles.map((file) => [file.path, file]));
   await Promise.allSettled(
@@ -703,13 +735,20 @@ async function restoreUpdatedSupportFiles(params: {
       }
       if (previous.existed) {
         await writeWorkspaceSupportFile({
+          workspaceDir: params.workspaceDir,
           skillDir: params.record.target.skillDir,
           relativePath,
           content: previous.previousContent ?? "",
           overwrite: true,
+          allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
         });
       } else {
-        await removeWorkspaceSupportFile({ skillDir: params.record.target.skillDir, relativePath });
+        await removeWorkspaceSupportFile({
+          workspaceDir: params.workspaceDir,
+          skillDir: params.record.target.skillDir,
+          relativePath,
+          allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+        });
       }
     }),
   );

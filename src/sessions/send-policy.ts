@@ -46,7 +46,12 @@ function deriveChannelFromKey(key?: string) {
     return undefined;
   }
   const parts = normalizedKey.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+  // Canonical key layout is <channel>:<peerKind>:<peerId>; parts[0] is the channel
+  // for direct/dm peers too, so channel-scoped rules also fire for direct chats.
+  if (
+    parts.length >= 3 &&
+    (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
+  ) {
     return normalizeMatchValue(parts[0]);
   }
   return undefined;

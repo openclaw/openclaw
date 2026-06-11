@@ -205,6 +205,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "llama-cpp",
+        channels: [],
+        origin: "global",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          embeddingProviders: ["local"],
+        },
+      },
+      {
         id: "google",
         channels: [],
         origin: "bundled",
@@ -395,6 +406,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         enabledByDefault: undefined,
         providers: [],
         cliBackends: [],
+      },
+      {
+        id: "external-trusted-policy",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          trustedToolPolicies: ["workflow-budget"],
+        },
       },
       {
         id: "lossless-claw",
@@ -1102,7 +1124,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
-      "ignores sentinel memory embedding providers that no plugin owns",
+      "includes the llama.cpp provider for configured local memory embeddings",
       {
         channels: {},
         agents: {
@@ -1111,7 +1133,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      ["browser", "memory-core"],
+      ["browser", "llama-cpp", "memory-core"],
     ],
     [
       "skips memory embedding providers from disabled memory search blocks",
@@ -1431,6 +1453,17 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads explicit trusted policy plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        allowPluginIds: ["external-trusted-policy"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-trusted-policy"],
     });
   });
 
