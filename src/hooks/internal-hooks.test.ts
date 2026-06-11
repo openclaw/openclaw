@@ -331,7 +331,9 @@ describe("hooks", () => {
 
       // At this point, dispatch is complete and guard key is cleared.
       // Wait for the delayed trigger to fire and complete.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
 
       // Handler should be called twice: once for the original, once for the delayed
       expect(handler).toHaveBeenCalledTimes(2);
