@@ -60,6 +60,7 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
+const CLAUDE_SAFE_MODE_ARG = "--safe-mode";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 
@@ -168,6 +169,16 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   return normalized;
 }
 
+export function normalizeClaudeSafeModeArgs(args?: string[]): string[] | undefined {
+  if (!args) {
+    return args;
+  }
+  if (args.includes(CLAUDE_SAFE_MODE_ARG)) {
+    return args;
+  }
+  return [...args, CLAUDE_SAFE_MODE_ARG];
+}
+
 export function normalizeClaudeBackendConfig(
   config: CliBackendConfig,
   context?: CliBackendNormalizeConfigContext,
@@ -177,9 +188,9 @@ export function normalizeClaudeBackendConfig(
   const permission = resolveClaudePermissionMode(context);
   return {
     ...config,
-    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args), permission),
+    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(normalizeClaudeSafeModeArgs(config.args)), permission),
     resumeArgs: normalizeClaudePermissionArgs(
-      normalizeClaudeSettingSourcesArgs(config.resumeArgs),
+      normalizeClaudeSettingSourcesArgs(normalizeClaudeSafeModeArgs(config.resumeArgs)),
       permission,
     ),
     output,
