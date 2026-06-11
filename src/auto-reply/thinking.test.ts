@@ -768,6 +768,27 @@ describe("resolveThinkingDefaultForModel", () => {
       }),
     ).toBe("off");
   });
+
+  it("respects provider-declared 'off' default for reasoning-capable models", () => {
+    // Providers like Ollama declare defaultLevel:"off" even for reasoning=true models
+    // because thinking must be explicitly opted in, not activated by the global default.
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "ollama"
+        ? {
+            levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+            defaultLevel: "off",
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "ollama",
+        model: "gemma4",
+        catalog: [{ provider: "ollama", id: "gemma4", reasoning: true }],
+      }),
+    ).toBe("off");
+  });
 });
 
 describe("normalizeReasoningLevel", () => {
