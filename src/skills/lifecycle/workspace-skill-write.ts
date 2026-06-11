@@ -196,14 +196,14 @@ async function prepareWorkspaceSkillWrite(params: {
       symlinkPolicy: params.symlinkPolicy,
     });
     if (params.mode === "update") {
-      const previousContent = await readWorkspaceSupportFile({
+      const previousSupportContent = await readWorkspaceSupportFile({
         skillDir: params.skillDir,
         relativePath: file.path,
       });
       previousSupportFiles.push(
-        previousContent === null
+        previousSupportContent === null
           ? { path: file.path, existed: false }
-          : { path: file.path, existed: true, previousContent },
+          : { path: file.path, existed: true, previousContent: previousSupportContent },
       );
     }
   }
