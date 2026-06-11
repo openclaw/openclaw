@@ -25,6 +25,16 @@ describe("sanitizeWebFetchUrl", () => {
     expect(result).toBe("https://example.com?q=a b");
   });
 
+  it("preserves scheme-like text in the path component", () => {
+    const result = sanitizeWebFetchUrl("https://example.com/a:// b");
+    expect(result).toBe("https://example.com/a:// b");
+  });
+
+  it("preserves scheme-like text in the query component", () => {
+    const result = sanitizeWebFetchUrl("https://example.com?q=x:// y");
+    expect(result).toBe("https://example.com?q=x:// y");
+  });
+
   it("preserves percent-encoded characters in path", () => {
     const result = sanitizeWebFetchUrl("https://example.com/a%20b");
     expect(result).toBe("https://example.com/a%20b");

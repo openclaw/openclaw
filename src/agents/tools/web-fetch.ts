@@ -342,9 +342,7 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
  */
 export function sanitizeWebFetchUrl(raw: string): string {
   const trimmed = raw.trim();
-  // Narrow fix: only strip whitespace immediately following ://
-  // This handles the exact reported bug without affecting path/query semantics.
-  return trimmed.replace(/:\/\/\s+/g, "://");
+  return trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
 }
 
 function normalizeProviderWebFetchPayload(params: {
