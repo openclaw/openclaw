@@ -794,6 +794,11 @@ export const registerTelegramHandlers = ({
       },
     });
     if (mentionDecision.shouldSkip) {
+      // #92067: honor ingest config — an explicitly ingest-enabled group/topic
+      // opts out of the media skip so plugins still receive media-bearing updates.
+      if ((topicConfig?.ingest ?? groupConfig?.ingest) === true) {
+        return false;
+      }
       logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
       return true;
     }
