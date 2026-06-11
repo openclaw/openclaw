@@ -137,10 +137,20 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
 
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export {
-  resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "../config/sessions/paths.js";
+/**
+ * @deprecated Use getSessionEntry to read session metadata by agent/session
+ * identity instead of resolving transcript file paths. File-shaped session
+ * APIs are removed at the SQLite storage flip.
+ */
+export { resolveSessionFilePath } from "../config/sessions/paths.js";
+/**
+ * @deprecated Use patchSessionEntry/upsertSessionEntry to persist session
+ * metadata by agent/session identity. File-shaped session APIs are removed at
+ * the SQLite storage flip.
+ */
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
@@ -149,10 +159,14 @@ export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js
 export {
   clearSessionStoreCacheForTest,
   recordSessionMetaFromInbound,
-  saveSessionStore,
   updateLastRoute,
-  updateSessionStore,
 } from "../config/sessions/store.js";
+/**
+ * @deprecated Use patchSessionEntry/upsertSessionEntry for storage-neutral
+ * writes. Whole-store helpers keep the legacy mutable sessions.json shape and
+ * are removed at the SQLite storage flip.
+ */
+export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
