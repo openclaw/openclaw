@@ -671,6 +671,10 @@ function buildParams(
     params.tool_choice = options.toolChoice;
   }
 
+  const compatReasoningMap = (model.compat as Record<string, unknown> | undefined)
+    ?.reasoningEffortMap as Record<string, string> | undefined;
+  const reasoningMap = model.thinkingLevelMap ?? compatReasoningMap;
+
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
@@ -683,18 +687,17 @@ function buildParams(
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
     params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
     if (options?.reasoningEffort) {
-      params.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+      params.reasoning_effort = reasoningMap?.[options.reasoningEffort] ?? options.reasoningEffort;
     }
   } else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
     // OpenRouter normalizes reasoning across providers via a nested reasoning object.
     const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
     if (options?.reasoningEffort) {
       openRouterParams.reasoning = {
-        effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
+        effort: reasoningMap?.[options.reasoningEffort] ?? options.reasoningEffort,
       };
-    } else if (model.thinkingLevelMap?.off !== null) {
-      openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
+    } else if (reasoningMap?.off !== null) {
+      openRouterParams.reasoning = { effort: reasoningMap?.off ?? "none" };
     }
   } else if (compat.thinkingFormat === "together" && model.reasoning) {
     const togetherParams = params as Omit<typeof params, "reasoning_effort"> & {
@@ -704,14 +707,13 @@ function buildParams(
     togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
     if (options?.reasoningEffort && compat.supportsReasoningEffort) {
       togetherParams.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+        reasoningMap?.[options.reasoningEffort] ?? options.reasoningEffort;
     }
   } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
     // OpenAI-style reasoning_effort
-    params.reasoning_effort =
-      model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    params.reasoning_effort = reasoningMap?.[options.reasoningEffort] ?? options.reasoningEffort;
   } else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-    const offValue = model.thinkingLevelMap?.off;
+    const offValue = reasoningMap?.off;
     if (typeof offValue === "string") {
       params.reasoning_effort = offValue;
     }
