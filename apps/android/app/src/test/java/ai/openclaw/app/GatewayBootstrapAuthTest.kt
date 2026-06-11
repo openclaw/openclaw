@@ -295,6 +295,45 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  fun refreshGatewayConnection_reconnectsSavedManualEndpointAfterDisconnect() {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setManualEnabled(true)
+    prefs.setManualHost("127.0.0.1")
+    prefs.setManualPort(18789)
+    prefs.setManualTls(false)
+    prefs.setGatewayToken("shared-token")
+    val runtime = NodeRuntime(app, prefs)
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "initial-token", bootstrapToken = null, password = null),
+    )
+    runtime.disconnect()
+    assertNull(desiredConnection(runtime, "nodeSession"))
+
+    runtime.refreshGatewayConnection()
+
+    var desired: Any? = null
+    repeat(100) {
+      desired = desiredConnection(runtime, "nodeSession")
+      if (desired != null) return@repeat
+      Thread.sleep(10)
+    }
+    if (desired == null) error("Expected desired node connection")
+    
+    val endpoint = readField<GatewayEndpoint>(desired, "endpoint")
+    assertEquals("127.0.0.1", endpoint.host)
+    assertEquals(18789, endpoint.port)
+    assertEquals("shared-token", readField<String?>(desired, "token"))
+  }
+
+  @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =

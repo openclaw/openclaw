@@ -30,6 +30,7 @@ export async function uploadBatchJsonlFile(params: {
   const filePayload = await withRemoteHttpResponse({
     url: `${baseUrl}/files`,
     ssrfPolicy: params.client.ssrfPolicy,
+    fetchImpl: params.client.fetchImpl,
     init: {
       method: "POST",
       headers: buildBatchHeaders(params.client, { json: false }),

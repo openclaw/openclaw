@@ -26,6 +26,9 @@ const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
   "category-edit",
   "category-delete",
   "event-create",
+  "timeout",
+  "kick",
+  "ban",
 ]);
 
 const localExecutionActions = new Set<ChannelMessageActionName>([

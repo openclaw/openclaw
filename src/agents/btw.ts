@@ -27,6 +27,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
@@ -483,12 +484,7 @@ export async function runBtwSideQuestion(
         profileId: resolvedAuthProfileId,
       },
     });
-    if (preparedAuth?.baseUrl) {
-      runtimeModel = {
-        ...runtimeModel,
-        baseUrl: preparedAuth.baseUrl,
-      };
-    }
+    runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
     if (preparedAuth?.apiKey) {
       apiKey = preparedAuth.apiKey;
     }

@@ -31,7 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -406,17 +406,19 @@ private fun ChatMessageList(
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
-  val displayMessages = remember(messages) { messages.asReversed() }
-  val stream = streamingAssistantText?.trim()
-
-  LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size) {
-    if (listState.firstVisibleItemIndex <= 2) {
-      listState.animateScrollToItem(index = 0)
+  val timeline =
+    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
+      buildChatTimeline(
+        messages = messages,
+        pendingRunCount = pendingRunCount,
+        pendingToolCalls = pendingToolCalls,
+        streamingAssistantText = streamingAssistantText,
+      )
     }
-  }
-  LaunchedEffect(stream) {
-    if (!stream.isNullOrEmpty() && listState.firstVisibleItemIndex <= 2) {
-      listState.scrollToItem(index = 0)
+
+  LaunchedEffect(timeline.scrollTargetIndex, timeline.items.size, pendingRunCount, pendingToolCalls.size) {
+    timeline.scrollTargetIndex?.let { index ->
+      listState.animateScrollToItem(index = index)
     }
   }
 
@@ -428,30 +430,29 @@ private fun ChatMessageList(
       verticalArrangement = Arrangement.spacedBy(5.dp),
       contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
     ) {
-      if (!stream.isNullOrEmpty()) {
-        item(key = "stream") {
-          ChatBubble(role = "assistant", live = true, content = listOf(ChatMessageContent(text = stream)), timestampMs = null)
+      itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
+        when (item) {
+          is ChatTimelineItem.Message ->
+            ChatBubble(
+              role = item.message.role,
+              live = false,
+              content = item.message.content,
+              timestampMs = item.message.timestampMs,
+            )
+          is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
+          is ChatTimelineItem.StreamingAssistant ->
+            ChatBubble(
+              role = "assistant",
+              live = true,
+              content = listOf(ChatMessageContent(text = item.text)),
+              timestampMs = null,
+            )
+          ChatTimelineItem.Thinking -> ChatThinkingBubble()
         }
-      }
-
-      if (pendingToolCalls.isNotEmpty()) {
-        item(key = "tools") {
-          ToolBubble(toolCalls = pendingToolCalls)
-        }
-      }
-
-      if (pendingRunCount > 0) {
-        item(key = "thinking") {
-          ChatThinkingBubble()
-        }
-      }
-
-      items(items = displayMessages, key = { it.id }) { message ->
-        ChatBubble(role = message.role, live = false, content = message.content, timestampMs = message.timestampMs)
       }
     }
 
-    if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && stream.isNullOrBlank()) {
+    if (timeline.items.isEmpty()) {
       if (historyLoading) {
         ClawLoadingState(title = "Loading session", modifier = Modifier.align(Alignment.Center))
       } else {

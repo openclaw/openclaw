@@ -14,6 +14,7 @@ import {
 import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
@@ -28,6 +29,7 @@ import {
 } from "./prepare.js";
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
@@ -180,7 +182,8 @@ function createSessionFile() {
   // Prepare tests use canonical OpenClaw session paths because several cases
   // assert that external or stale transcript paths are ignored.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+  setTestEnvValue("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
   fs.writeFileSync(
@@ -263,6 +266,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     resetContextWindowCacheForTest();
     clearMemoryPluginState();
     vi.unstubAllEnvs();
+    sessionFileEnvSnapshot?.restore();
+    sessionFileEnvSnapshot = undefined;
   });
 
   it("skips local cli auth only when a profile-owned execution was prepared", () => {
@@ -591,6 +596,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-turn-prepare",
+        messageChannel: "telegram",
+        currentChannelId: "chat-1",
+        senderId: "user-456",
         config: createCliBackendConfig(),
       });
 
@@ -605,10 +613,19 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         queuedInjections: [],
       });
       const turnPrepareContext = agentTurnPrepareCalls[0]?.[1] as
-        | { runId?: string; sessionKey?: string }
+        | {
+            channel?: string;
+            chatId?: string;
+            runId?: string;
+            senderId?: string;
+            sessionKey?: string;
+          }
         | undefined;
       expect(turnPrepareContext?.runId).toBe("run-test-turn-prepare");
       expect(turnPrepareContext?.sessionKey).toBe("agent:main:test");
+      expect(turnPrepareContext?.channel).toBe("telegram");
+      expect(turnPrepareContext?.chatId).toBe("chat-1");
+      expect(turnPrepareContext?.senderId).toBe("user-456");
       expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
       expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     } finally {
@@ -645,6 +662,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-legacy-merge",
+        messageChannel: "discord",
+        currentChannelId: "channel:room-1",
+        senderId: "user-789",
         config: createCliBackendConfig(),
       });
 
@@ -654,6 +674,24 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
       expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledOnce();
+      const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+        [unknown, unknown]
+      >;
+      const promptContext = beforePromptBuildCalls[0]?.[1] as
+        | { channel?: string; chatId?: string; senderId?: string }
+        | undefined;
+      expect(promptContext?.channel).toBe("discord");
+      expect(promptContext?.chatId).toBe("room-1");
+      expect(promptContext?.senderId).toBe("user-789");
+      const beforeAgentStartCalls = hookRunner.runBeforeAgentStart.mock.calls as unknown as Array<
+        [unknown, unknown]
+      >;
+      const legacyContext = beforeAgentStartCalls[0]?.[1] as
+        | { channel?: string; chatId?: string; senderId?: string }
+        | undefined;
+      expect(legacyContext?.channel).toBe("discord");
+      expect(legacyContext?.chatId).toBe("room-1");
+      expect(legacyContext?.senderId).toBe("user-789");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

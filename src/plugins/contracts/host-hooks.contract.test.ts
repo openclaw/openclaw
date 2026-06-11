@@ -184,9 +184,301 @@ describe("host-hook fixture plugin contract", () => {
     const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
     expect(diagnostics).toHaveLength(2);
     expect(diagnostics[0]?.pluginId).toBe("external-policy");
-    expect(diagnostics[0]?.message).toContain("only bundled plugins can register trusted tool");
+    expect(diagnostics[0]?.message).toContain(
+      "plugin must declare contracts.trustedToolPolicies for: deny",
+    );
     expect(diagnostics[1]?.pluginId).toBe("external-policy");
     expect(diagnostics[1]?.message).toContain("only bundled plugins can claim reserved command");
+  });
+
+  it("rejects declared external trusted policy registration without explicit opt-in", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["deny"] },
+        explicitlyEnabled: false,
+        activationSource: "default",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-policy",
+        message: "plugin must be explicitly enabled to register trusted tool policy: deny",
+      },
+    ]);
+  });
+
+  it("allows explicitly enabled declared external trusted policy registration without reserved command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["deny"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
+        });
+        api.registerCommand({
+          name: "status",
+          description: "Should not be accepted",
+          ownership: "reserved",
+          handler: async () => ({ text: "no" }),
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
+    expect(registry.registry.trustedToolPolicies?.[0]?.policy.id).toBe("deny");
+    expect(registry.registry.commands).toHaveLength(0);
+    const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.pluginId).toBe("external-policy");
+    expect(diagnostics[0]?.message).toContain("only bundled plugins can claim reserved command");
+  });
+
+  it("rejects declared external tool-result middleware registration without explicit opt-in", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-middleware",
+        name: "External Middleware",
+        origin: "workspace",
+        contracts: { agentToolResultMiddleware: ["codex"] },
+        explicitlyEnabled: false,
+        activationSource: "default",
+      }),
+      register(api) {
+        api.registerAgentToolResultMiddleware(async (event) => ({ result: event.result }), {
+          runtimes: ["codex"],
+        });
+      },
+    });
+
+    expect(registry.registry.agentToolResultMiddlewares ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-middleware",
+        message: "plugin must be explicitly enabled to register agent tool result middleware",
+      },
+    ]);
+  });
+
+  it("diagnoses malformed trusted policy registrations", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "malformed-policy",
+        name: "Malformed Policy",
+        origin: "workspace",
+      }),
+      register(api) {
+        Reflect.apply(api.registerTrustedToolPolicy, api, [null]);
+        Reflect.apply(api.registerTrustedToolPolicy, api, [undefined]);
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+    ]);
+  });
+
+  it("scopes installed trusted policy ids to the registering plugin", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    for (const pluginId of ["budget-policy-a", "budget-policy-b"]) {
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: pluginId,
+          name: pluginId,
+          origin: "workspace",
+          contracts: { trustedToolPolicies: ["workflow-budget"] },
+        }),
+        register(api) {
+          api.registerTrustedToolPolicy({
+            id: "workflow-budget",
+            description: `${pluginId} workflow budget policy`,
+            evaluate: () => undefined,
+          });
+        },
+      });
+    }
+
+    expect(
+      (registry.registry.trustedToolPolicies ?? []).map((entry) => [
+        entry.pluginId,
+        entry.policy.id,
+      ]),
+    ).toEqual([
+      ["budget-policy-a", "workflow-budget"],
+      ["budget-policy-b", "workflow-budget"],
+    ]);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
+  });
+
+  it("rejects duplicate trusted policy ids from the same plugin", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "duplicate-policy",
+        name: "Duplicate Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["workflow-budget"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "workflow-budget",
+          description: "First workflow budget policy",
+          evaluate: () => undefined,
+        });
+        api.registerTrustedToolPolicy({
+          id: "workflow-budget",
+          description: "Duplicate workflow budget policy",
+          evaluate: () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "duplicate-policy",
+        message: "trusted tool policy already registered: workflow-budget (duplicate-policy)",
+      },
+    ]);
+  });
+
+  it("runs bundled trusted policies before declared external trusted policies", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["external-deny"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "external-deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "external policy" }),
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bundled-policy",
+        name: "Bundled Policy",
+        origin: "bundled",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "bundled-deny",
+          description: "Bundled policy",
+          evaluate: () => ({ block: true, blockReason: "bundled policy" }),
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const result = await runTrustedToolPolicies(
+      { toolName: "exec", params: {} },
+      { toolName: "exec" },
+    );
+
+    expect(result?.blockReason).toBe("bundled policy");
+  });
+
+  it("keeps same-id bundled and installed trusted policies owner-scoped", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["shared-deny"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "shared-deny",
+          description: "Declared external policy",
+          evaluate: () => ({ allow: true }),
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bundled-policy",
+        name: "Bundled Policy",
+        origin: "bundled",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "shared-deny",
+          description: "Bundled policy",
+          evaluate: () => ({ block: true, blockReason: "bundled policy" }),
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    expect(
+      registry.registry.trustedToolPolicies?.map((entry) => [entry.pluginId, entry.policy.id]),
+    ).toEqual([
+      ["bundled-policy", "shared-deny"],
+      ["external-policy", "shared-deny"],
+    ]);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
+
+    const result = await runTrustedToolPolicies(
+      { toolName: "exec", params: {} },
+      { toolName: "exec" },
+    );
+
+    expect(result?.blockReason).toBe("bundled policy");
   });
 
   it("allows the official npm Codex plugin to keep /codex command ownership", () => {

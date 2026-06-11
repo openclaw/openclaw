@@ -340,13 +340,6 @@ export function createSessionsSendTool(opts?: {
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = normalizeOptionalString(readStringParam(params, "label"));
       const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
-      if (sessionKeyParam && labelParam) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Provide either sessionKey or label (not both).",
-        });
-      }
 
       let sessionKey = sessionKeyParam;
       if (!sessionKey && !labelParam && labelAgentIdParam) {
@@ -469,12 +462,13 @@ export function createSessionsSendTool(opts?: {
         restrictToSpawned,
         visibilitySessionKey: sessionKey,
       });
+      const unresolvedDisplayKey = sessionKey;
       if (!visibleSession.ok) {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: visibleSession.status,
           error: visibleSession.error,
-          sessionKey: visibleSession.displayKey,
+          sessionKey: unresolvedDisplayKey,
         });
       }
       // Normalize sessionKey/sessionId input into a canonical session key.
@@ -493,7 +487,7 @@ export function createSessionsSendTool(opts?: {
           status: "error",
           error:
             "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
-          sessionKey: displayKey,
+          sessionKey: unresolvedDisplayKey,
         });
       }
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -508,7 +502,7 @@ export function createSessionsSendTool(opts?: {
           runId: crypto.randomUUID(),
           status: access.status,
           error: access.error,
-          sessionKey: displayKey,
+          sessionKey: unresolvedDisplayKey,
         });
       }
 

@@ -227,6 +227,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/plugins/installs.json",
       hasLegacy: false,
     },
+    stateSchema: {
+      hasLegacy: false,
+      preview: [],
+    },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",
@@ -235,6 +239,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
     deliveryQueues: {
       outboundPath: "/tmp/state/delivery-queue",
       sessionPath: "/tmp/state/session-delivery-queue",
+      hasLegacy: false,
+    },
+    execApprovals: {
+      sourcePath: "/tmp/state/exec-approvals.legacy.json",
+      targetPath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
     },
     channelPlans: {

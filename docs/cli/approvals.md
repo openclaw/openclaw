@@ -27,7 +27,7 @@ Use it when you want to:
 
 - inspect the local requested policy, host approvals file, and effective merge
 - apply a local preset such as YOLO or deny-all
-- synchronize local `tools.exec.*` and local `~/.openclaw/exec-approvals.json`
+- synchronize local `tools.exec.*` and the local host approvals file
 
 Examples:
 
@@ -83,7 +83,7 @@ Precedence is intentional:
 ```bash
 openclaw approvals set --file ./exec-approvals.json
 openclaw approvals set --stdin <<'EOF'
-{ version: 1, defaults: { security: "full", ask: "off" } }
+{ version: 1, defaults: { security: "full", ask: "off", askFallback: "full" } }
 EOF
 openclaw approvals set --node <id|name|ip> --file ./exec-approvals.json
 openclaw approvals set --gateway --file ./exec-approvals.json
@@ -137,7 +137,8 @@ Why `tools.exec.host=gateway` in this example:
 - YOLO is about approvals, not routing.
 - If you want host exec even when a sandbox is configured, make the host choice explicit with `gateway` or `/exec host=gateway`.
 
-This matches the current host-default YOLO behavior. Tighten it if you want approvals.
+Omitted `askFallback` defaults to `deny`. Set `askFallback: "full"`
+explicitly when upgrading a no-UI host that should keep never-prompt behavior.
 
 Local shortcut:
 
@@ -182,7 +183,9 @@ Targeting notes:
 - `--node` uses the same resolver as `openclaw nodes` (id, name, ip, or id prefix).
 - `--agent` defaults to `"*"`, which applies to all agents.
 - The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
-- Approvals files are stored per host at `~/.openclaw/exec-approvals.json`.
+- Approvals files are stored per host in the OpenClaw state dir
+  (`$OPENCLAW_STATE_DIR/exec-approvals.json`, or
+  `~/.openclaw/exec-approvals.json` when the variable is unset).
 
 ## Related
 

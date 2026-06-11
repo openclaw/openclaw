@@ -42,7 +42,6 @@ class SecurePrefs(
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
-
     // SSH tunnel preference keys.
     private const val sshEnabledKey = "ssh.tunnel.enabled"
     private const val sshHostKey = "ssh.tunnel.host"
@@ -51,6 +50,7 @@ class SecurePrefs(
     private const val sshLocalPortKey = "ssh.tunnel.localPort"
     private const val sshRemoteHostKey = "ssh.tunnel.remoteHost"
     private const val sshRemotePortKey = "ssh.tunnel.remotePort"
+    private const val appearanceThemeModeKey = "appearance.themeMode"
   }
 
   private val appContext = context.applicationContext
@@ -213,6 +213,10 @@ class SecurePrefs(
 
   private val _sshRemotePort = MutableStateFlow(plainPrefs.getInt(sshRemotePortKey, 18789))
   val sshRemotePort: StateFlow<Int> = _sshRemotePort
+
+  private val _appearanceThemeMode =
+    MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
+  val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -649,6 +653,17 @@ class SecurePrefs(
       remotePort = _sshRemotePort.value,
     )
 
+  fun setSshHostKey(host: String, port: Int, key: String) {
+    plainPrefs.edit { putString("ssh.hostkey.$host.$port", key) }
+  }
+
+  fun loadSshHostKey(host: String, port: Int): String? =
+    plainPrefs.getString("ssh.hostkey.$host.$port", null)
+
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
+    _appearanceThemeMode.value = mode
+  }
   private fun loadNotificationForwardingPackages(): Set<String> {
     val raw = plainPrefs.getString(notificationsForwardingPackagesKey, null)?.trim()
     if (raw.isNullOrEmpty()) {

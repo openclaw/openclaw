@@ -28,6 +28,7 @@ import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import {
   consumeExecApprovalFollowupRuntimeHandoff,
+  isExecApprovalFollowupSessionRebound,
   parseExecApprovalFollowupApprovalId,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
@@ -149,7 +150,6 @@ import {
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import {
   readTerminalSnapshotFromGatewayDedupe,
   setGatewayDedupeEntry,
@@ -682,6 +682,7 @@ function tryFinalizeTrackedAgentTask(params: {
   status: GatewayAgentTaskTerminalStatus;
   error?: string;
   terminalSummary?: string;
+  log: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): void {
   try {
     finalizeTaskRunByRunId({
@@ -692,8 +693,10 @@ function tryFinalizeTrackedAgentTask(params: {
       ...(params.error !== undefined ? { error: params.error } : {}),
       ...(params.terminalSummary !== undefined ? { terminalSummary: params.terminalSummary } : {}),
     });
-  } catch {
+  } catch (err) {
     // Best-effort only: background task tracking must not block agent runs.
+    // Still surface the swallowed error so non-transient finalize failures stay observable.
+    params.log.warn(`failed to finalize tracked agent task ${params.runId}: ${formatForLog(err)}`);
   }
 }
 
@@ -908,8 +911,12 @@ function dispatchAgentRunFromGateway(params: {
           startedAt: Date.now(),
         }),
       );
-    } catch {
+    } catch (err) {
       // Best-effort only: background task tracking must not block agent runs.
+      // Still surface the swallowed error so non-transient tracking failures stay observable.
+      params.context.logGateway.warn(
+        `failed to start tracked agent task ${params.runId}: ${formatForLog(err)}`,
+      );
     }
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
@@ -921,6 +928,7 @@ function dispatchAgentRunFromGateway(params: {
           runId: params.runId,
           status: aborted ? "timed_out" : "succeeded",
           terminalSummary: aborted ? "aborted" : "completed",
+          log: params.context.logGateway,
         });
       }
       const payload = {
@@ -958,6 +966,7 @@ function dispatchAgentRunFromGateway(params: {
           status: aborted ? "timed_out" : resolveFailedTrackedAgentTaskStatus(err),
           error: renderedErr,
           terminalSummary: renderedErr,
+          log: params.context.logGateway,
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
@@ -1062,6 +1071,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       acpTurnSource?: "manual_spawn";
       internalRuntimeHandoffId?: string;
+      execApprovalFollowupExpectedSessionId?: string;
       internalEvents?: AgentInternalEvent[];
       suppressPromptPersistence?: boolean;
       sessionEffects?: "visible" | "internal";
@@ -1299,6 +1309,44 @@ export const agentHandlers: GatewayRequestHandlers = {
           return;
         }
         agentId = inferredAgentId;
+      }
+    }
+    // Drop an exec-approval followup whose session key was rebound by /new or
+    // /reset while the approval was pending, before the handler touches the
+    // rebound session (store write, run registration, dedupe, accepted ack).
+    if (execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
+      const expectedSessionId = normalizeOptionalString(
+        request.execApprovalFollowupExpectedSessionId,
+      );
+      let currentSessionId: string | undefined;
+      try {
+        currentSessionId = normalizeOptionalString(
+          loadSessionEntry(requestedSessionKeyRaw).entry?.sessionId,
+        );
+      } catch {
+        currentSessionId = undefined;
+      }
+      if (
+        isExecApprovalFollowupSessionRebound({
+          expectedSessionId,
+          resolvedSessionId: currentSessionId,
+        })
+      ) {
+        context.logGateway.info(
+          `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
+        );
+        const droppedPayload = {
+          runId,
+          status: "ok" as const,
+          summary: "exec approval followup dropped: session was reset before the approval resolved",
+        };
+        setGatewayDedupeEntries({
+          dedupe: context.dedupe,
+          keys: agentDedupeKeys,
+          entry: { ts: Date.now(), ok: true, payload: droppedPayload },
+        });
+        respond(true, droppedPayload, undefined, { runId });
+        return;
       }
     }
     const requestedSessionId = normalizeOptionalString(request.sessionId);
@@ -1594,13 +1642,13 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
 
-      // Inject timestamp into user-authored messages that don't already have one.
-      // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
-      // formatting in a separate code path — they never reach this handler.
+      // The per-message timestamp prefix is now applied at the single LLM
+      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
+      // own timestamp, so the current turn and all historical turns carry
+      // identical bytes on the wire. The transient gateway injectTimestamp call
+      // is removed — stamping the live turn here would diverge from the bare
+      // stored history and bust the prompt cache.
       // See: https://github.com/openclaw/openclaw/issues/3658
-      if (!isRawModelRun && inputProvenance?.kind !== "inter_session") {
-        message = injectTimestamp(message, timestampOptsFromConfig(cfg));
-      }
 
       if (requestedSessionKey) {
         const sessionLoadOptions = {

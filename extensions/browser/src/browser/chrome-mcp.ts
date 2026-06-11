@@ -143,6 +143,9 @@ const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CHROME_MCP_STDERR_MAX_BYTES = 8 * 1024;
 const CHROME_MCP_PROCESS_EXIT_GRACE_MS = 250;
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
+const DEVTOOLS_ACTIVE_PORT_RE = /\bDevToolsActivePort\b/i;
+const CHROME_CONNECTION_TOOL_ERROR_RE =
+  /(?:Could not connect to Chrome|DevToolsActivePort|ECONNREFUSED|ECONNRESET|websocket|timed out)/i;
 const STALE_SELECTED_PAGE_ERROR =
   "The selected page has been closed. Call list_pages to see open pages.";
 
@@ -265,6 +268,41 @@ function extractMessageText(result: ChromeMcpToolResult): string {
 function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
   const message = extractMessageText(result).trim();
   return message || `Chrome MCP tool "${name}" failed.`;
+}
+
+function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
+  return redactToolPayloadText(redactCdpUrl(browserUrl) ?? browserUrl);
+}
+
+function formatChromeMcpToolErrorMessage(params: {
+  profileName: string;
+  options: NormalizedChromeMcpProfileOptions;
+  toolName: string;
+  message: string;
+}): string {
+  const detail = redactChromeMcpDiagnosticTextWithLocalPaths(params.message);
+  const profileLabel = redactChromeMcpProfileLabelForDiagnostic(params.profileName);
+  if (params.options.browserUrl && CHROME_CONNECTION_TOOL_ERROR_RE.test(params.message)) {
+    return (
+      `Chrome MCP tool "${params.toolName}" failed for profile "${profileLabel}" while using ` +
+      `the configured Chrome endpoint (${formatChromeMcpEndpointForDiagnostic(params.options.browserUrl)}). ` +
+      `Details: ${detail}`
+    );
+  }
+  if (
+    !params.options.browserUrl &&
+    params.options.userDataDir &&
+    DEVTOOLS_ACTIVE_PORT_RE.test(params.message)
+  ) {
+    const cdpUrlPath = path.isAbsolute(params.profileName)
+      ? "this existing-session profile's cdpUrl"
+      : `browser.profiles.${params.profileName}.cdpUrl`;
+    return (
+      `${detail} If this browser was started with --remote-debugging-port, set ${cdpUrlPath} ` +
+      "to that DevTools endpoint instead of relying on Chrome MCP auto-connect."
+    );
+  }
+  return detail;
 }
 
 function shouldReconnectForToolError(name: string, message: string): boolean {
@@ -1194,9 +1232,10 @@ async function callTool(
   if (signal?.aborted) {
     throw signal.reason ?? new Error("aborted");
   }
+  const normalizedProfileOptions = normalizeChromeMcpOptions(profileOptions);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const lease = await leaseSession(profileName, profileOptions, options);
+    const lease = await leaseSession(profileName, normalizedProfileOptions, options);
     const rawCall = lease.session.client.callTool({
       name,
       arguments: args,
@@ -1273,7 +1312,14 @@ async function callTool(
           continue;
         }
       }
-      throw new Error(message);
+      throw new Error(
+        formatChromeMcpToolErrorMessage({
+          profileName,
+          options: normalizedProfileOptions,
+          toolName: name,
+          message,
+        }),
+      );
     }
     return result;
   }

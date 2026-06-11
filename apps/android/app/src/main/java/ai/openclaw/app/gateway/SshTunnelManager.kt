@@ -30,7 +30,10 @@ private const val CONNECT_TIMEOUT_MS = 15_000
  *
  * The tunnel runs on the IO dispatcher; callers do not need to manage threading.
  */
-class SshTunnelManager(private val scope: CoroutineScope) {
+class SshTunnelManager(
+  private val scope: CoroutineScope,
+  private val prefs: ai.openclaw.app.SecurePrefs,
+) {
   /** Currently active JSch session, if any. */
   @Volatile
   private var session: Session? = null
@@ -112,13 +115,48 @@ class SshTunnelManager(private val scope: CoroutineScope) {
       return@withContext try {
         val jsch = JSch()
 
-        // Disable strict host-key checking so the user does not need to pre-trust the SSH host
-        // on the phone. In a future iteration we can store and verify the SSH host fingerprint.
+        // Implement Trust on First Use (TOFU) by storing the host key fingerprint.
+        jsch.setHostKeyRepository(object : com.jcraft.jsch.HostKeyRepository {
+          override fun check(host: String, key: ByteArray): Int {
+            val encodedKey = android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP)
+            val savedKey = prefs.loadSshHostKey(host, config.port)
+            return when {
+              savedKey == null -> {
+                Log.i(TAG, "First connection to $host:${config.port}, trusting host key.")
+                prefs.setSshHostKey(host, config.port, encodedKey)
+                com.jcraft.jsch.HostKeyRepository.OK
+              }
+              savedKey == encodedKey -> com.jcraft.jsch.HostKeyRepository.OK
+              else -> {
+                Log.e(TAG, "SSH HOST KEY MISMATCH for $host:${config.port}! Potential Man-in-the-Middle attack.")
+                com.jcraft.jsch.HostKeyRepository.CHANGED
+              }
+            }
+          }
+          override fun add(hostkey: com.jcraft.jsch.HostKey, userinfo: com.jcraft.jsch.UserInfo?) {}
+          override fun remove(host: String, type: String) {}
+          override fun remove(host: String, type: String, key: ByteArray) {}
+          override fun getKnownHostsRepositoryID(): String = "openclaw-memory-repo"
+          override fun getHostKey(): Array<com.jcraft.jsch.HostKey> = emptyArray()
+          override fun getHostKey(host: String, type: String): Array<com.jcraft.jsch.HostKey> = emptyArray()
+        })
+
         val props =
           Properties().apply {
-            setProperty("StrictHostKeyChecking", "no")
+            setProperty("StrictHostKeyChecking", "ask")
             setProperty("PreferredAuthentications", "publickey,password,keyboard-interactive")
           }
+
+        // We need a UserInfo to handle the "ask" when the key is new, 
+        // even if our repository already handled it in check().
+        val userInfo = object : com.jcraft.jsch.UserInfo {
+          override fun getPassphrase(): String? = null
+          override fun getPassword(): String? = null
+          override fun promptPassword(message: String?): Boolean = true
+          override fun promptPassphrase(message: String?): Boolean = true
+          override fun promptYesNo(message: String?): Boolean = true
+          override fun showMessage(message: String?) { Log.d(TAG, "SSH Message: $message") }
+        }
 
         if (config.privateKey.isNotBlank()) {
           val passphrase = config.privateKeyPassphrase.toByteArray().takeIf { it.isNotEmpty() }
@@ -131,6 +169,7 @@ class SshTunnelManager(private val scope: CoroutineScope) {
               setPassword(config.password)
             }
             setConfig(props)
+            setUserInfo(userInfo)
           }
 
         newSession.connect(CONNECT_TIMEOUT_MS)

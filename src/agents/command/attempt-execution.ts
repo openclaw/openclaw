@@ -13,6 +13,10 @@ import {
 } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  injectTimestamp,
+  timestampOptsFromConfig,
+} from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -440,6 +444,7 @@ export function runAgentAttempt(params: {
   resolvedThinkLevel: ThinkLevel;
   fastMode?: boolean;
   timeoutMs: number;
+  runTimeoutOverrideMs?: number;
   runId: string;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
@@ -553,6 +558,10 @@ export function runAgentAttempt(params: {
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+    const cliPrompt =
+      params.opts.inputProvenance?.kind === "inter_session"
+        ? effectivePrompt
+        : injectTimestamp(effectivePrompt, timestampOptsFromConfig(params.cfg));
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -601,12 +610,14 @@ export function runAgentAttempt(params: {
         workspaceDir: params.workspaceDir,
         cwd: params.cwd,
         config: params.cfg,
-        prompt: effectivePrompt,
+        prompt: cliPrompt,
         provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
         timeoutMs: params.timeoutMs,
+        runTimeoutOverrideMs: params.runTimeoutOverrideMs,
         runId: params.runId,
+        lane: params.opts.lane,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
         cliSessionId: nextCliSessionId,
@@ -627,6 +638,7 @@ export function runAgentAttempt(params: {
         currentThreadTs: params.runContext.currentThreadTs,
         currentInboundAudio: params.runContext.currentInboundAudio,
         agentAccountId: params.runContext.accountId,
+        senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
         toolsAllow: params.opts.toolsAllow,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
@@ -696,6 +708,7 @@ export function runAgentAttempt(params: {
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
+    senderId: params.runContext.senderId,
     senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,

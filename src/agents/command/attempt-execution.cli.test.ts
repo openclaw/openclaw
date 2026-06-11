@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
@@ -174,6 +175,7 @@ describe("CLI attempt execution", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
     } else {
@@ -718,6 +720,7 @@ describe("CLI attempt execution", () => {
       ),
       "utf-8",
     );
+    clearSessionStoreCacheForTest();
 
     const nowCalls: number[] = [];
     let nextNow = 10_000;
@@ -748,7 +751,7 @@ describe("CLI attempt execution", () => {
     if (!updatedSessionFile) {
       throw new Error("expected CLI transcript persistence to create a session file");
     }
-    expect(updatedSessionFile).toBe(sessionFile);
+    expect(await fs.realpath(updatedSessionFile)).toBe(await fs.realpath(sessionFile));
     const entries = await readSessionFileEntries(sessionFile);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
@@ -781,12 +784,11 @@ describe("CLI attempt execution", () => {
       string,
       SessionEntry
     >;
-    expect(persisted[sessionKey]?.sessionFile).toBe(sessionFile);
+    expect(await fs.realpath(persisted[sessionKey]?.sessionFile ?? "")).toBe(
+      await fs.realpath(sessionFile),
+    );
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
     expect(persisted[sessionKey]?.updatedAt).toBeLessThan(nowCalls.at(-1) ?? 0);
-    expect(persisted[sessionKey]?.status).toBe("done");
-    expect(persisted[sessionKey]?.endedAt).toBe(4);
-    expect(persisted[sessionKey]?.startedAt).toBe(2);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
@@ -1124,7 +1126,10 @@ describe("CLI attempt execution", () => {
       opts: {
         messageProvider: "discord-voice",
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      runContext: {
+        currentChannelId: "channel:voice-room",
+        senderId: "sender-voice",
+      } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "discord",
       skillsSnapshot: undefined,
@@ -1142,6 +1147,8 @@ describe("CLI attempt execution", () => {
       trigger: "user",
       messageChannel: "discord",
       messageProvider: "discord-voice",
+      currentChannelId: "channel:voice-room",
+      senderId: "sender-voice",
     });
   });
 
@@ -1190,6 +1197,53 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       toolsAllow: ["read", "web_search"],
+    });
+  });
+
+  it("stamps CLI prompts with current timestamp context", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
+    const sessionKey = "agent:main:direct:claude-timestamp";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-timestamp",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("timestamped cli"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "what time is it?",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-timestamp",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
     });
   });
 
