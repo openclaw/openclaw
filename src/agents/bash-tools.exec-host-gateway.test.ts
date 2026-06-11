@@ -9,7 +9,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
-import type { ExecApprovalDecision, ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecCommandSegment,
+  ExecSegmentSatisfiedBy,
+} from "../infra/exec-approvals.js";
 import {
   planShellAuthorization,
   type ExecAuthorizationPlan,
@@ -25,11 +29,7 @@ type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExe
 type BuildExecApprovalFollowupTargetMock = (
   value: ExecApprovalFollowupTarget,
 ) => ExecApprovalFollowupTarget | null;
-type MockAllowlistSegment = {
-  raw?: string;
-  resolution: null;
-  argv: string[];
-};
+type MockAllowlistSegment = Omit<ExecCommandSegment, "raw"> & { raw?: string };
 type MockAllowlistResult = {
   allowlistMatches: unknown[];
   analysisOk: boolean;
