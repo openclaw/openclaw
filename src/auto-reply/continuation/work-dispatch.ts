@@ -89,9 +89,28 @@ function isRetryableContinuationSkipReason(reason: string): boolean {
   return isRetryableHeartbeatBusySkipReason(reason) || reason === CONTINUATION_TURN_DRAINING_REASON;
 }
 
+/**
+ * #990 Pillar-0 — exp-backoff delay for a PRE-drive busy-skip re-arm.
+ *
+ * A busy-skip (`requests-in-flight`/`draining`) means the turn never started — a
+ * legit defer, never a failed attempt. Re-arming at a flat `BUSY_RETRY_MS` spins a
+ * chronically-busy seat at ~1Hz forever (the storm). Backing off exponentially on
+ * the CONSECUTIVE busy-skip count decays the poll rate while the seat stays busy.
+ *
+ * RATE-cap, NEVER TOTAL: the result is bounded by `ceilingMs` but the flow is never
+ * dropped — it keeps deferring at the ceiling rate and delivers the instant the seat
+ * quiets. `busySkipCount` is the PRE-increment prior-skip count so the first skip
+ * yields `BUSY_RETRY_MS` (2^0): 1s, 2s, 4s, … capped at `ceilingMs`. `2 ** n`
+ * overflowing to Infinity is harmless — `Math.min` clamps it to the ceiling.
+ */
+export function computeBusySkipBackoffMs(busySkipCount: number, ceilingMs: number): number {
+  const exponent = Math.max(0, busySkipCount);
+  return Math.min(ceilingMs, BUSY_RETRY_MS * 2 ** exponent);
+}
+
 function requeueWorkForRetry(
   work: PendingContinuationWork,
-  params: { dueAt: number; summary: string; retryCount?: number },
+  params: { dueAt: number; summary: string; retryCount?: number; busySkipCount?: number },
 ): boolean {
   const requeued = requeuePendingWork(work, params);
   if (requeued) {
@@ -362,10 +381,21 @@ export async function dispatchPendingContinuationWork(params: {
         `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason}`,
       );
       if (isRetryableContinuationSkipReason(skippedReason)) {
-        const retryDueAt = Date.now() + BUSY_RETRY_MS;
+        // #990 Pillar-0: this is a legit PRE-drive busy-defer (the turn never
+        // started), NOT a failed attempt. Re-arm with exp-backoff on the
+        // consecutive busy-skip count — bounded by maxDelayMs (same ceiling as
+        // scheduling, see clampDelayMs) so a chronically-busy seat decays toward
+        // a slow poll instead of spinning at ~1Hz. busySkipCount is DISTINCT from
+        // retryCount: we never pass retryCount here, so a busy-defer never touches
+        // the transient-error fail-bound (#952 never-penalize) and the flow is
+        // never dropped — it delivers the instant the seat quiets (rate-cap-forever).
+        const priorBusySkips = work.busySkipCount ?? 0;
+        const backoffMs = computeBusySkipBackoffMs(priorBusySkips, runtimeConfig.maxDelayMs);
+        const retryDueAt = Date.now() + backoffMs;
         requeueWorkForRetry(work, {
           dueAt: retryDueAt,
           summary: `Retryable continuation skip: ${skippedReason}`,
+          busySkipCount: priorBusySkips + 1,
         });
       } else {
         enqueueSystemEvent(
