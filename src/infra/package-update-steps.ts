@@ -41,6 +41,12 @@ export type PackageUpdateStepAdvisory = {
   message: string;
 };
 
+export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
+  kind: "package-post-install-doctor",
+  message:
+    "Post-install doctor failed after the package install was verified; continuing with post-core plugin convergence and gateway restart.",
+};
+
 type PackageUpdateStepRunner = (params: {
   name: string;
   argv: string[];
@@ -73,6 +79,26 @@ function formatError(err: unknown): string {
 
 function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
+}
+
+export function markPackagePostInstallDoctorAdvisory<
+  T extends {
+    exitCode: number | null;
+    stderrTail?: string | null;
+    advisory?: PackageUpdateStepAdvisory;
+  },
+>(step: T): T {
+  if (step.exitCode === 0 || step.exitCode === null) {
+    return step;
+  }
+  const advisoryTail = [step.stderrTail, PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message]
+    .filter((line): line is string => Boolean(line?.trim()))
+    .join("\n");
+  return {
+    ...step,
+    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+    stderrTail: advisoryTail || step.stderrTail,
+  };
 }
 
 async function removePathBestEffort(targetPath: string): Promise<boolean> {

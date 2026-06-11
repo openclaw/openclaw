@@ -1994,7 +1994,7 @@ describe("runGatewayUpdate", () => {
     expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2.0.0");
   });
 
-  it("fails global npm updates when post-update doctor fails", async () => {
+  it("continues global npm updates when post-update doctor fails after verification", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     await seedGlobalPackageRoot(pkgRoot);
@@ -2025,13 +2025,63 @@ describe("runGatewayUpdate", () => {
 
     const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
 
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBeUndefined();
+    expect(calls).toContain(doctorCommand);
+    const lastStep = result.steps.at(-1);
+    expect(lastStep?.name).toBe("openclaw doctor");
+    expect(lastStep?.exitCode).toBe(1);
+    expect(lastStep?.advisory).toEqual({
+      kind: "package-post-install-doctor",
+      message: expect.stringContaining(
+        "Post-install doctor failed after the package install was verified",
+      ),
+    });
+    expect(lastStep?.stderrTail).toContain("doctor refused migration");
+    expect(lastStep?.stderrTail).toContain(
+      "Post-install doctor failed after the package install was verified",
+    );
+  });
+
+  it("fails global npm updates when the post-update doctor exits without a code", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await writeGatewayEntrypoint(pkgRoot);
+      },
+    });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(
+      pkgRoot,
+      "dist",
+      "index.js",
+    )} doctor --non-interactive --fix`;
+    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      const key = argv.join(" ");
+      if (key === doctorCommand) {
+        calls.push(key);
+        return { stdout: "", stderr: "doctor timed out", code: null };
+      }
+      return runCommand(argv, options);
+    };
+
+    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
+
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-failed");
     expect(calls).toContain(doctorCommand);
     const lastStep = result.steps.at(-1);
     expect(lastStep?.name).toBe("openclaw doctor");
-    expect(lastStep?.exitCode).toBe(1);
-    expect(lastStep?.stderrTail).toBe("doctor refused migration");
+    expect(lastStep?.exitCode).toBeNull();
+    expect(lastStep?.advisory).toBeUndefined();
+    expect(lastStep?.stderrTail).toBe("doctor timed out");
   });
 
   it("falls back to global npm update when git is missing from PATH", async () => {

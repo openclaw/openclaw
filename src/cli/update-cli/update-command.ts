@@ -52,7 +52,10 @@ import {
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
-import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import {
+  markPackagePostInstallDoctorAdvisory,
+  runGlobalPackageUpdateSteps,
+} from "../../infra/package-update-steps.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -87,7 +90,6 @@ import {
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   runGatewayUpdate,
-  type UpdateStepAdvisory,
   type UpdateRunResult,
   type UpdateStepProgress,
 } from "../../infra/update-runner.js";
@@ -1514,7 +1516,7 @@ async function runPackageInstallUpdate(params: {
           timeoutMs: params.timeoutMs,
           progress: createPackagePostInstallDoctorProgress(params.progress),
         });
-        return normalizePackagePostInstallDoctorStep(doctorStep);
+        return markPackagePostInstallDoctorAdvisory(doctorStep);
       }
       return null;
     },
@@ -1532,33 +1534,6 @@ async function runPackageInstallUpdate(params: {
   };
 }
 
-const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: UpdateStepAdvisory = {
-  kind: "package-post-install-doctor",
-  message:
-    "Post-install doctor failed after the package install was verified; continuing with post-core plugin convergence and gateway restart.",
-};
-
-function normalizePackagePostInstallDoctorStep<
-  T extends {
-    name: string;
-    exitCode: number | null;
-    stderrTail?: string | null;
-    advisory?: UpdateStepAdvisory;
-  },
->(step: T): T {
-  if (step.exitCode === 0 || step.exitCode === null) {
-    return step;
-  }
-  const advisoryTail = [step.stderrTail, PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message]
-    .filter((line): line is string => Boolean(line?.trim()))
-    .join("\n");
-  return {
-    ...step,
-    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
-    stderrTail: advisoryTail || step.stderrTail,
-  };
-}
-
 function createPackagePostInstallDoctorProgress(
   progress: UpdateStepProgress | undefined,
 ): UpdateStepProgress | undefined {
@@ -1568,7 +1543,7 @@ function createPackagePostInstallDoctorProgress(
   return {
     ...(progress.onStepStart ? { onStepStart: progress.onStepStart } : {}),
     onStepComplete: (step) => {
-      progress.onStepComplete?.(normalizePackagePostInstallDoctorStep(step));
+      progress.onStepComplete?.(markPackagePostInstallDoctorAdvisory(step));
     },
   };
 }

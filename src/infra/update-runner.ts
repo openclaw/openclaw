@@ -15,6 +15,7 @@ import {
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
 import {
+  markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
   type PackageUpdateStepAdvisory,
 } from "./package-update-steps.js";
@@ -443,6 +444,20 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     exitCode: result.code,
     stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
     stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
+  };
+}
+
+function createPackagePostInstallDoctorProgress(
+  progress: UpdateStepProgress | undefined,
+): UpdateStepProgress | undefined {
+  if (!progress) {
+    return undefined;
+  }
+  return {
+    ...(progress.onStepStart ? { onStepStart: progress.onStepStart } : {}),
+    onStepComplete: (step) => {
+      progress.onStepComplete?.(markPackagePostInstallDoctorAdvisory(step));
+    },
   };
 }
 
@@ -1537,7 +1552,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
         const doctorNodePath = await resolveStableNodePath(process.execPath);
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
-        return await runStep({
+        const doctorStep = await runStep({
           runCommand,
           name: "openclaw doctor",
           argv: [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"],
@@ -1550,10 +1565,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               ? {}
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
           },
-          progress,
+          progress: createPackagePostInstallDoctorProgress(progress),
           stepIndex: 0,
           totalSteps: 1,
         });
+        return markPackagePostInstallDoctorAdvisory(doctorStep);
       },
     });
     return {
