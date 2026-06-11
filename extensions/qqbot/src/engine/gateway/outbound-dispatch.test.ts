@@ -439,6 +439,25 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
+  it("keeps buffered tool text suppressed when a visible block precedes a silent final skip", async () => {
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver, onSkip }) => {
+        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+        onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
   it("does not re-send tool fallback after timeout when non-streaming final block is silent", async () => {
     vi.useFakeTimers();
     const runtime = makeRuntime({

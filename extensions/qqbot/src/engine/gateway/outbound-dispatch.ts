@@ -151,6 +151,7 @@ export async function dispatchOutbound(
   // ---- Deliver state ----
   let hasResponse = false;
   let hasBlockResponse = false;
+  let hasVisibleBlockResponse = false;
   let toolDeliverCount = 0;
   const toolTexts: string[] = [];
   const toolMediaUrls: string[] = [];
@@ -485,6 +486,7 @@ export async function dispatchOutbound(
                   }
                   return;
                 }
+                hasVisibleBlockResponse = true;
 
                 if (streamingController && !streamingController.isTerminalPhase) {
                   try {
@@ -622,7 +624,11 @@ export async function dispatchOutbound(
                 }
               },
               onSettled: async () => {
-                if (skippedSilentBlockResponse && (await flushPendingToolDeliveriesOnce())) {
+                if (
+                  skippedSilentBlockResponse &&
+                  !hasVisibleBlockResponse &&
+                  (await flushPendingToolDeliveriesOnce())
+                ) {
                   return { visibleReplySent: true };
                 }
                 return undefined;
