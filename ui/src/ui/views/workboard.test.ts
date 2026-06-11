@@ -173,6 +173,9 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-agent-chip")?.textContent).toContain(
       "workboard-dispatcher",
     );
+    const runningCard = cards.find((card) => card.textContent?.includes("Running card"));
+    expect(runningCard?.querySelector('button[aria-label="Open session"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
 
   it("renders date and time in detail drawer timestamps", () => {

@@ -2100,6 +2100,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         <button
           class="btn btn--icon workboard-card__icon"
           title=${t("workboard.openSession")}
+          aria-label=${t("workboard.openSession")}
           @click=${() => props.onOpenSession(linkedSessionKey)}
         >
           ${icons.messageSquare}
@@ -2112,6 +2113,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
           <button
             class="btn btn--icon workboard-card__icon"
             title=${t("workboard.stopSession")}
+            aria-label=${t("workboard.stopSession")}
             ?disabled=${busy || !props.connected}
             @click=${() =>
               stopWorkboardCard({
