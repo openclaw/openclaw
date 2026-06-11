@@ -143,6 +143,7 @@ function makeAnthropicTransportModel(
     maxTokens?: number;
     thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
     headers?: Record<string, string>;
+    authHeader?: boolean;
     requestTransport?: RequestTransportConfig;
   } = {},
 ): AnthropicMessagesModel {
@@ -161,6 +162,7 @@ function makeAnthropicTransportModel(
       maxTokens: params.maxTokens ?? 8192,
       ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
       ...(params.headers ? { headers: params.headers } : {}),
+      ...(params.authHeader !== undefined ? { authHeader: params.authHeader } : {}),
     } satisfies AnthropicMessagesModel,
     params.requestTransport ?? {
       proxy: {
@@ -235,6 +237,35 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("uses bearer auth for Microsoft Foundry Anthropic transport requests", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "microsoft-foundry",
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      authHeader: true,
+      headers: {
+        "api-key": "stale-foundry-key",
+        "x-api-key": "stale-resource-key",
+        "X-Provider": "foundry",
+      },
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "entra-access-token",
+      } as AnthropicStreamOptions,
+    );
+
+    const headers = latestAnthropicRequestHeaders();
+    expect(headers.get("authorization")).toBe("Bearer entra-access-token");
+    expect(headers.get("api-key")).toBeNull();
+    expect(headers.get("x-api-key")).toBeNull();
+    expect(headers.get("X-Provider")).toBe("foundry");
+  });
+
   it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
 
@@ -277,6 +308,7 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamContext,
       {
         apiKey: "sk-ant-api",
+        toolChoice: { type: "tool", name: "read_file" },
       } as AnthropicStreamOptions,
     );
 
@@ -2090,6 +2122,7 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
+    expect(payload.tool_choice).toEqual({ type: "auto" });
   });
 
   it("does not infer adaptive thinking from forward-compatible effort maps", async () => {
@@ -2241,6 +2274,61 @@ describe("anthropic transport stream", () => {
     expect(payload.tool_choice).toEqual({ type: "auto" });
     expect(payload).not.toHaveProperty("temperature");
     expect(result.responseModel).toBe("claude-fable-5");
+  });
+
+  it("uses adaptive thinking for canonical Claude Mythos Preview transport aliases", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "prod-mythos-preview",
+      name: "Production Claude",
+      provider: "microsoft-foundry",
+      params: { canonicalModelId: "claude-mythos-preview" },
+      reasoning: true,
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      maxTokens: 128_000,
+    });
+
+    guardedFetchMock.mockResolvedValueOnce(createSseResponse());
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.output_config).toEqual({ effort: "high" });
+  });
+
+  it("uses mandatory adaptive thinking for canonical Claude Mythos Preview transport aliases", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "prod-mythos-preview",
+      name: "Production Claude",
+      provider: "microsoft-foundry",
+      params: { canonicalModelId: "claude-mythos-preview" },
+      reasoning: false,
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      maxTokens: 128_000,
+    });
+
+    guardedFetchMock.mockResolvedValueOnce(createSseResponse());
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.output_config).toEqual({ effort: "high" });
   });
 
   it("maps Claude Fable 5 transport thinking levels to adaptive effort", async () => {
