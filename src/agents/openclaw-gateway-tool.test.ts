@@ -388,16 +388,22 @@ describe("gateway tool", () => {
       action: "config.patch",
       raw,
       sessionKey,
-      replacePaths: ["agents.list[]"],
+      replacePaths: ["agents.list[0]"],
     });
   });
 
   it("distinguishes explicit terminal array consent from indexed consent", () => {
     expect(normalizeConfigPatchReplacePath("bindings[]")).toBe("bindings");
-    expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[]");
+    expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[0]");
     expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe(
       "agents.list[].skills",
     );
+    expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[]"))).toBe(
+      "bindings",
+    );
+    expect(
+      normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]")),
+    ).toBe("bindings[0]");
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {
