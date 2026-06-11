@@ -853,6 +853,55 @@ describe("Discord model picker interactions", () => {
     ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
   });
 
+  it("preserves an auth profile override set by another source when picking a model", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const pickerData = createModelsProviderData({
+      anthropic: ["claude-sonnet-4-5"],
+      lmstudio: ["unsloth/gemma-4-26b-a4b-it@iq4_xs"],
+    });
+    const modelCommand = createModelCommandDefinition();
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    // An auth profile override established by a non-picker source (e.g. a CLI flag).
+    await saveSessionStore(storePath, {
+      "agent:worker:subagent:bound": {
+        updatedAt: Date.now(),
+        sessionId: "bound-session",
+        authProfileOverride: "cli-profile",
+        authProfileOverrideSource: "user",
+      },
+    });
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    const button = createModelPickerFallbackButton(context, dispatchSpy);
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+
+    await button.run(submitInteraction as unknown as PickerButtonInteraction, {
+      ...createModelsViewSubmitData(),
+      p: "lmstudio",
+      mi: "1",
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const entry = store["agent:worker:subagent:bound"];
+    expect(entry?.providerOverride).toBe("lmstudio");
+    // The picker must not destroy the unrelated auth profile override.
+    expect(entry?.authProfileOverride).toBe("cli-profile");
+    expect(entry?.authProfileOverrideSource).toBe("user");
+  });
+
   it("does not write a fallback override when hidden /model dispatch is rejected", async () => {
     const context = createModelPickerContext();
     context.threadBindings = createBoundThreadBindingManager({
