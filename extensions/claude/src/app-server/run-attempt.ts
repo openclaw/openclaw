@@ -74,7 +74,13 @@ import {
 } from "./protocol-validators.js";
 import { startOrResumeClaudeThread } from "./thread-lifecycle.js";
 import { mirrorClaudeAppServerTranscript } from "./transcript-mirror.js";
-import type { ApprovalPolicy, JsonValue, TurnStartParams, UserInput } from "./types.js";
+import type {
+  ApprovalPolicy,
+  DynamicToolSpec,
+  JsonValue,
+  TurnStartParams,
+  UserInput,
+} from "./types.js";
 import { filterToolsForVisionInputs, modelSupportsVision } from "./vision-tools.js";
 
 export type RunClaudeAppServerAttemptOptions = {
@@ -377,6 +383,19 @@ export async function runClaudeAppServerAttempt(
     }
 
     // 8. Populate result.
+    // Build the system-prompt accounting report so /status correctly shows
+    // context weight instead of 0. Mirrors codex's buildCodexSystemPromptReport
+    // call at codex/run-attempt.ts:1091. All inputs are already in scope from
+    // the earlier setup steps.
+    result.systemPromptReport = buildClaudeSystemPromptReport({
+      params,
+      sessionKey: sandboxSessionKey,
+      workspaceDir: effectiveWorkspace,
+      developerInstructions,
+      skillsPrompt:
+        (params.skillsSnapshot as { prompt?: string } | undefined)?.prompt?.trim() ?? "",
+      tools: bridge.specs,
+    });
     result.assistantTexts = accumulated.assistantTexts;
     result.toolMetas = accumulated.toolMetas;
     // Populate messagesSnapshot + lastAssistant so the auto-reply dispatcher
@@ -735,6 +754,68 @@ function registerToolCallHandler(
 
 function fingerprintString(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+// Mirrors codex's buildCodexSystemPromptReport (attempt-context.ts:270).
+// Cannot cross-import from another extension; logic is small enough to
+// replicate. Produces the SessionSystemPromptReport stored on the session
+// entry so /status can show correct context weight instead of 0.
+type ClaudeSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
+
+function buildClaudeSystemPromptReport(params: {
+  params: EmbeddedRunAttemptParams;
+  sessionKey: string;
+  workspaceDir: string;
+  developerInstructions: string;
+  skillsPrompt: string;
+  tools: DynamicToolSpec[];
+}): ClaudeSystemPromptReport {
+  const skillsPrompt = params.skillsPrompt;
+  const toolEntries = params.tools.map((tool) => {
+    const schemaStr = JSON.stringify(tool.inputSchema ?? {});
+    return {
+      name: tool.name,
+      summaryChars: tool.description.length,
+      summaryHash: fingerprintString(tool.description),
+      schemaChars: schemaStr.length,
+      schemaHash: fingerprintString(schemaStr),
+      propertiesCount:
+        tool.inputSchema &&
+        typeof tool.inputSchema === "object" &&
+        !Array.isArray(tool.inputSchema) &&
+        "properties" in tool.inputSchema &&
+        typeof (tool.inputSchema as Record<string, unknown>).properties === "object"
+          ? Object.keys((tool.inputSchema as Record<string, unknown>).properties as object).length
+          : null,
+    };
+  });
+  const schemaChars = toolEntries.reduce((sum, t) => sum + t.schemaChars, 0);
+  return {
+    source: "run",
+    generatedAt: Date.now(),
+    sessionId: params.params.sessionId,
+    sessionKey: params.sessionKey,
+    provider: params.params.model?.provider,
+    model: params.params.modelId,
+    workspaceDir: params.workspaceDir,
+    systemPrompt: {
+      chars: params.developerInstructions.length,
+      projectContextChars: 0,
+      nonProjectContextChars: params.developerInstructions.length,
+      hash: fingerprintString(params.developerInstructions),
+    },
+    injectedWorkspaceFiles: [],
+    skills: {
+      promptChars: skillsPrompt.length,
+      hash: fingerprintString(skillsPrompt),
+      entries: [],
+    },
+    tools: {
+      listChars: 0,
+      schemaChars,
+      entries: toolEntries,
+    },
+  };
 }
 
 // ─── Turn execution ─────────────────────────────────────────────────────────
