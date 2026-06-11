@@ -15,7 +15,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -49,6 +48,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
@@ -177,17 +177,19 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  if (
+    params.rejectWebchatAsInternalOnly &&
+    normalizeOptionalLowercaseString(channelInput) === "webchat"
+  ) {
+    return {
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+      ),
+    };
+  }
+  const normalizedChannel = channelInput ? (normalizeMessageChannel(channelInput) ?? null) : null;
   if (channelInput && !normalizedChannel) {
-    const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
-    if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
-      return {
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
-        ),
-      };
-    }
     return {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };

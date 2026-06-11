@@ -1,3 +1,4 @@
+import { resetRegisteredChannelPluginLookupCache } from "../channels/registry-lookup.js";
 // Coordinates active plugin runtime registries and event hooks.
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -9,7 +10,10 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
+import {
+  getActivePluginChannelRegistrySnapshotFromState,
+  resetActivePluginChannelRegistrySnapshot,
+} from "./runtime-channel-state.js";
 import {
   PLUGIN_REGISTRY_STATE,
   type RegistryState,
@@ -405,4 +409,6 @@ export function resetPluginRuntimeStateForTest(): void {
   // since this helper is widely used across plugin/agent tests.
   clearPluginHostRuntimeState();
   clearPluginMetadataLifecycleCaches();
+  resetActivePluginChannelRegistrySnapshot();
+  resetRegisteredChannelPluginLookupCache();
 }

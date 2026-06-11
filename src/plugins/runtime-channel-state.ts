@@ -83,3 +83,8 @@ export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRe
 export function getActivePluginChannelRegistryVersionFromState(): number {
   return getActivePluginChannelRegistrySnapshotFromState().version;
 }
+
+/** Clears the cached snapshot so the next access reads fresh registry state. */
+export function resetActivePluginChannelRegistrySnapshot(): void {
+  activePluginChannelRegistrySnapshot = undefined;
+}

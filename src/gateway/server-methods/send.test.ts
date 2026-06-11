@@ -52,6 +52,25 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
 
+vi.mock("../../utils/message-channel.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/message-channel.js")>();
+  return {
+    ...actual,
+    normalizeMessageChannel: (value: string) => {
+      if (value === "webchat") return "webchat";
+      if (
+        value === "telegram" ||
+        value === "discord" ||
+        value === "slack" ||
+        value === "whatsapp" ||
+        value === "matrix"
+      )
+        return value;
+      return undefined;
+    },
+  };
+});
+
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
@@ -924,6 +943,27 @@ describe("gateway send mirroring", () => {
     expect(response?.[1]).toBeUndefined();
     expect(response?.[2]?.message).toContain("unsupported channel: webchat");
     expect(response?.[2]?.message).toContain("Use `chat.send`");
+  });
+
+  // Regression: telegram and other plugin channels must pass normalizeMessageChannel validation
+  // even when the active plugin registry is empty (channels are resolved via bundled catalog,
+  // not registry-only normalizeChannelId). This was broken before the normalizeMessageChannel fix.
+  it("accepts plugin channels like telegram that are not in the active registry", async () => {
+    mockDeliverySuccess("m-telegram-regression");
+
+    const { respond } = await runSend({
+      to: "248008339",
+      message: "hello",
+      channel: "telegram",
+      idempotencyKey: "idem-telegram-regression",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(response?.[1]?.messageId).toBe("m-telegram-regression");
+    expect(response?.[2]).toBeUndefined();
+    expect(response?.[3]?.channel).toBe("telegram");
   });
 
   it("auto-picks the single configured channel for send", async () => {

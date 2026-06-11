@@ -88,6 +88,11 @@ export function findRegisteredChannelPluginEntry(
   return buildRegisteredChannelPluginLookup().byKey.get(normalizedKey);
 }
 
+/** Clears the cached lookup so the next access reads fresh registry state. */
+export function resetRegisteredChannelPluginLookupCache(): void {
+  registeredChannelPluginLookup = undefined;
+}
+
 /** Finds an active channel plugin registration by its canonical plugin id. */
 export function findRegisteredChannelPluginEntryById(
   id: string,
