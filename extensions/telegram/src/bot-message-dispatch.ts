@@ -729,7 +729,7 @@ export const dispatchTelegramMessage = async ({
   opts,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
-}: DispatchTelegramMessageParams) => {
+}: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
@@ -2479,7 +2479,7 @@ export const dispatchTelegramMessage = async ({
         },
       });
       if (!turnResult.dispatched) {
-        return;
+        return { kind: "completed" };
       }
       ({ queuedFinal } = turnResult.dispatchResult);
       suppressSilentReplyFallback =

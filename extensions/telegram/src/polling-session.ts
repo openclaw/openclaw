@@ -595,7 +595,6 @@ export class TelegramPollingSession {
       deferredSpooledUpdateClaimsByKey.delete(claimKey);
     }
     let settled = false;
-    let state: DeferredSpooledUpdateClaimState;
     const finish = async (result: TelegramMessageProcessingResult): Promise<void> => {
       if (settled) {
         return;
@@ -627,10 +626,10 @@ export class TelegramPollingSession {
         );
       }
     };
-    state = {
+    const state: DeferredSpooledUpdateClaimState = {
       claimKey,
       laneKey: params.laneKey,
-      task: params.deferredWork.task.then(finish, async (err) => {
+      task: params.deferredWork.task.then(finish, async (err: unknown) => {
         await finish({ kind: "failed-retryable", error: err });
       }),
       update: params.update,
