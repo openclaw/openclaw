@@ -343,7 +343,8 @@
               "followUpWindowMs": { "type": "integer", "minimum": 0 }
             }
           },
-          "maxVisionPerMinute": { "type": "integer", "minimum": 0 }
+          "maxVisionPerMinute": { "type": "integer", "minimum": 0 },
+          "meetingRecap": { "type": "boolean" }
         }
       },
       "fromNumber": {
