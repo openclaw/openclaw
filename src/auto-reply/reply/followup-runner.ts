@@ -972,6 +972,8 @@ export function createFollowupRunner(params: {
                         : undefined,
                     currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
+                    senderId: run.senderId,
+                    senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
                   },

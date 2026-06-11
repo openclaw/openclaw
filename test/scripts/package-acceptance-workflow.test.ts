@@ -1603,7 +1603,12 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("npm_telegram_run_id");
     expect(releaseWorkflow).toContain('release_publish_run_id="${GITHUB_RUN_ID}"');
     expect(releaseWorkflow).toContain("append_release_proof_to_github_release");
+    expect(releaseWorkflow).toContain("guard_existing_public_release");
+    expect(releaseWorkflow).toContain(
+      "already has a public GitHub release page without complete postpublish evidence",
+    );
     expect(releaseWorkflow).toContain("registry tarball");
+    expect(releaseWorkflow).toContain("release SHA");
     expect(releaseWorkflow).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");
     expect(releaseWorkflow).toContain("Validate release publish approval");
@@ -1612,6 +1617,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
     expect(releaseWorkflow).toContain("release:verify-beta");
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain("--skip-github-release");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
     expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
     expect(releaseWorkflow).toContain("Failed child job summary");
@@ -1654,8 +1660,11 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain(
       "has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}",
     );
+    expect(releaseWorkflow.lastIndexOf("verify_published_release")).toBeLessThan(
+      releaseWorkflow.lastIndexOf("create_or_update_github_release"),
+    );
     expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
-      releaseWorkflow.indexOf('if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"'),
+      releaseWorkflow.lastIndexOf("append_release_proof_to_github_release"),
     );
     expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
   });
