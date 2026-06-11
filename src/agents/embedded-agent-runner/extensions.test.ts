@@ -1,5 +1,5 @@
 // Coverage for embedded extension factory selection and runtime wiring.
-import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -16,7 +16,15 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   // Plugin-owned cache-TTL decisions are mocked out here; extension selection
-  // tests assert the core default wiring only.
+  // tests assert the core default wiring only. The model module builds its
+  // provider runtime hook sets at import time, so every referenced hook must
+  // exist in this factory even when a test never exercises it.
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
   resolveProviderCacheTtlEligibility: () => undefined,
   resolveProviderRuntimePlugin: () => undefined,
   runProviderDynamicModel: () => undefined,
