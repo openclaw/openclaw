@@ -188,7 +188,8 @@ vi.mock("./bash-process-registry.js", () => ({
   tail: vi.fn((value) => value),
 }));
 
-vi.mock("../infra/command-analysis/inline-eval.js", () => ({
+vi.mock("../infra/command-analysis/inline-eval.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/command-analysis/inline-eval.js")>()),
   describeInterpreterInlineEval: vi.fn(() => "python -c"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
@@ -789,6 +790,59 @@ describe("processGatewayAllowlist", () => {
         allowedDecisions: ["allow-once", "deny"],
       }),
     );
+  });
+
+  it("keeps shell-wrapper allowlist misses one-shot when gateway enforcement cannot reuse them", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const command = "sh -c 'git status'";
+    const env = { PATH: "/usr/bin:/bin" };
+    const approvalsFile = { version: 1, agents: {} };
+    const authorizationPlan = await planShellAuthorization({ command, env });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    requiresExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: authorizationPlan.groups.flatMap((group) =>
+        group.candidates.map((candidate) => candidate.sourceSegment),
+      ),
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [null],
+      authorizationPlan,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: approvalsFile },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      env,
+      autoReview: false,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "on-miss",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+    });
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+    expect(approvalsFile.agents).toEqual({});
   });
 
   it("requests human approval when auto-review asks on an approval miss", async () => {

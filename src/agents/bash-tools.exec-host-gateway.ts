@@ -9,10 +9,13 @@ import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
+  type AllowAlwaysPersistenceDecision,
   commandRequiresSecurityAuditSuppressionApproval,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
+  type ExecCommandSegment,
   type ExecSecurity,
+  type ExecSegmentSatisfiedBy,
   buildEnforcedShellCommand,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
@@ -22,6 +25,7 @@ import {
   resolveAllowAlwaysPersistenceDecision,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
+import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
   defaultExecAutoReviewer,
@@ -155,6 +159,31 @@ function resolveGatewayAutoReviewReason(params: {
     return "allowlist-miss";
   }
   return "approval-required";
+}
+
+function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
+  return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
+}
+
+function resolveGatewayEnforcedCommand(params: {
+  command: string;
+  segments: ExecCommandSegment[];
+  authorizationPlan?: ExecAuthorizationPlan;
+  segmentSatisfiedBy?: readonly ExecSegmentSatisfiedBy[];
+}): { ok: boolean; command?: string; reason?: string } {
+  return process.platform === "win32"
+    ? buildEnforcedShellCommand({
+        command: params.command,
+        segments: params.segments,
+        platform: process.platform,
+      })
+    : params.authorizationPlan
+      ? buildAuthorizedShellCommandFromPlan({
+          plan: params.authorizationPlan,
+          mode: "enforced",
+          segmentSatisfiedBy: params.segmentSatisfiedBy,
+        })
+      : { ok: false, reason: "authorization plan unavailable" };
 }
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
@@ -448,23 +477,22 @@ export async function processGatewayAllowlist(
       )}.`,
     );
   }
+  const gatewayEnforcedCommand =
+    hostSecurity === "allowlist" && analysisOk
+      ? resolveGatewayEnforcedCommand({
+          command: params.command,
+          segments: allowlistEval.segments,
+          authorizationPlan: allowlistEval.authorizationPlan,
+          segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+        })
+      : null;
   let enforcedCommand: string | undefined;
   let allowlistPlanUnavailableReason: string | null = null;
   if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
-    const enforced =
-      process.platform === "win32"
-        ? buildEnforcedShellCommand({
-            command: params.command,
-            segments: allowlistEval.segments,
-            platform: process.platform,
-          })
-        : allowlistEval.authorizationPlan
-          ? buildAuthorizedShellCommandFromPlan({
-              plan: allowlistEval.authorizationPlan,
-              mode: "enforced",
-              segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
-            })
-          : { ok: false, reason: "authorization plan unavailable" };
+    const enforced = gatewayEnforcedCommand ?? {
+      ok: false,
+      reason: "authorization plan unavailable",
+    };
     if (!enforced.ok || !enforced.command) {
       allowlistPlanUnavailableReason =
         ("reason" in enforced ? enforced.reason : undefined) ?? "unsupported platform";
@@ -521,11 +549,17 @@ export async function processGatewayAllowlist(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
+  const effectiveAllowAlwaysPersistence =
+    allowAlwaysPersistence.kind === "patterns" &&
+    gatewayEnforcedCommand !== null &&
+    (!gatewayEnforcedCommand.ok || !gatewayEnforcedCommand.command)
+      ? createOneShotAllowAlwaysDecision()
+      : allowAlwaysPersistence;
   const approvalAllowedDecisions = resolveExecApprovalAllowedDecisions({
     ask: hostAsk,
     allowAlwaysPersistence: requiresAllowlistPlanApproval
-      ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
-      : allowAlwaysPersistence,
+      ? createOneShotAllowAlwaysDecision()
+      : effectiveAllowAlwaysPersistence,
   });
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
@@ -774,7 +808,7 @@ export async function processGatewayAllowlist(
         persistAllowAlwaysDecision({
           approvals: approvals.file,
           agentId: params.agentId,
-          decision: allowAlwaysPersistence,
+          decision: effectiveAllowAlwaysPersistence,
         });
       }
 
