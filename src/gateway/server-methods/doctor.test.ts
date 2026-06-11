@@ -438,6 +438,59 @@ describe("doctor.memory.status", () => {
     );
   });
 
+  it("uses the requested agent workspace when memory search manager is missing", async () => {
+    const mainWorkspaceDir = "/tmp/openclaw-main-workspace";
+    const alphaWorkspaceDir = "/tmp/openclaw-alpha-workspace";
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        list: [{ id: "alpha", workspace: alphaWorkspaceDir }],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
+      agentId === "alpha" ? alphaWorkspaceDir : mainWorkspaceDir,
+    );
+    getMemorySearchManager.mockResolvedValue({
+      manager: null,
+      error: "memory search unavailable",
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond, {
+      params: { agentId: "alpha", probe: true },
+    });
+
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, {
+      agentId: "alpha",
+      embedding: {
+        ok: false,
+        error: "memory search unavailable",
+      },
+    });
+    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.anything(), "alpha");
+    expect(loadShortTermPromotionDreamingStats).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: alphaWorkspaceDir,
+      }),
+    );
+    expect(loadShortTermPromotionDreamingStats).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: mainWorkspaceDir,
+      }),
+    );
+  });
+
   it("returns probe failure when manager probe throws", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     getMemorySearchManager.mockResolvedValue({
