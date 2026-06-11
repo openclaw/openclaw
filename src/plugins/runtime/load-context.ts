@@ -37,7 +37,7 @@ export type PluginRuntimeLoadContext = {
    * pass. Loads built from it must keep raw-mode cache semantics: resolved
    * values can change between calls and must never enter cache keys.
    */
-  rawConfigEnvVarsResolved: boolean;
+  rawConfigEnvVarsResolved?: boolean;
 };
 
 /** Runtime load option values that can be passed directly to plugin loading. */
