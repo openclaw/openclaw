@@ -21,4 +21,20 @@ describe("OpenAI provider policy artifact", () => {
     expect(openaiProfile?.levels.map((level) => level.id)).not.toContain("xhigh");
     expect(openaiMiniProfile?.levels.map((level) => level.id)).toContain("xhigh");
   });
+
+  it("applies OpenAI thinking policy to custom openai-responses refs", () => {
+    const profile = resolveThinkingProfile({
+      provider: "custom-openai",
+      api: "openai-responses",
+      modelId: "gpt-5.5",
+    });
+    const unrelatedProfile = resolveThinkingProfile({
+      provider: "custom-openai",
+      api: "anthropic-messages",
+      modelId: "gpt-5.5",
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
+    expect(unrelatedProfile).toBeNull();
+  });
 });

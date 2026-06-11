@@ -1,6 +1,6 @@
 // Resolves provider thinking-level policy from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import { resolveBundledProviderPolicySurfaces } from "./provider-public-artifacts.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -86,10 +86,17 @@ export function resolveProviderThinkingProfile(
   if (activeProfile !== undefined) {
     return activeProfile;
   }
-  return resolveBundledProviderPolicySurface(
+  const surfaces = resolveBundledProviderPolicySurfaces(
     params.provider,
     params.context.api ? { providerRefs: [params.context.api] } : undefined,
-  )?.resolveThinkingProfile?.(params.context);
+  );
+  for (const surface of surfaces) {
+    const profile = surface.resolveThinkingProfile?.(params.context);
+    if (profile !== null && profile !== undefined) {
+      return profile;
+    }
+  }
+  return undefined;
 }
 
 /** Resolves the provider default thinking level from the active plugin registry. */
