@@ -92,67 +92,136 @@ let pluginRouteRuntimeScopesModulePromise:
   | undefined;
 
 function getIdentityAvatarModule() {
-  identityAvatarModulePromise ??= import("../agents/identity-avatar.js");
+  if (!identityAvatarModulePromise) {
+    identityAvatarModulePromise = import("../agents/identity-avatar.js").catch((err) => {
+      identityAvatarModulePromise = undefined;
+      throw err;
+    });
+  }
   return identityAvatarModulePromise;
 }
 
 function getControlUiModule() {
-  controlUiModulePromise ??= import("./control-ui.js");
+  if (!controlUiModulePromise) {
+    controlUiModulePromise = import("./control-ui.js").catch((err) => {
+      controlUiModulePromise = undefined;
+      throw err;
+    });
+  }
   return controlUiModulePromise;
 }
 
 function getEmbeddingsHttpModule() {
-  embeddingsHttpModulePromise ??= import("./embeddings-http.js");
+  if (!embeddingsHttpModulePromise) {
+    embeddingsHttpModulePromise = import("./embeddings-http.js").catch((err) => {
+      embeddingsHttpModulePromise = undefined;
+      throw err;
+    });
+  }
   return embeddingsHttpModulePromise;
 }
 
 function getManagedImageAttachmentsModule() {
-  managedImageAttachmentsModulePromise ??= import("./managed-image-attachments.js");
+  if (!managedImageAttachmentsModulePromise) {
+    managedImageAttachmentsModulePromise = import("./managed-image-attachments.js").catch((err) => {
+      managedImageAttachmentsModulePromise = undefined;
+      throw err;
+    });
+  }
   return managedImageAttachmentsModulePromise;
 }
 
 function getModelsHttpModule() {
-  modelsHttpModulePromise ??= import("./models-http.js");
+  if (!modelsHttpModulePromise) {
+    modelsHttpModulePromise = import("./models-http.js").catch((err) => {
+      modelsHttpModulePromise = undefined;
+      throw err;
+    });
+  }
   return modelsHttpModulePromise;
 }
 
 function getOpenAiHttpModule() {
-  openAiHttpModulePromise ??= import("./openai-http.js");
+  if (!openAiHttpModulePromise) {
+    openAiHttpModulePromise = import("./openai-http.js").catch((err) => {
+      openAiHttpModulePromise = undefined;
+      throw err;
+    });
+  }
   return openAiHttpModulePromise;
 }
 
 function getOpenResponsesHttpModule() {
-  openResponsesHttpModulePromise ??= import("./openresponses-http.js");
+  if (!openResponsesHttpModulePromise) {
+    openResponsesHttpModulePromise = import("./openresponses-http.js").catch((err) => {
+      openResponsesHttpModulePromise = undefined;
+      throw err;
+    });
+  }
   return openResponsesHttpModulePromise;
 }
 
 function getSessionHistoryHttpModule() {
-  sessionHistoryHttpModulePromise ??= import("./sessions-history-http.js");
+  if (!sessionHistoryHttpModulePromise) {
+    sessionHistoryHttpModulePromise = import("./sessions-history-http.js").catch((err) => {
+      sessionHistoryHttpModulePromise = undefined;
+      throw err;
+    });
+  }
   return sessionHistoryHttpModulePromise;
 }
 
 function getSessionKillHttpModule() {
-  sessionKillHttpModulePromise ??= import("./session-kill-http.js");
+  if (!sessionKillHttpModulePromise) {
+    sessionKillHttpModulePromise = import("./session-kill-http.js").catch((err) => {
+      sessionKillHttpModulePromise = undefined;
+      throw err;
+    });
+  }
   return sessionKillHttpModulePromise;
 }
 
 function getToolsInvokeHttpModule() {
-  toolsInvokeHttpModulePromise ??= import("./tools-invoke-http.js");
+  if (!toolsInvokeHttpModulePromise) {
+    toolsInvokeHttpModulePromise = import("./tools-invoke-http.js").catch((err) => {
+      toolsInvokeHttpModulePromise = undefined;
+      throw err;
+    });
+  }
   return toolsInvokeHttpModulePromise;
 }
 
 function getPluginNodeCapabilityAuthModule() {
-  pluginNodeCapabilityAuthModulePromise ??= import("./server/plugin-node-capability-auth.js");
+  if (!pluginNodeCapabilityAuthModulePromise) {
+    pluginNodeCapabilityAuthModulePromise = import("./server/plugin-node-capability-auth.js").catch(
+      (err) => {
+        pluginNodeCapabilityAuthModulePromise = undefined;
+        throw err;
+      },
+    );
+  }
   return pluginNodeCapabilityAuthModulePromise;
 }
 
 function getHttpAuthUtilsModule() {
-  httpAuthUtilsModulePromise ??= import("./http-auth-utils.js");
+  if (!httpAuthUtilsModulePromise) {
+    httpAuthUtilsModulePromise = import("./http-auth-utils.js").catch((err) => {
+      httpAuthUtilsModulePromise = undefined;
+      throw err;
+    });
+  }
   return httpAuthUtilsModulePromise;
 }
 
 function getPluginRouteRuntimeScopesModule() {
-  pluginRouteRuntimeScopesModulePromise ??= import("./server/plugin-route-runtime-scopes.js");
+  if (!pluginRouteRuntimeScopesModulePromise) {
+    pluginRouteRuntimeScopesModulePromise = import("./server/plugin-route-runtime-scopes.js").catch(
+      (err) => {
+        pluginRouteRuntimeScopesModulePromise = undefined;
+        throw err;
+      },
+    );
+  }
   return pluginRouteRuntimeScopesModulePromise;
 }
 

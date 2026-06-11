@@ -987,7 +987,15 @@ export async function handleOpenResponsesHttpRequest(
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
       if (replace && typeof text === "string") {
+        // Replace events carry the full corrected text, not an incremental
+        // delta. Update the accumulator and mark that we have received output,
+        // but do not emit a response.output_text.delta — there is no standard
+        // SSE representation for a full-content replacement, and emitting
+        // `text` as a delta would duplicate it when it is also used as the
+        // `content` fall-through value below.
         accumulatedText = text;
+        sawAssistantDelta = true;
+        return;
       }
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
@@ -1228,6 +1236,17 @@ export async function handleOpenResponsesHttpRequest(
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
+
+      // Mark the stream closed and remove the event listener *before* emitting
+      // any lifecycle events. notifyListeners() is synchronous, so leaving the
+      // listener active while calling emitAgentEvent({ phase: "error" }) below
+      // would immediately re-enter maybeFinalize() — which is still unblocked
+      // (closed=false, finalizeRequested=null) — and write a second terminal
+      // SSE sequence on top of the response.failed event written here.
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
+
       if (isClientToolNameConflictError(err)) {
         const errorResponse = createResponseResource({
           id: responseId,
@@ -1237,53 +1256,36 @@ export async function handleOpenResponsesHttpRequest(
           error: { code: "invalid_request_error", message: "invalid tool configuration" },
           usage: finalUsage,
         });
-
         writeSseEvent(res, { type: "response.failed", response: errorResponse });
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
+        writeDone(res);
+        res.end();
+        emitAgentEvent({ runId: responseId, stream: "lifecycle", data: { phase: "error" } });
         return;
       }
-      const errorResponse = createResponseResource({
-        id: responseId,
-        model,
-        status: "failed",
-        output: [],
-        error: { code: "api_error", message: "internal error" },
-        usage: finalUsage,
-      });
 
       const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        const mappedResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
-            code: mapped.error.type,
-            message: mapped.error.message,
-          },
-          usage: finalUsage,
-        });
-        rememberResponseSession();
-        writeSseEvent(res, { type: "response.failed", response: mappedResponse });
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
-        return;
-      }
+      const errorResource = mapped
+        ? createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: mapped.error.type, message: mapped.error.message },
+            usage: finalUsage,
+          })
+        : createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: "api_error", message: "internal error" },
+            usage: finalUsage,
+          });
       rememberResponseSession();
-      writeSseEvent(res, { type: "response.failed", response: errorResponse });
-      emitAgentEvent({
-        runId: responseId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
+      writeSseEvent(res, { type: "response.failed", response: errorResource });
+      writeDone(res);
+      res.end();
+      emitAgentEvent({ runId: responseId, stream: "lifecycle", data: { phase: "error" } });
     } finally {
       if (!closed) {
         // Emit lifecycle end to trigger completion
