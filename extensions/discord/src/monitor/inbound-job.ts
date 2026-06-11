@@ -27,6 +27,9 @@ export type DiscordInboundJob = {
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
   replayKeys?: string[];
+  // Source-message cancel keys (accountId:channelId:messageId) so a
+  // MESSAGE_DELETE or superseding edit can abort exactly this job's run.
+  cancelKeys?: string[];
 };
 
 export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
@@ -45,7 +48,7 @@ export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightCon
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { replayKeys?: readonly string[]; cancelKeys?: readonly string[] },
 ): DiscordInboundJob {
   const {
     runtime,
@@ -83,6 +86,7 @@ export function buildDiscordInboundJob(
       discordRestFetch,
     },
     replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    cancelKeys: options?.cancelKeys?.length ? [...options.cancelKeys] : undefined,
   };
 }
 

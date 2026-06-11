@@ -7,6 +7,8 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Client } from "../internal/discord.js";
 import {
+  buildDiscordInboundCancelKey,
+  buildDiscordInboundEditReplayKey,
   buildDiscordInboundReplayKey,
   claimDiscordInboundReplay,
   commitDiscordInboundReplay,
@@ -15,7 +17,11 @@ import {
   releaseDiscordInboundReplay,
 } from "./inbound-dedupe.js";
 import { buildDiscordInboundJob, resolveDiscordInboundJobQueueKey } from "./inbound-job.js";
-import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
+import type {
+  DiscordMessageEvent,
+  DiscordMessageHandler,
+  DiscordMessageRunCancel,
+} from "./listeners.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type {
   DiscordMessagePreflightContext,
@@ -71,6 +77,7 @@ async function loadMessagePreflightRuntime() {
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
+  cancelMessageRun: DiscordMessageRunCancel;
 };
 
 function isNonEmptyString(value: string | undefined): value is string {
@@ -145,11 +152,23 @@ export function createDiscordMessageHandler(
     testing: params.testing,
   });
 
+  const cancelSupersededRuns = (entries: ReadonlyArray<{ supersedeKey?: string }>) => {
+    for (const entry of entries) {
+      if (entry.supersedeKey) {
+        messageRunQueue.cancel(entry.supersedeKey, "superseded by edited discord message");
+      }
+    }
+  };
+
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;
     client: Client;
     abortSignal?: AbortSignal;
     replayKey?: string;
+    // Source-message key for the run-cancellation index; edits also carry it
+    // as supersedeKey so an accepted revision aborts the prior revision's run.
+    cancelKey?: string;
+    supersedeKey?: string;
   }>({
     cfg: params.cfg,
     channel: "discord",
@@ -183,11 +202,26 @@ export function createDiscordMessageHandler(
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
+      // Within one batch, an edit supersedes the earlier revision of the same
+      // source message; only the latest revision's text is processed, while
+      // every entry's replay key still commits with the surviving job.
+      const latestRevisionIndex = new Map<string, number>();
+      entries.forEach((entry, index) => {
+        if (entry.cancelKey) {
+          latestRevisionIndex.set(entry.cancelKey, index);
+        }
+      });
+      const flushEntries = entries.filter(
+        (entry, index) => !entry.cancelKey || latestRevisionIndex.get(entry.cancelKey) === index,
+      );
+      const last = flushEntries.at(-1);
       if (!last) {
         return;
       }
       const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
+      const cancelKeys = [
+        ...new Set(flushEntries.map((entry) => entry.cancelKey).filter(isNonEmptyString)),
+      ];
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
         releaseDiscordInboundReplay({
@@ -198,7 +232,7 @@ export function createDiscordMessageHandler(
         return;
       }
       try {
-        if (entries.length === 1) {
+        if (flushEntries.length === 1) {
           const preflight =
             preflightDiscordMessageImpl ??
             (await loadMessagePreflightRuntime()).preflightDiscordMessage;
@@ -222,10 +256,11 @@ export function createDiscordMessageHandler(
             activeFeedback: prestartedTypingFeedback,
           });
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+          cancelSupersededRuns(entries);
+          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys, cancelKeys }));
           return;
         }
-        const combinedBaseText = entries
+        const combinedBaseText = flushEntries
           .map((entry) =>
             resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
           )
@@ -278,8 +313,8 @@ export function createDiscordMessageHandler(
           activeFeedback: prestartedTypingFeedback,
         });
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
-        if (entries.length > 1) {
-          const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
+        if (flushEntries.length > 1) {
+          const ids = flushEntries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
           if (ids.length > 0) {
             const ctxBatch = ctx as typeof ctx & {
               MessageSids?: string[];
@@ -291,7 +326,8 @@ export function createDiscordMessageHandler(
             ctxBatch.MessageSidLast = ids[ids.length - 1];
           }
         }
-        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+        cancelSupersededRuns(entries);
+        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys, cancelKeys }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
           releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
@@ -320,10 +356,15 @@ export function createDiscordMessageHandler(
       if (params.botUserId && msgAuthorId === params.botUserId) {
         return;
       }
-      const replayKey = buildDiscordInboundReplayKey({
+      const cancelKey = buildDiscordInboundReplayKey({
         accountId: params.accountId,
         data,
       });
+      const edit = options?.edit;
+      const replayKey =
+        cancelKey && edit
+          ? buildDiscordInboundEditReplayKey(cancelKey, edit.editedTimestamp)
+          : cancelKey;
       if (
         !(await claimDiscordInboundReplay({
           replayKey,
@@ -338,6 +379,8 @@ export function createDiscordMessageHandler(
         client,
         abortSignal: options?.abortSignal,
         replayKey: replayKey ?? undefined,
+        cancelKey: cancelKey ?? undefined,
+        supersedeKey: edit && cancelKey ? cancelKey : undefined,
       });
     } catch (err) {
       params.runtime.error(danger(`handler failed: ${String(err)}`));
@@ -345,6 +388,15 @@ export function createDiscordMessageHandler(
   };
 
   handler.deactivate = messageRunQueue.deactivate;
+  handler.cancelMessageRun = (cancelParams) =>
+    messageRunQueue.cancel(
+      buildDiscordInboundCancelKey({
+        accountId: params.accountId,
+        channelId: cancelParams.channelId,
+        messageId: cancelParams.messageId,
+      }),
+      cancelParams.reason,
+    );
 
   return handler;
 }

@@ -28,13 +28,16 @@ import {
 } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
+  DiscordMessageDeleteListener,
   DiscordMessageListener,
+  DiscordMessageUpdateListener,
   DiscordInteractionListener,
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
+  type DiscordMessageRunCancel,
 } from "./listeners.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
@@ -253,6 +256,7 @@ export function registerDiscordMonitorListeners(params: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   logger: NonNullable<ConstructorParameters<typeof DiscordMessageListener>[1]>;
   messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
+  cancelMessageRun?: DiscordMessageRunCancel;
   trackInboundEvent?: () => void;
 }) {
   registerDiscordListener(
@@ -263,6 +267,26 @@ export function registerDiscordMonitorListeners(params: {
     params.client.listeners,
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
   );
+  // Edits re-enter the same handler (preflight owns mention/allow gating);
+  // deletes abort the run the deleted message originally triggered.
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordMessageUpdateListener(
+      params.messageHandler,
+      params.logger,
+      params.trackInboundEvent,
+    ),
+  );
+  if (params.cancelMessageRun) {
+    registerDiscordListener(
+      params.client.listeners,
+      new DiscordMessageDeleteListener(
+        params.cancelMessageRun,
+        params.logger,
+        params.trackInboundEvent,
+      ),
+    );
+  }
 
   if (shouldRegisterDiscordReactionListeners(params)) {
     const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {

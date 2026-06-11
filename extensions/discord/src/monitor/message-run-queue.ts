@@ -25,6 +25,7 @@ type DiscordMessageRunQueueParams = {
 
 type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
+  cancel: (cancelKey: string, reason: string) => boolean;
   deactivate: () => void;
 };
 
@@ -46,13 +47,18 @@ async function loadMessageProcessRuntime() {
 async function processDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
   lifecycleSignal?: AbortSignal;
+  cancelSignal?: AbortSignal;
   replayGuard: ClaimableDedupe;
   testing?: DiscordMessageRunQueueTestingHooks;
 }) {
   const processDiscordMessageImpl =
     params.testing?.processDiscordMessage ??
     (await loadMessageProcessRuntime()).processDiscordMessage;
-  const abortSignal = mergeAbortSignals([params.job.runtime.abortSignal, params.lifecycleSignal]);
+  const abortSignal = mergeAbortSignals([
+    params.job.runtime.abortSignal,
+    params.lifecycleSignal,
+    params.cancelSignal,
+  ]);
   try {
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
     await commitDiscordInboundReplay({
@@ -98,6 +104,39 @@ export function createDiscordMessageRunQueue(
 ): DiscordMessageRunQueue {
   const replayGuard = params.replayGuard ?? createDiscordInboundReplayGuard();
   const skippedCleanup = new Set<SkippedQueuedMessageCleanup>();
+  // Active and queued jobs indexed by source-message cancel key so deletes and
+  // superseding edits abort only the run their Discord message started.
+  const cancelControllers = new Map<string, Set<AbortController>>();
+
+  const registerCancelController = (job: DiscordInboundJob): AbortController | undefined => {
+    const cancelKeys = job.cancelKeys ?? [];
+    if (cancelKeys.length === 0) {
+      return undefined;
+    }
+    const controller = new AbortController();
+    for (const cancelKey of cancelKeys) {
+      let controllers = cancelControllers.get(cancelKey);
+      if (!controllers) {
+        controllers = new Set();
+        cancelControllers.set(cancelKey, controllers);
+      }
+      controllers.add(controller);
+    }
+    return controller;
+  };
+
+  const releaseCancelController = (job: DiscordInboundJob, controller?: AbortController) => {
+    if (!controller) {
+      return;
+    }
+    for (const cancelKey of job.cancelKeys ?? []) {
+      const controllers = cancelControllers.get(cancelKey);
+      controllers?.delete(controller);
+      if (controllers?.size === 0) {
+        cancelControllers.delete(cancelKey);
+      }
+    }
+  };
   const runQueue = createChannelRunQueue({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
@@ -129,7 +168,11 @@ export function createDiscordMessageRunQueue(
 
   return {
     enqueue(job) {
+      // Registered before dispatch so deletes can also cancel queued-but-not-
+      // started jobs; processDiscordMessage bails on the aborted signal.
+      const cancelController = registerCancelController(job);
       const cleanupSkipped = () => {
+        releaseCancelController(job, cancelController);
         cleanupSkippedDiscordQueuedMessage({ job, replayGuard });
       };
       if (!lifecycleActive) {
@@ -141,13 +184,28 @@ export function createDiscordMessageRunQueue(
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay/typing state.
         skippedCleanup.delete(cleanupSkipped);
-        await processDiscordQueuedMessage({
-          job,
-          lifecycleSignal,
-          replayGuard,
-          testing: params.testing,
-        });
+        try {
+          await processDiscordQueuedMessage({
+            job,
+            lifecycleSignal,
+            cancelSignal: cancelController?.signal,
+            replayGuard,
+            testing: params.testing,
+          });
+        } finally {
+          releaseCancelController(job, cancelController);
+        }
       });
+    },
+    cancel(cancelKey, reason) {
+      const controllers = cancelControllers.get(cancelKey);
+      if (!controllers?.size) {
+        return false;
+      }
+      for (const controller of [...controllers]) {
+        controller.abort(new Error(reason));
+      }
+      return true;
     },
     deactivate() {
       runQueue.deactivate();

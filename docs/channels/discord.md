@@ -639,6 +639,23 @@ Default slash command settings:
 ## Feature details
 
 <AccordionGroup>
+  <Accordion title="Message edits and deletes">
+    Editing or deleting the message that triggered a run changes that run:
+
+    - **Edit a message** and OpenClaw reprocesses the new content, subject to the
+      same mention and allow-list gating as a fresh message. If the run the
+      original message started is still in progress, it is aborted first and the
+      edited content is dispatched as a replacement. If the run already
+      finished, the edit starts a new turn in the same session.
+    - **Delete a message** while its run is still in progress (queued or
+      actively running) and that run is cancelled. Only the run started by the
+      deleted message is affected.
+
+    Only real user edits re-trigger processing; Discord-internal message
+    updates such as link-embed unfurls or pins are ignored.
+
+  </Accordion>
+
   <Accordion title="Reply tags and native replies">
     Discord supports reply tags in agent output:
 

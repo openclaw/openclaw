@@ -340,6 +340,47 @@ describe("GatewayPlugin", () => {
     expect(dispatched.message?.content).toBe("hello");
   });
 
+  it("hydrates MESSAGE_UPDATE payloads for inbound dispatch", async () => {
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const dispatchGatewayEvent = vi.fn(async (_eventValue: string, _dataValue: unknown) => {});
+    (gateway as unknown as { client: unknown }).client = {
+      dispatchGatewayEvent,
+    };
+
+    await (
+      gateway as unknown as {
+        handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
+      }
+    ).handleDispatch({
+      t: GatewayDispatchEvents.MessageUpdate,
+      d: {
+        id: "m1",
+        channel_id: "c1",
+        content: "hello edited",
+        edited_timestamp: "2026-06-10T01:02:03.000Z",
+        attachments: [],
+        timestamp: new Date().toISOString(),
+        author: { id: "u1", username: "user", discriminator: "0", avatar: null },
+        type: 0,
+        tts: false,
+        mention_everyone: false,
+        pinned: false,
+        flags: 0,
+      },
+    });
+
+    expect(dispatchGatewayEvent).toHaveBeenCalledTimes(1);
+    const dispatched = firstDispatchedData(dispatchGatewayEvent) as {
+      author?: { id: string };
+      edited_timestamp?: string;
+      message?: { author?: { id: string } | null; content?: string };
+    };
+    expect(dispatched.author?.id).toBe("u1");
+    expect(dispatched.message?.author?.id).toBe("u1");
+    expect(dispatched.message?.content).toBe("hello edited");
+    expect(dispatched.edited_timestamp).toBe("2026-06-10T01:02:03.000Z");
+  });
+
   it("marks successful gateway resumes connected", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     (gateway as unknown as { client: unknown }).client = {

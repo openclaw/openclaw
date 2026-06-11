@@ -20,6 +20,16 @@ export class DiscordRetryableInboundError extends Error {
   }
 }
 
+// Shared by the inbound replay guard and the run-cancellation index so a
+// MESSAGE_DELETE event can address the exact run its source message started.
+export function buildDiscordInboundCancelKey(params: {
+  accountId: string;
+  channelId: string;
+  messageId: string;
+}): string {
+  return `${params.accountId}:${params.channelId}:${params.messageId}`;
+}
+
 export function buildDiscordInboundReplayKey(params: {
   accountId: string;
   data: DiscordMessageEvent;
@@ -35,7 +45,16 @@ export function buildDiscordInboundReplayKey(params: {
   if (!channelId) {
     return null;
   }
-  return `${params.accountId}:${channelId}:${messageId}`;
+  return buildDiscordInboundCancelKey({ accountId: params.accountId, channelId, messageId });
+}
+
+// Edits reuse the Discord message id, so the base replay key would drop them
+// as duplicates; the edit timestamp gives each accepted revision its own claim.
+export function buildDiscordInboundEditReplayKey(
+  baseReplayKey: string,
+  editedTimestamp: string,
+): string {
+  return `${baseReplayKey}:edit:${editedTimestamp}`;
 }
 
 export async function claimDiscordInboundReplay(params: {

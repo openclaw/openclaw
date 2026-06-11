@@ -186,6 +186,121 @@ async function createLifecycleStopScenario(params: {
   };
 }
 
+function installAbortAwareProcessMock(capturedSignals: Array<AbortSignal | undefined>) {
+  processDiscordMessageMock.mockImplementation(async (ctx: { abortSignal?: AbortSignal }) => {
+    capturedSignals.push(ctx.abortSignal);
+    if (capturedSignals.length > 1) {
+      return;
+    }
+    // First run blocks until cancelled, simulating an in-flight agent run.
+    await new Promise<void>((resolve) => {
+      if (ctx.abortSignal?.aborted) {
+        resolve();
+        return;
+      }
+      ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+  });
+}
+
+describe("createDiscordMessageHandler edit and delete cancellation", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    installDefaultDiscordPreflight();
+  });
+
+  it("aborts the in-flight run and reprocesses when its source message is edited", async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    installAbortAwareProcessMock(signals);
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await handler(createMessageData("m-1") as never, {} as never);
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    const edited = createMessageData("m-1");
+    edited.message.content = "hello edited";
+    await handler(edited as never, {} as never, {
+      edit: { editedTimestamp: "2026-06-10T01:02:03.000Z" },
+    });
+    await flushQueueWork();
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    expect(signals[1]?.aborted).toBe(false);
+  });
+
+  it("reprocesses an edited message after the original run completed", async () => {
+    processDiscordMessageMock.mockResolvedValue(undefined);
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await handler(createMessageData("m-2") as never, {} as never);
+    await flushQueueWork();
+    // A replayed create with the same message id stays deduped.
+    await handler(createMessageData("m-2") as never, {} as never);
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    await handler(createMessageData("m-2") as never, {} as never, {
+      edit: { editedTimestamp: "2026-06-10T01:02:03.000Z" },
+    });
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels an in-flight run when the source message is deleted", async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    installAbortAwareProcessMock(signals);
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await handler(createMessageData("m-3") as never, {} as never);
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    const cancelled = handler.cancelMessageRun({
+      channelId: "ch-1",
+      messageId: "m-3",
+      reason: "discord source message deleted",
+    });
+
+    expect(cancelled).toBe(true);
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("returns false when no run matches the deleted message", async () => {
+    processDiscordMessageMock.mockResolvedValue(undefined);
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    expect(
+      handler.cancelMessageRun({
+        channelId: "ch-1",
+        messageId: "missing",
+        reason: "discord source message deleted",
+      }),
+    ).toBe(false);
+  });
+
+  it("releases cancellation tracking once a run completes", async () => {
+    processDiscordMessageMock.mockResolvedValue(undefined);
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await handler(createMessageData("m-4") as never, {} as never);
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    expect(
+      handler.cancelMessageRun({
+        channelId: "ch-1",
+        messageId: "m-4",
+        reason: "discord source message deleted",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("createDiscordMessageHandler queue behavior", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -572,7 +687,10 @@ describe("createDiscordMessageHandler queue behavior", () => {
       await flushQueueWork();
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-      expect(capturedAbortSignals).toEqual([undefined]);
+      // Runs carry a cancellation signal (edit/delete supersede), but no
+      // Discord-owned timeout may fire it.
+      expect(capturedAbortSignals).toHaveLength(1);
+      expect(capturedAbortSignals[0]?.aborted ?? false).toBe(false);
       const runtimeError = params.runtime.error as unknown as MockCallSource;
       expect(
         mockCalls(runtimeError).some(([message]) => String(message).includes("timed out")),
@@ -583,7 +701,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       await flushQueueWork();
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-      expect(capturedAbortSignals).toEqual([undefined, undefined]);
+      expect(capturedAbortSignals).toHaveLength(2);
+      expect(capturedAbortSignals.some((signal) => signal?.aborted)).toBe(false);
 
       secondRun.resolve();
       await secondRun.promise;
