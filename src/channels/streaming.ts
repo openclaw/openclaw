@@ -12,7 +12,6 @@ import type {
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-import { logWarn } from "../logger.js";
 import { asBoolean } from "../utils/boolean.js";
 
 export type {
@@ -570,11 +569,13 @@ export function createChannelProgressDraftGate(params: {
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   // Boundary default: callers that do not pass onStartError still get an observable
-  // warning for a swallowed timer-fired start failure instead of a silent drop.
+  // warning for a swallowed timer-fired start failure instead of a silent drop. Use a
+  // lightweight console.warn (matching sibling typing.ts) rather than a structured
+  // logger import, so this SDK-exposed module does not widen its static import surface.
   const reportStartError =
     params.onStartError ??
     ((error: unknown) => {
-      logWarn(`channel progress draft failed to start: ${String(error)}`);
+      console.warn(`[progress-draft] channel progress draft failed to start: ${String(error)}`);
     });
   let started = false;
   let disposed = false;
