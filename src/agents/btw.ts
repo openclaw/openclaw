@@ -27,7 +27,6 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
-import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
@@ -41,6 +40,7 @@ import {
 } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -258,12 +258,23 @@ async function resolveRuntimeModel(params: {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
-  const model = resolveModelWithRegistry({
+  let model = resolveModelWithRegistry({
     provider: params.provider,
     modelId: params.model,
     modelRegistry,
     cfg: params.cfg,
   });
+  if (!model) {
+    // When the primary model is configured via agentRuntime (e.g.
+    // anthropic/claude-opus with agentRuntime.id: claude-cli), the model
+    // won't be in the standard registry. Synthesize a minimal model so the
+    // downstream harness selection can route through the configured runtime.
+    const defaultsModels = params.cfg?.agents?.defaults?.models;
+    const key = `${params.provider}/${params.model}`;
+    if (defaultsModels?.[key]?.agentRuntime) {
+      model = { id: params.model, provider: params.provider };
+    }
+  }
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
