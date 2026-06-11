@@ -683,6 +683,81 @@ const SKIPPED_MEMORY_EMBEDDING_PROBE = {
   error: "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
 } as const;
 
+function emptyDreamingStoreStats(): DreamingStoreStats {
+  return {
+    shortTermCount: 0,
+    recallSignalCount: 0,
+    dailySignalCount: 0,
+    groundedSignalCount: 0,
+    totalSignalCount: 0,
+    phaseSignalCount: 0,
+    lightPhaseHitCount: 0,
+    remPhaseHitCount: 0,
+    promotedTotal: 0,
+    promotedToday: 0,
+    shortTermEntries: [],
+    signalEntries: [],
+    promotedEntries: [],
+  };
+}
+
+async function resolveDoctorMemoryDreamingPayload(params: {
+  cfg: OpenClawConfig;
+  context: { cron?: { list?: (opts?: { includeDisabled?: boolean }) => Promise<unknown[]> } };
+  agentId: string;
+  requestedAgentId: string | null;
+  workspaceDir?: string;
+}): Promise<DoctorMemoryDreamingPayload> {
+  const nowMs = Date.now();
+  const dreamingConfig = resolveDreamingConfig(params.cfg);
+  const primaryWorkspaceDir =
+    normalizeTrimmedString(params.workspaceDir) ??
+    normalizeTrimmedString(resolveAgentWorkspaceDir(params.cfg, params.agentId));
+  const configuredWorkspaces = params.requestedAgentId
+    ? primaryWorkspaceDir
+      ? [primaryWorkspaceDir]
+      : []
+    : resolveMemoryDreamingWorkspaces(params.cfg, {
+        primaryWorkspaceDir,
+        primaryAgentId: params.agentId,
+      }).map((entry) => entry.workspaceDir);
+  const allWorkspaces =
+    configuredWorkspaces.length > 0
+      ? configuredWorkspaces
+      : primaryWorkspaceDir
+        ? [primaryWorkspaceDir]
+        : [];
+  const storeStats =
+    allWorkspaces.length > 0
+      ? mergeDreamingStoreStats(
+          await Promise.all(
+            allWorkspaces.map((entry) =>
+              loadDreamingStoreStats(entry, nowMs, dreamingConfig.timezone),
+            ),
+          ),
+        )
+      : emptyDreamingStoreStats();
+  const cronStatuses = await resolveAllManagedDreamingCronStatuses(params.context);
+  return {
+    ...dreamingConfig,
+    ...storeStats,
+    phases: {
+      light: {
+        ...dreamingConfig.phases.light,
+        ...cronStatuses.light,
+      },
+      deep: {
+        ...dreamingConfig.phases.deep,
+        ...cronStatuses.deep,
+      },
+      rem: {
+        ...dreamingConfig.phases.rem,
+        ...cronStatuses.rem,
+      },
+    },
+  };
+}
+
 export const doctorHandlers: GatewayRequestHandlers = {
   "doctor.memory.status": async ({ respond, context, params }) => {
     const cfg = context.getRuntimeConfig();
@@ -701,6 +776,12 @@ export const doctorHandlers: GatewayRequestHandlers = {
           ok: false,
           error: error ?? "memory search unavailable",
         },
+        dreaming: await resolveDoctorMemoryDreamingPayload({
+          cfg,
+          context,
+          agentId,
+          requestedAgentId,
+        }),
       };
       respond(true, payload, undefined);
       return;
@@ -715,63 +796,18 @@ export const doctorHandlers: GatewayRequestHandlers = {
       if (!embedding.ok && !embedding.error) {
         embedding = { ok: false, error: "memory embeddings unavailable" };
       }
-      const nowMs = Date.now();
-      const dreamingConfig = resolveDreamingConfig(cfg);
-      const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
-      const configuredWorkspaces = requestedAgentId
-        ? workspaceDir
-          ? [workspaceDir]
-          : []
-        : resolveMemoryDreamingWorkspaces(cfg, {
-            primaryWorkspaceDir: workspaceDir,
-            primaryAgentId: agentId,
-          }).map((entry) => entry.workspaceDir);
-      const allWorkspaces =
-        configuredWorkspaces.length > 0 ? configuredWorkspaces : workspaceDir ? [workspaceDir] : [];
-      const storeStats =
-        allWorkspaces.length > 0
-          ? mergeDreamingStoreStats(
-              await Promise.all(
-                allWorkspaces.map((entry) =>
-                  loadDreamingStoreStats(entry, nowMs, dreamingConfig.timezone),
-                ),
-              ),
-            )
-          : {
-              shortTermCount: 0,
-              recallSignalCount: 0,
-              dailySignalCount: 0,
-              groundedSignalCount: 0,
-              totalSignalCount: 0,
-              phaseSignalCount: 0,
-              lightPhaseHitCount: 0,
-              remPhaseHitCount: 0,
-              promotedTotal: 0,
-              promotedToday: 0,
-            };
-      const cronStatuses = await resolveAllManagedDreamingCronStatuses(context);
+      const dreaming = await resolveDoctorMemoryDreamingPayload({
+        cfg,
+        context,
+        agentId,
+        requestedAgentId,
+        workspaceDir: normalizeTrimmedString((status as Record<string, unknown>).workspaceDir),
+      });
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         provider: status.provider,
         embedding,
-        dreaming: {
-          ...dreamingConfig,
-          ...storeStats,
-          phases: {
-            light: {
-              ...dreamingConfig.phases.light,
-              ...cronStatuses.light,
-            },
-            deep: {
-              ...dreamingConfig.phases.deep,
-              ...cronStatuses.deep,
-            },
-            rem: {
-              ...dreamingConfig.phases.rem,
-              ...cronStatuses.rem,
-            },
-          },
-        },
+        dreaming,
       };
       respond(true, payload, undefined);
     } catch (err) {

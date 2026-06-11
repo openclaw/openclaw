@@ -41,6 +41,7 @@ import {
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
+import type { GatewayMemoryProbe } from "./doctor-gateway-health.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
@@ -51,6 +52,11 @@ type RuntimeMemoryAuditContext = {
   dbPath?: string;
   qmdCollections?: number;
 };
+
+type MemorySearchHealthGatewayProbe = Omit<GatewayMemoryProbe, "skipped"> & {
+  skipped?: boolean;
+};
+type GatewayMemoryDreamingProbe = NonNullable<MemorySearchHealthGatewayProbe["dreaming"]>;
 
 type MemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
@@ -388,6 +394,45 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   return entry.enabled === true || entry.config !== undefined;
 }
 
+const DREAMING_PHASE_KEYS = ["light", "deep", "rem"] as const;
+
+function resolveNextDreamingRunAtMs(dreaming: GatewayMemoryDreamingProbe): number | null {
+  let nextRunAtMs: number | null = null;
+  for (const phaseKey of DREAMING_PHASE_KEYS) {
+    const candidate = dreaming.phases[phaseKey].nextRunAtMs;
+    if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+      continue;
+    }
+    if (nextRunAtMs === null || candidate < nextRunAtMs) {
+      nextRunAtMs = candidate;
+    }
+  }
+  return nextRunAtMs;
+}
+
+function formatGatewayDreamingStatusNote(
+  dreaming: MemorySearchHealthGatewayProbe["dreaming"],
+): string | null {
+  if (!dreaming?.enabled) {
+    return null;
+  }
+  const enabledPhases = DREAMING_PHASE_KEYS.filter((phaseKey) => dreaming.phases[phaseKey].enabled);
+  const managedCronPresent = DREAMING_PHASE_KEYS.some(
+    (phaseKey) => dreaming.phases[phaseKey].managedCronPresent,
+  );
+  const nextRunAtMs = resolveNextDreamingRunAtMs(dreaming);
+  return [
+    "Memory-core dreaming is enabled independently of embedding memory search.",
+    `Enabled phases: ${enabledPhases.length > 0 ? enabledPhases.join(", ") : "none"}.`,
+    `Managed cron: ${managedCronPresent ? "present" : "not detected"}.`,
+    nextRunAtMs !== null ? `Next run: ${new Date(nextRunAtMs).toISOString()}.` : null,
+    dreaming.lastPromotedAt ? `Last promotion: ${dreaming.lastPromotedAt}.` : null,
+    `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only checks where possible;
@@ -397,12 +442,7 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
   opts?: {
-    gatewayMemoryProbe?: {
-      checked: boolean;
-      ready: boolean;
-      error?: string;
-      skipped?: boolean;
-    };
+    gatewayMemoryProbe?: MemorySearchHealthGatewayProbe;
   },
 ): Promise<void> {
   await noteWorkspaceMemoryHealth(cfg);
@@ -414,6 +454,10 @@ export async function noteMemorySearchHealth(
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    const dreamingMessage = formatGatewayDreamingStatusNote(opts?.gatewayMemoryProbe?.dreaming);
+    if (dreamingMessage) {
+      note(dreamingMessage, "Memory dreaming");
+    }
     return;
   }
   const provider =
@@ -430,6 +474,10 @@ export async function noteMemorySearchHealth(
       return;
     }
     note("No active memory plugin is registered for the current config.", "Memory search");
+    const dreamingMessage = formatGatewayDreamingStatusNote(opts?.gatewayMemoryProbe?.dreaming);
+    if (dreamingMessage) {
+      note(dreamingMessage, "Memory dreaming");
+    }
     return;
   }
   if (backendConfig.backend === "qmd") {
