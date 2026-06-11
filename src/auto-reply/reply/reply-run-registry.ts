@@ -10,11 +10,7 @@ export type ReplyRunKey = string;
 
 export type ReplyBackendKind = "embedded" | "cli";
 
-export type ReplyBackendCancelReason =
-  | "user_abort"
-  | "restart"
-  | "superseded"
-  | "stuck_recovery";
+export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded" | "stuck_recovery";
 
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
@@ -287,22 +283,22 @@ export function createReplyOperation(params: {
     }
   };
 
-  const applyAbort = (params: {
+  const applyAbort = (abortParams: {
     cancelReason: ReplyBackendCancelReason;
     abortReason: unknown;
     abortedCode?: ReplyOperationAbortCode;
     resultReason?: string;
   }) => {
-    if (params.abortedCode && !result) {
+    if (abortParams.abortedCode && !result) {
       result = {
         kind: "aborted",
-        code: params.abortedCode,
-        ...(params.resultReason ? { reason: params.resultReason } : {}),
+        code: abortParams.abortedCode,
+        ...(abortParams.resultReason ? { reason: abortParams.resultReason } : {}),
       };
     }
     phase = "aborted";
-    abortInternally(params.abortReason);
-    getAttachedBackend(operation)?.cancel(params.cancelReason);
+    abortInternally(abortParams.abortReason);
+    getAttachedBackend(operation)?.cancel(abortParams.cancelReason);
   };
 
   const abortWithReason = (
@@ -453,12 +449,12 @@ export function createReplyOperation(params: {
         clearState();
       }
     },
-    abortWithReason(params) {
+    abortWithReason(abortParams) {
       const phaseBeforeAbort = phase;
-      abortWithReason(params.reason, {
-        abortReason: params.abortReason,
-        cancelReason: params.cancelReason,
-        abortedCode: params.abortedCode,
+      abortWithReason(abortParams.reason, {
+        abortReason: abortParams.abortReason,
+        cancelReason: abortParams.cancelReason,
+        abortedCode: abortParams.abortedCode,
       });
       if (phaseBeforeAbort === "queued") {
         clearState();
@@ -602,10 +598,7 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   return true;
 }
 
-export function abortReplyRunBySessionId(
-  sessionId: string,
-  opts?: { reason?: string },
-): boolean {
+export function abortReplyRunBySessionId(sessionId: string, opts?: { reason?: string }): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   if (!operation) {
     return false;
