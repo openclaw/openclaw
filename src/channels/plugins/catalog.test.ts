@@ -2,7 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
 
-const listChannelCatalogEntriesMock = vi.hoisted(() => vi.fn(() => []));
+const listChannelCatalogEntriesMock = vi.hoisted(() =>
+  vi.fn<() => PluginChannelCatalogEntry[]>(() => []),
+);
 
 vi.mock("../../plugins/channel-catalog-registry.js", () => ({
   listChannelCatalogEntries: listChannelCatalogEntriesMock,

@@ -5810,6 +5810,94 @@ module.exports = {
     });
   });
 
+  it("setup-loads a trusted global channel plugin when the caller scopes to it", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "trusted-global-channel-imported.txt");
+    withStateDir((stateDir) => {
+      const globalDir = path.join(stateDir, "extensions", "trusted-global-channel");
+      mkdirSafe(globalDir);
+      fs.writeFileSync(
+        path.join(globalDir, "index.cjs"),
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "trusted-global-channel",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "trusted-global-channel",
+        meta: {
+          id: "trusted-global-channel",
+          label: "Trusted Global Channel",
+          selectionLabel: "Trusted Global Channel",
+          docsPath: "/channels/trusted-global-channel",
+          blurb: "trusted global setup gate",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(globalDir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: "trusted-global-channel",
+            configSchema: EMPTY_PLUGIN_SCHEMA,
+            channels: ["trusted-global-channel"],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(globalDir, "package.json"),
+        JSON.stringify(
+          {
+            name: "@openclaw/trusted-global-channel",
+            version: "0.0.0-test",
+            main: "./index.cjs",
+            openclaw: {
+              extensions: ["./index.cjs"],
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const scopedSetupRegistry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+            allow: ["trusted-global-channel"],
+          },
+        },
+        includeSetupOnlyChannelPlugins: true,
+        forceSetupOnlyChannelPlugins: true,
+        onlyPluginIds: ["trusted-global-channel"],
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(scopedSetupRegistry.channelSetups.map((entry) => entry.plugin.meta.label)).toEqual([
+        "Trusted Global Channel",
+      ]);
+      expect(scopedSetupRegistry.channels).toHaveLength(0);
+      expect(
+        scopedSetupRegistry.plugins.find((entry) => entry.id === "trusted-global-channel")?.status,
+      ).toBe("loaded");
+    });
+  });
+
   it("does not setup-load an auto-enabled config-origin channel plugin without explicit trust", () => {
     useNoBundledPlugins();
     const marker = path.join(makeTempDir(), "auto-enabled-load-path-channel-imported.txt");
