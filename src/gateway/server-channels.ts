@@ -465,7 +465,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannelInternal = async (
     channelId: ChannelId,
     accountId?: string,
-    opts: StartChannelInternalOptions = {},
+    startOptions: StartChannelInternalOptions = {},
   ) => {
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
@@ -476,7 +476,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       includeKnownAccounts = false,
       preserveRestartAttempts = false,
       preserveManualStop = false,
-    } = opts;
+    } = startOptions;
     const cfg = getRuntimeConfig();
     resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
@@ -555,7 +555,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         };
 
         try {
-          const rKey = restartKey(channelId, id);
           restartDeferredToCaller.delete(rKey);
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
@@ -639,8 +638,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (opts.deferAccountStartUntil) {
-              await waitForDeferredAccountStart(opts.deferAccountStartUntil, abort.signal);
+            if (startOptions.deferAccountStartUntil) {
+              await waitForDeferredAccountStart(startOptions.deferAccountStartUntil, abort.signal);
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
@@ -820,9 +819,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannel = async (
     channelId: ChannelId,
     accountId?: string,
-    opts: StartChannelOptions = {},
+    startOptions: StartChannelOptions = {},
   ) => {
-    await startChannelInternal(channelId, accountId, opts);
+    await startChannelInternal(channelId, accountId, startOptions);
   };
 
   const stopChannel = async (
