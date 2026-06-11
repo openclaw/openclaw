@@ -521,6 +521,12 @@ export async function processGatewayAllowlist(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
+  const approvalAllowedDecisions = resolveExecApprovalAllowedDecisions({
+    ask: hostAsk,
+    allowAlwaysPersistence: requiresAllowlistPlanApproval
+      ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
+      : allowAlwaysPersistence,
+  });
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
@@ -609,10 +615,7 @@ export async function processGatewayAllowlist(
         host: "gateway",
         security: hostSecurity,
         ask: hostAsk,
-        allowedDecisions: resolveExecApprovalAllowedDecisions({
-          ask: hostAsk,
-          allowAlwaysPersistence,
-        }),
+        allowedDecisions: approvalAllowedDecisions,
         commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
         ...buildExecApprovalRequesterContext({
@@ -934,10 +937,7 @@ export async function processGatewayAllowlist(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
-        allowedDecisions: resolveExecApprovalAllowedDecisions({
-          ask: hostAsk,
-          allowAlwaysPersistence,
-        }),
+        allowedDecisions: approvalAllowedDecisions,
       }),
     };
   }

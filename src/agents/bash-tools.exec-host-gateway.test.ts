@@ -9,7 +9,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
-import type { ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
+import type { ExecApprovalDecision, ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
 import {
   planShellAuthorization,
   type ExecAuthorizationPlan,
@@ -79,6 +79,17 @@ const evaluateShellAllowlistWithAuthorizationMock = vi.hoisted(() =>
 );
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
+const resolveExecApprovalAllowedDecisionsMock = vi.hoisted(() =>
+  vi.fn(
+    (params?: {
+      ask?: string | null;
+      allowAlwaysPersistence?: { kind: string } | null;
+    }): readonly ExecApprovalDecision[] =>
+      params?.ask === "always" || params?.allowAlwaysPersistence?.kind === "one-shot"
+        ? ["allow-once", "deny"]
+        : ["allow-once", "allow-always", "deny"],
+  ),
+);
 const buildEnforcedShellCommandMock = vi.hoisted(() =>
   vi.fn((): { ok: boolean; reason?: string; command?: string } => ({
     ok: false,
@@ -136,7 +147,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   recordAllowlistMatchesUse: recordAllowlistMatchesUseMock,
   resolveApprovalAuditTrustPath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
-  resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
+  resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
   addAllowlistEntry: vi.fn(),
   addDurableCommandApproval: vi.fn(),
 }));
@@ -264,6 +275,7 @@ describe("processGatewayAllowlist", () => {
     hasDurableExecApprovalMock.mockReturnValue(true);
     requiresExecApprovalMock.mockReset();
     requiresExecApprovalMock.mockReturnValue(false);
+    resolveExecApprovalAllowedDecisionsMock.mockClear();
     buildEnforcedShellCommandMock.mockReset();
     buildEnforcedShellCommandMock.mockReturnValue({
       ok: false,
@@ -732,6 +744,51 @@ describe("processGatewayAllowlist", () => {
       execCommandOverride: undefined,
       allowWithoutEnforcedCommand: true,
     });
+  });
+
+  it("omits allow-always when allowlist execution still needs approval every run", async () => {
+    const command = "ls *.ts";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    requiresExecApprovalMock.mockReturnValue(false);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ raw: command, resolution: null, argv: ["ls", "*.ts"] }],
+      segmentAllowlistEntries: [{ pattern: "/usr/bin/ls", source: "allow-always" }],
+      segmentSatisfiedBy: ["allowlist"],
+      authorizationPlan,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      autoReview: false,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "on-miss",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+    });
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
   });
 
   it("requests human approval when auto-review asks on an approval miss", async () => {
