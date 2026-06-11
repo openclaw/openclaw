@@ -718,6 +718,24 @@ const SPLIT_NODE_SHARDS = new Map([
   ],
   ["core-unit-security", []],
   [
+    "core-tooling",
+    [
+      {
+        shardName: "core-tooling",
+        configs: [
+          "test/vitest/vitest.tooling.config.ts",
+          "test/vitest/vitest.tooling-isolated.config.ts",
+        ],
+        requiresDist: false,
+      },
+      {
+        shardName: "core-tooling-docker",
+        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
+        requiresDist: false,
+      },
+    ],
+  ],
+  [
     "core-unit-support",
     [
       {

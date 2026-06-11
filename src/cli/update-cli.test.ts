@@ -631,6 +631,13 @@ describe("update-cli", () => {
       ...overrides,
     }) as UpdateRunResult;
 
+  const mockGitUpdateAfterMutation = (result = makeOkUpdateResult({ mode: "git" })) => {
+    vi.mocked(runGatewayUpdate).mockImplementationOnce(async (opts) => {
+      await opts?.beforeGitMutation?.();
+      return result;
+    });
+  };
+
   const runUpdateCliScenario = async (testCase: UpdateCliScenario) => {
     vi.clearAllMocks();
     await testCase.run();
@@ -2840,6 +2847,297 @@ describe("update-cli", () => {
     expect(requiredServiceStopCallOrder).toBeLessThan(requiredNpmInstallCallOrder);
   });
 
+  it("stops a running managed gateway when git checkout rebuild starts", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation();
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    const serviceStopCall = serviceStop.mock.calls[0]?.[0] as
+      | { env?: NodeJS.ProcessEnv }
+      | undefined;
+    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
+    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_KIND).toBe("gateway");
+    const updateCall = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+    expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
+  });
+
+  it("stops a running managed git gateway when wrapper commands hide the service root", async () => {
+    const wrapperPath = path.join(
+      createCaseDir("openclaw-update-wrapper-service"),
+      "gateway-wrapper",
+    );
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [wrapperPath, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation();
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    expect(prepareRestartScript).toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("fails managed git restart when the gateway responds but the service stays stopped", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(false);
+    serviceLoaded.mockResolvedValueOnce(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "stopped",
+      pid: null,
+      state: "stopped",
+    });
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation();
+
+    await updateCommand({ yes: true });
+
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runRestartScript).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(logs.join("\n")).toContain(
+      "Gateway responded, but the managed service did not report running after restart.",
+    );
+    expect(logs.join("\n")).not.toContain("Gateway: restarted and verified.");
+  });
+
+  it("fails managed git restart when the stopped service cannot be restarted", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(false);
+    serviceLoaded.mockResolvedValueOnce(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "stopped",
+      pid: null,
+      state: "stopped",
+    });
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    runRestartScript.mockRejectedValueOnce(new Error("restart unavailable"));
+    mockGitUpdateAfterMutation();
+
+    await updateCommand({ yes: true });
+
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runRestartScript).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(logs.join("\n")).toContain("Gateway: restart failed: Error: restart unavailable");
+    expect(logs.join("\n")).not.toContain("Gateway: restarted and verified.");
+  });
+
+  it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
+    const packageRoot = createCaseDir("openclaw-update-package-root");
+    const gitRoot = await createTrackedTempDir("openclaw-update-git-service-root-");
+    const serviceEntrypoint = path.join(gitRoot, "dist", "index.js");
+    await fs.mkdir(path.join(gitRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.dirname(serviceEntrypoint), { recursive: true });
+    await fs.writeFile(
+      path.join(gitRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(serviceEntrypoint, "export {};\n", "utf-8");
+    mockPackageInstallStatus(packageRoot);
+    pathExists.mockImplementation(async (candidate: string) => candidate === gitRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation(
+      makeOkUpdateResult({
+        mode: "git",
+        root: gitRoot,
+      }),
+    );
+
+    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
+      await updateCommand({ channel: "dev", yes: true });
+    });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    const updateCall = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+    expect(updateCall?.cwd).toBe(gitRoot);
+    expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
+  });
+
+  it("stops a managed gateway rooted at the package install when switching package installs to dev", async () => {
+    const packageRoot = await createTrackedTempDir("openclaw-update-package-service-root-");
+    const packageEntrypoint = path.join(packageRoot, "dist", "index.js");
+    const gitRoot = await createTrackedTempDir("openclaw-update-git-service-root-");
+    await fs.mkdir(path.join(gitRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.dirname(packageEntrypoint), { recursive: true });
+    await fs.writeFile(
+      path.join(gitRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.20" }),
+      "utf-8",
+    );
+    await fs.writeFile(packageEntrypoint, "export {};\n", "utf-8");
+    mockPackageInstallStatus(packageRoot);
+    pathExists.mockImplementation(async (candidate: string) => candidate === gitRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", packageEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation(
+      makeOkUpdateResult({
+        mode: "git",
+        root: gitRoot,
+      }),
+    );
+
+    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
+      await updateCommand({ channel: "dev", yes: true });
+    });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    const updateCall = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+    expect(updateCall?.cwd).toBe(gitRoot);
+    expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
+  });
+
+  it("does not stop or restart a managed gateway owned by another git checkout", async () => {
+    const otherRoot = await createTrackedTempDir("openclaw-update-other-service-root-");
+    const otherEntrypoint = path.join(otherRoot, "dist", "index.js");
+    await fs.mkdir(path.dirname(otherEntrypoint), { recursive: true });
+    await fs.writeFile(
+      path.join(otherRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(otherEntrypoint, "export {};\n", "utf-8");
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", otherEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation();
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(prepareRestartScript).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a stopped git service down when plugin post-update fails", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    const invalidPostUpdateSnapshot: ConfigFileSnapshot = {
+      ...baseSnapshot,
+      valid: false,
+      issues: [{ path: "plugins", message: "invalid plugin config" }],
+      config: baseConfig,
+      runtimeConfig: baseConfig,
+    };
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce(baseSnapshot)
+      .mockResolvedValueOnce(invalidPostUpdateSnapshot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation();
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("keeps managed service stop output off stdout during json package updates", async () => {
     const tempDir = await createTrackedTempDir("openclaw-update-json-stop-service-");
     const nodeModules = path.join(tempDir, "node_modules");
@@ -4882,6 +5180,7 @@ describe("update-cli", () => {
     expect(logs.join("\n")).toContain(
       "Commit, stash, or discard the local changes, then rerun `openclaw update`.",
     );
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
   });
   it.each([
