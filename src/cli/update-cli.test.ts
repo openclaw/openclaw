@@ -2721,22 +2721,30 @@ describe("update-cli", () => {
       };
     });
 
-    await updateCommand({ yes: true, restart: false });
+    await updateCommand({ yes: true, restart: false, json: true });
 
     const doctorCall = doctorCommandCall();
     expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
     const postCoreCall = spawnCall();
     expect(postCoreCall?.[0]).toMatch(/node/);
-    expect(postCoreCall?.[1]).toEqual([entryPath, "update", "--no-restart", "--yes"]);
+    expect(postCoreCall?.[1]).toEqual([entryPath, "update", "--json", "--no-restart", "--yes"]);
     expect(postCoreCall?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    expect(
-      vi
-        .mocked(defaultRuntime.log)
-        .mock.calls.map((call) => String(call[0]))
-        .join("\n"),
-    ).toContain("Post-install doctor failed after the package install was verified");
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+    const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
+    expect(jsonOutput?.status).toBe("ok");
+    expect(doctorStep?.exitCode).toBe(1);
+    expect(doctorStep?.advisory).toEqual({
+      kind: "package-post-install-doctor",
+      message: expect.stringContaining(
+        "Post-install doctor failed after the package install was verified",
+      ),
+    });
+    expect(doctorStep?.stderrTail).toContain("legacy state migration warning");
+    expect(doctorStep?.stderrTail).toContain(
+      "Post-install doctor failed after the package install was verified",
+    );
   });
 
   it("fails package updates when the post-update doctor is killed after verification", async () => {

@@ -87,6 +87,7 @@ import {
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   runGatewayUpdate,
+  type UpdateStepAdvisory,
   type UpdateRunResult,
   type UpdateStepProgress,
 } from "../../infra/update-runner.js";
@@ -1531,22 +1532,29 @@ async function runPackageInstallUpdate(params: {
   };
 }
 
+const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: UpdateStepAdvisory = {
+  kind: "package-post-install-doctor",
+  message:
+    "Post-install doctor failed after the package install was verified; continuing with post-core plugin convergence and gateway restart.",
+};
+
 function normalizePackagePostInstallDoctorStep<
-  T extends { name: string; exitCode: number | null; stderrTail?: string | null },
+  T extends {
+    name: string;
+    exitCode: number | null;
+    stderrTail?: string | null;
+    advisory?: UpdateStepAdvisory;
+  },
 >(step: T): T {
   if (step.exitCode === 0 || step.exitCode === null) {
     return step;
   }
-  const advisoryTail = [
-    step.stderrTail,
-    "Post-install doctor failed after the package install was verified; continuing with post-core plugin convergence and gateway restart.",
-  ]
+  const advisoryTail = [step.stderrTail, PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message]
     .filter((line): line is string => Boolean(line?.trim()))
     .join("\n");
   return {
     ...step,
-    name: `${CLI_NAME} doctor (warning)`,
-    exitCode: 0,
+    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
     stderrTail: advisoryTail || step.stderrTail,
   };
 }

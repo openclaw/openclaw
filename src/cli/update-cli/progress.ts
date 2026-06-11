@@ -5,6 +5,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import type {
   UpdateRunResult,
+  UpdateStepAdvisory,
   UpdateStepInfo,
   UpdateStepProgress,
 } from "../../infra/update-runner.js";
@@ -28,7 +29,6 @@ const STEP_LABELS: Record<string, string> = {
   "ui assets verify": "Validating UI assets",
   "openclaw doctor entry": "Checking doctor entrypoint",
   "openclaw doctor": "Running doctor checks",
-  "openclaw doctor (warning)": "Running doctor checks",
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
   "global update (omit optional)": "Retrying update without optional deps",
@@ -42,8 +42,8 @@ function getStepLabel(step: Pick<UpdateStepInfo, "name">): string {
   return STEP_LABELS[step.name] ?? step.name;
 }
 
-function isAdvisoryStep(step: { name: string; exitCode: number | null }): boolean {
-  return step.exitCode === 0 && step.name.endsWith("(warning)");
+function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
+  return step.advisory !== undefined;
 }
 
 /** Convert updater failure reasons and stderr tails into operator-facing recovery hints. */
@@ -143,7 +143,7 @@ export function createUpdateProgress(enabled: boolean): ProgressController {
 
       const label = getStepLabel(step);
       const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      const icon = step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
+      const icon = formatStepStatus(step);
 
       currentSpinner.stop(`${icon} ${label} ${duration}`);
       currentSpinner = null;
@@ -177,11 +177,17 @@ export function createUpdateProgress(enabled: boolean): ProgressController {
   };
 }
 
-function formatStepStatus(exitCode: number | null): string {
-  if (exitCode === 0) {
+function formatStepStatus(step: {
+  exitCode: number | null;
+  advisory?: UpdateStepAdvisory;
+}): string {
+  if (isAdvisoryStep(step)) {
+    return theme.warn("!");
+  }
+  if (step.exitCode === 0) {
     return theme.success("\u2713");
   }
-  if (exitCode === null) {
+  if (step.exitCode === null) {
     return theme.warn("?");
   }
   return theme.error("\u2717");
@@ -225,7 +231,7 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Steps:"));
     for (const step of result.steps) {
-      const status = formatStepStatus(step.exitCode);
+      const status = formatStepStatus(step);
       const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
       defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
 

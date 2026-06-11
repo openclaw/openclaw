@@ -33,6 +33,12 @@ export type PackageUpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  advisory?: PackageUpdateStepAdvisory;
+};
+
+export type PackageUpdateStepAdvisory = {
+  kind: "package-post-install-doctor";
+  message: string;
 };
 
 type PackageUpdateStepRunner = (params: {
@@ -63,6 +69,10 @@ const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
+  return step.exitCode !== 0 && step.advisory === undefined;
 }
 
 async function removePathBestEffort(targetPath: string): Promise<boolean> {
@@ -682,10 +692,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
 
-    const failedStep =
-      finalInstallStep.exitCode !== 0
-        ? finalInstallStep
-        : (steps.find((step) => step !== updateStep && step.exitCode !== 0) ?? null);
+    const failedStep = isBlockingPackageUpdateStep(finalInstallStep)
+      ? finalInstallStep
+      : (steps.find((step) => step !== updateStep && isBlockingPackageUpdateStep(step)) ?? null);
 
     return {
       steps,

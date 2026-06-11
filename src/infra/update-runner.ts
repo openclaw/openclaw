@@ -14,7 +14,10 @@ import {
 } from "./control-ui-assets.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
-import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
+import {
+  runGlobalPackageUpdateSteps,
+  type PackageUpdateStepAdvisory,
+} from "./package-update-steps.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
@@ -42,6 +45,8 @@ import {
   type UpdatePackageManagerFailureReason,
 } from "./update-package-manager.js";
 
+export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
+
 export type UpdateStepResult = {
   name: string;
   command: string;
@@ -50,6 +55,7 @@ export type UpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  advisory?: UpdateStepAdvisory;
 };
 
 export type UpdateRunResult = {
@@ -126,6 +132,7 @@ export type UpdateStepCompletion = UpdateStepInfo & {
   durationMs: number;
   exitCode: number | null;
   stderrTail?: string | null;
+  advisory?: UpdateStepAdvisory;
 };
 
 export type UpdateStepProgress = {
