@@ -8,7 +8,8 @@ import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.j
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
-import { checkContinuationBudget } from "./scheduler.js";import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
+import { checkContinuationBudget } from "./scheduler.js";
+import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
 import {
   consumePendingWork,
   enqueuePendingWork,
@@ -228,7 +229,13 @@ function earlierDueAt(left: number | undefined, right: number | undefined): numb
  * and never co-drain. Within such a batch we fold the OLDER members that are
  * stale (overdue past `graceMs`) into the newest-elected member, which carries
  * the live intent. Non-stale members (close bursts) always drive; the
- * newest-elected always drives. Pure for testability.
+ * newest-elected always drives.
+ *
+ * #988-P2-1 fold-side write-guard: only `queued` members are supersede-eligible.
+ * A recovered `running` member (the recovery path passes `includeRunning`) is a
+ * live turn already being driven and ALWAYS drives — it is never folded, even
+ * when stale and not newest, so an in-flight turn is never finished-as-superseded
+ * out from under itself. Pure for testability.
  */
 export function partitionSupersededWork(
   works: readonly PendingContinuationWork[],
@@ -256,6 +263,15 @@ export function partitionSupersededWork(
   const superseded: PendingContinuationWork[] = [];
   for (let i = 0; i < works.length; i++) {
     const work = works[i];
+    // #988-P2-1 fold-side write-guard: a recovered `running` member is live
+    // intent already being driven (it may be observing requests-in-flight). It
+    // is NEVER supersede-eligible, regardless of staleness or election order —
+    // folding it would finish an in-flight turn as superseded out from under
+    // itself. Only `queued` backlog members can be coalesced into the newest.
+    if (work.status === "running") {
+      drive.push(work);
+      continue;
+    }
     const isNewest = i === newestIdx;
     const isStale = now - work.dueAt > graceMs;
     if (isNewest) {

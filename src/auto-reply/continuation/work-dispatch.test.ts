@@ -835,10 +835,66 @@ describe("durable continuation_work dispatch", () => {
       }),
     ]);
   });
+
+  it("never supersedes a recovered running wake folded against a newer queued election (#988-P2-1)", async () => {
+    // End-to-end proof that the PRE-claim status is carried through
+    // consumePendingWork into partitionSupersededWork: a stale, recovered
+    // `running` wake co-drained with a newer `queued` election must DRIVE, not
+    // be finished-as-superseded. Without the carry-status guard the running
+    // wake (stale, not newest) would be folded and only the queued one would run.
+    const sessionKey = "agent:main:recovered-running-fold";
+    mockSessionStore[sessionKey] = { sessionKey };
+    const now = Date.now();
+
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: now - 500_000,
+      dueAt: now - 500_000, // matured and stale (overdue >> 120s grace)
+      maxChainLength: 8,
+      reason: "recovered running",
+    });
+    const runningFlow = [...mockFlows.values()][0];
+    if (!runningFlow) {
+      throw new Error("expected running mock flow");
+    }
+    runningFlow.status = "running";
+    runningFlow.updatedAt = now - 200_000; // older than the 60s recovery staleness window
+
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 1_000,
+      electedAt: now - 1_000, // newest election
+      dueAt: now - 1_000, // matured
+      maxChainLength: 8,
+      reason: "newest queued",
+    });
+
+    const result = await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: now - 60_000,
+    });
+
+    expect(result).toEqual({ dispatched: 2, failed: 0 });
+    const bodies = turnGrants.map((grant) => (grant as { context: { Body: string } }).context.Body);
+    expect(bodies.some((body) => body.includes("recovered running"))).toBe(true);
+    expect(bodies.some((body) => body.includes("newest queued"))).toBe(true);
+    expect(systemEvents.some((event) => (event as { text: string }).text.includes("folded"))).toBe(
+      false,
+    );
+  });
 });
 
 function work(
-  partial: Partial<{ hop: number; electedAt: number; dueAt: number }> = {},
+  partial: Partial<{
+    hop: number;
+    electedAt: number;
+    dueAt: number;
+    status: "queued" | "running";
+  }> = {},
 ): Parameters<typeof partitionSupersededWork>[0][number] {
   return {
     sessionKey: "agent:main:s",
@@ -847,6 +903,7 @@ function work(
     electedAt: partial.electedAt ?? 1_000,
     dueAt: partial.dueAt ?? 2_000,
     maxChainLength: 8,
+    status: partial.status ?? "queued",
     flowId: `f-${partial.hop ?? 1}`,
     expectedRevision: 0,
   };
@@ -924,6 +981,43 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     expect(drive.map((w) => w.hop)).toEqual([3]);
     expect(superseded.map((w) => w.hop).toSorted()).toEqual([1, 2]);
   });
+
+  it("never supersedes a recovered running member even when stale and not newest (#988-P2-1)", () => {
+    // A recovered `running` turn is actively executing (it may be observing
+    // requests-in-flight). It must drive, never fold, even though it is overdue
+    // past grace and a newer queued election exists. RED before the write-guard:
+    // the stale, non-newest running member was classified `superseded`.
+    const works = [
+      work({ hop: 1, electedAt: 100, dueAt: NOW - 500_000, status: "running" }), // stale running, oldest
+      work({ hop: 2, electedAt: 300, dueAt: NOW - 300_000, status: "queued" }), // newest queued election
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    expect(drive.map((w) => w.hop).toSorted((a, b) => a - b)).toEqual([1, 2]);
+    expect(superseded).toHaveLength(0);
+  });
+
+  it("still folds a stale queued member into a newer election (#986 Guard 2 intact)", () => {
+    // The only supersede-eligible member is `queued`; the #986 behavior is
+    // unchanged for genuine queued backlog.
+    const works = [
+      work({ hop: 1, electedAt: 100, dueAt: NOW - 500_000, status: "queued" }), // stale queued backlog
+      work({ hop: 2, electedAt: 300, dueAt: NOW - 300_000, status: "queued" }), // newest queued election
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    expect(drive.map((w) => w.hop)).toEqual([2]);
+    expect(superseded.map((w) => w.hop)).toEqual([1]);
+  });
+
+  it("mixed batch: stale running drives, stale queued folds, newest queued drives (#988-P2-1)", () => {
+    const works = [
+      work({ hop: 1, electedAt: 100, dueAt: NOW - 500_000, status: "running" }), // stale running → drives
+      work({ hop: 2, electedAt: 200, dueAt: NOW - 400_000, status: "queued" }), // stale queued → folds
+      work({ hop: 3, electedAt: 300, dueAt: NOW - 300_000, status: "queued" }), // newest queued → drives
+    ];
+    const { drive, superseded } = partitionSupersededWork(works, GRACE, NOW);
+    expect(drive.map((w) => w.hop).toSorted((a, b) => a - b)).toEqual([1, 3]);
+    expect(superseded.map((w) => w.hop)).toEqual([2]);
+  });
 });
 
 describe("#986 maxPendingWork cap (Guard 1)", () => {
@@ -942,10 +1036,28 @@ describe("#986 maxPendingWork cap (Guard 1)", () => {
   const baseChain = { currentChainCount: 0, chainStartedAt: 1_000_000, accumulatedChainTokens: 0 };
 
   it("rejects a new election once pendingWorkCount is at maxPendingWork", async () => {
-    const capped = { ...config, maxPendingWork: 2, maxChainLength: 100 } satisfies ContinuationRuntimeConfig;
+    const capped = {
+      ...config,
+      maxPendingWork: 2,
+      maxChainLength: 100,
+    } satisfies ContinuationRuntimeConfig;
     // Pre-fill the store to the cap (2 queued flows).
-    enqueuePendingWork({ sessionKey, hop: 1, delayMs: 1_000, electedAt: 1_000_000, dueAt: 1_001_000, maxChainLength: 100 });
-    enqueuePendingWork({ sessionKey, hop: 2, delayMs: 1_000, electedAt: 1_000_000, dueAt: 1_001_000, maxChainLength: 100 });
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: 1_000_000,
+      dueAt: 1_001_000,
+      maxChainLength: 100,
+    });
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 1_000,
+      electedAt: 1_000_000,
+      dueAt: 1_001_000,
+      maxChainLength: 100,
+    });
 
     const result = await scheduleContinuationWork({
       sessionKey,
@@ -959,7 +1071,11 @@ describe("#986 maxPendingWork cap (Guard 1)", () => {
   });
 
   it("batch ends early on pending-cap but preserves earlier scheduled elections (#982 partial-success)", async () => {
-    const capped = { ...config, maxPendingWork: 3, maxChainLength: 100 } satisfies ContinuationRuntimeConfig;
+    const capped = {
+      ...config,
+      maxPendingWork: 3,
+      maxChainLength: 100,
+    } satisfies ContinuationRuntimeConfig;
     // Start empty; a 5-election batch should schedule 3, then hit the cap.
     const result = await scheduleContinuationWorkBatch({
       sessionKey,
@@ -983,7 +1099,11 @@ describe("#986 maxPendingWork cap (Guard 1)", () => {
   });
 
   it("does NOT count the active driving (running) wake against the cap — serial maxPendingWork:1 still schedules its successor (#988 :403)", async () => {
-    const capOne = { ...config, maxPendingWork: 1, maxChainLength: 100 } satisfies ContinuationRuntimeConfig;
+    const capOne = {
+      ...config,
+      maxPendingWork: 1,
+      maxChainLength: 100,
+    } satisfies ContinuationRuntimeConfig;
     // Simulate the in-flight driver: one continuation-work flow currently
     // `running` (its turn is being driven; markPendingWorkTurnGranted hasn't run
     // yet). A serial chain at maxPendingWork:1 must still schedule the successor
