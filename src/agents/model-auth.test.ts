@@ -874,6 +874,42 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
+  it("resolves custom provider secretref-managed apiKey from runtime snapshot", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: "resolved-secretref-key", // pragma: allowlist secret
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "cliproxyapi",
+      cfg: sourceConfig,
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(resolved, {
+      apiKey: "resolved-secretref-key",
+      source: "models.providers.cliproxyapi",
+      mode: "api-key",
+    });
+  });
+
   it("does not reuse plugin fallback auth when the plugin is disabled", async () => {
     await expect(
       withoutEnv("PLUGIN_WEB_API_KEY", () =>

@@ -787,7 +787,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     config: OpenClawConfig | undefined,
   ): ResolvedProviderAuth | undefined => {
     const providerConfig = resolveProviderConfig(config, params.provider);
-    return (
+    const pluginAuth =
       resolveProviderSyntheticAuthWithPlugin({
         provider: params.provider,
         config,
@@ -797,12 +797,31 @@ function resolveProviderSyntheticRuntimeAuth(params: {
           providerConfig,
         },
         modelApi: params.modelApi,
-      }) ?? undefined
-    );
+      }) ?? undefined;
+    if (pluginAuth) {
+      return pluginAuth;
+    }
+    // Fallback: read resolved apiKey directly from provider config (e.g., runtime snapshot)
+    const apiKey = providerConfig?.apiKey;
+    if (apiKey && typeof apiKey === "string" && !isNonSecretApiKeyMarker(apiKey)) {
+      return {
+        apiKey,
+        source: `models.providers.${params.provider}`,
+        mode: "api-key" as const,
+      };
+    }
+    return undefined;
   };
 
   const directAuth = resolveFromConfig(params.cfg);
   if (!directAuth) {
+    const runtimeConfig = getRuntimeConfigSnapshot();
+    if (runtimeConfig && runtimeConfig !== params.cfg) {
+      const runtimeAuth = resolveFromConfig(runtimeConfig);
+      if (runtimeAuth && !isNonSecretApiKeyMarker(runtimeAuth.apiKey)) {
+        return { auth: runtimeAuth };
+      }
+    }
     return {};
   }
   if (!isManagedSecretRefApiKeyMarker(directAuth.apiKey)) {
