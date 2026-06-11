@@ -633,7 +633,8 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       } as never,
       {} as never,
     )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
-    for await (const _event of response) {
+    for await (const event of response) {
+      void event;
       // Drain the retry stream before reading result().
     }
 
@@ -716,7 +717,8 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       } as never,
       {} as never,
     )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
-    for await (const _event of response) {
+    for await (const event of response) {
+      void event;
       // Drain the retry stream before reading result().
     }
 
