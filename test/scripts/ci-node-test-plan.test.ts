@@ -177,19 +177,30 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(requiresDistShardNames).toEqual(["core-support-boundary"]);
   });
 
-  it("keeps tooling checks independent from built artifacts", () => {
-    const toolingShard = createNodeTestShards().find((shard) => shard.shardName === "core-tooling");
+  it("splits tooling checks independently from built artifacts", () => {
+    const toolingShards = createNodeTestShards().filter((shard) =>
+      shard.shardName.startsWith("core-tooling"),
+    );
 
-    expect(toolingShard).toEqual({
-      checkName: "checks-node-core-tooling",
-      configs: [
-        "test/vitest/vitest.tooling.config.ts",
-        "test/vitest/vitest.tooling-isolated.config.ts",
-      ],
-      requiresDist: false,
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-      shardName: "core-tooling",
-    });
+    expect(toolingShards).toEqual([
+      {
+        checkName: "checks-node-core-tooling",
+        configs: [
+          "test/vitest/vitest.tooling.config.ts",
+          "test/vitest/vitest.tooling-isolated.config.ts",
+        ],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "core-tooling",
+      },
+      {
+        checkName: "checks-node-core-tooling-docker",
+        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "core-tooling-docker",
+      },
+    ]);
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {

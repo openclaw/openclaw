@@ -1,13 +1,13 @@
 ---
-summary: "OpenClaw llama.cpp embedding provider plugin."
+summary: "Local GGUF embeddings through node-llama-cpp."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
-title: "llama-cpp plugin"
+title: "Llama Cpp plugin"
 ---
 
-# llama-cpp plugin
+# Llama Cpp plugin
 
-OpenClaw llama.cpp embedding provider plugin.
+Local GGUF embeddings through node-llama-cpp.
 
 ## Distribution
 
@@ -20,4 +20,4 @@ contracts: embeddingProviders
 
 ## Related docs
 
-- [llama.cpp Provider](/plugins/llama-cpp)
+- [llama-cpp](/plugins/llama-cpp)

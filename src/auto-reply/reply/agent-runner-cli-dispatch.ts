@@ -347,8 +347,6 @@ export async function runCliAgentWithLifecycle(params: {
   try {
     const rawResult = await runCliAgent({
       ...params.runParams,
-      classifyCommentaryText:
-        params.runParams.classifyCommentaryText ?? Boolean(params.onCommentaryText),
       emitCommentaryText: Boolean(params.onCommentaryText),
     });
     const result = params.transformResult?.(rawResult) ?? rawResult;
