@@ -600,6 +600,13 @@ export async function createVoiceCallRuntime(params: {
           voiceConfig: config,
           logger: log,
         });
+        // Realtime mode still needs the CallManager (outbound call.answered/endCall, session.end
+        // finalize) and the response runtime (vision budget, recap). Without the manager, this.manager
+        // is null → call.answered no-ops → the stale-call reaper force-ends outbound realtime calls
+        // mid-conversation, and notify auto-hangup silently no-ops. (Streaming wires these via
+        // wireMsteamsRuntime; realtime must too.)
+        msteamsProvider.setCallManager(manager);
+        msteamsProvider.setResponseRuntime({ coreConfig, agentRuntime, voiceConfig: config });
         log.info("[voice-call] msteams realtime voice mode enabled");
         handlerWired = true;
       } else if (config.streaming?.enabled) {
