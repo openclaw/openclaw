@@ -1,3 +1,4 @@
+// Matrix tests cover mentions plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 // Mock the runtime before importing resolveMentions
@@ -34,15 +35,15 @@ describe("resolveMentions", () => {
       expect(result.hasExplicitMention).toBe(true);
     });
 
-    it("does not trust forged m.mentions.user_ids without a visible mention", () => {
+    it("does not trust m.mentions.user_ids without a visible text or formatted mention", () => {
       const result = resolveMentions({
         content: {
           msgtype: "m.text",
-          body: "hello",
+          body: "please reply",
           "m.mentions": { user_ids: ["@bot:matrix.org"] },
         },
         userId,
-        text: "hello",
+        text: "please reply",
         mentionRegexes,
       });
       expect(result.wasMentioned).toBe(false);
@@ -209,8 +210,26 @@ describe("resolveMentions", () => {
       expect(result.wasMentioned).toBe(true);
     });
 
+    it("detects mention when the visible label is @displayName with Unicode text", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "@欢欢 please reply",
+          formatted_body:
+            '<a href="https://matrix.to/#/@huanhuan:localhost">@欢欢</a> please reply',
+          "m.mentions": { user_ids: ["@huanhuan:localhost"] },
+        },
+        userId: "@huanhuan:localhost",
+        displayName: "欢欢",
+        text: "@欢欢 please reply",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(true);
+      expect(result.hasExplicitMention).toBe(true);
+    });
+
     it("ignores out-of-range hexadecimal HTML entities in visible labels", () => {
-      expect(() =>
+      expect(
         resolveMentions({
           content: {
             msgtype: "m.text",
@@ -221,11 +240,11 @@ describe("resolveMentions", () => {
           text: "hello",
           mentionRegexes: [],
         }),
-      ).not.toThrow();
+      ).toEqual({ hasExplicitMention: false, wasMentioned: false });
     });
 
     it("ignores oversized decimal HTML entities in visible labels", () => {
-      expect(() =>
+      expect(
         resolveMentions({
           content: {
             msgtype: "m.text",
@@ -237,7 +256,7 @@ describe("resolveMentions", () => {
           text: "hello",
           mentionRegexes: [],
         }),
-      ).not.toThrow();
+      ).toEqual({ hasExplicitMention: false, wasMentioned: false });
     });
 
     it("does not detect mention when displayName is spoofed", () => {

@@ -1,4 +1,8 @@
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+// Whatsapp plugin module implements monitor state behavior.
+import {
+  createConnectedChannelStatusPatch,
+  createTransportActivityStatusPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import type { WebChannelHealthState, WebChannelStatus } from "./types.js";
 
 function cloneStatus(status: WebChannelStatus): WebChannelStatus {
@@ -13,6 +17,7 @@ function isTerminalHealthState(healthState: WebChannelHealthState | undefined): 
 }
 
 export function createWebChannelStatusController(statusSink?: (status: WebChannelStatus) => void) {
+  let lastDisconnectWasWatchdogRecovery = false;
   const status: WebChannelStatus = {
     running: true,
     connected: false,
@@ -35,6 +40,12 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     snapshot: () => status,
     noteConnected(at = Date.now()) {
       Object.assign(status, createConnectedChannelStatusPatch(at));
+      Object.assign(status, createTransportActivityStatusPatch(at));
+      if (lastDisconnectWasWatchdogRecovery) {
+        status.lastDisconnect = null;
+        status.reconnectAttempts = 0;
+        lastDisconnectWasWatchdogRecovery = false;
+      }
       status.lastError = null;
       status.healthState = "healthy";
       emit();
@@ -43,9 +54,17 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.lastInboundAt = at;
       status.lastMessageAt = at;
       status.lastEventAt = at;
+      Object.assign(status, createTransportActivityStatusPatch(at));
       if (status.connected) {
         status.healthState = "healthy";
       }
+      emit();
+    },
+    noteTransportActivity(at = Date.now()) {
+      if (status.lastTransportActivityAt === at) {
+        return;
+      }
+      Object.assign(status, createTransportActivityStatusPatch(at));
       emit();
     },
     noteWatchdogStale(at = Date.now()) {
@@ -66,8 +85,10 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       error?: string;
       reconnectAttempts: number;
       healthState: WebChannelHealthState;
+      watchdogRecovery?: boolean;
     }) {
       const at = params.at ?? Date.now();
+      lastDisconnectWasWatchdogRecovery = params.watchdogRecovery === true;
       status.connected = false;
       status.lastEventAt = at;
       status.lastDisconnect = {

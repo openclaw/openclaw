@@ -1,54 +1,55 @@
-import { withFileLock } from "../../infra/file-lock.js";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION } from "./constants.js";
-import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
-import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
+/**
+ * Locked auth profile upsert helper.
+ * Normalizes literal secrets before persistence and routes all writes through
+ * the shared SQLite lock to avoid racing concurrent auth updates.
+ */
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { updateAuthProfileStoreWithLock } from "./store.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
-function coerceAuthProfileStore(raw: unknown): AuthProfileStore {
-  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const profiles =
-    record.profiles && typeof record.profiles === "object" && !Array.isArray(record.profiles)
-      ? { ...(record.profiles as Record<string, AuthProfileCredential>) }
-      : {};
-  const order =
-    record.order && typeof record.order === "object" && !Array.isArray(record.order)
-      ? (record.order as Record<string, string[]>)
-      : undefined;
-  const lastGood =
-    record.lastGood && typeof record.lastGood === "object" && !Array.isArray(record.lastGood)
-      ? (record.lastGood as Record<string, string>)
-      : undefined;
-  const usageStats =
-    record.usageStats && typeof record.usageStats === "object" && !Array.isArray(record.usageStats)
-      ? (record.usageStats as Record<string, ProfileUsageStats>)
-      : undefined;
-
-  return {
-    version:
-      typeof record.version === "number" && Number.isFinite(record.version)
-        ? record.version
-        : AUTH_STORE_VERSION,
-    profiles,
-    ...(order ? { order } : {}),
-    ...(lastGood ? { lastGood } : {}),
-    ...(usageStats ? { usageStats } : {}),
-  };
+// Upserts normalize literal secrets before persistence; SecretRef fields are
+// preserved by leaving non-string key/token values untouched.
+function normalizeAuthProfileCredential(credential: AuthProfileCredential): AuthProfileCredential {
+  if (credential.type === "api_key") {
+    if (typeof credential.key !== "string") {
+      return credential;
+    }
+    const { key: _key, ...rest } = credential;
+    const key = normalizeSecretInput(credential.key);
+    return {
+      ...rest,
+      ...(key ? { key } : {}),
+    };
+  }
+  if (credential.type === "token") {
+    if (typeof credential.token !== "string") {
+      return credential;
+    }
+    const { token: _token, ...rest } = credential;
+    const token = normalizeSecretInput(credential.token);
+    return { ...rest, ...(token ? { token } : {}) };
+  }
+  return credential;
 }
 
+/** Upserts an auth profile under the store lock, returning null on write failure. */
 export async function upsertAuthProfileWithLock(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
 }): Promise<AuthProfileStore | null> {
-  const authPath = resolveAuthStorePath(params.agentDir);
-  ensureAuthStoreFile(authPath);
-
   try {
-    return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      const store = coerceAuthProfileStore(loadJsonFile(authPath));
-      store.profiles[params.profileId] = params.credential;
-      saveJsonFile(authPath, store);
-      return store;
+    const credential = normalizeAuthProfileCredential(params.credential);
+    return await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
+      saveOptions: {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      },
+      updater: (store) => {
+        store.profiles[params.profileId] = credential;
+        return true;
+      },
     });
   } catch {
     return null;

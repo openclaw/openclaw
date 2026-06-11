@@ -1,21 +1,30 @@
+/**
+ * Playwright role snapshot helpers.
+ *
+ * Converts ARIA or AI snapshots into compact role/name text with stable refs
+ * and duplicate disambiguation for agent actions.
+ */
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export type RoleRef = {
+type RoleRef = {
   role: string;
   name?: string;
   /** Index used only when role+name duplicates exist. */
   nth?: number;
 };
 
+/** Mapping from generated role refs to role/name metadata. */
 export type RoleRefMap = Record<string, RoleRef>;
 
-export type RoleSnapshotStats = {
+type RoleSnapshotStats = {
   lines: number;
   chars: number;
   refs: number;
   interactive: number;
 };
 
+/** Options for filtering and compacting role snapshots. */
 export type RoleSnapshotOptions = {
   /** Only include interactive elements (buttons, links, inputs, etc.). */
   interactive?: boolean;
@@ -25,6 +34,7 @@ export type RoleSnapshotOptions = {
   compact?: boolean;
 };
 
+/** Compute snapshot line/char/ref statistics. */
 export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
   const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
   return {
@@ -52,11 +62,13 @@ function matchInteractiveSnapshotLine(
   if (!match) {
     return null;
   }
-  const [, , roleRaw, name, suffix] = match;
+  const roleRaw = match[2];
+  const name = match[3];
+  const suffix = match[4];
   if (roleRaw.startsWith("/")) {
     return null;
   }
-  const role = roleRaw.toLowerCase();
+  const role = normalizeLowercaseStringOrEmpty(roleRaw);
   return {
     roleRaw,
     role,
@@ -174,7 +186,7 @@ function processLine(
     return options.interactive ? null : line;
   }
 
-  const role = roleRaw.toLowerCase();
+  const role = normalizeLowercaseStringOrEmpty(roleRaw);
   const isInteractive = INTERACTIVE_ROLES.has(role);
   const isContent = CONTENT_ROLES.has(role);
   const isStructural = STRUCTURAL_ROLES.has(role);
@@ -254,6 +266,7 @@ function buildInteractiveSnapshotLines(params: {
   return out;
 }
 
+/** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -264,9 +277,16 @@ export function parseRoleRef(raw: string): string | null {
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  return /^e\d+$/.test(normalized) ? normalized : null;
+  if (/^e\d+$/i.test(normalized)) {
+    return normalized;
+  }
+  if (/^\d{1,9}$/.test(normalized)) {
+    return normalized;
+  }
+  return null;
 }
 
+/** Build a role snapshot and refs from Playwright ARIA snapshot text. */
 export function buildRoleSnapshotFromAriaSnapshot(
   ariaSnapshot: string,
   options: RoleSnapshotOptions = {},
@@ -327,19 +347,24 @@ export function buildRoleSnapshotFromAriaSnapshot(
 }
 
 function parseAiSnapshotRef(suffix: string): string | null {
-  const match = suffix.match(/\[ref=(e\d+)\]/i);
-  return match ? match[1] : null;
+  const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
+  if (eMatch) {
+    return eMatch[1];
+  }
+  const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
+  return numMatch ? numMatch[1] : null;
 }
 
 /**
  * Build a role snapshot from Playwright's AI snapshot output while preserving Playwright's own
  * aria-ref ids (e.g. ref=e13). This makes the refs self-resolving across calls.
  */
+/** Build a role snapshot and refs from Playwright AI snapshot text. */
 export function buildRoleSnapshotFromAiSnapshot(
   aiSnapshot: string,
   options: RoleSnapshotOptions = {},
 ): { snapshot: string; refs: RoleRefMap } {
-  const lines = String(aiSnapshot ?? "").split("\n");
+  const lines = aiSnapshot.split("\n");
   const refs: RoleRefMap = {};
 
   if (options.interactive) {
@@ -373,13 +398,15 @@ export function buildRoleSnapshotFromAiSnapshot(
       out.push(line);
       continue;
     }
-    const [, , roleRaw, name, suffix] = match;
+    const roleRaw = match[2];
+    const name = match[3];
+    const suffix = match[4];
     if (roleRaw.startsWith("/")) {
       out.push(line);
       continue;
     }
 
-    const role = roleRaw.toLowerCase();
+    const role = normalizeLowercaseStringOrEmpty(roleRaw);
     const isStructural = STRUCTURAL_ROLES.has(role);
 
     if (options.compact && isStructural && !name) {

@@ -1,8 +1,11 @@
+// Matrix plugin module implements monitor route test support behavior.
 export {
-  __testing,
-  createTestRegistry,
   registerSessionBindingAdapter,
-  resolveAgentRoute,
+  testing,
+} from "openclaw/plugin-sdk/session-binding-runtime";
+export { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+export {
+  createTestRegistry,
   setActivePluginRegistry,
-  type OpenClawConfig,
-} from "../../../../test/helpers/plugins/matrix-monitor-route.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

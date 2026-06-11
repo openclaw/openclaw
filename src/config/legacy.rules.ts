@@ -1,1 +1,2 @@
-export { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "./legacy.migrations.js";
+// Public facade for shared legacy config doctor rules.
+export { LEGACY_CONFIG_RULES } from "../commands/doctor/shared/legacy-config-rules.js";

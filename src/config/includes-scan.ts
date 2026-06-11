@@ -1,8 +1,10 @@
+// Scans included config files and resolves include graphs.
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import JSON5 from "json5";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "./includes.js";
 
+// Include discovery walks nested config objects because include blocks may be embedded.
 function listDirectIncludes(parsed: unknown): string[] {
   const out: string[] = [];
   const visit = (value: unknown) => {
@@ -45,6 +47,7 @@ function resolveIncludePath(baseConfigPath: string, includePath: string): string
   );
 }
 
+/** Collects recursively referenced config include files without requiring a valid full config. */
 export async function collectIncludePathsRecursive(params: {
   configPath: string;
   parsed: unknown;
@@ -70,13 +73,12 @@ export async function collectIncludePathsRecursive(params: {
       }
       const nestedParsed = (() => {
         try {
-          return JSON5.parse(rawText);
+          return parseJsonWithJson5Fallback(rawText);
         } catch {
           return null;
         }
       })();
       if (nestedParsed) {
-        // eslint-disable-next-line no-await-in-loop
         await walk(resolved, nestedParsed, depth + 1);
       }
     }

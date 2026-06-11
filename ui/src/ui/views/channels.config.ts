@@ -1,4 +1,6 @@
+// Control UI view renders channels screen content.
 import { html } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
 import type { ChannelsProps } from "./channels.types.ts";
@@ -135,7 +137,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
           ${props.configSaving ? "Saving…" : "Save"}
         </button>
         <button class="btn" ?disabled=${disabled} @click=${() => props.onConfigReload()}>
-          Reload
+          ${t("common.reload")}
         </button>
       </div>
     </div>

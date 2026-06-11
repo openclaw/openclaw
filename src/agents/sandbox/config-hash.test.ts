@@ -1,3 +1,5 @@
+// Sandbox config hash tests pin which runtime settings require container
+// recreation versus reuse.
 import { describe, expect, it } from "vitest";
 import { computeSandboxBrowserConfigHash, computeSandboxConfigHash } from "./config-hash.js";
 import type { SandboxDockerConfig } from "./types.js";
@@ -86,6 +88,8 @@ describe("computeSandboxConfigHash", () => {
   });
 
   it.each(ORDER_SENSITIVE_ARRAY_CASES)("treats $field order as significant", (testCase) => {
+    // Docker arrays are command-line arguments; reordering can change runtime
+    // behavior and must invalidate an existing sandbox.
     const shared = {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
@@ -106,6 +110,30 @@ describe("computeSandboxConfigHash", () => {
     });
     expect(left).not.toBe(right);
   });
+  it("changes when read-only workspace skill mount state changes", () => {
+    // Skill overlays affect what the sandbox can read, so they are part of the
+    // reuse identity even though they are read-only.
+    const shared = {
+      docker: createDockerConfig(),
+      dockerEnvPolicyEpoch: undefined,
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    };
+
+    const withoutSkills = computeSandboxConfigHash({
+      ...shared,
+      readOnlyWorkspaceSkillMounts: [],
+    });
+
+    const withSkills = computeSandboxConfigHash({
+      ...shared,
+      readOnlyWorkspaceSkillMounts: ["/tmp/workspace/skills:/workspace/skills:ro"],
+    });
+
+    expect(withoutSkills).not.toBe(withSkills);
+  });
 });
 
 describe("computeSandboxBrowserConfigHash", () => {
@@ -118,6 +146,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
       workspaceAccess: "rw" as const,
@@ -150,6 +179,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
@@ -176,6 +206,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
       workspaceAccess: "rw" as const,
@@ -204,6 +235,7 @@ describe("computeSandboxBrowserConfigHash", () => {
         noVncPort: 6080,
         headless: false,
         enableNoVnc: true,
+        autoStartTimeoutMs: 12000,
       },
       securityEpoch: "epoch-v1",
       workspaceAccess: "rw" as const,

@@ -1,6 +1,7 @@
+// Chutes OAuth login flow with loopback callback handling and manual paste fallback.
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChutesOAuthAppConfig } from "../agents/chutes-oauth.js";
 import {
   CHUTES_AUTHORIZE_ENDPOINT,
@@ -9,6 +10,7 @@ import {
   parseOAuthCallbackInput,
 } from "../agents/chutes-oauth.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import type { OAuthCredentials } from "../llm/oauth.js";
 
 type OAuthPrompt = {
   message: string;
@@ -19,7 +21,7 @@ function parseManualOAuthInput(
   input: string,
   expectedState: string,
 ): { code: string; state: string } {
-  const trimmed = String(input ?? "").trim();
+  const trimmed = normalizeOptionalString(input ?? "") ?? "";
   if (!trimmed) {
     throw new Error("Missing OAuth redirect URL or authorization code.");
   }
@@ -129,7 +131,7 @@ async function waitForLocalCallback(params: {
           clearTimeout(timeout);
         }
         server.close();
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
       }
     });
 
@@ -153,6 +155,7 @@ async function waitForLocalCallback(params: {
   });
 }
 
+/** Run a PKCE OAuth login for Chutes and exchange the resulting code for credentials. */
 export async function loginChutes(params: {
   app: ChutesOAuthAppConfig;
   manual?: boolean;
@@ -214,4 +217,18 @@ export async function loginChutes(params: {
     codeVerifier: verifier,
     fetchFn: params.fetchFn,
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

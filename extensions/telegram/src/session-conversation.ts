@@ -1,4 +1,6 @@
-import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram-core";
+// Telegram plugin module implements session conversation behavior.
+import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
+import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 export function resolveTelegramSessionConversation(params: {
   kind: "group" | "channel";
@@ -14,4 +16,9 @@ export function resolveTelegramSessionConversation(params: {
     baseConversationId: parsed.chatId,
     parentConversationCandidates: [parsed.chatId],
   };
+}
+
+export function resolveTelegramSessionTarget(params: { kind: "group" | "channel"; id: string }) {
+  const raw = params.kind === "group" ? `telegram:group:${params.id}` : `telegram:${params.id}`;
+  return normalizeTelegramChatId(raw) ?? normalizeTelegramLookupTarget(raw);
 }

@@ -1,7 +1,6 @@
+// Msteams tests cover block streaming config plugin behavior.
 import { describe, expect, it } from "vitest";
-
-// Import the schema directly to avoid cross-extension import chains
-const { MSTeamsConfigSchema } = await import("../../../src/config/zod-schema.providers-core.js");
+import { MSTeamsConfigSchema } from "../config-api.js";
 
 describe("MSTeamsConfigSchema blockStreaming", () => {
   const baseConfig = {

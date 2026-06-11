@@ -1,3 +1,4 @@
+// Covers environment-variable config metadata and parsing.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -32,6 +33,25 @@ describe("config env vars", () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);
       expect(process.env.GROQ_API_KEY).toBe("gsk-config");
+    });
+  });
+
+  it("skips non-string env.vars values from runtime JSON configs", async () => {
+    await withEnvOverride({ API_TOKEN: undefined, PORT: undefined, DEBUG: undefined }, async () => {
+      const cfg = JSON.parse(`{
+        "env": {
+          "vars": {
+            "API_TOKEN": "sk-test-123",
+            "PORT": 8080,
+            "DEBUG": true
+          }
+        }
+      }`);
+
+      expect(applyConfigEnvVars(cfg)).toBeUndefined();
+      expect(process.env.API_TOKEN).toBe("sk-test-123");
+      expect(process.env.PORT).toBeUndefined();
+      expect(process.env.DEBUG).toBeUndefined();
     });
   });
 
@@ -101,6 +121,51 @@ describe("config env vars", () => {
     });
   });
 
+  it("drops unresolved env references from config env", async () => {
+    const entries = collectConfigRuntimeEnvVars({
+      env: {
+        vars: {
+          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+          BRAVE_API_KEY: "config-key",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBeUndefined();
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
+  it("drops unresolved env references from top-level config env", async () => {
+    const entries = collectConfigRuntimeEnvVars({
+      env: {
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+        BRAVE_API_KEY: "config-key",
+      },
+    } as OpenClawConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBeUndefined();
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
+  it("keeps resolved env references from config env", async () => {
+    const resolvedConfig = resolveConfigEnvVars(
+      {
+        env: {
+          vars: {
+            OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+            BRAVE_API_KEY: "config-key",
+          },
+        },
+      },
+      { OPENROUTER_API_KEY: "resolved-key" },
+    ) as OpenClawConfig;
+
+    const entries = collectConfigRuntimeEnvVars(resolvedConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBe("resolved-key");
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
   it("loads ${VAR} substitutions from ~/.openclaw/.env on repeated runtime loads", async () => {
     await withTempHome(async (_home) => {
       await withEnvOverride({ BRAVE_API_KEY: undefined }, async () => {
@@ -146,7 +211,7 @@ describe("config env vars", () => {
 
   it("returns empty record when the state-dir .env file is missing", async () => {
     await withTempHome(async (_home) => {
-      expect(readStateDirDotEnvVars(process.env)).toEqual({});
+      expect(readStateDirDotEnvVars(process.env)).toStrictEqual({});
     });
   });
 

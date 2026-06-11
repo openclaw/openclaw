@@ -1,11 +1,17 @@
-import type { OpenClawConfig } from "../config/config.js";
+/**
+ * Provider behavior helpers shared by reply runners, embedded agents, and provider plugins.
+ * Keep policy here generic; provider-specific reasoning rules belong in provider runtime hooks.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel } from "../plugins/types.js";
 
 /**
- * Utility functions for provider-specific logic and capabilities.
+ * Resolves whether a provider should emit reasoning via native fields or tagged text,
+ * using provider runtime hooks when available and defaulting to native output.
  */
-
 export function resolveReasoningOutputMode(params: {
   provider: string | undefined | null;
   config?: OpenClawConfig;
@@ -14,17 +20,20 @@ export function resolveReasoningOutputMode(params: {
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
 }): "native" | "tagged" {
-  const provider = params.provider?.trim();
+  const provider = normalizeOptionalString(params.provider);
   if (!provider) {
     return "native";
   }
 
+  // Provider hooks own model/API-specific reasoning transport rules; core only supplies the default.
   const pluginMode = resolveProviderReasoningOutputModeWithPlugin({
     provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
     context: {
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -37,24 +46,6 @@ export function resolveReasoningOutputMode(params: {
   });
   if (pluginMode) {
     return pluginMode;
-  }
-
-  const normalized = provider.toLowerCase();
-
-  // Check for exact matches or known prefixes/substrings for reasoning providers.
-  // Note: Ollama is intentionally excluded - its OpenAI-compatible endpoint
-  // handles reasoning natively via the `reasoning` field in streaming chunks,
-  // so tag-based enforcement is unnecessary and causes all output to be
-  // discarded as "(no output)" (#2279).
-  // Note: MiniMax is also intentionally excluded. In production it does not
-  // reliably wrap user-visible output in <final> tags, so forcing tag
-  // enforcement suppresses normal assistant replies.
-  if (
-    normalized === "google" ||
-    normalized === "google-gemini-cli" ||
-    normalized === "google-generative-ai"
-  ) {
-    return "tagged";
   }
 
   return "native";
@@ -74,6 +65,7 @@ export function isReasoningTagProvider(
     modelId?: string;
     modelApi?: string | null;
     model?: ProviderRuntimeModel;
+    runtimeHandle?: ProviderRuntimePluginHandle;
   },
 ): boolean {
   return (
@@ -85,6 +77,7 @@ export function isReasoningTagProvider(
       modelId: options?.modelId,
       modelApi: options?.modelApi,
       model: options?.model,
+      runtimeHandle: options?.runtimeHandle,
     }) === "tagged"
   );
 }

@@ -1,10 +1,8 @@
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
-import {
-  looksLikeUuid,
-  resolveSignalPeerId,
-  resolveSignalRecipient,
-  resolveSignalSender,
-} from "./identity.js";
+// Signal plugin module implements outbound session behavior.
+import type { RoutePeer } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalPeerId, resolveSignalRecipient, resolveSignalSender } from "./identity.js";
+import { looksLikeUuid } from "./uuid.js";
 
 export type ResolvedSignalOutboundTarget = {
   peer: RoutePeer;
@@ -15,7 +13,7 @@ export type ResolvedSignalOutboundTarget = {
 
 export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutboundTarget | null {
   const stripped = target.replace(/^signal:/i, "").trim();
-  const lowered = stripped.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(stripped);
   if (lowered.startsWith("group:")) {
     const groupId = stripped.slice("group:".length).trim();
     if (!groupId) {
@@ -39,7 +37,7 @@ export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutbo
     return null;
   }
 
-  const uuidCandidate = recipient.toLowerCase().startsWith("uuid:")
+  const uuidCandidate = normalizeLowercaseStringOrEmpty(recipient).startsWith("uuid:")
     ? recipient.slice("uuid:".length)
     : recipient;
   const sender = resolveSignalSender({

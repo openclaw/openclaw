@@ -1,3 +1,6 @@
+// Memory Host SDK module implements query expansion behavior.
+import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+
 /**
  * Query expansion for FTS-only search mode.
  *
@@ -630,6 +633,7 @@ const STOP_WORDS_ZH = new Set([
   "告诉",
 ]);
 
+/** Returns true for low-value conversational tokens that should not drive FTS matching. */
 export function isQueryStopWordToken(token: string): boolean {
   return (
     STOP_WORDS_EN.has(token) ||
@@ -673,7 +677,7 @@ function isValidKeyword(token: string): boolean {
 function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" }): string[] {
   const useTrigram = opts?.ftsTokenizer === "trigram";
   const tokens: string[] = [];
-  const normalized = text.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(text);
 
   // Split into segments (English words, Chinese character sequences, etc.)
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);

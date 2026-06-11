@@ -1,9 +1,29 @@
 {
   "id": "kilocode",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["kilocode"],
-  "providerAuthEnvVars": {
-    "kilocode": ["KILOCODE_API_KEY"]
+  "modelPricing": {
+    "providers": {
+      "kilocode": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "kilocode",
+        "envVars": ["KILOCODE_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -25,5 +45,32 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "kilocode": {
+        "baseUrl": "https://api.kilo.ai/api/gateway/",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "kilo/auto",
+            "name": "Kilo Auto",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 128000
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "kilocode": "refreshable"
+    }
   }
 }

@@ -4,22 +4,31 @@
  * Implements the ChannelPlugin interface following the LINE pattern.
  */
 
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  defineChannelMessageAdapter,
+  type MessageReceipt,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   composeWarningCollectors,
   createConditionalWarningCollector,
   projectAccountConfigWarningCollector,
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -29,6 +38,7 @@ import {
   registerSynologyWebhookRoute,
   validateSynologyGatewayAccountStartup,
 } from "./gateway-runtime.js";
+import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
 import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
@@ -41,7 +51,7 @@ const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynol
   policyPathSuffix: "dmPolicy",
   defaultPolicy: "allowlist",
   approveHint: "openclaw pairing approve synology-chat <code>",
-  normalizeEntry: (raw) => raw.toLowerCase().trim(),
+  normalizeEntry: (raw) => normalizeLowercaseStringOrEmpty(raw),
 });
 
 type SynologyChannelGatewayContext = {
@@ -87,8 +97,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
     "allowInsecureSsl",
   ],
   resolveAllowFrom: (account) => account.allowedUserIds,
-  formatAllowFrom: (allowFrom) =>
-    allowFrom.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean),
+  formatAllowFrom: (allowFrom) => normalizeStringEntriesLower(allowFrom),
 });
 
 const collectSynologyChatSecurityWarnings =
@@ -111,17 +120,23 @@ const collectSynologyChatSecurityWarnings =
       "- Synology Chat: dangerouslyAllowInheritedWebhookPath=true opts a named account into a shared inherited webhook path. Prefer an explicit per-account webhookPath.",
     (account) =>
       account.dmPolicy === "open" &&
+      account.allowedUserIds.length === 0 &&
+      '- Synology Chat: dmPolicy="open" with empty allowedUserIds blocks all senders. Add allowedUserIds=["*"] for public DMs or set explicit user IDs.',
+    (account) =>
+      account.dmPolicy === "open" &&
+      account.allowedUserIds.includes("*") &&
       '- Synology Chat: dmPolicy="open" allows any user to message the bot. Consider "allowlist" for production use.',
     (account) =>
       account.dmPolicy === "allowlist" &&
       account.allowedUserIds.length === 0 &&
-      '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
+      '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open" with allowedUserIds=["*"].',
   );
 
 type SynologyChatOutboundResult = {
   channel: typeof CHANNEL_ID;
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 };
 
 type SynologyChatPlugin = Omit<
@@ -145,6 +160,7 @@ type SynologyChatPlugin = Omit<
     }) => string[];
   };
   messaging: {
+    targetPrefixes?: readonly string[];
     normalizeTarget: (target: string) => string | undefined;
     targetResolver: {
       looksLikeId: (id: string) => boolean;
@@ -160,8 +176,9 @@ type SynologyChatPlugin = Omit<
     deliveryMode: "gateway";
     textChunkLimit: number;
     sendText: (ctx: SynologyChannelSendTextContext) => Promise<SynologyChatOutboundResult>;
-    sendMedia: (ctx: SynologyChannelOutboundContext) => Promise<SynologyChatOutboundResult>;
+    sendMedia: (ctx: SynologyChannelSendMediaContext) => Promise<SynologyChatOutboundResult>;
   };
+  message: typeof synologyChatMessageAdapter;
   gateway: {
     startAccount: (ctx: SynologyChannelGatewayContext) => Promise<unknown>;
     stopAccount: (ctx: SynologyChannelGatewayContext) => Promise<void>;
@@ -194,6 +211,77 @@ function requireIncomingUrl(account: ResolvedSynologyChatAccount): string {
   return account.incomingUrl;
 }
 
+function createSynologyChatSendResult(params: {
+  messageId: string;
+  chatId: string;
+  kind: MessageReceiptPartKind;
+}): SynologyChatOutboundResult {
+  return {
+    channel: CHANNEL_ID,
+    messageId: params.messageId,
+    chatId: params.chatId,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [
+        {
+          channel: CHANNEL_ID,
+          messageId: params.messageId,
+          chatId: params.chatId,
+          conversationId: params.chatId,
+        },
+      ],
+      threadId: params.chatId,
+      kind: params.kind,
+    }),
+  };
+}
+
+async function sendSynologyChatText(
+  ctx: SynologyChannelSendTextContext,
+): Promise<SynologyChatOutboundResult> {
+  const account = resolveOutboundAccount(ctx.cfg ?? {}, ctx.accountId);
+  const incomingUrl = requireIncomingUrl(account);
+  const ok = await sendMessage(incomingUrl, ctx.text, ctx.to, account.allowInsecureSsl);
+  if (!ok) {
+    throw new Error("Failed to send message to Synology Chat");
+  }
+  return createSynologyChatSendResult({
+    messageId: `sc-${Date.now()}`,
+    chatId: ctx.to,
+    kind: "text",
+  });
+}
+
+async function sendSynologyChatMedia(
+  ctx: SynologyChannelSendMediaContext,
+): Promise<SynologyChatOutboundResult> {
+  const account = resolveOutboundAccount(ctx.cfg ?? {}, ctx.accountId);
+  const incomingUrl = requireIncomingUrl(account);
+  const ok = await sendFileUrl(incomingUrl, ctx.mediaUrl, ctx.to, account.allowInsecureSsl);
+  if (!ok) {
+    throw new Error("Failed to send media to Synology Chat");
+  }
+  return createSynologyChatSendResult({
+    messageId: `sc-${Date.now()}`,
+    chatId: ctx.to,
+    kind: "media",
+  });
+}
+
+export const synologyChatMessageAdapter = defineChannelMessageAdapter({
+  id: CHANNEL_ID,
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+  send: {
+    text: async (ctx) => await sendSynologyChatText(ctx),
+    media: async (ctx) => await sendSynologyChatMedia(ctx),
+  },
+});
+
 export function createSynologyChatPlugin(): SynologyChatPlugin {
   return createChatChannelPlugin({
     base: {
@@ -225,20 +313,25 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       config: {
         ...synologyChatConfigAdapter,
       },
-      auth: synologyChatApprovalAuth,
+      approvalCapability: synologyChatApprovalAuth,
       messaging: {
+        targetPrefixes: ["synology-chat", "synology_chat", "synology"],
         normalizeTarget: (target: string) => {
           const trimmed = target.trim();
-          if (!trimmed) return undefined;
+          if (!trimmed) {
+            return undefined;
+          }
           // Strip common prefixes
-          return trimmed.replace(/^synology[-_]?chat:/i, "").trim();
+          return trimmed.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
         },
         targetResolver: {
           looksLikeId: (id: string) => {
             const trimmed = id?.trim();
-            if (!trimmed) return false;
+            if (!trimmed) {
+              return false;
+            }
             // Synology Chat user IDs are numeric
-            return /^\d+$/.test(trimmed) || /^synology[-_]?chat:/i.test(trimmed);
+            return /^\d+$/.test(trimmed) || /^synology(?:[-_]?chat)?:/i.test(trimmed);
           },
           hint: "<userId>",
         },
@@ -297,15 +390,18 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
           "- Wrap URLs with `<URL|label>` for user-friendly links",
         ],
       },
+      message: synologyChatMessageAdapter,
     },
     pairing: {
       text: {
         idLabel: "synologyChatUserId",
         message: "OpenClaw: your access has been approved.",
-        normalizeAllowEntry: (entry: string) => entry.toLowerCase().trim(),
+        normalizeAllowEntry: (entry: string) => normalizeLowercaseStringOrEmpty(entry),
         notify: async ({ cfg, id, message }) => {
           const account = resolveAccount(cfg);
-          if (!account.incomingUrl) return;
+          if (!account.incomingUrl) {
+            return;
+          }
           await sendMessage(account.incomingUrl, message, id, account.allowInsecureSsl);
         },
       },
@@ -318,33 +414,21 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         ),
         collectSynologyChatRoutingWarnings,
       ),
+      collectAuditFindings: collectSynologyChatSecurityAuditFindings,
     },
     outbound: {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
 
-      sendText: async ({ to, text, accountId, cfg }: SynologyChannelSendTextContext) => {
-        const account = resolveOutboundAccount(cfg ?? {}, accountId);
-        const incomingUrl = requireIncomingUrl(account);
-        const ok = await sendMessage(incomingUrl, text, to, account.allowInsecureSsl);
-        if (!ok) {
-          throw new Error("Failed to send message to Synology Chat");
+      sendText: sendSynologyChatText,
+      sendMedia: async (ctx) => {
+        if (!ctx.mediaUrl) {
+          throw new Error("Synology Chat media send requires mediaUrl");
         }
-        return attachChannelToResult(CHANNEL_ID, { messageId: `sc-${Date.now()}`, chatId: to });
-      },
-
-      sendMedia: async ({ to, mediaUrl, accountId, cfg }: SynologyChannelOutboundContext) => {
-        const account = resolveOutboundAccount(cfg ?? {}, accountId);
-        const incomingUrl = requireIncomingUrl(account);
-        if (!mediaUrl) {
-          throw new Error("No media URL provided");
-        }
-
-        const ok = await sendFileUrl(incomingUrl, mediaUrl, to, account.allowInsecureSsl);
-        if (!ok) {
-          throw new Error("Failed to send media to Synology Chat");
-        }
-        return attachChannelToResult(CHANNEL_ID, { messageId: `sc-${Date.now()}`, chatId: to });
+        return await sendSynologyChatMedia({
+          ...ctx,
+          mediaUrl: ctx.mediaUrl,
+        });
       },
     },
   }) as unknown as SynologyChatPlugin;

@@ -1,10 +1,15 @@
+/**
+ * Subagent session reactivation tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 
-vi.mock("../agents/subagent-registry-read.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/subagent-registry-read.js")>();
+vi.mock("../agents/subagent-registry-read.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/subagent-registry-read.js")>(
+    "../agents/subagent-registry-read.js",
+  );
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>

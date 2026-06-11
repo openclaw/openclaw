@@ -1,9 +1,12 @@
+// Session path helpers keep stores and transcripts inside agent-owned session directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
+import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
   agentId?: string,
@@ -61,7 +64,10 @@ export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
-  if (!SAFE_SESSION_ID_RE.test(trimmed)) {
+  if (
+    !SAFE_SESSION_ID_RE.test(trimmed) ||
+    isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)
+  ) {
     throw new Error(`Invalid session ID: ${sessionId}`);
   }
   return trimmed;
@@ -83,6 +89,7 @@ function resolvePathFromAgentSessionsDir(
     safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
   const realCandidate = safeRealpathSync(candidateAbsPath) ?? candidateAbsPath;
   const relative = path.relative(agentBase, realCandidate);
+  // Realpath both sides when possible so symlinked session dirs still enforce containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return undefined;
   }
@@ -93,6 +100,8 @@ function resolveSiblingAgentSessionsDir(
   baseSessionsDir: string,
   agentId: string,
 ): string | undefined {
+  // Multi-agent stores share a common .../agents/<id>/sessions shape; sibling resolution keeps
+  // persisted absolute files portable across active agent stores.
   const resolvedBase = path.resolve(baseSessionsDir);
   if (path.basename(resolvedBase) !== "sessions") {
     return undefined;
@@ -142,7 +151,7 @@ function resolveStructuralSessionFallbackPath(
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(agentIdPart);
-  if (normalizedAgentId !== agentIdPart.toLowerCase()) {
+  if (normalizedAgentId !== normalizeLowercaseStringOrEmpty(agentIdPart)) {
     return undefined;
   }
   if (normalizedAgentId !== normalizeAgentId(expectedAgentId)) {
@@ -287,6 +296,7 @@ export function resolveStorePath(
     return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
   }
   if (store.includes("{agentId}")) {
+    // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {
       return path.resolve(

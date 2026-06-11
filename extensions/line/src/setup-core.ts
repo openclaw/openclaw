@@ -1,3 +1,4 @@
+// Line plugin module implements setup core behavior.
 import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup";
 import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
@@ -8,8 +9,6 @@ import {
   resolveLineAccount,
   type LineConfig,
 } from "./setup-runtime-api.js";
-
-const channel = "line" as const;
 
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
@@ -41,7 +40,7 @@ export function patchLineAccountConfig(params: {
   }
 
   const nextAccount = {
-    ...(lineConfig.accounts?.[accountId] ?? {}),
+    ...lineConfig.accounts?.[accountId],
   } as Record<string, unknown>;
   for (const field of clearFields) {
     delete nextAccount[field];

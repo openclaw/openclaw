@@ -1,14 +1,19 @@
+// Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
-import { runTui } from "../tui/tui.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 
+/** Attach the `tui` command plus its `terminal`/`chat` aliases to the root CLI. */
 export function registerTuiCli(program: Command) {
   program
     .command("tui")
+    .alias("terminal")
+    .alias("chat")
     .description("Open a terminal UI connected to the Gateway")
+    .option("--local", "Run against the local embedded agent runtime", false)
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (if required)")
@@ -22,16 +27,30 @@ export function registerTuiCli(program: Command) {
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
     )
-    .action(async (opts) => {
+    .action(async (opts, cmd) => {
       try {
+        // `cmd.name()` always returns the canonical subcommand name (`tui`).
+        // Use the parsed parent args to see which alias the user actually typed.
+        const invokedSubcommand = cmd.parent?.args[0];
+        const invokedAsLocalAlias =
+          invokedSubcommand === "terminal" || invokedSubcommand === "chat";
+        const isLocal = Boolean(opts.local) || invokedAsLocalAlias;
+        if (isLocal && (opts.url || opts.token || opts.password)) {
+          throw new Error("--local cannot be combined with --url, --token, or --password");
+        }
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
           defaultRuntime.error(
             `warning: invalid --timeout-ms "${String(opts.timeoutMs)}"; ignoring`,
           );
         }
-        const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
+        const historyLimit = parseStrictPositiveInteger(opts.historyLimit ?? "200");
+        if (historyLimit === undefined) {
+          throw new Error("--history-limit must be a positive integer.");
+        }
+        const { runTui } = await import("../tui/tui.js");
         await runTui({
+          local: isLocal,
           url: opts.url as string | undefined,
           token: opts.token as string | undefined,
           password: opts.password as string | undefined,
@@ -40,7 +59,8 @@ export function registerTuiCli(program: Command) {
           thinking: opts.thinking as string | undefined,
           message: opts.message as string | undefined,
           timeoutMs,
-          historyLimit: Number.isNaN(historyLimit) ? undefined : historyLimit,
+          historyLimit,
+          forceProcessExitOnReturn: true,
         });
       } catch (err) {
         defaultRuntime.error(String(err));

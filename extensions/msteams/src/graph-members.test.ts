@@ -1,3 +1,4 @@
+// Msteams tests cover graph members plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { getMemberInfoMSTeams } from "./graph-members.js";
@@ -7,10 +8,8 @@ const mockState = vi.hoisted(() => ({
   fetchGraphJson: vi.fn(),
 }));
 
-vi.mock("./graph.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./graph.js")>();
+vi.mock("./graph.js", () => {
   return {
-    ...actual,
     resolveGraphToken: mockState.resolveGraphToken,
     fetchGraphJson: mockState.fetchGraphJson,
   };

@@ -3,14 +3,17 @@ package ai.openclaw.app.node
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.VoiceWakeMode
+import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
+import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
+import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
-import ai.openclaw.app.gateway.GatewayEndpoint
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -107,12 +110,64 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_discoveryNonLoopbackWithoutHintsStillRequiresTls() {
+  fun resolveTlsParamsForEndpoint_manualPrivateLanRespectsManualTlsToggle() {
+    val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_manualPrivateLanCleartextCanOverrideStoredPin() {
+    val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = "pinned",
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryTailnetWithoutHintsStillRequiresTls() {
     val endpoint =
       GatewayEndpoint(
         stableId = "_openclaw-gw._tcp.|local.|Test",
         name = "Test",
-        host = "10.0.0.2",
+        host = "100.64.0.9",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryPrivateLanWithoutHintsStillRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "192.168.1.20",
         port = 18789,
         tlsEnabled = false,
         tlsFingerprintSha256 = null,
@@ -200,6 +255,14 @@ class ConnectionManagerTest {
   fun isLoopbackGatewayHost_onlyTreatsEmulatorBridgeAsLocalWhenAllowed() {
     assertTrue(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = true))
     assertFalse(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = false))
+  }
+
+  @Test
+  fun isLocalCleartextGatewayHost_acceptsLanIpsButRejectsMdnsAndTailnetHosts() {
+    assertTrue(isLocalCleartextGatewayHost("192.168.1.20"))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local"))
+    assertFalse(isLocalCleartextGatewayHost("100.64.0.9"))
+    assertFalse(isLocalCleartextGatewayHost("gateway.tailnet.ts.net"))
   }
 
   @Test
@@ -319,6 +382,20 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
+    val options = newManager().buildOperatorConnectOptions()
+
+    assertEquals(
+      listOf(
+        "operator.approvals",
+        "operator.read",
+        "operator.write",
+      ),
+      options.scopes,
+    )
+  }
+
+  @Test
   fun buildNodeConnectOptions_advertisesRequestableSmsSearchWithoutSmsCapability() {
     val options =
       newManager(
@@ -382,6 +459,7 @@ class ConnectionManagerTest {
         voiceWakeMode = VoiceWakeMode.Always,
         motionActivityAvailable = true,
         callLogAvailable = true,
+        photosAvailable = true,
         hasRecordAudioPermission = true,
       ).buildNodeConnectOptions()
 
@@ -389,11 +467,22 @@ class ConnectionManagerTest {
     assertTrue(options.commands.contains(OpenClawLocationCommand.Get.rawValue))
     assertTrue(options.commands.contains(OpenClawMotionCommand.Activity.rawValue))
     assertTrue(options.commands.contains(OpenClawCallLogCommand.Search.rawValue))
+    assertTrue(options.commands.contains(OpenClawPhotosCommand.Latest.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Camera.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Location.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Motion.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.CallLog.rawValue))
+    assertTrue(options.caps.contains(OpenClawCapability.Photos.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+  }
+
+  @Test
+  fun buildNodeConnectOptions_advertisesDeviceAppsOnlyWhenUserOptedIn() {
+    val disabled = newManager(installedAppsSharingEnabled = false).buildNodeConnectOptions()
+    val enabled = newManager(installedAppsSharingEnabled = true).buildNodeConnectOptions()
+
+    assertFalse(disabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
+    assertTrue(enabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
   }
 
   @Test
@@ -408,12 +497,13 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildNodeConnectOptions_omitsUnavailableCameraLocationAndCallLogSurfaces() {
+  fun buildNodeConnectOptions_omitsUnavailableCameraLocationCallLogAndPhotosSurfaces() {
     val options =
       newManager(
         cameraEnabled = false,
         locationMode = LocationMode.Off,
         callLogAvailable = false,
+        photosAvailable = false,
       ).buildNodeConnectOptions()
 
     assertFalse(options.commands.contains(OpenClawCameraCommand.List.rawValue))
@@ -421,9 +511,11 @@ class ConnectionManagerTest {
     assertFalse(options.commands.contains(OpenClawCameraCommand.Clip.rawValue))
     assertFalse(options.commands.contains(OpenClawLocationCommand.Get.rawValue))
     assertFalse(options.commands.contains(OpenClawCallLogCommand.Search.rawValue))
+    assertFalse(options.commands.contains(OpenClawPhotosCommand.Latest.rawValue))
     assertFalse(options.caps.contains(OpenClawCapability.Camera.rawValue))
     assertFalse(options.caps.contains(OpenClawCapability.Location.rawValue))
     assertFalse(options.caps.contains(OpenClawCapability.CallLog.rawValue))
+    assertFalse(options.caps.contains(OpenClawCapability.Photos.rawValue))
   }
 
   @Test
@@ -462,7 +554,9 @@ class ConnectionManagerTest {
     readSmsAvailable: Boolean = false,
     smsSearchPossible: Boolean = false,
     callLogAvailable: Boolean = false,
+    photosAvailable: Boolean = false,
     hasRecordAudioPermission: Boolean = false,
+    installedAppsSharingEnabled: Boolean = false,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
     val prefs =
@@ -482,7 +576,9 @@ class ConnectionManagerTest {
       readSmsAvailable = { readSmsAvailable },
       smsSearchPossible = { smsSearchPossible },
       callLogAvailable = { callLogAvailable },
+      photosAvailable = { photosAvailable },
       hasRecordAudioPermission = { hasRecordAudioPermission },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled },
       manualTls = { false },
     )
   }

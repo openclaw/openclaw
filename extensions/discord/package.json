@@ -1,20 +1,26 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.4.1-beta.1",
-  "description": "OpenClaw Discord channel plugin",
+  "version": "2026.6.2",
+  "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "@buape/carbon": "0.0.0-beta-20260327000044",
-    "@discordjs/voice": "^0.19.2",
-    "discord-api-types": "^0.38.43",
-    "https-proxy-agent": "^8.0.0",
-    "opusscript": "^0.0.8"
+    "@discordjs/voice": "0.19.2",
+    "discord-api-types": "0.38.48",
+    "libopus-wasm": "0.2.0",
+    "typebox": "1.1.39",
+    "undici": "8.3.0",
+    "ws": "8.21.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.1-beta.1"
+    "openclaw": ">=2026.6.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -26,6 +32,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true
+    },
     "channel": {
       "id": "discord",
       "label": "Discord",
@@ -35,17 +44,36 @@
       "docsLabel": "discord",
       "blurb": "very well supported right now.",
       "systemImage": "bubble.left.and.bubble.right",
-      "markdownCapable": true
+      "markdownCapable": true,
+      "preferSessionLookupForAnnounceTarget": true,
+      "commands": {
+        "nativeCommandsAutoEnabled": true,
+        "nativeSkillsAutoEnabled": true
+      },
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "DISCORD_BOT_TOKEN"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasDiscordConfiguredState"
+      }
     },
     "install": {
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.1"
+      "minHostVersion": ">=2026.5.26",
+      "allowInvalidConfigRecovery": true
     },
-    "bundle": {
-      "stageRuntimeDependencies": true
+    "compat": {
+      "pluginApi": ">=2026.6.2"
+    },
+    "build": {
+      "openclawVersion": "2026.6.2"
     },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

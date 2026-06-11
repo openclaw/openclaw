@@ -299,6 +299,10 @@ enum GatewayEnvironment {
         if normalized.lowercased().hasPrefix("openclaw ") {
             normalized = String(normalized.dropFirst("openclaw ".count))
         }
+        // Strip trailing commit metadata, e.g. "2026.4.2 (d74a122)" → "2026.4.2"
+        if let parenRange = normalized.range(of: #"\s*\([0-9a-fA-F]+\)\s*$"#, options: .regularExpression) {
+            normalized = String(normalized[normalized.startIndex..<parenRange.lowerBound])
+        }
         return normalized
     }
 

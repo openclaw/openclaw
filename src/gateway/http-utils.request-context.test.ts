@@ -1,3 +1,6 @@
+/**
+ * Tests HTTP request context extraction for gateway auth and routing.
+ */
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
@@ -63,7 +66,7 @@ describe("resolveTrustedHttpOperatorScopes", () => {
       tokenAuth,
     );
 
-    expect(scopes).toEqual([]);
+    expect(scopes).toStrictEqual([]);
   });
 
   it("keeps declared scopes for non-bearer HTTP requests", () => {
@@ -98,7 +101,7 @@ describe("resolveTrustedHttpOperatorScopes", () => {
       { trustDeclaredOperatorScopes: false },
     );
 
-    expect(scopes).toEqual([]);
+    expect(scopes).toStrictEqual([]);
   });
 });
 
@@ -141,6 +144,7 @@ describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
       "operator.write",
       "operator.approvals",
       "operator.pairing",
+      "operator.talk.secrets",
     ]);
   });
 

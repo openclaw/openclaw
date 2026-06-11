@@ -1,1 +1,2 @@
-export { maybeCreateMatrixMigrationSnapshot } from "openclaw/plugin-sdk/matrix-runtime-heavy";
+// Matrix plugin module implements migration snapshot behavior.
+export { maybeCreateMatrixMigrationSnapshot } from "../../migration-snapshot-backup.js";

@@ -7,17 +7,20 @@ read_when:
 title: "Nodes"
 ---
 
-# Nodes
-
 A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
+Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL;
+historical only for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway's
+WS server and exposes its local canvas/camera commands as a node (so
+`openclaw nodes …` works against this Mac). In remote gateway mode, browser
+automation is handled by the CLI node host (`openclaw node run` or the
+installed node service), not by the native app node.
 
 Notes:
 
-- Nodes are **peripherals**, not gateways. They don’t run the gateway service.
+- Nodes are **peripherals**, not gateways. They don't run the gateway service.
 - Telegram/WhatsApp/etc. messages land on the **gateway**, not on nodes.
 - Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
@@ -43,8 +46,17 @@ pending request is superseded and a new `requestId` is created. Re-run
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject`) is a separate gateway-owned
+- The device pairing record is the durable approved-role contract. Token
+  rotation stays inside that contract; it cannot upgrade a paired node into a
+  different role that pairing approval never granted.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
+- `openclaw nodes remove --node <id|name|ip>` deletes stale entries from that
+  separate gateway-owned node pairing store.
+- Approval scope follows the pending request's declared commands:
+  - commandless request: `operator.pairing`
+  - non-exec node commands: `operator.pairing` + `operator.write`
+  - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
 ## Remote node host (system.run)
 
@@ -106,6 +118,7 @@ Notes:
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
+openclaw node start
 openclaw node restart
 ```
 
@@ -157,7 +170,7 @@ Or per session:
 Once set, any `exec` call with `host=node` runs on the node host (subject to the
 node allowlist/approvals).
 
-`host=auto` will not silently hop to the node just because a tool call requests it. If you want node exec, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
+`host=auto` will not implicitly choose the node on its own, but an explicit per-call `host=node` request is allowed from `auto`. If you want node exec to be the default for the session, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
 
 Related:
 
@@ -173,13 +186,39 @@ Low-level (raw RPC):
 openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
 ```
 
-Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
+Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows.
+
+## Command policy
+
+Node commands must pass two gates before they can be invoked:
+
+1. The node must declare the command in its WebSocket `connect.commands` list.
+2. The gateway's platform policy must allow the declared command.
+
+Windows and macOS companion nodes allow safe declared commands such as
+`canvas.*`, `camera.list`, `location.get`, and `screen.snapshot` by default.
+Trusted nodes that advertise the `talk` capability or declare `talk.*` commands
+also allow declared push-to-talk commands (`talk.ptt.start`, `talk.ptt.stop`,
+`talk.ptt.cancel`, `talk.ptt.once`) by default, independent of platform label.
+Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
+`screen.record` still require explicit opt-in with
+`gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
+defaults and extra allowlist entries.
+
+Plugin-owned node commands can add a Gateway node-invoke policy. That policy
+runs after the allowlist check and before forwarding to the node, so raw
+`node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
+permission boundary. Dangerous plugin node commands still require explicit
+`gateway.nodes.allowCommands` opt-in.
+
+After a node changes its declared command list, reject the old device pairing
+and approve the new request so the gateway stores the updated command snapshot.
 
 ## Screenshots (canvas snapshots)
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
 
-CLI helper (writes to a temp file and prints `MEDIA:<path>`):
+CLI helper (writes to a temp file and prints the saved path):
 
 ```bash
 openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
@@ -210,7 +249,9 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 
 Notes:
 
+- Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
+- iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
 
 ## Photos + videos (node camera)
 
@@ -265,7 +306,7 @@ openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 1
 Notes:
 
 - Location is **off by default**.
-- “Always” requires system permission; background fetch is best-effort.
+- "Always" requires system permission; background fetch is best-effort.
 - The response includes lat/lon, accuracy (meters), and timestamp.
 
 ## SMS (Android nodes)
@@ -290,6 +331,7 @@ Android nodes can advertise additional command families when the corresponding c
 Available families:
 
 - `device.status`, `device.info`, `device.permissions`, `device.health`
+- `device.apps` when Installed Apps sharing is enabled in Android Settings
 - `notifications.list`, `notifications.actions`
 - `photos.latest`
 - `contacts.search`, `contacts.add`
@@ -302,12 +344,14 @@ Example invokes:
 
 ```bash
 openclaw nodes invoke --node <idOrNameOrIp> --command device.status --params '{}'
+openclaw nodes invoke --node <idOrNameOrIp> --command device.apps --params '{"limit":10}'
 openclaw nodes invoke --node <idOrNameOrIp> --command notifications.list --params '{}'
 openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"limit":1}'
 ```
 
 Notes:
 
+- `device.apps` is opt-in and returns launcher-visible apps by default.
 - Motion commands are capability-gated by available sensors.
 
 ## System commands (node host / mac node)
@@ -327,6 +371,9 @@ Notes:
 - `system.run` returns stdout/stderr/exit code in the payload.
 - Shell execution now goes through the `exec` tool with `host=node`; `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
+- The exec path prepares a canonical `systemRunPlan` before approval. Once an
+  approval is granted, the gateway forwards that stored plan, not any later
+  caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.allowCommands`.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
@@ -334,7 +381,7 @@ Notes:
 - For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 - On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
-- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
+- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by exec approvals (`~/.openclaw/exec-approvals.json`).
@@ -354,14 +401,14 @@ Per-agent override:
 
 ```bash
 openclaw config get agents.list
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
 ```
 
 Unset to allow any node:
 
 ```bash
 openclaw config unset tools.exec.node
-openclaw config unset agents.list[0].tools.exec.node
+openclaw config unset 'agents.list[0].tools.exec.node'
 ```
 
 ## Permissions map

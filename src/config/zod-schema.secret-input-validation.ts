@@ -1,3 +1,5 @@
+// Validates secret input schema fragments shared by config sections.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 
@@ -25,6 +27,7 @@ type SlackConfigLike = {
   accounts?: Record<string, SlackAccountLike | undefined>;
 };
 
+// Only enabled accounts need per-account secret requirement checks.
 function forEachEnabledAccount<T extends { enabled?: unknown }>(
   accounts: Record<string, T | undefined> | undefined,
   run: (accountId: string, account: T) => void,
@@ -40,11 +43,12 @@ function forEachEnabledAccount<T extends { enabled?: unknown }>(
   }
 }
 
+/** Validates Telegram webhook URLs have a usable shared or account webhook secret. */
 export function validateTelegramWebhookSecretRequirements(
   value: TelegramConfigLike,
   ctx: z.RefinementCtx,
 ): void {
-  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookUrl = normalizeOptionalString(value.webhookUrl) ?? "";
   const hasBaseWebhookSecret = hasConfiguredSecretInput(value.webhookSecret);
   if (baseWebhookUrl && !hasBaseWebhookSecret) {
     ctx.addIssue({
@@ -54,8 +58,7 @@ export function validateTelegramWebhookSecretRequirements(
     });
   }
   forEachEnabledAccount(value.accounts, (accountId, account) => {
-    const accountWebhookUrl =
-      typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
+    const accountWebhookUrl = normalizeOptionalString(account.webhookUrl) ?? "";
     if (!accountWebhookUrl) {
       return;
     }

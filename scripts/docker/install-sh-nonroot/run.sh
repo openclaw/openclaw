@@ -20,9 +20,15 @@ node -e '
   const version = process.versions.node.split(".").map(Number);
   const ok =
     version.length >= 2 &&
-    (version[0] > 22 || (version[0] === 22 && version[1] >= 16));
+    (version[0] > 22 || (version[0] === 22 && version[1] >= 19));
   if (!ok) {
     process.stderr.write(`unsupported node ${process.versions.node}\n`);
+    process.exit(1);
+  }
+  try {
+    require("node:sqlite");
+  } catch {
+    process.stderr.write(`unsupported node ${process.versions.node}: missing node:sqlite\n`);
     process.exit(1);
   }
 '
@@ -41,7 +47,7 @@ EXPECTED_VERSION="${OPENCLAW_INSTALL_EXPECT_VERSION:-}"
 if [[ -n "$EXPECTED_VERSION" ]]; then
   LATEST_VERSION="$EXPECTED_VERSION"
 else
-  LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
+  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
 fi
 echo "==> Verify CLI installed"
 verify_installed_cli "$PACKAGE_NAME" "$LATEST_VERSION"

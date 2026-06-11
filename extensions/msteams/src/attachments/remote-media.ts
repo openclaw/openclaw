@@ -1,9 +1,34 @@
+// Msteams plugin module implements remote media behavior.
+import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { inferPlaceholder } from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Direct save path used when the caller supplies the already-guarded fetch
+ * implementation. This lets Teams-specific auth fallback own the request
+ * sequence while keeping redirect and DNS pinning inside `safeFetchWithPolicy`.
+ */
+async function saveRemoteMediaDirect(params: {
+  url: string;
+  filePathHint: string;
+  fetchImpl: FetchLike;
+  maxBytes: number;
+  contentTypeHint?: string;
+  originalFilename?: string;
+}): Promise<SavedRemoteMedia> {
+  const response = await params.fetchImpl(params.url, { redirect: "follow" });
+  return await saveResponseMedia(response, {
+    sourceUrl: params.url,
+    filePathHint: params.filePathHint,
+    maxBytes: params.maxBytes,
+    fallbackContentType: params.contentTypeHint,
+    originalFilename: params.originalFilename,
+  });
+}
 
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   url: string;
@@ -14,27 +39,34 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   contentTypeHint?: string;
   placeholder?: string;
   preserveFilenames?: boolean;
+  /**
+   * Opt into the Teams-specific guarded fetch path. Only safe when the
+   * supplied `fetchImpl` enforces the attachment fetch policy itself.
+   */
+  useDirectFetch?: boolean;
 }): Promise<MSTeamsInboundMedia> {
-  const fetched = await getMSTeamsRuntime().channel.media.fetchRemoteMedia({
-    url: params.url,
-    fetchImpl: params.fetchImpl,
-    filePathHint: params.filePathHint,
-    maxBytes: params.maxBytes,
-    ssrfPolicy: params.ssrfPolicy,
-  });
-  const mime = await getMSTeamsRuntime().media.detectMime({
-    buffer: fetched.buffer,
-    headerMime: fetched.contentType ?? params.contentTypeHint,
-    filePath: params.filePathHint,
-  });
   const originalFilename = params.preserveFilenames ? params.filePathHint : undefined;
-  const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-    fetched.buffer,
-    mime ?? params.contentTypeHint,
-    "inbound",
-    params.maxBytes,
-    originalFilename,
-  );
+  let saved: SavedRemoteMedia;
+  if (params.useDirectFetch && params.fetchImpl) {
+    saved = await saveRemoteMediaDirect({
+      url: params.url,
+      filePathHint: params.filePathHint,
+      fetchImpl: params.fetchImpl,
+      maxBytes: params.maxBytes,
+      contentTypeHint: params.contentTypeHint,
+      originalFilename,
+    });
+  } else {
+    saved = await getMSTeamsRuntime().channel.media.saveRemoteMedia({
+      url: params.url,
+      fetchImpl: params.fetchImpl,
+      filePathHint: params.filePathHint,
+      maxBytes: params.maxBytes,
+      ssrfPolicy: params.ssrfPolicy,
+      fallbackContentType: params.contentTypeHint,
+      originalFilename,
+    });
+  }
   return {
     path: saved.path,
     contentType: saved.contentType,

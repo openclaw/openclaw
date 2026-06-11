@@ -1,9 +1,13 @@
+// Gateway node catalog builder.
+// Merges paired devices, approved node records, and live websocket sessions.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
-export type KnownNodeDevicePairingSource = {
+type KnownNodeDevicePairingSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -11,9 +15,11 @@ export type KnownNodeDevicePairingSource = {
   clientMode?: string;
   remoteIp?: string;
   approvedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
-export type KnownNodeApprovedSource = {
+type KnownNodeApprovedSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -27,9 +33,12 @@ export type KnownNodeApprovedSource = {
   commands: string[];
   permissions?: Record<string, boolean>;
   approvedAtMs?: number;
+  lastConnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
-export type KnownNodeEntry = {
+type KnownNodeEntry = {
   nodeId: string;
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
@@ -37,24 +46,12 @@ export type KnownNodeEntry = {
   effective: NodeListNode;
 };
 
-export type KnownNodeCatalog = {
+type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
-  const values = new Set<string>();
-  for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    for (const value of item) {
-      const trimmed = value.trim();
-      if (trimmed) {
-        values.add(trimmed);
-      }
-    }
-  }
-  return [...values].toSorted((left, right) => left.localeCompare(right));
+function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
+  return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
@@ -66,6 +63,8 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
     clientMode: entry.clientMode,
     remoteIp: entry.remoteIp,
     approvedAtMs: entry.approvedAtMs,
+    lastSeenAtMs: entry.lastSeenAtMs,
+    lastSeenReason: entry.lastSeenReason,
   };
 }
 
@@ -84,6 +83,43 @@ function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprove
     commands: entry.commands ?? [],
     permissions: entry.permissions,
     approvedAtMs: entry.approvedAtMs,
+    lastConnectedAtMs: entry.lastConnectedAtMs,
+    lastSeenAtMs: entry.lastSeenAtMs,
+    lastSeenReason: entry.lastSeenReason,
+  };
+}
+
+function resolveEffectiveLastSeen(params: {
+  live?: NodeSession;
+  devicePairing?: KnownNodeDevicePairingSource;
+  nodePairing?: KnownNodeApprovedSource;
+}): { lastSeenAtMs?: number; lastSeenReason?: string } {
+  // Live connected time is the freshest signal; stored last-seen values fill in
+  // disconnected rows without letting stale device-pairing data override nodes.
+  const candidates: Array<{ atMs: number; reason?: string }> = [
+    params.live?.connectedAtMs ? { atMs: params.live.connectedAtMs, reason: "connect" } : undefined,
+    params.nodePairing?.lastSeenAtMs
+      ? { atMs: params.nodePairing.lastSeenAtMs, reason: params.nodePairing.lastSeenReason }
+      : undefined,
+    params.nodePairing?.lastConnectedAtMs
+      ? { atMs: params.nodePairing.lastConnectedAtMs, reason: "connect" }
+      : undefined,
+    params.devicePairing?.lastSeenAtMs
+      ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
+      : undefined,
+  ].filter((entry) => entry !== undefined);
+  let newest: { atMs: number; reason?: string } | undefined;
+  for (const candidate of candidates) {
+    if (!newest || candidate.atMs > newest.atMs) {
+      newest = candidate;
+    }
+  }
+  if (!newest) {
+    return {};
+  }
+  return {
+    lastSeenAtMs: newest.atMs,
+    lastSeenReason: newest.reason,
   };
 }
 
@@ -94,6 +130,7 @@ function buildEffectiveKnownNode(entry: {
   live?: NodeSession;
 }): NodeListNode {
   const { nodeId, devicePairing, nodePairing, live } = entry;
+  const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
     displayName: live?.displayName ?? nodePairing?.displayName ?? devicePairing?.displayName,
@@ -113,6 +150,8 @@ function buildEffectiveKnownNode(entry: {
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastSeenAtMs: lastSeen.lastSeenAtMs,
+    lastSeenReason: lastSeen.lastSeenReason,
     approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
     paired: Boolean(devicePairing ?? nodePairing),
     connected: Boolean(live),
@@ -123,8 +162,8 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   if (left.connected !== right.connected) {
     return left.connected ? -1 : 1;
   }
-  const leftName = (left.displayName ?? left.nodeId).toLowerCase();
-  const rightName = (right.displayName ?? right.nodeId).toLowerCase();
+  const leftName = normalizeLowercaseStringOrEmpty(left.displayName ?? left.nodeId);
+  const rightName = normalizeLowercaseStringOrEmpty(right.displayName ?? right.nodeId);
   if (leftName < rightName) {
     return -1;
   }
@@ -134,6 +173,7 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
+/** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly NodePairingPairedNode[];
@@ -174,12 +214,14 @@ export function createKnownNodeCatalog(params: {
   return { entriesById };
 }
 
+/** Lists known nodes with connected nodes first and deterministic display ordering. */
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.entriesById.values()]
     .map((entry) => entry.effective)
     .toSorted(compareKnownNodes);
 }
 
+/** Returns the merged catalog entry for diagnostics that need source details. */
 export function getKnownNodeEntry(
   catalog: KnownNodeCatalog,
   nodeId: string,
@@ -187,6 +229,7 @@ export function getKnownNodeEntry(
   return catalog.entriesById.get(nodeId) ?? null;
 }
 
+/** Returns the effective node row shown to gateway clients. */
 export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
   return getKnownNodeEntry(catalog, nodeId)?.effective ?? null;
 }

@@ -4,11 +4,9 @@ read_when:
   - You want to fetch a URL and extract readable content
   - You need to configure web_fetch or its Firecrawl fallback
   - You want to understand web_fetch limits and caching
-title: "Web Fetch"
+title: "Web fetch"
 sidebarTitle: "Web Fetch"
 ---
-
-# Web Fetch
 
 The `web_fetch` tool does a plain HTTP GET and extracts readable content
 (HTML to markdown or text). It does **not** execute JavaScript.
@@ -27,11 +25,17 @@ await web_fetch({ url: "https://example.com/article" });
 
 ## Tool parameters
 
-| Parameter     | Type     | Description                              |
-| ------------- | -------- | ---------------------------------------- |
-| `url`         | `string` | URL to fetch (required, http/https only) |
-| `extractMode` | `string` | `"markdown"` (default) or `"text"`       |
-| `maxChars`    | `number` | Truncate output to this many chars       |
+<ParamField path="url" type="string" required>
+URL to fetch. `http(s)` only.
+</ParamField>
+
+<ParamField path="extractMode" type="'markdown' | 'text'" default="markdown">
+Output format after main-content extraction.
+</ParamField>
+
+<ParamField path="maxChars" type="number">
+Truncate output to this many characters.
+</ParamField>
 
 ## How it works
 
@@ -53,6 +57,21 @@ await web_fetch({ url: "https://example.com/article" });
   </Step>
 </Steps>
 
+## Progress updates
+
+`web_fetch` emits a public progress line only when the fetch is still pending
+after five seconds:
+
+```text
+Fetching page content...
+```
+
+Fast cache hits and quick network responses finish before the timer fires, so
+they do not show a progress line. If the call is canceled, the timer is cleared.
+When the fetch eventually completes, the agent receives the normal tool result;
+the progress line is only channel UI state and never contains fetched page
+content.
+
 ## Config
 
 ```json5
@@ -61,14 +80,20 @@ await web_fetch({ url: "https://example.com/article" });
     web: {
       fetch: {
         enabled: true, // default: true
+        provider: "firecrawl", // optional; omit for auto-detect
         maxChars: 50000, // max output chars
         maxCharsCap: 50000, // hard cap for maxChars param
         maxResponseBytes: 2000000, // max download size before truncation
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         maxRedirects: 3,
+        useTrustedEnvProxy: false, // let a trusted HTTP(S) env proxy resolve DNS
         readability: true, // use Readability extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
+        ssrfPolicy: {
+          allowRfc2544BenchmarkRange: true, // opt-in for trusted fake-IP proxies using 198.18.0.0/15
+          allowIpv6UniqueLocalRange: true, // opt-in for trusted fake-IP proxies using fc00::/7
+        },
       },
     },
   },
@@ -82,6 +107,13 @@ If Readability extraction fails, `web_fetch` can fall back to
 
 ```json5
 {
+  tools: {
+    web: {
+      fetch: {
+        provider: "firecrawl", // optional; omit for auto-detect from available credentials
+      },
+    },
+  },
   plugins: {
     entries: {
       firecrawl: {
@@ -109,13 +141,53 @@ Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor
   `FIRECRAWL_API_KEY` env fallback, gateway startup fails fast.
 </Note>
 
+<Note>
+  Firecrawl `baseUrl` overrides are locked down: hosted traffic uses
+  `https://api.firecrawl.dev`; self-hosted overrides must target private or
+  internal endpoints, and `http://` is accepted only for those private targets.
+</Note>
+
+Current runtime behavior:
+
+- `tools.web.fetch.provider` selects the fetch fallback provider explicitly.
+- If `provider` is omitted, OpenClaw auto-detects the first ready web-fetch
+  provider from available credentials. Non-sandboxed `web_fetch` can use
+  installed plugins that declare `contracts.webFetchProviders` and register a
+  matching provider at runtime. Today the bundled provider is Firecrawl.
+- Sandboxed `web_fetch` calls stay limited to bundled providers.
+- If Readability is disabled, `web_fetch` skips straight to the selected
+  provider fallback. If no provider is available, it fails closed.
+
+## Trusted env proxy
+
+If your deployment requires `web_fetch` to go through a trusted outbound
+HTTP(S) proxy, set `tools.web.fetch.useTrustedEnvProxy: true`.
+
+In this mode, OpenClaw still applies hostname-based SSRF checks before sending
+the request, but it lets the proxy resolve DNS instead of doing local DNS
+pinning. Enable this only when the proxy is operator-controlled and enforces
+outbound policy after DNS resolution.
+
+<Note>
+  If no HTTP(S) proxy env var is configured, or the target host is excluded by
+  `NO_PROXY`, `web_fetch` falls back to the normal strict path with local DNS
+  pinning.
+</Note>
+
 ## Limits and safety
 
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`
 - Response body is capped at `maxResponseBytes` before parsing; oversized
   responses are truncated with a warning
 - Private/internal hostnames are blocked
+- `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
+  `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins
+  for trusted fake-IP proxy stacks; leave them unset unless your proxy owns
+  those synthetic ranges and enforces its own destination policy
 - Redirects are checked and limited by `maxRedirects`
+- `useTrustedEnvProxy` is an explicit opt-in and should only be enabled for
+  operator-controlled proxies that still enforce outbound policy after DNS
+  resolution
 - `web_fetch` is best-effort -- some sites need the [Web Browser](/tools/browser)
 
 ## Tool profiles
@@ -126,7 +198,7 @@ If you use tool profiles or allowlists, add `web_fetch` or `group:web`:
 {
   tools: {
     allow: ["web_fetch"],
-    // or: allow: ["group:web"]  (includes both web_fetch and web_search)
+    // or: allow: ["group:web"]  (includes web_fetch, web_search, and x_search)
   },
 }
 ```

@@ -1,3 +1,4 @@
+// Covers archive entry path normalization and traversal rejection.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -30,7 +31,7 @@ describe("archive path helpers", () => {
   });
 
   it.each(["", ".", "./"])("accepts empty-like entry paths: %j", (entryPath) => {
-    expect(() => validateArchiveEntryPath(entryPath)).not.toThrow();
+    expect(validateArchiveEntryPath(entryPath)).toBeUndefined();
   });
 
   it.each([

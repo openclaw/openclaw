@@ -6,8 +6,6 @@ read_when:
 title: "Tailscale"
 ---
 
-# Tailscale (Gateway dashboard)
-
 OpenClaw can auto-configure Tailscale **Serve** (tailnet) or **Funnel** (public) for the
 Gateway dashboard and WebSocket port. This keeps the Gateway bound to loopback while
 Tailscale provides HTTPS, routing, and (for Serve) identity headers.
@@ -18,12 +16,18 @@ Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 - `funnel`: Public HTTPS via `tailscale funnel`. OpenClaw requires a shared password.
 - `off`: Default (no Tailscale automation).
 
+Status and audit output use **Tailscale exposure** for this OpenClaw Serve/Funnel
+mode. `off` means OpenClaw is not managing Serve or Funnel; it does not mean the
+local Tailscale daemon is stopped or logged out.
+
 ## Auth
 
 Set `gateway.auth.mode` to control the handshake:
 
+- `none` (private ingress only)
 - `token` (default when `OPENCLAW_GATEWAY_TOKEN` is set)
 - `password` (shared secret via `OPENCLAW_GATEWAY_PASSWORD` or config)
+- `trusted-proxy` (identity-aware reverse proxy; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth))
 
 When `tailscale.mode = "serve"` and `gateway.auth.allowTailscale` is `true`,
 Control UI/WebSocket auth can use Tailscale identity headers
@@ -31,15 +35,22 @@ Control UI/WebSocket auth can use Tailscale identity headers
 the identity by resolving the `x-forwarded-for` address via the local Tailscale
 daemon (`tailscale whois`) and matching it to the header before accepting it.
 OpenClaw only treats a request as Serve when it arrives from loopback with
-Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
+Tailscale's `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
+For Control UI operator sessions that include browser device identity, this
+verified Serve path also skips the device-pairing round trip. It does not bypass
+browser device identity: device-less clients are still rejected, and node-role
+or non-Control UI WebSocket connections still follow the normal pairing and
+auth checks.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
-still require token/password auth.
+do **not** use Tailscale identity-header auth. They still follow the gateway's
+normal HTTP auth mode: shared-secret auth by default, or an intentionally
+configured trusted-proxy / private-ingress `none` setup.
 This tokenless flow assumes the gateway host is trusted. If untrusted local code
 may run on the same host, disable `gateway.auth.allowTailscale` and require
 token/password auth instead.
-To require explicit credentials, set `gateway.auth.allowTailscale: false` or
-force `gateway.auth.mode: "password"`.
+To require explicit shared-secret credentials, set `gateway.auth.allowTailscale: false`
+and use `gateway.auth.mode: "token"` or `"password"`.
 
 ## Config examples
 
@@ -55,6 +66,25 @@ force `gateway.auth.mode: "password"`.
 ```
 
 Open: `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
+
+To expose the Control UI through a named Tailscale Service instead of the
+device hostname, set `gateway.tailscale.serviceName` to the Service name:
+
+```json5
+{
+  gateway: {
+    bind: "loopback",
+    tailscale: { mode: "serve", serviceName: "svc:openclaw" },
+  },
+}
+```
+
+With the example above, startup reports the Service URL as
+`https://openclaw.<tailnet-name>.ts.net/` instead of the device hostname.
+Tailscale Services require the host to be an approved tagged node in your
+tailnet. Configure the tag and approve the Service in Tailscale before enabling
+this option, otherwise `tailscale serve --service=...` will fail during gateway
+startup.
 
 ### Tailnet-only (bind to Tailnet IP)
 
@@ -74,7 +104,9 @@ Connect from another Tailnet device:
 - Control UI: `http://<tailscale-ip>:18789/`
 - WebSocket: `ws://<tailscale-ip>:18789`
 
-Note: loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+<Note>
+Loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+</Note>
 
 ### Public internet (Funnel + shared password)
 
@@ -101,8 +133,18 @@ openclaw gateway --tailscale funnel --auth password
 
 - Tailscale Serve/Funnel requires the `tailscale` CLI to be installed and logged in.
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password` to avoid public exposure.
+- `gateway.tailscale.serviceName` applies only to Serve mode and is passed to
+  `tailscale serve --service=<name>`. The value must use Tailscale's
+  `svc:<dns-label>` Service name format, for example `svc:openclaw`.
+  Tailscale requires Service hosts to be tagged nodes, and the Service may need
+  approval in the admin console before Serve can publish it.
 - Set `gateway.tailscale.resetOnExit` if you want OpenClaw to undo `tailscale serve`
   or `tailscale funnel` configuration on shutdown.
+- Set `gateway.tailscale.preserveFunnel: true` to keep an externally configured
+  `tailscale funnel` route alive across gateway restarts. When enabled and the
+  gateway runs in `mode: "serve"`, OpenClaw checks `tailscale funnel status`
+  before re-applying Serve and skips it when a Funnel route already covers the
+  gateway port. The OpenClaw-managed Funnel password-only policy is unchanged.
 - `gateway.bind: "tailnet"` is a direct Tailnet bind (no HTTPS, no Serve/Funnel).
 - `gateway.bind: "auto"` prefers loopback; use `tailnet` if you want Tailnet-only.
 - Serve/Funnel only expose the **Gateway control UI + WS**. Nodes connect over
@@ -130,3 +172,9 @@ Avoid Funnel for browser control; treat node pairing like operator access.
 - `tailscale serve` command: [https://tailscale.com/kb/1242/tailscale-serve](https://tailscale.com/kb/1242/tailscale-serve)
 - Tailscale Funnel overview: [https://tailscale.com/kb/1223/tailscale-funnel](https://tailscale.com/kb/1223/tailscale-funnel)
 - `tailscale funnel` command: [https://tailscale.com/kb/1311/tailscale-funnel](https://tailscale.com/kb/1311/tailscale-funnel)
+
+## Related
+
+- [Remote access](/gateway/remote)
+- [Discovery](/gateway/discovery)
+- [Authentication](/gateway/authentication)

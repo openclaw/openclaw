@@ -1,4 +1,7 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+// Doctor checks and repairs for exec safeBins profiles and trusted binary directories.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCommandResolutionFromArgv } from "../../../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
@@ -10,14 +13,18 @@ import {
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
 } from "../../../infra/exec-safe-bin-trust.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 export type ExecSafeBinCoverageHit = {
+  /** Config scope that owns the safeBins entry. */
   scopePath: string;
+  /** Normalized binary name from safeBins. */
   bin: string;
+  /** Missing profile coverage or unsafe semantic shape detected by doctor. */
   kind: "missingProfile" | "riskySemantics";
+  /** True when the missing profile belongs to an interpreter/runtime binary. */
   isInterpreter?: boolean;
+  /** Risk explanation for risky semantic hits. */
   warning?: string;
 };
 
@@ -30,8 +37,11 @@ type ExecSafeBinScopeRef = {
 };
 
 export type ExecSafeBinTrustedDirHintHit = {
+  /** Config scope that owns the safeBins entry. */
   scopePath: string;
+  /** Binary name configured in safeBins. */
   bin: string;
+  /** Resolved executable path outside trusted safe-bin directories. */
   resolvedPath: string;
 };
 
@@ -42,7 +52,7 @@ function normalizeConfiguredSafeBins(entries: unknown): string[] {
   return Array.from(
     new Set(
       entries
-        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
         .filter((entry) => entry.length > 0),
     ),
   ).toSorted();
@@ -111,6 +121,7 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   return scopes;
 }
 
+/** Scan configured safeBins for missing profiles and risky low-friction entries. */
 export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
   const hits: ExecSafeBinCoverageHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
@@ -138,6 +149,7 @@ export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverag
   return hits;
 }
 
+/** Scan configured safeBins that resolve outside trusted binary directories. */
 export function scanExecSafeBinTrustedDirHints(
   cfg: OpenClawConfig,
 ): ExecSafeBinTrustedDirHintHit[] {
@@ -166,6 +178,7 @@ export function scanExecSafeBinTrustedDirHints(
   return hits;
 }
 
+/** Format doctor warnings for safeBins profile coverage and risky semantics. */
 export function collectExecSafeBinCoverageWarnings(params: {
   hits: ExecSafeBinCoverageHit[];
   doctorFixCommand: string;
@@ -221,6 +234,7 @@ export function collectExecSafeBinCoverageWarnings(params: {
   return lines;
 }
 
+/** Format doctor warnings for safeBins resolved outside trusted directories. */
 export function collectExecSafeBinTrustedDirHintWarnings(
   hits: ExecSafeBinTrustedDirHintHit[],
 ): string[] {
@@ -242,6 +256,7 @@ export function collectExecSafeBinTrustedDirHintWarnings(
   return lines;
 }
 
+/** Scaffold missing custom safeBin profiles and warn on interpreter/risky entries. */
 export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];

@@ -1,5 +1,10 @@
+// Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "./error-utils.js";
 
+// SQLite schema setup for builtin memory index, embedding cache, and FTS.
+
+/** Ensure memory index tables and optional FTS/cache tables exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
   embeddingCacheTable: string;
@@ -74,7 +79,7 @@ export function ensureMemoryIndexSchema(params: {
       );
       ftsAvailable = true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       ftsAvailable = false;
       ftsError = message;
     }
@@ -88,6 +93,7 @@ export function ensureMemoryIndexSchema(params: {
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
 
+/** Add a missing shipped column without rebuilding existing memory tables. */
 function ensureColumn(
   db: DatabaseSync,
   table: "files" | "chunks",

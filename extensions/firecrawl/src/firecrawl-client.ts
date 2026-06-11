@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Firecrawl plugin module implements firecrawl client behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
@@ -7,11 +8,21 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   truncateText,
+  withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
+  SsrFBlockedError,
+  isBlockedHostnameOrIp,
+  isPrivateIpAddress,
+  resolvePinnedHostnameWithPolicy,
+  type LookupFn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
   resolveFirecrawlBaseUrl,
   resolveFirecrawlMaxAgeMs,
@@ -31,6 +42,16 @@ const SCRAPE_CACHE = new Map<
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
 const ALLOWED_FIRECRAWL_HOSTS = new Set(["api.firecrawl.dev"]);
+const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
+  "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
+const FIRECRAWL_HTTP_PRIVATE_ERROR =
+  "Firecrawl HTTP baseUrl must target a private or internal self-hosted endpoint. Use https:// for public hosts.";
+
+type FirecrawlEndpointMode = "selfHosted" | "strict";
+type FirecrawlResolvedEndpoint = {
+  url: string;
+  mode: FirecrawlEndpointMode;
+};
 
 type FirecrawlSearchItem = {
   title: string;
@@ -40,6 +61,17 @@ type FirecrawlSearchItem = {
   published?: string;
   siteName?: string;
 };
+
+async function readFirecrawlJsonResponse(
+  response: Response,
+  label: string,
+): Promise<Record<string, unknown>> {
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+}
 
 export type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
@@ -63,25 +95,94 @@ export type FirecrawlScrapeParams = {
   timeoutSeconds?: number;
 };
 
-function resolveEndpoint(baseUrl: string, pathname: "/v2/search" | "/v2/scrape"): string {
-  const url = new URL(baseUrl.trim() || "https://api.firecrawl.dev");
-  if (url.protocol !== "https:") {
-    throw new Error("Firecrawl baseUrl must use https.");
+export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SsrFBlockedError("Invalid URL supplied to Firecrawl scrape");
   }
-  if (!ALLOWED_FIRECRAWL_HOSTS.has(url.hostname)) {
-    throw new Error(`Firecrawl baseUrl host is not allowed: ${url.hostname}`);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new SsrFBlockedError(
+      `Blocked non-HTTP(S) protocol in Firecrawl scrape URL: ${parsed.protocol}`,
+    );
   }
+  if (isBlockedHostnameOrIp(parsed.hostname)) {
+    throw new SsrFBlockedError(
+      `Blocked hostname or private/internal IP in Firecrawl scrape URL: ${parsed.hostname}`,
+    );
+  }
+}
+
+function isOfficialFirecrawlEndpoint(url: URL): boolean {
+  return url.protocol === "https:" && ALLOWED_FIRECRAWL_HOSTS.has(url.hostname);
+}
+
+async function firecrawlEndpointTargetsPrivateNetwork(
+  url: URL,
+  lookupFn?: LookupFn,
+): Promise<boolean> {
+  if (isBlockedHostnameOrIp(url.hostname)) {
+    return true;
+  }
+  try {
+    const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
+      lookupFn,
+      policy: { allowPrivateNetwork: true },
+    });
+    return pinned.addresses.every((address) => isPrivateIpAddress(address));
+  } catch {
+    return false;
+  }
+}
+
+async function validateFirecrawlBaseUrl(
+  baseUrl: string,
+  lookupFn?: LookupFn,
+): Promise<FirecrawlEndpointMode> {
+  let url: URL;
+  try {
+    url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
+  } catch {
+    throw new Error("Firecrawl baseUrl must be a valid http:// or https:// URL.");
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Firecrawl baseUrl must use http:// or https://.");
+  }
+  if (isOfficialFirecrawlEndpoint(url)) {
+    return "strict";
+  }
+
+  const isPrivateTarget = await firecrawlEndpointTargetsPrivateNetwork(url, lookupFn);
+  if (isPrivateTarget) {
+    return "selfHosted";
+  }
+  if (url.protocol === "http:") {
+    throw new Error(FIRECRAWL_HTTP_PRIVATE_ERROR);
+  }
+  throw new Error(`${FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR} Host: ${url.hostname}`);
+}
+
+async function resolveEndpoint(
+  baseUrl: string,
+  pathname: "/v2/search" | "/v2/scrape",
+  lookupFn?: LookupFn,
+): Promise<FirecrawlResolvedEndpoint> {
+  const url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
+  const mode = await validateFirecrawlBaseUrl(url.toString(), lookupFn);
   url.username = "";
   url.password = "";
   url.search = "";
   url.hash = "";
   url.pathname = pathname;
-  return url.toString();
+  return { url: url.toString(), mode };
 }
 
 async function postFirecrawlJson<T>(
   params: {
     url: string;
+    mode?: FirecrawlEndpointMode;
     timeoutSeconds: number;
     apiKey: string;
     body: Record<string, unknown>;
@@ -89,14 +190,18 @@ async function postFirecrawlJson<T>(
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
-  return await withStrictWebToolsEndpoint(
+  const apiKey = normalizeSecretInput(params.apiKey);
+  const mode = params.mode ?? (await validateFirecrawlBaseUrl(params.url));
+  const withEndpoint =
+    mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
+  return await withEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${params.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(params.body),
@@ -104,17 +209,37 @@ async function postFirecrawlJson<T>(
     },
     async ({ response }) => {
       if (!response.ok) {
-        let detail = response.statusText;
-        const errorBody = await readResponseText(response, { maxBytes: 64_000 });
-        try {
-          const payload = JSON.parse(errorBody.text) as Record<string, unknown>;
+        let detail =
+          typeof response.statusText === "string" && response.statusText.trim()
+            ? response.statusText.trim()
+            : "request failed";
+
+        const readJsonPayload = async (): Promise<Record<string, unknown> | null> => {
+          const candidate = response as Response & { clone?: () => Response };
+          const jsonResponse = typeof candidate.clone === "function" ? candidate.clone() : response;
+          if (typeof jsonResponse.json !== "function") {
+            return null;
+          }
+          try {
+            const payload = await jsonResponse.json();
+            return payload && typeof payload === "object" && !Array.isArray(payload)
+              ? (payload as Record<string, unknown>)
+              : null;
+          } catch {
+            return null;
+          }
+        };
+
+        const payload = await readJsonPayload();
+        if (payload) {
           detail =
             typeof payload.error === "string"
               ? payload.error
               : typeof payload.message === "string"
                 ? payload.message
                 : detail;
-        } catch {
+        } else {
+          const errorBody = await readResponseText(response, { maxBytes: 64_000 });
           if (errorBody.text) {
             detail = errorBody.text;
           }
@@ -282,26 +407,28 @@ export async function runFirecrawlSearch(
   }
 
   const start = Date.now();
+  const endpoint = await resolveEndpoint(baseUrl, "/v2/search");
   const payload = await postFirecrawlJson(
     {
-      url: resolveEndpoint(baseUrl, "/v2/search"),
+      url: endpoint.url,
+      mode: endpoint.mode,
       timeoutSeconds,
       apiKey,
       body,
       errorLabel: "Firecrawl Search",
     },
     async (response) => {
-      const payload = (await response.json()) as Record<string, unknown>;
-      if (payload.success === false) {
+      const payloadValue = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
+      if (payloadValue.success === false) {
         const error =
-          typeof payload.error === "string"
-            ? payload.error
-            : typeof payload.message === "string"
-              ? payload.message
+          typeof payloadValue.error === "string"
+            ? payloadValue.error
+            : typeof payloadValue.message === "string"
+              ? payloadValue.message
               : "unknown error";
         throw new Error(`Firecrawl Search API error: ${error}`);
       }
-      return payload;
+      return payloadValue;
     },
   );
   const result = buildSearchPayload({
@@ -392,6 +519,8 @@ export function parseFirecrawlScrapePayload(params: {
 export async function runFirecrawlScrape(
   params: FirecrawlScrapeParams,
 ): Promise<Record<string, unknown>> {
+  assertFirecrawlScrapeTargetAllowed(params.url);
+
   const apiKey = resolveFirecrawlApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -426,9 +555,11 @@ export async function runFirecrawlScrape(
     return { ...cached.value, cached: true };
   }
 
+  const endpoint = await resolveEndpoint(baseUrl, "/v2/scrape");
   const payload = await postFirecrawlJson(
     {
-      url: resolveEndpoint(baseUrl, "/v2/scrape"),
+      url: endpoint.url,
+      mode: endpoint.mode,
       timeoutSeconds,
       apiKey,
       errorLabel: "Firecrawl",
@@ -443,19 +574,19 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
-      const payload = (await response.json()) as Record<string, unknown>;
-      if (payload.success === false) {
+      const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed");
+      if (payloadLocal.success === false) {
         const detail =
-          typeof payload.error === "string"
-            ? payload.error
-            : typeof payload.message === "string"
-              ? payload.message
+          typeof payloadLocal.error === "string"
+            ? payloadLocal.error
+            : typeof payloadLocal.message === "string"
+              ? payloadLocal.message
               : response.statusText;
         throw new Error(
           `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail, "web_fetch")}`.trim(),
         );
       }
-      return payload;
+      return payloadLocal;
     },
   );
   const result = parseFirecrawlScrapePayload({
@@ -473,9 +604,12 @@ export async function runFirecrawlScrape(
   return result;
 }
 
-export const __testing = {
+export const testing = {
+  assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
   resolveEndpoint,
+  validateFirecrawlBaseUrl,
   resolveSearchItems,
 };
+export { testing as __testing };

@@ -1,3 +1,5 @@
+// Credential precedence parity tests keep call, probe, status, and auth surfaces
+// aligned on local/remote gateway token and password resolution.
 import { describe, expect, it } from "vitest";
 import { resolveGatewayProbeAuth as resolveStatusGatewayProbeAuth } from "../commands/status.gateway-probe.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -101,7 +103,7 @@ describe("gateway credential precedence coverage", () => {
       expected: {
         call: { token: "remote-token", password: "env-password" }, // pragma: allowlist secret
         probe: { token: "remote-token", password: "env-password" }, // pragma: allowlist secret
-        status: { token: "remote-token", password: "remote-password" }, // pragma: allowlist secret
+        status: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
         auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
       },
     },
@@ -114,7 +116,7 @@ describe("gateway credential precedence coverage", () => {
       expected: {
         call: { token: "env-token", password: "env-password" }, // pragma: allowlist secret
         probe: { token: undefined, password: "env-password" }, // pragma: allowlist secret
-        status: { token: undefined, password: "remote-password" }, // pragma: allowlist secret
+        status: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
         auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
       },
     },

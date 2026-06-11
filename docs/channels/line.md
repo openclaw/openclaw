@@ -7,19 +7,17 @@ read_when:
 title: LINE
 ---
 
-# LINE (plugin)
-
 LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+Status: downloadable plugin. Direct messages, group chats, media, locations, Flex
 messages, template messages, and quick replies are supported. Reactions and threads
 are not supported.
 
-## Plugin required
+## Install
 
-Install the LINE plugin:
+Install LINE before configuring the channel:
 
 ```bash
 openclaw plugins install @openclaw/line
@@ -44,7 +42,9 @@ openclaw plugins install ./path/to/local/line-plugin
 https://gateway-host/line/webhook
 ```
 
-The gateway responds to LINE’s webhook verification (GET) and inbound events (POST).
+The gateway responds to LINE's webhook verification (GET) and acknowledges signed
+inbound events (POST) immediately after signature and payload validation; agent
+processing continues asynchronously.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
@@ -65,6 +65,22 @@ Minimal config:
       channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
       channelSecret: "LINE_CHANNEL_SECRET",
       dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Public DM config:
+
+```json5
+{
+  channels: {
+    line: {
+      enabled: true,
+      channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
+      channelSecret: "LINE_CHANNEL_SECRET",
+      dmPolicy: "open",
+      allowFrom: ["*"],
     },
   },
 }
@@ -121,10 +137,11 @@ openclaw pairing approve line <CODE>
 Allowlists and policies:
 
 - `channels.line.dmPolicy`: `pairing | allowlist | open | disabled`
-- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs
+- `channels.line.allowFrom`: allowlisted LINE user IDs for DMs; `dmPolicy: "open"` requires `["*"]`
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom`
+- Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`.
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 LINE IDs are case-sensitive. Valid IDs look like:
@@ -141,6 +158,9 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Streaming responses are buffered; LINE receives full chunks with a loading
   animation while the agent works.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
+- Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
+  to the agent, matching the shared media store used by other bundled channel
+  plugins.
 
 ## Channel data (rich messages)
 
@@ -200,6 +220,8 @@ The LINE plugin supports sending images, videos, and audio files through the age
 - **Images**: sent as LINE image messages with automatic preview generation.
 - **Videos**: sent with explicit preview and content-type handling.
 - **Audio**: sent as LINE audio messages.
+
+Outbound media URLs must be public HTTPS URLs. OpenClaw validates the target hostname before handing the URL to LINE and rejects loopback, link-local, and private-network targets.
 
 Generic media sends fall back to the existing image-only route when a LINE-specific path is not available.
 

@@ -1,3 +1,5 @@
+// Docker backend manager tests cover runtime image matching and removal error
+// handling for sandbox and browser containers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -8,8 +10,8 @@ const dockerMocks = vi.hoisted(() => ({
   execDockerRaw: vi.fn(),
 }));
 
-vi.mock("./docker.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./docker.js")>();
+vi.mock("./docker.js", async () => {
+  const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return {
     ...actual,
     dockerContainerState: dockerMocks.dockerContainerState,
@@ -19,7 +21,7 @@ vi.mock("./docker.js", async (importOriginal) => {
   };
 });
 
-let dockerSandboxBackendManager: typeof import("./docker-backend.js").dockerSandboxBackendManager;
+const { dockerSandboxBackendManager } = await import("./docker-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -43,23 +45,8 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-async function loadFreshDockerBackendModuleForTest() {
-  vi.resetModules();
-  vi.doMock("./docker.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./docker.js")>();
-    return {
-      ...actual,
-      dockerContainerState: dockerMocks.dockerContainerState,
-      ensureSandboxContainer: dockerMocks.ensureSandboxContainer,
-      execDocker: dockerMocks.execDocker,
-      execDockerRaw: dockerMocks.execDockerRaw,
-    };
-  });
-  ({ dockerSandboxBackendManager } = await import("./docker-backend.js"));
-}
-
 describe("docker sandbox backend manager", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     dockerMocks.dockerContainerState.mockResolvedValue({
       exists: true,
@@ -70,7 +57,6 @@ describe("docker sandbox backend manager", () => {
       stdout: "unused-image",
       stderr: "",
     });
-    await loadFreshDockerBackendModuleForTest();
   });
 
   it("matches ordinary sandbox runtimes against sandbox.docker.image", async () => {
@@ -132,6 +118,8 @@ describe("docker sandbox backend manager", () => {
   });
 
   it("defaults docker-backed runtime matching to sandbox.docker.image when label kind is missing", async () => {
+    // Older registry entries did not record configLabelKind; keep ordinary
+    // sandbox matching stable for those existing containers.
     dockerMocks.execDocker.mockResolvedValueOnce({
       code: 0,
       stdout: "openclaw-sandbox:bookworm-slim\n",
@@ -157,5 +145,53 @@ describe("docker sandbox backend manager", () => {
       actualConfigLabel: "openclaw-sandbox:bookworm-slim",
       configLabelMatch: true,
     });
+  });
+
+  it("reports Docker runtime removal failures", async () => {
+    dockerMocks.execDocker.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "permission denied",
+    });
+
+    await expect(
+      dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "sandbox-1",
+          backendId: "docker",
+          runtimeLabel: "sandbox-1",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config: createConfig(),
+      }),
+    ).rejects.toThrow("Failed to remove Docker sandbox runtime sandbox-1: permission denied");
+  });
+
+  it("treats already-missing Docker runtimes as removed", async () => {
+    // Prune/remove flows are idempotent; Docker may have already removed the
+    // container by the time the manager runs.
+    dockerMocks.execDocker.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "Error response from daemon: No such container: sandbox-1",
+    });
+
+    await expect(
+      dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "sandbox-1",
+          backendId: "docker",
+          runtimeLabel: "sandbox-1",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config: createConfig(),
+      }),
+    ).resolves.toBeUndefined();
   });
 });

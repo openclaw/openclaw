@@ -1,35 +1,60 @@
+/**
+ * Playwright browser session manager.
+ *
+ * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
+ * console/network/page state, role refs, and safe navigation handling.
+ */
+import crypto from "node:crypto";
+import path from "node:path";
+import {
+  isFutureDateTimestampMs,
+  parseFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   Browser,
   BrowserContext,
   ConsoleMessage,
+  Dialog,
   Page,
   Request,
   Response,
   Route,
 } from "playwright-core";
-import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
   appendCdpPath,
+  assertCdpEndpointAllowed,
   fetchJson,
   getHeadersWithAuth,
+  isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   withCdpSocket,
 } from "./cdp.helpers.js";
-import { normalizeCdpWsUrl } from "./cdp.js";
+import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { writeViaSiblingTempPath } from "./output-atomic.js";
+import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import { playwrightCore } from "./playwright-core.runtime.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
+const { chromium } = playwrightCore;
+
+/** Console message captured from a Playwright page. */
 export type BrowserConsoleMessage = {
   type: string;
   text: string;
@@ -37,6 +62,7 @@ export type BrowserConsoleMessage = {
   location?: { url?: string; lineNumber?: number; columnNumber?: number };
 };
 
+/** Page error captured from a Playwright page. */
 export type BrowserPageError = {
   message: string;
   name?: string;
@@ -44,6 +70,7 @@ export type BrowserPageError = {
   timestamp: string;
 };
 
+/** Network request record captured from a Playwright page. */
 export type BrowserNetworkRequest = {
   id: string;
   timestamp: string;
@@ -55,11 +82,55 @@ export type BrowserNetworkRequest = {
   failureText?: string;
 };
 
-type SnapshotForAIResult = { full: string; incremental?: string };
-type SnapshotForAIOptions = { timeout?: number; track?: string };
+/** Observed browser dialog record tracked for agent-visible state. */
+export type BrowserObservedDialogRecord = {
+  id: string;
+  type: string;
+  message: string;
+  defaultValue?: string;
+  openedAt: string;
+  closedAt?: string;
+  closedBy?: "agent" | "armed" | "auto" | "timeout" | "remote";
+};
 
-export type WithSnapshotForAI = {
-  _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
+/** Pending and recent dialog state for a page. */
+export type BrowserObservedDialogState = {
+  pending: BrowserObservedDialogRecord[];
+  recent: BrowserObservedDialogRecord[];
+};
+
+/** Browser state currently observable by agent responses. */
+export type BrowserObservedState = {
+  dialogs: BrowserObservedDialogState;
+};
+
+/** Raised when an action is blocked by an observed modal dialog. */
+export class BrowserObservedDialogBlockedError extends Error {
+  readonly browserState: BrowserObservedState;
+
+  constructor(browserState: BrowserObservedState) {
+    super("Browser action blocked by a modal dialog.");
+    this.name = "BrowserObservedDialogBlockedError";
+    this.browserState = browserState;
+  }
+}
+
+/** Type guard for observed-dialog blocked errors. */
+export function isBrowserObservedDialogBlockedError(
+  err: unknown,
+): err is BrowserObservedDialogBlockedError {
+  return err instanceof BrowserObservedDialogBlockedError;
+}
+
+type PendingObservedDialog = BrowserObservedDialogRecord & {
+  dialog: Dialog;
+};
+
+type ArmedDialogResponse = {
+  accept: boolean;
+  promptText?: string;
+  expiresAt: number;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 type TargetInfoResponse = {
@@ -81,14 +152,19 @@ type PageState = {
   requestIds: WeakMap<Request, string>;
   nextRequestId: number;
   armIdUpload: number;
-  armIdDialog: number;
   armIdDownload: number;
+  downloadWaiterDepth: number;
+  nextObservedDialogId: number;
+  pendingDialogs: PendingObservedDialog[];
+  recentDialogs: BrowserObservedDialogRecord[];
+  armedDialogResponse?: ArmedDialogResponse;
+  dialogAbortControllers: Set<AbortController>;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
    * Mode "aria" refs are Playwright aria-ref ids and resolved via `aria-ref=...`.
    */
-  roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
+  roleRefs?: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }>;
   roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
 };
@@ -117,14 +193,71 @@ const MAX_ROLE_REFS_CACHE = 50;
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
+const MAX_RECENT_DIALOGS = 20;
+const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
+let cdpConnectRetryDelayMsForTests: number | undefined;
+
+/** Override CDP reconnect retry delay in tests. */
+export function setCdpConnectRetryDelayMsForTests(delayMs?: number): void {
+  cdpConnectRetryDelayMsForTests = delayMs;
+}
+
+function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
+  const parsed = parseFiniteNumber(timeoutMs);
+  return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function resolveCdpConnectRetryDelayMs(attempt: number): number {
+  return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
+}
+
+function buildManagedDownloadPath(fileName: string): string {
+  const id = crypto.randomUUID();
+  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
+  return path.join(DEFAULT_DOWNLOAD_DIR, `${id}-${safeName}`);
+}
+
+function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
+  return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
+}
+
+function isRecoverablePlaywrightDisconnectError(err: unknown): boolean {
+  const message = formatErrorMessage(err).toLowerCase();
+  return (
+    message.includes("target page, context or browser has been closed") ||
+    message.includes("browser has been closed") ||
+    message.includes("browser disconnected") ||
+    message.includes("target closed") ||
+    message.includes("connection closed") ||
+    message.includes("websocket closed") ||
+    message.includes("cdp socket closed")
+  );
+}
+
+function isRecoverableStalePageSelectionError(err: unknown, reusedCachedBrowser: boolean): boolean {
+  if (!reusedCachedBrowser) {
+    return false;
+  }
+  if (
+    err instanceof Error &&
+    err.message.includes("No pages available in the connected browser.")
+  ) {
+    return true;
+  }
+  if (err instanceof BrowserTabNotFoundError) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : formatErrorMessage(err);
+  return message.toLowerCase().includes("tab not found");
 }
 
 function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
@@ -137,6 +270,135 @@ function findNetworkRequestById(state: PageState, id: string): BrowserNetworkReq
   return undefined;
 }
 
+function appendRecentDialog(state: PageState, record: BrowserObservedDialogRecord): void {
+  state.recentDialogs.push(record);
+  while (state.recentDialogs.length > MAX_RECENT_DIALOGS) {
+    state.recentDialogs.shift();
+  }
+}
+
+function serializeDialogRecord(dialog: BrowserObservedDialogRecord): BrowserObservedDialogRecord {
+  return {
+    id: dialog.id,
+    type: dialog.type,
+    message: dialog.message,
+    ...(dialog.defaultValue !== undefined ? { defaultValue: dialog.defaultValue } : {}),
+    openedAt: dialog.openedAt,
+    ...(dialog.closedAt !== undefined ? { closedAt: dialog.closedAt } : {}),
+    ...(dialog.closedBy !== undefined ? { closedBy: dialog.closedBy } : {}),
+  };
+}
+
+function serializePendingDialog(dialog: PendingObservedDialog): BrowserObservedDialogRecord {
+  return serializeDialogRecord(dialog);
+}
+
+function serializeObservedBrowserState(state: PageState): BrowserObservedState {
+  return {
+    dialogs: {
+      pending: state.pendingDialogs.map(serializePendingDialog),
+      recent: state.recentDialogs.map(serializeDialogRecord),
+    },
+  };
+}
+
+function clearArmedDialogResponse(state: PageState): void {
+  if (state.armedDialogResponse?.timer) {
+    clearTimeout(state.armedDialogResponse.timer);
+  }
+  state.armedDialogResponse = undefined;
+}
+
+function abortActionsBlockedByDialog(state: PageState): void {
+  if (state.dialogAbortControllers.size === 0) {
+    return;
+  }
+  const err = new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
+  for (const controller of state.dialogAbortControllers) {
+    if (!controller.signal.aborted) {
+      controller.abort(err);
+    }
+  }
+  state.dialogAbortControllers.clear();
+}
+
+function isNoDialogShowingError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.toLowerCase().includes("no dialog is showing");
+}
+
+async function settleObservedDialog(params: {
+  state: PageState;
+  pending: PendingObservedDialog;
+  accept: boolean;
+  promptText?: string;
+  closedBy: NonNullable<BrowserObservedDialogRecord["closedBy"]>;
+}): Promise<BrowserObservedDialogRecord> {
+  const { state, pending } = params;
+  state.pendingDialogs = state.pendingDialogs.filter((dialog) => dialog.id !== pending.id);
+
+  let closedBy = params.closedBy;
+  try {
+    if (params.accept) {
+      await pending.dialog.accept(params.promptText);
+    } else {
+      await pending.dialog.dismiss();
+    }
+  } catch (err) {
+    if (!isNoDialogShowingError(err)) {
+      if (params.closedBy === "agent") {
+        state.pendingDialogs.push(pending);
+      }
+      throw err;
+    }
+    closedBy = "remote";
+  }
+
+  const record: BrowserObservedDialogRecord = {
+    id: pending.id,
+    type: pending.type,
+    message: pending.message,
+    ...(pending.defaultValue !== undefined ? { defaultValue: pending.defaultValue } : {}),
+    openedAt: pending.openedAt,
+    closedAt: new Date().toISOString(),
+    closedBy,
+  };
+  appendRecentDialog(state, record);
+  return record;
+}
+
+function observeDialog(pageState: PageState, dialog: Dialog): void {
+  pageState.nextObservedDialogId += 1;
+  const type = dialog.type();
+  const defaultValue = dialog.defaultValue();
+  const pending: PendingObservedDialog = {
+    id: `d${pageState.nextObservedDialogId}`,
+    type,
+    message: dialog.message(),
+    openedAt: new Date().toISOString(),
+    dialog,
+    ...(type === "prompt" ? { defaultValue } : {}),
+  };
+  pageState.pendingDialogs.push(pending);
+
+  const armed = pageState.armedDialogResponse;
+  if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
+    clearArmedDialogResponse(pageState);
+    void settleObservedDialog({
+      state: pageState,
+      pending,
+      accept: armed.accept,
+      ...(armed.promptText !== undefined ? { promptText: armed.promptText } : {}),
+      closedBy: "armed",
+    }).catch(() => {});
+    return;
+  }
+  if (armed) {
+    clearArmedDialogResponse(pageState);
+  }
+  abortActionsBlockedByDialog(pageState);
+}
+
 function targetKey(cdpUrl: string, targetId: string) {
   return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
 }
@@ -146,7 +408,7 @@ function roleRefsKey(cdpUrl: string, targetId: string) {
 }
 
 function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
-  const normalizedTargetId = targetId?.trim() || "";
+  const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
     return false;
   }
@@ -154,7 +416,7 @@ function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
 }
 
 function markTargetBlocked(cdpUrl: string, targetId?: string): void {
-  const normalizedTargetId = targetId?.trim() || "";
+  const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
     return;
   }
@@ -162,7 +424,7 @@ function markTargetBlocked(cdpUrl: string, targetId?: string): void {
 }
 
 function clearBlockedTarget(cdpUrl: string, targetId?: string): void {
-  const normalizedTargetId = targetId?.trim() || "";
+  const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
     return;
   }
@@ -213,6 +475,25 @@ function clearBlockedPageRef(cdpUrl: string, page: Page): void {
   blockedPageRefsByCdpUrl.get(normalizeCdpUrl(cdpUrl))?.delete(page);
 }
 
+function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
+  const normalized = normalizeCdpUrl(cdpUrl);
+  const cur = cachedByCdpUrl.get(normalized);
+  cachedByCdpUrl.delete(normalized);
+  connectingByCdpUrl.delete(normalized);
+  if (!cur) {
+    return null;
+  }
+  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+    cur.browser.off("disconnected", cur.onDisconnected);
+  }
+  return cur;
+}
+
+function evictStalePlaywrightBrowserConnection(cdpUrl: string): void {
+  const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
+  cur?.browser.close().catch(() => {});
+}
+
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
   const prefix = `${normalizeCdpUrl(cdpUrl)}::`;
   for (const key of blockedTargetsByCdpUrl) {
@@ -223,6 +504,7 @@ function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
   return false;
 }
 
+/** Raised when a page target has been quarantined after policy denial. */
 export class BlockedBrowserTargetError extends Error {
   constructor() {
     super("Browser target is unavailable after SSRF policy blocked its navigation.");
@@ -230,6 +512,7 @@ export class BlockedBrowserTargetError extends Error {
   }
 }
 
+/** Cache role refs for a target id after a snapshot. */
 export function rememberRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId: string;
@@ -237,7 +520,7 @@ export function rememberRoleRefsForTarget(opts: {
   frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
 }): void {
-  const targetId = opts.targetId.trim();
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (!targetId) {
     return;
   }
@@ -255,6 +538,7 @@ export function rememberRoleRefsForTarget(opts: {
   }
 }
 
+/** Store role refs on the page and target cache. */
 export function storeRoleRefsForTarget(opts: {
   page: Page;
   cdpUrl: string;
@@ -267,24 +551,26 @@ export function storeRoleRefsForTarget(opts: {
   state.roleRefs = opts.refs;
   state.roleRefsFrameSelector = opts.frameSelector;
   state.roleRefsMode = opts.mode;
-  if (!opts.targetId?.trim()) {
+  const targetId = normalizeOptionalString(opts.targetId);
+  if (!targetId) {
     return;
   }
   rememberRoleRefsForTarget({
     cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
+    targetId,
     refs: opts.refs,
     frameSelector: opts.frameSelector,
     mode: opts.mode,
   });
 }
 
+/** Restore cached role refs onto a newly resolved page. */
 export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
   page: Page;
 }): void {
-  const targetId = opts.targetId?.trim() || "";
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (!targetId) {
     return;
   }
@@ -301,6 +587,7 @@ export function restoreRoleRefsForTarget(opts: {
   state.roleRefsMode = cached.mode;
 }
 
+/** Ensure and attach state listeners for a Playwright page. */
 export function ensurePageState(page: Page): PageState {
   const existing = pageStates.get(page);
   if (existing) {
@@ -314,8 +601,12 @@ export function ensurePageState(page: Page): PageState {
     requestIds: new WeakMap(),
     nextRequestId: 0,
     armIdUpload: 0,
-    armIdDialog: 0,
     armIdDownload: 0,
+    downloadWaiterDepth: 0,
+    nextObservedDialogId: 0,
+    pendingDialogs: [],
+    recentDialogs: [],
+    dialogAbortControllers: new Set(),
   };
   pageStates.set(page, state);
 
@@ -335,9 +626,9 @@ export function ensurePageState(page: Page): PageState {
     });
     page.on("pageerror", (err: Error) => {
       state.errors.push({
-        message: err?.message ? String(err.message) : String(err),
-        name: err?.name ? String(err.name) : undefined,
-        stack: err?.stack ? String(err.stack) : undefined,
+        message: err.message || String(err),
+        name: err.name || undefined,
+        stack: err.stack || undefined,
         timestamp: new Date().toISOString(),
       });
       if (state.errors.length > MAX_PAGE_ERRORS) {
@@ -384,13 +675,216 @@ export function ensurePageState(page: Page): PageState {
       rec.failureText = req.failure()?.errorText;
       rec.ok = false;
     });
+    page.on("dialog", (dialog: Dialog) => {
+      observeDialog(state, dialog);
+    });
+    page.on(
+      "download",
+      (download: {
+        suggestedFilename?: () => string;
+        saveAs?: (outPath: string) => Promise<void>;
+        path?: () => Promise<string>;
+      }) => {
+        if (state.downloadWaiterDepth > 0) {
+          return;
+        }
+        const suggested = sanitizeUntrustedFileName(
+          download.suggestedFilename?.() || "download.bin",
+          "download.bin",
+        );
+        const managedPath = buildManagedDownloadPath(suggested);
+        const managedSave = (async () => {
+          await writeViaSiblingTempPath({
+            rootDir: DEFAULT_DOWNLOAD_DIR,
+            targetPath: managedPath,
+            writeTemp: async (tempPath) => {
+              await download.saveAs?.(tempPath);
+            },
+          });
+          return managedPath;
+        })();
+        managedSave.catch(() => {});
+        download.path = async () => await managedSave;
+      },
+    );
     page.on("close", () => {
+      clearArmedDialogResponse(state);
+      for (const controller of state.dialogAbortControllers) {
+        if (!controller.signal.aborted) {
+          controller.abort(new Error("Page closed before browser action completed."));
+        }
+      }
+      state.dialogAbortControllers.clear();
+      state.pendingDialogs = [];
       pageStates.delete(page);
       observedPages.delete(page);
     });
   }
 
   return state;
+}
+
+/** Read observed dialog state from a Playwright page. */
+export function getObservedBrowserStateForPage(page: Page): BrowserObservedState {
+  const state = ensurePageState(page);
+  return serializeObservedBrowserState(state);
+}
+
+/** Resolve a page and read its observed browser state. */
+export async function getObservedBrowserStateViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<BrowserObservedState> {
+  const page = await getPageForTargetId(opts);
+  return getObservedBrowserStateForPage(page);
+}
+
+function resolvePendingDialogForResponse(params: {
+  state: PageState;
+  dialogId?: string;
+}): PendingObservedDialog {
+  const dialogId = normalizeOptionalString(params.dialogId);
+  if (dialogId) {
+    const found = params.state.pendingDialogs.find((dialog) => dialog.id === dialogId);
+    if (found) {
+      return found;
+    }
+    throw new Error(`Dialog "${dialogId}" is not pending.`);
+  }
+  if (params.state.pendingDialogs.length === 1) {
+    return params.state.pendingDialogs[0];
+  }
+  if (params.state.pendingDialogs.length > 1) {
+    throw new Error("Multiple dialogs are pending; pass dialogId.");
+  }
+  throw new Error("No dialog is pending.");
+}
+
+/** Respond to a pending observed dialog on a page. */
+export async function respondToObservedDialogOnPage(opts: {
+  page: Page;
+  dialogId?: string;
+  accept: boolean;
+  promptText?: string;
+  closedBy?: "agent" | "armed";
+}): Promise<BrowserObservedDialogRecord> {
+  const state = ensurePageState(opts.page);
+  const pending = resolvePendingDialogForResponse({
+    state,
+    ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
+  });
+  return await settleObservedDialog({
+    state,
+    pending,
+    accept: opts.accept,
+    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+    closedBy: opts.closedBy ?? "agent",
+  });
+}
+
+/** Resolve a page and respond to one of its observed dialogs. */
+export async function respondToObservedDialogViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  dialogId?: string;
+  accept: boolean;
+  promptText?: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<BrowserObservedDialogRecord> {
+  const page = await getPageForTargetId(opts);
+  return await respondToObservedDialogOnPage({
+    page,
+    accept: opts.accept,
+    ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
+    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+  });
+}
+
+/** Mark pending observed dialogs as handled by a remote/browser-side hook. */
+export function markObservedDialogsHandledRemotelyForPage(page: Page): BrowserObservedState {
+  const state = ensurePageState(page);
+  const pending = state.pendingDialogs.splice(0);
+  const closedAt = new Date().toISOString();
+  for (const dialog of pending) {
+    appendRecentDialog(state, {
+      id: dialog.id,
+      type: dialog.type,
+      message: dialog.message,
+      ...(dialog.defaultValue !== undefined ? { defaultValue: dialog.defaultValue } : {}),
+      openedAt: dialog.openedAt,
+      closedAt,
+      closedBy: "remote",
+    });
+  }
+  return serializeObservedBrowserState(state);
+}
+
+/** Arm a one-shot automatic dialog response for a page. */
+export function armObservedDialogResponseOnPage(opts: {
+  page: Page;
+  accept: boolean;
+  promptText?: string;
+  timeoutMs?: number;
+}): void {
+  const state = ensurePageState(opts.page);
+  clearArmedDialogResponse(state);
+  const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
+  if (expiresAt === undefined) {
+    return;
+  }
+  const response: ArmedDialogResponse = {
+    accept: opts.accept,
+    expiresAt,
+    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+  };
+  response.timer = setTimeout(() => {
+    if (state.armedDialogResponse === response) {
+      state.armedDialogResponse = undefined;
+    }
+  }, timeoutMs);
+  state.armedDialogResponse = response;
+}
+
+/** Create an abort signal that fires while a dialog blocks the page. */
+export function createObservedDialogAbortSignalForPage(opts: {
+  page: Page;
+  parentSignal?: AbortSignal;
+}): { signal: AbortSignal; cleanup: () => void } {
+  const state = ensurePageState(opts.page);
+  const controller = new AbortController();
+  const abortForCurrentDialog = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state)));
+    }
+  };
+  const abortForParent = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(opts.parentSignal?.reason ?? new Error("aborted"));
+    }
+  };
+
+  if (state.pendingDialogs.length > 0) {
+    abortForCurrentDialog();
+  } else {
+    state.dialogAbortControllers.add(controller);
+  }
+  if (opts.parentSignal) {
+    if (opts.parentSignal.aborted) {
+      abortForParent();
+    } else {
+      opts.parentSignal.addEventListener("abort", abortForParent, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      state.dialogAbortControllers.delete(controller);
+      opts.parentSignal?.removeEventListener("abort", abortForParent);
+    },
+  };
 }
 
 function observeContext(context: BrowserContext) {
@@ -406,6 +900,7 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => ensurePageState(page));
 }
 
+/** Ensure shared Playwright browser-context state. */
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
   if (existing) {
@@ -422,12 +917,15 @@ function observeBrowser(browser: Browser) {
   }
 }
 
-async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
+async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
     return cached;
   }
+  // Run SSRF policy check only on cache miss so transient DNS failures
+  // do not break active sessions that already hold a live CDP connection.
+  await assertCdpEndpointAllowed(normalized, ssrfPolicy);
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
     return await connecting;
@@ -438,13 +936,26 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
-        const endpoint = wsUrl ?? normalized;
-        const headers = getHeadersWithAuth(endpoint);
-        // Bypass proxy for loopback CDP connections (#31219)
-        const browser = await withNoProxyForCdpUrl(endpoint, () =>
-          chromium.connectOverCDP(endpoint, { timeout, headers }),
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
+          () => null,
         );
+        const endpoint = wsUrl ?? normalized;
+        const connectEndpoint = async (target: string) => {
+          const headers = getHeadersWithAuth(target);
+          // Bypass proxy for loopback CDP connections (#31219)
+          return await withNoProxyForCdpUrl(target, () =>
+            chromium.connectOverCDP(target, { timeout, headers }),
+          );
+        };
+        let browser: Browser;
+        try {
+          browser = await connectEndpoint(endpoint);
+        } catch (err) {
+          if (!isWebSocketUrl(normalized) || endpoint === normalized) {
+            throw err;
+          }
+          browser = await connectEndpoint(normalized);
+        }
         const onDisconnected = () => {
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
@@ -459,12 +970,14 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
       } catch (err) {
         lastErr = err;
         // Don't retry rate-limit errors; retrying worsens the 429.
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = formatErrorMessage(err);
         if (errMsg.includes("rate limit")) {
           break;
         }
-        const delay = 250 + attempt * 250;
-        await new Promise((r) => setTimeout(r, delay));
+        const delay = resolveCdpConnectRetryDelayMs(attempt);
+        await new Promise((r) => {
+          setTimeout(r, delay);
+        });
       }
     }
     if (lastErr instanceof Error) {
@@ -523,7 +1036,7 @@ async function pageTargetId(page: Page): Promise<string | null> {
   const session = await page.context().newCDPSession(page);
   try {
     const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
-    const targetId = String(info?.targetInfo?.targetId ?? "").trim();
+    const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
     return targetId || null;
   } finally {
     await session.detach().catch(() => {});
@@ -560,8 +1073,10 @@ async function findPageByTargetIdViaTargetList(
   pages: Page[],
   targetId: string,
   cdpUrl: string,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<Page | null> {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+  await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   const targets = await fetchJson<
     Array<{
       id: string;
@@ -576,11 +1091,12 @@ async function findPageByTargetId(
   browser: Browser,
   targetId: string,
   cdpUrl?: string,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
   for (const page of pages) {
-    let tid: string | null = null;
+    let tid: string | null;
     try {
       tid = await pageTargetId(page);
       resolvedViaCdp = true;
@@ -593,7 +1109,7 @@ async function findPageByTargetId(
   }
   if (cdpUrl) {
     try {
-      return await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl);
+      return await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl, ssrfPolicy);
     } catch {
       // Ignore fetch errors and fall through to return null.
     }
@@ -607,26 +1123,28 @@ async function findPageByTargetId(
 async function resolvePageByTargetIdOrThrow(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
   if (isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.ssrfPolicy);
   if (!page) {
     throw new BrowserTabNotFoundError();
   }
   return page;
 }
 
-export async function getPageForTargetId(opts: {
+async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
   targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -646,7 +1164,7 @@ export async function getPageForTargetId(opts: {
   if (!opts.targetId) {
     return first;
   }
-  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.ssrfPolicy);
   if (found) {
     if (isBlockedPageRef(opts.cdpUrl, found)) {
       throw new BlockedBrowserTargetError();
@@ -664,45 +1182,134 @@ export async function getPageForTargetId(opts: {
   throw new BrowserTabNotFoundError();
 }
 
-function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  if (!request.isNavigationRequest()) {
-    return false;
-  }
+/** Resolve a Playwright page by target id, reconnecting once on stale state. */
+export async function getPageForTargetId(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<Page> {
+  const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
   try {
-    return request.frame() === page.mainFrame();
-  } catch {
-    return true;
+    return await getPageForTargetIdOnce(opts);
+  } catch (err) {
+    if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
+      throw err;
+    }
+    await closePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+    return await getPageForTargetIdOnce(opts);
   }
 }
 
-function isPolicyDenyNavigationError(err: unknown): boolean {
+function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
+  let sameMainFrame;
+  try {
+    sameMainFrame = request.frame() === page.mainFrame();
+  } catch {
+    // Frame resolution can fail during redirect/renderer churn; fail closed.
+    sameMainFrame = true;
+  }
+  if (!sameMainFrame) {
+    return false;
+  }
+
+  try {
+    if (request.isNavigationRequest()) {
+      return true;
+    }
+  } catch {
+    // Ignore and fall back to resource-type check below.
+  }
+
+  try {
+    return request.resourceType() === "document";
+  } catch {
+    return false;
+  }
+}
+
+function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
+  let sameMainFrame;
+  try {
+    sameMainFrame = request.frame() === page.mainFrame();
+  } catch {
+    // Fail closed: if frame resolution throws after the top-level check already
+    // determined this is NOT the main frame, treat it as a subframe document
+    // navigation so the SSRF guard still fires. Returning false here would let
+    // transient renderer churn skip the policy check entirely.
+    return true;
+  }
+  if (sameMainFrame) {
+    return false;
+  }
+
+  try {
+    if (request.isNavigationRequest()) {
+      return true;
+    }
+  } catch {
+    // Fall through to the resource-type check.
+  }
+
+  try {
+    return request.resourceType() === "document";
+  } catch {
+    return false;
+  }
+}
+
+/** Return true when an error is a browser navigation policy denial. */
+export function isPolicyDenyNavigationError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
 
-async function closeBlockedNavigationTarget(opts: {
+// Mark a page (and its CDP target id when resolvable) as blocked so subsequent
+// OpenClaw operations short-circuit instead of re-running the SSRF check on a
+// page we have already proven is non-compliant. This is a pure bookkeeping
+// step; it does NOT close the tab. Read-only paths can call this safely on a
+// user-owned tab without losing the user's content.
+async function quarantineBlockedTarget(opts: {
   cdpUrl: string;
   page: Page;
   targetId?: string;
 }): Promise<void> {
-  // Quarantine the concrete page first; then persist by target id when available.
   markPageRefBlocked(opts.cdpUrl, opts.page);
   const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
-  const fallbackTargetId = opts.targetId?.trim() || "";
+  const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
   const targetIdToBlock = resolvedTargetId || fallbackTargetId;
   if (targetIdToBlock) {
     markTargetBlocked(opts.cdpUrl, targetIdToBlock);
   }
+}
+
+// Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.
+// Only callers that own the navigation lifecycle (gotoPageWithNavigationGuard
+// and the navigate-style entry points that wrap it) may invoke this — closing
+// a tab is a destructive action that must not happen on user-owned tabs from
+// read-only operations like snapshot/screenshot/interactions.
+/** Quarantine and close a tab that OpenClaw navigated to a blocked URL. */
+export async function closeBlockedNavigationTarget(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId?: string;
+}): Promise<void> {
+  await quarantineBlockedTarget(opts);
   await opts.page.close().catch(() => {});
 }
 
-export async function assertPageNavigationCompletedSafely(opts: {
-  cdpUrl: string;
-  page: Page;
-  response: Response | null;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<void> {
-  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+// On policy denial: quarantines and rethrows (never closes).
+// Navigate-style callers catch the rethrow and close via closeBlockedNavigationTarget.
+/** Validate a completed page navigation and quarantine policy-denied targets. */
+export async function assertPageNavigationCompletedSafely(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    response: Response | null;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   try {
     await assertBrowserNavigationRedirectChainAllowed({
       request: opts.response?.request(),
@@ -714,7 +1321,7 @@ export async function assertPageNavigationCompletedSafely(opts: {
     });
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
-      await closeBlockedNavigationTarget({
+      await quarantineBlockedTarget({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         targetId: opts.targetId,
@@ -724,15 +1331,31 @@ export async function assertPageNavigationCompletedSafely(opts: {
   }
 }
 
-export async function gotoPageWithNavigationGuard(opts: {
-  cdpUrl: string;
-  page: Page;
-  url: string;
-  timeoutMs: number;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<Response | null> {
-  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+async function continueRouteSafely(route: Route): Promise<void> {
+  try {
+    await route.continue();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("Route is already handled")) {
+      return;
+    }
+    throw err;
+  }
+}
+
+/** Navigate a page while guarding requested URL and redirect chain. */
+export async function gotoPageWithNavigationGuard(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    url: string;
+    timeoutMs: number;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<Response | null> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   let blockedError: unknown = null;
 
   const handler = async (route: Route, request: Request) => {
@@ -740,8 +1363,11 @@ export async function gotoPageWithNavigationGuard(opts: {
       await route.abort().catch(() => {});
       return;
     }
-    if (!isTopLevelNavigationRequest(opts.page, request)) {
-      await route.continue();
+    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);
+    const isSubframeDocument =
+      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
+    if (!isTopLevel && !isSubframeDocument) {
+      await continueRouteSafely(route);
       return;
     }
     try {
@@ -751,25 +1377,27 @@ export async function gotoPageWithNavigationGuard(opts: {
       });
     } catch (err) {
       if (isPolicyDenyNavigationError(err)) {
-        blockedError = err;
+        if (isTopLevel) {
+          blockedError = err;
+        }
         await route.abort().catch(() => {});
         return;
       }
       throw err;
     }
-    await route.continue();
+    await continueRouteSafely(route);
   };
 
   await opts.page.route("**", handler);
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     return response;
   } catch (err) {
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     throw err;
   } finally {
@@ -784,6 +1412,7 @@ export async function gotoPageWithNavigationGuard(opts: {
   }
 }
 
+/** Resolve a browser snapshot ref into a Playwright locator. */
 export function refLocator(page: Page, ref: string) {
   const normalized = ref.startsWith("@")
     ? ref.slice(1)
@@ -820,23 +1449,45 @@ export function refLocator(page: Page, ref: string) {
     return info.nth !== undefined ? locator.nth(info.nth) : locator;
   }
 
+  if (AX_REF_PATTERN.test(normalized)) {
+    const state = pageStates.get(page);
+    const info = state?.roleRefs?.[normalized];
+    if (!info) {
+      throw new Error(
+        `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
+      );
+    }
+    const scope = state.roleRefsFrameSelector
+      ? page.frameLocator(state.roleRefsFrameSelector)
+      : page;
+    if (info.domMarker) {
+      return scope.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${normalized}"]`);
+    }
+    const locAny = scope as unknown as {
+      getByRole: (
+        role: never,
+        opts?: { name?: string; exact?: boolean },
+      ) => ReturnType<Page["getByRole"]>;
+    };
+    const locator = info.name
+      ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
+      : locAny.getByRole(info.role as never);
+    return info.nth !== undefined ? locator.nth(info.nth) : locator;
+  }
+
   return page.locator(`aria-ref=${normalized}`);
 }
 
+/** Close one or all cached Playwright browser connections. */
 export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string }): Promise<void> {
   const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
 
   if (normalized) {
     clearBlockedTargetsForCdpUrl(normalized);
     clearBlockedPageRefsForCdpUrl(normalized);
-    const cur = cachedByCdpUrl.get(normalized);
-    cachedByCdpUrl.delete(normalized);
-    connectingByCdpUrl.delete(normalized);
+    const cur = takeCachedPlaywrightBrowserConnection(normalized);
     if (!cur) {
       return;
-    }
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
     }
     await cur.browser.close().catch(() => {});
     return;
@@ -869,7 +1520,9 @@ function cdpSocketNeedsAttach(wsUrl: string): boolean {
 async function tryTerminateExecutionViaCdp(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
+  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
   const listUrl = appendCdpPath(cdpHttpBase, "/json/list");
 
@@ -878,17 +1531,19 @@ async function tryTerminateExecutionViaCdp(opts: {
       id?: string;
       webSocketDebuggerUrl?: string;
     }>
-  >(listUrl, 2000).catch(() => null);
+  >(listUrl, 2000, undefined, opts.ssrfPolicy).catch(() => null);
   if (!pages || pages.length === 0) {
     return;
   }
 
-  const target = pages.find((p) => String(p.id ?? "").trim() === opts.targetId);
-  const wsUrlRaw = String(target?.webSocketDebuggerUrl ?? "").trim();
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
+  const target = pages.find((p) => normalizeOptionalString(p.id) === targetId);
+  const wsUrlRaw = normalizeOptionalString(target?.webSocketDebuggerUrl) ?? "";
   if (!wsUrlRaw) {
     return;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
+  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   const needsAttach = cdpSocketNeedsAttach(wsUrl);
 
   const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
@@ -915,8 +1570,9 @@ async function tryTerminateExecutionViaCdp(opts: {
             send("Target.attachToTarget", { targetId: opts.targetId, flatten: true }),
             1500,
           )) as { sessionId?: unknown };
-          if (typeof attached?.sessionId === "string" && attached.sessionId.trim()) {
-            sessionId = attached.sessionId;
+          const attachedSessionId = normalizeOptionalString(attached?.sessionId);
+          if (attachedSessionId) {
+            sessionId = attachedSessionId;
           }
         }
         await runWithTimeout(send("Runtime.terminateExecution", undefined, sessionId), 1500);
@@ -952,42 +1608,58 @@ async function tryTerminateExecutionViaCdp(opts: {
  * The old browser.close() eventually resolves when the in-browser evaluate timeout fires,
  * or the old connection gets GC'd. Either way, it doesn't affect the fresh connection.
  */
+/** Force-disconnect a Playwright connection to unblock a stuck target operation. */
 export async function forceDisconnectPlaywrightForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
   reason?: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
-  const cur = cachedByCdpUrl.get(normalized);
+  const cur = takeCachedPlaywrightBrowserConnection(normalized);
   if (!cur) {
     return;
-  }
-  cachedByCdpUrl.delete(normalized);
-  // Also clear the per-url in-flight connect so the next call does a fresh connectOverCDP
-  // rather than awaiting a stale promise.
-  connectingByCdpUrl.delete(normalized);
-  // Remove the "disconnected" listener to prevent the old browser's teardown
-  // from racing with a fresh connection and nulling the new cached entry.
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
-    cur.browser.off("disconnected", cur.onDisconnected);
   }
 
   // Best-effort: kill any stuck JS to unblock the target's execution context before we
   // disconnect Playwright's CDP connection.
-  const targetId = opts.targetId?.trim() || "";
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (targetId) {
-    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
+    await tryTerminateExecutionViaCdp({
+      cdpUrl: normalized,
+      targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+    }).catch(() => {});
   }
 
   // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
   cur.browser.close().catch(() => {});
 }
 
+async function withPlaywrightSafeReadReconnect<T>(
+  cdpUrl: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isRecoverablePlaywrightDisconnectError(err)) {
+      throw err;
+    }
+    evictStalePlaywrightBrowserConnection(cdpUrl);
+    return await run();
+  }
+}
+
 /**
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
  */
-export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
+/** List pages through the persistent Playwright connection. */
+export async function listPagesViaPlaywright(opts: {
+  cdpUrl: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<
   Array<{
     targetId: string;
     title: string;
@@ -995,30 +1667,59 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
     type: string;
   }>
 > {
-  const { browser } = await connectBrowser(opts.cdpUrl);
-  const pages = await getAllPages(browser);
-  const results: Array<{
-    targetId: string;
-    title: string;
-    url: string;
-    type: string;
-  }> = [];
+  return await withPlaywrightSafeReadReconnect(opts.cdpUrl, async () => {
+    const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+    const pages = await getAllPages(browser);
+    const results: Array<{
+      targetId: string;
+      title: string;
+      url: string;
+      type: string;
+    }> = [];
 
-  for (const page of pages) {
-    if (isBlockedPageRef(opts.cdpUrl, page)) {
-      continue;
+    for (const page of pages) {
+      if (isBlockedPageRef(opts.cdpUrl, page)) {
+        continue;
+      }
+      let tid: string | null;
+      try {
+        tid = await pageTargetId(page);
+      } catch (err) {
+        if (isRecoverablePlaywrightDisconnectError(err)) {
+          throw err;
+        }
+        tid = null;
+      }
+      if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
+        let title = "";
+        try {
+          title = await page.title();
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+        }
+        let url = "";
+        try {
+          url = page.url();
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+        }
+        if (!isSelectableCdpBrowserTarget({ url })) {
+          continue;
+        }
+        results.push({
+          targetId: tid,
+          title,
+          url,
+          type: "page",
+        });
+      }
     }
-    const tid = await pageTargetId(page).catch(() => null);
-    if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
-      results.push({
-        targetId: tid,
-        title: await page.title().catch(() => ""),
-        url: page.url(),
-        type: "page",
-      });
-    }
-  }
-  return results;
+    return results;
+  });
 }
 
 /**
@@ -1026,17 +1727,19 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
  * Used for remote profiles where HTTP-based /json/new is ephemeral.
  * Returns the new page's targetId and metadata.
  */
-export async function createPageViaPlaywright(opts: {
-  cdpUrl: string;
-  url: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<{
+/** Create and optionally navigate a page through Playwright. */
+export async function createPageViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    url: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<{
   targetId: string;
   title: string;
   url: string;
   type: string;
 }> {
-  const { browser } = await connectBrowser(opts.cdpUrl);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
   const context = browser.contexts()[0] ?? (await browser.newContext());
   ensureContextState(context);
 
@@ -1049,7 +1752,9 @@ export async function createPageViaPlaywright(opts: {
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
-    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+      browserProxyMode: opts.browserProxyMode,
+    });
     await assertBrowserNavigationAllowed({
       url: targetUrl,
       ...navigationPolicy,
@@ -1062,6 +1767,7 @@ export async function createPageViaPlaywright(opts: {
         url: targetUrl,
         timeoutMs: 30_000,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: createdTargetId ?? undefined,
       });
     } catch (err) {
@@ -1069,13 +1775,27 @@ export async function createPageViaPlaywright(opts: {
         throw err;
       }
     }
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: createdTargetId ?? undefined,
-    });
+    // OpenClaw owns this newly-created tab: if the post-navigation safety
+    // check trips, close the tab we just spawned.
+    try {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        targetId: createdTargetId ?? undefined,
+      });
+    } catch (err) {
+      if (isPolicyDenyNavigationError(err)) {
+        await closeBlockedNavigationTarget({
+          cdpUrl: opts.cdpUrl,
+          page,
+          targetId: createdTargetId ?? undefined,
+        });
+      }
+      throw err;
+    }
   }
 
   // Get the targetId for this page
@@ -1096,9 +1816,11 @@ export async function createPageViaPlaywright(opts: {
  * Close a page/tab by targetId using the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/close is ephemeral.
  */
+/** Close a Playwright page by CDP target id. */
 export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await resolvePageByTargetIdOrThrow(opts);
   await page.close();
@@ -1108,9 +1830,11 @@ export async function closePageByTargetIdViaPlaywright(opts: {
  * Focus a page/tab by targetId using the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/activate can be ephemeral.
  */
+/** Bring a Playwright page to the front by CDP target id. */
 export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await resolvePageByTargetIdOrThrow(opts);
   try {
@@ -1125,9 +1849,22 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
           await send("Page.bringToFront");
         },
       });
-      return;
     } catch {
       throw err;
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

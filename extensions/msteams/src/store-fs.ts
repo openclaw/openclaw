@@ -1,6 +1,7 @@
-import fs from "node:fs";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "../runtime-api.js";
-import { withFileLock as withPathLock } from "./file-lock.js";
+// Msteams plugin module implements store fs behavior.
+import { withFileLock as withPathLock } from "openclaw/plugin-sdk/file-lock";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 
 const STORE_LOCK_OPTIONS = {
   retries: {
@@ -13,21 +14,12 @@ const STORE_LOCK_OPTIONS = {
   stale: 30_000,
 } as const;
 
-export async function readJsonFile<T>(
-  filePath: string,
-  fallback: T,
-): Promise<{ value: T; exists: boolean }> {
-  return await readJsonFileWithFallback(filePath, fallback);
-}
-
-export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await writeJsonFileAtomically(filePath, value);
 }
 
 async function ensureJsonFile(filePath: string, fallback: unknown) {
-  try {
-    await fs.promises.access(filePath);
-  } catch {
+  if (!(await pathExists(filePath))) {
     await writeJsonFile(filePath, fallback);
   }
 }

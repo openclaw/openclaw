@@ -1,62 +1,43 @@
-import type { ChannelApprovalAdapter, ChannelApprovalCapability, ChannelPlugin } from "./types.js";
+/**
+ * Channel approval capability adapters.
+ *
+ * Projects plugin approval metadata into runtime approval delivery adapters.
+ */
+import type { ChannelApprovalAdapter, ChannelApprovalCapability } from "./types.adapters.js";
+import type { ChannelPlugin } from "./types.plugin.js";
 
-function buildApprovalCapabilityFromLegacyPlugin(
-  plugin?: Pick<ChannelPlugin, "auth" | "approvals"> | null,
-): ChannelApprovalCapability | undefined {
-  const authorizeActorAction = plugin?.auth?.authorizeActorAction;
-  const getActionAvailabilityState = plugin?.auth?.getActionAvailabilityState;
-  const approvals = plugin?.approvals;
-  if (
-    !authorizeActorAction &&
-    !getActionAvailabilityState &&
-    !approvals?.delivery &&
-    !approvals?.render &&
-    !approvals?.native
-  ) {
-    return undefined;
-  }
-  return {
-    authorizeActorAction,
-    getActionAvailabilityState,
-    delivery: approvals?.delivery,
-    render: approvals?.render,
-    native: approvals?.native,
-  };
-}
-
+/**
+ * Returns the approval capability exposed by a channel plugin.
+ */
 export function resolveChannelApprovalCapability(
-  plugin?: Pick<ChannelPlugin, "approvalCapability" | "auth" | "approvals"> | null,
+  plugin?: Pick<ChannelPlugin, "approvalCapability"> | null,
 ): ChannelApprovalCapability | undefined {
-  const capability = plugin?.approvalCapability;
-  const legacyCapability = buildApprovalCapabilityFromLegacyPlugin(plugin);
-  if (!capability) {
-    return legacyCapability;
-  }
-  if (!legacyCapability) {
-    return capability;
-  }
-  return {
-    authorizeActorAction: capability.authorizeActorAction ?? legacyCapability.authorizeActorAction,
-    getActionAvailabilityState:
-      capability.getActionAvailabilityState ?? legacyCapability.getActionAvailabilityState,
-    delivery: capability.delivery ?? legacyCapability.delivery,
-    render: capability.render ?? legacyCapability.render,
-    native: capability.native ?? legacyCapability.native,
-  };
+  return plugin?.approvalCapability;
 }
 
+/**
+ * Projects a channel approval capability into the runtime approval adapter shape.
+ */
 export function resolveChannelApprovalAdapter(
-  plugin?: Pick<ChannelPlugin, "approvalCapability" | "auth" | "approvals"> | null,
+  plugin?: Pick<ChannelPlugin, "approvalCapability"> | null,
 ): ChannelApprovalAdapter | undefined {
   const capability = resolveChannelApprovalCapability(plugin);
   if (!capability) {
     return undefined;
   }
-  if (!capability.delivery && !capability.render && !capability.native) {
+  if (
+    !capability.delivery &&
+    !capability.nativeRuntime &&
+    !capability.render &&
+    !capability.native
+  ) {
+    // Auth-only capabilities are valid plugin metadata but do not form a delivery adapter.
     return undefined;
   }
   return {
+    describeExecApprovalSetup: capability.describeExecApprovalSetup,
     delivery: capability.delivery,
+    nativeRuntime: capability.nativeRuntime,
     render: capability.render,
     native: capability.native,
   };

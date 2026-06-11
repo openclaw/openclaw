@@ -1,4 +1,12 @@
-import type { SnapshotAriaNode } from "./client.js";
+/**
+ * Chrome MCP snapshot conversion helpers.
+ *
+ * Converts chrome-devtools-mcp structured snapshots into OpenClaw ARIA nodes
+ * and compact AI snapshots with stable refs and duplicate tracking.
+ */
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeString } from "../record-shared.js";
+import type { SnapshotAriaNode } from "./client.types.js";
 import {
   getRoleSnapshotStats,
   type RoleRefMap,
@@ -6,6 +14,7 @@ import {
 } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
+/** Structured snapshot node shape returned by chrome-devtools-mcp. */
 export type ChromeMcpSnapshotNode = {
   id?: string;
   role?: string;
@@ -16,19 +25,8 @@ export type ChromeMcpSnapshotNode = {
 };
 
 function normalizeRole(node: ChromeMcpSnapshotNode): string {
-  const role = typeof node.role === "string" ? node.role.trim().toLowerCase() : "";
+  const role = normalizeLowercaseStringOrEmpty(node.role);
   return role || "generic";
-}
-
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return undefined;
 }
 
 function escapeQuoted(value: string): string {
@@ -84,6 +82,7 @@ function registerRef(
   return undefined;
 }
 
+/** Flatten a Chrome MCP snapshot tree into OpenClaw ARIA-style nodes. */
 export function flattenChromeMcpSnapshotToAriaNodes(
   root: ChromeMcpSnapshotNode,
   limit = 500,
@@ -118,6 +117,7 @@ export function flattenChromeMcpSnapshotToAriaNodes(
   return out;
 }
 
+/** Build a compact text snapshot and ref map from a Chrome MCP snapshot tree. */
 export function buildAiSnapshotFromChromeMcpSnapshot(params: {
   root: ChromeMcpSnapshotNode;
   options?: RoleSnapshotOptions;

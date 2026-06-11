@@ -1,31 +1,48 @@
+/** Shared helpers for plugin status tests and installed-index fixture setup. */
 import type { PluginLoadResult } from "./loader.js";
 import type { PluginRecord } from "./registry.js";
-import type { PluginCompatibilityNotice, PluginStatusReport } from "./status.js";
+import type { PluginCompatibilityNotice } from "./status.js";
 import type { PluginHookName } from "./types.js";
 
 export const LEGACY_BEFORE_AGENT_START_MESSAGE =
   "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.";
 export const HOOK_ONLY_MESSAGE =
   "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.";
+export const DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE =
+  "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.";
 
 export function createCompatibilityNotice(
   params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
 ): PluginCompatibilityNotice {
-  if (params.code === "legacy-before-agent-start") {
-    return {
-      pluginId: params.pluginId,
-      code: params.code,
-      severity: "warn",
-      message: LEGACY_BEFORE_AGENT_START_MESSAGE,
-    };
+  switch (params.code) {
+    case "legacy-before-agent-start":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "legacy-before-agent-start",
+        severity: "warn",
+        message: LEGACY_BEFORE_AGENT_START_MESSAGE,
+      };
+    case "hook-only":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
+        message: HOOK_ONLY_MESSAGE,
+      };
+    case "deprecated-memory-embedding-provider-api":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "deprecated-memory-embedding-provider-api",
+        severity: "warn",
+        message: DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
+      };
   }
-
-  return {
-    pluginId: params.pluginId,
-    code: params.code,
-    severity: "info",
-    message: HOOK_ONLY_MESSAGE,
-  };
+  const unsupportedCode: never = params.code;
+  void unsupportedCode;
+  throw new Error("unsupported compatibility notice code");
 }
 
 export function createPluginRecord(
@@ -50,14 +67,24 @@ export function createPluginRecord(
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    transcriptSourceProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
-    gatewayMethods: [],
+    migrationProviderIds: [],
+    contextEngineIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     cliCommands: [],
     services: [],
+    gatewayDiscoveryServiceIds: [],
     commands: [],
     httpRoutes: 0,
     hookCount: 0,
@@ -107,37 +134,56 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const { plugins, ...rest } = overrides;
+  const {
+    plugins,
+    embeddingProviders,
+    modelCatalogProviders,
+    realtimeTranscriptionProviders,
+    realtimeVoiceProviders,
+    ...rest
+  } = overrides;
   return {
     plugins,
     diagnostics: [],
     channels: [],
     channelSetups: [],
     providers: [],
+    embeddingProviders: embeddingProviders ?? [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
+    musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
+    codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
+    memoryEmbeddingProviders: [],
+    textTransforms: [],
+    agentHarnesses: [],
     tools: [],
     hooks: [],
     typedHooks: [],
     httpRoutes: [],
     gatewayHandlers: {},
+    gatewayMethodDescriptors: [],
     cliRegistrars: [],
     services: [],
     commands: [],
+    sessionExtensions: [],
+    trustedToolPolicies: [],
+    toolMetadata: [],
+    controlUiDescriptors: [],
+    runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
-  };
-}
-
-export function createPluginStatusReport(
-  overrides: Partial<PluginStatusReport> & Pick<PluginStatusReport, "plugins">,
-): PluginStatusReport {
-  const { workspaceDir, ...loadResultOverrides } = overrides;
-  return {
-    workspaceDir,
-    ...createPluginLoadResult(loadResultOverrides),
+    modelCatalogProviders: modelCatalogProviders ?? [],
+    gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
+    realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
+    realtimeVoiceProviders: realtimeVoiceProviders ?? [],
   };
 }

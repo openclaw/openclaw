@@ -1,4 +1,5 @@
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+// Discord helper module supports inbound context helpers behavior.
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
 export function buildFinalizedDiscordDirectInboundContext() {
@@ -25,7 +26,7 @@ export function buildFinalizedDiscordDirectInboundContext() {
     SenderUsername: "alice",
     GroupSystemPrompt: groupSystemPrompt,
     OwnerAllowFrom: ownerAllowFrom,
-    UntrustedContext: untrustedContext,
+    UntrustedStructuredContext: untrustedContext,
     Provider: "discord",
     Surface: "discord",
     WasMentioned: false,

@@ -1,3 +1,5 @@
+// Tool invoke cron regression tests cover HTTP tool invocation for cron/gateway
+// tools with lightweight mocks around auth, config, and before-tool hooks.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +18,11 @@ const noPluginToolMeta = () => undefined;
 const noWarnLog = () => {};
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => cfg,
+  getRuntimeConfig: () => cfg,
+}));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => cfg,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -31,17 +37,21 @@ vi.mock("../logger.js", () => ({
   logWarn: noWarnLog,
 }));
 
-vi.mock("../agents/pi-tools.js", () => ({
+vi.mock("../agents/agent-tools.js", () => ({
   resolveToolLoopDetectionConfig,
 }));
 
-vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
+vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook,
 }));
 
-vi.mock("../plugins/config-state.js", () => ({
-  isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
-}));
+vi.mock("../plugins/config-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/config-state.js")>();
+  return {
+    ...actual,
+    isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
+  };
+});
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: noPluginToolMeta,
@@ -72,14 +82,18 @@ let server: ReturnType<typeof createServer> | undefined;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    void handleToolsInvokeHttpRequest(req, res, {
-      auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
-    }).then((handled) => {
+    void (async () => {
+      const handled = await handleToolsInvokeHttpRequest(req, res, {
+        auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
+      });
       if (handled) {
         return;
       }
       res.statusCode = 404;
       res.end("not found");
+    })().catch((err: unknown) => {
+      res.statusCode = 500;
+      res.end(String(err));
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -96,7 +110,9 @@ afterAll(async () => {
   if (!server) {
     return;
   }
-  await new Promise<void>((resolve) => server?.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server?.close(() => resolve());
+  });
   server = undefined;
 });
 

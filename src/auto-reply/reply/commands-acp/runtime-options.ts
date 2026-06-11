@@ -1,3 +1,7 @@
+// Formats ACP runtime option details for command responses.
+import { resolveAcpSessionIdentifierLinesFromIdentity } from "@openclaw/acp-core/runtime/session-identifiers";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import {
   parseRuntimeTimeoutSecondsInput,
@@ -7,7 +11,6 @@ import {
   validateRuntimeModelInput,
   validateRuntimePermissionProfileInput,
 } from "../../../acp/control-plane/runtime-options.js";
-import { resolveAcpSessionIdentifierLinesFromIdentity } from "../../../acp/runtime/session-identifiers.js";
 import { findLatestTaskForRelatedSessionKeyForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -144,6 +147,11 @@ export async function handleAcpStatusAction(
       const runtimeDetails = sanitizeTaskStatusText(status.runtimeStatus?.details, {
         errorContext: true,
       });
+      const taskUpdatedAt =
+        typeof linkedTask?.lastEventAt === "number"
+          ? timestampMsToIsoString(linkedTask.lastEventAt)
+          : undefined;
+      const lastActivityAt = timestampMsToIsoString(status.lastActivityAt) ?? "n/a";
       const lines = [
         "ACP status:",
         "-----",
@@ -161,14 +169,12 @@ export async function handleAcpStatusAction(
               ...(taskProgress ? [`taskProgress: ${taskProgress}`] : []),
               ...(taskSummary ? [`taskSummary: ${taskSummary}`] : []),
               ...(taskError ? [`taskError: ${taskError}`] : []),
-              ...(typeof linkedTask.lastEventAt === "number"
-                ? [`taskUpdatedAt: ${new Date(linkedTask.lastEventAt).toISOString()}`]
-                : []),
+              ...(taskUpdatedAt ? [`taskUpdatedAt: ${taskUpdatedAt}`] : []),
             ]
           : []),
         `runtimeOptions: ${formatRuntimeOptionsText(status.runtimeOptions)}`,
         `capabilities: ${formatAcpCapabilitiesText(status.capabilities.controls)}`,
-        `lastActivityAt: ${new Date(status.lastActivityAt).toISOString()}`,
+        `lastActivityAt: ${lastActivityAt}`,
         ...(lastError ? [`lastError: ${lastError}`] : []),
         ...(runtimeSummary ? [`runtime: ${runtimeSummary}`] : []),
         ...(runtimeDetails ? [`runtimeDetails: ${runtimeDetails}`] : []),
@@ -230,7 +236,7 @@ export async function handleAcpSetAction(
 
   return await withAcpCommandErrorBoundary({
     run: async () => {
-      const lowerKey = key.toLowerCase();
+      const lowerKey = normalizeLowercaseStringOrEmpty(key);
       if (lowerKey === "cwd") {
         const cwd = validateRuntimeCwdInput(value);
         const options = await getAcpSessionManager().updateSessionRuntimeOptions({

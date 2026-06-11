@@ -1,11 +1,13 @@
-import type { Component } from "@mariozechner/pi-tui";
+// Filterable select list component supports filtered keyboard selection.
+import type { Component } from "@earendil-works/pi-tui";
 import {
   Input,
   matchesKey,
   type SelectItem,
   SelectList,
   type SelectListTheme,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
 import { fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";
 
@@ -44,7 +46,7 @@ export class FilterableSelectList implements Component {
   }
 
   private applyFilter(): void {
-    const queryLower = this.filterText.toLowerCase();
+    const queryLower = normalizeLowercaseStringOrEmpty(this.filterText);
     if (!queryLower.trim()) {
       this.selectList = new SelectList(this.allItems, this.maxVisible, this.theme);
       return;

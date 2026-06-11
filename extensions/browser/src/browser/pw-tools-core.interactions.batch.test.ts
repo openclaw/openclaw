@@ -1,6 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Browser tests cover pw tools core.interactions.batch plugin behavior.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let page: { evaluate: ReturnType<typeof vi.fn> } | null = null;
+let page: {
+  evaluate: ReturnType<typeof vi.fn>;
+  url: ReturnType<typeof vi.fn>;
+} | null = null;
 
 const getPageForTargetId = vi.fn(async () => {
   if (!page) {
@@ -9,7 +13,10 @@ const getPageForTargetId = vi.fn(async () => {
   return page;
 });
 const ensurePageState = vi.fn(() => {});
+const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
+const isBrowserObservedDialogBlockedError = vi.fn(() => false);
+const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const refLocator = vi.fn(() => {
   throw new Error("test: refLocator should not be called");
 });
@@ -19,9 +26,12 @@ const closePageViaPlaywright = vi.fn(async () => {});
 const resizeViewportViaPlaywright = vi.fn(async () => {});
 
 vi.mock("./pw-session.js", () => ({
+  assertPageNavigationCompletedSafely,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  isBrowserObservedDialogBlockedError,
+  markObservedDialogsHandledRemotelyForPage,
   refLocator,
   restoreRoleRefsForTarget,
 }));
@@ -31,17 +41,25 @@ vi.mock("./pw-tools-core.snapshot.js", () => ({
   resizeViewportViaPlaywright,
 }));
 
-let batchViaPlaywright: typeof import("./pw-tools-core.interactions.js").batchViaPlaywright;
+const { batchViaPlaywright } = await import("./pw-tools-core.interactions.js");
+
+function firstEvaluateCall(): [unknown, { fnSource?: string; timeoutMs?: number }] {
+  if (!page) {
+    throw new Error("expected test page");
+  }
+  const [call] = page.evaluate.mock.calls;
+  if (!call) {
+    throw new Error("expected page.evaluate call");
+  }
+  return call as [unknown, { fnSource?: string; timeoutMs?: number }];
+}
 
 describe("batchViaPlaywright", () => {
-  beforeAll(async () => {
-    ({ batchViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     page = {
       evaluate: vi.fn(async () => "ok"),
+      url: vi.fn(() => "about:blank"),
     };
   });
 
@@ -54,13 +72,10 @@ describe("batchViaPlaywright", () => {
     });
 
     expect(result).toEqual({ results: [{ ok: true }] });
-    expect(page?.evaluate).toHaveBeenCalledWith(
-      expect.any(Function),
-      expect.objectContaining({
-        fnBody: "() => 1",
-        timeoutMs: 4500,
-      }),
-    );
+    const [evaluateFn, evaluateOptions] = firstEvaluateCall();
+    expect(typeof evaluateFn).toBe("function");
+    expect(evaluateOptions?.fnSource).toBe("() => 1");
+    expect(evaluateOptions?.timeoutMs).toBe(4500);
   });
 
   it("supports resize and close inside a batch", async () => {

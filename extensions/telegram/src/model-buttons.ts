@@ -8,6 +8,7 @@
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
  * - mdl_back              - back to providers list
  */
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
@@ -63,11 +64,11 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   }
 
   // mdl_list_{provider}_{page}
-  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_-]+)_(\d+)$/i);
+  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_.-]+)_(\d+)$/i);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
-    const page = Number.parseInt(pageStr ?? "1", 10);
-    if (provider && Number.isFinite(page) && page >= 1) {
+    const page = parseStrictPositiveInteger(pageStr);
+    if (provider && page !== undefined) {
       return { type: "list", provider, page };
     }
   }
@@ -144,6 +145,20 @@ export function resolveModelSelection(params: {
   };
 }
 
+function isCurrentModelSelection(params: {
+  currentModel?: string;
+  provider: string;
+  model: string;
+}): boolean {
+  const currentModel = params.currentModel?.trim();
+  if (!currentModel) {
+    return false;
+  }
+  return currentModel.includes("/")
+    ? currentModel === `${params.provider}/${params.model}`
+    : currentModel === params.model;
+}
+
 /**
  * Build provider selection keyboard with 2 providers per row.
  */
@@ -195,11 +210,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
-
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
     // Skip models that still exceed Telegram's callback_data limit.
@@ -207,8 +217,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
-    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? model;
+    const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
+    const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
+    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
     const displayText = truncateModelId(displayLabel, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
