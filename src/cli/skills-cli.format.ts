@@ -478,7 +478,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       );
     }
     lines.push(
-      `  ${theme.muted("Fix:")} add the skill name to this agent's \`skills\` allowlist (\`agents.list[].skills\` or \`agents.defaults.skills\`).`,
+      `  ${theme.muted("Fix:")} add the skill name to this agent's \`agents.list[].skills\` allowlist (or \`agents.defaults.skills\`, which applies only when the agent sets no explicit list).`,
     );
   }
 
