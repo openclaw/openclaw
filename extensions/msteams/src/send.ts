@@ -7,6 +7,7 @@ import {
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { redactOutboundMSTeamsText } from "./dlp.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -154,7 +155,8 @@ export async function sendMessageMSTeams(
     cfg,
     channel: "msteams",
   });
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  // DLP (#16): scrub sensitive values out of any text we send to Teams.
+  const messageText = redactOutboundMSTeamsText(convertMarkdownTables(text ?? "", tableMode), cfg);
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
   const {
     app,
