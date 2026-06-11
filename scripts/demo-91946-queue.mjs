@@ -26,7 +26,9 @@ function buildClaudeOwnerKey(input) {
 }
 
 function normalizeOptionalLowercaseString(v) {
-  if (typeof v !== "string") return undefined;
+  if (typeof v !== "string") {
+    return undefined;
+  }
   const t = v.trim();
   return t ? t.toLowerCase() : undefined;
 }
@@ -38,11 +40,17 @@ function resolveCliRunQueueKey(params) {
   const isClaudeCliProvider = normalizeOptionalLowercaseString(params.backendId) === "claude-cli";
   if (isClaudeCliProvider) {
     const sessionId = params.cliSessionId?.trim();
-    if (sessionId) return `${params.backendId}:session:${sessionId}`;
+    if (sessionId) {
+      return `${params.backendId}:session:${sessionId}`;
+    }
     const ownerKey = params.ownerKey?.trim();
-    if (ownerKey) return `${params.backendId}:owner:${ownerKey}`;
+    if (ownerKey) {
+      return `${params.backendId}:owner:${ownerKey}`;
+    }
     const workspaceDir = params.workspaceDir.trim();
-    if (workspaceDir) return `${params.backendId}:workspace:${workspaceDir}`;
+    if (workspaceDir) {
+      return `${params.backendId}:workspace:${workspaceDir}`;
+    }
   }
   return params.backendId;
 }
@@ -56,7 +64,9 @@ function enqueueKeyedTask({ tails, key, task }) {
   );
   tails.set(key, tail);
   const cleanup = () => {
-    if (tails.get(key) === tail) tails.delete(key);
+    if (tails.get(key) === tail) {
+      tails.delete(key);
+    }
   };
   tail.then(cleanup, cleanup);
   return current;
@@ -140,13 +150,17 @@ const t0 = performance.now();
 const stamp = () => Number((performance.now() - t0).toFixed(2));
 const work = (label) => async () => {
   events.push({ label, phase: "start", t: stamp() });
-  await new Promise((r) => setTimeout(r, runMs));
+  await new Promise((resolve) => {
+    setTimeout(resolve, runMs);
+  });
   events.push({ label, phase: "end", t: stamp() });
 };
 
 console.log("=== PR #91974 live queue concurrency demo ===");
 console.log("source-slice fingerprints (sha256, first 16 hex):");
-for (const [k, v] of Object.entries(sliceHashes)) console.log(`  ${k.padEnd(24)} ${v}`);
+for (const [k, v] of Object.entries(sliceHashes)) {
+  console.log(`  ${k.padEnd(24)} ${v}`);
+}
 console.log("");
 console.log("queue-key resolution at PR head:");
 console.log(`  session A owner-hash         ${sessionA_owner}`);
