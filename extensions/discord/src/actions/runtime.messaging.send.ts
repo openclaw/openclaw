@@ -1,5 +1,4 @@
 // Discord plugin module implements runtime.messaging.send behavior.
-import { createChannelPagedActionResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   assertMediaNotDataUrl,
@@ -41,6 +40,23 @@ function readDiscordThreadArchiveCursor(thread: unknown): string | undefined {
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 
+type DiscordThreadListActionResult = {
+  ok: true;
+  threads: unknown;
+  complete: boolean;
+  hasMore: boolean;
+  returnedCount: number;
+  source: "discord.threadList.archived" | "discord.threadList.active";
+  query: {
+    guildId: string;
+    channelId?: string;
+    includeArchived: boolean;
+    before?: string;
+    limit?: number;
+  };
+  nextBefore?: string;
+};
+
 function normalizeDiscordThreadListActionResult(params: {
   value: unknown;
   includeArchived: boolean;
@@ -48,29 +64,24 @@ function normalizeDiscordThreadListActionResult(params: {
   guildId: string;
   limit?: number;
   before?: string;
-}) {
+}): DiscordThreadListActionResult {
   const record =
     params.value && typeof params.value === "object" && !Array.isArray(params.value)
       ? (params.value as Record<string, unknown>)
       : undefined;
-  const threads = Array.isArray(record?.threads) ? record.threads : [];
-  const members = Array.isArray(record?.members) ? record.members : [];
-  const hasMore = record?.has_more === true || record?.hasMore === true;
+  const threadItems = Array.isArray(record?.threads) ? record.threads : [];
+  const hasMore = record?.has_more === true;
   const nextBefore =
     params.includeArchived && hasMore
-      ? readDiscordThreadArchiveCursor(threads[threads.length - 1])
+      ? readDiscordThreadArchiveCursor(threadItems[threadItems.length - 1])
       : undefined;
 
-  return createChannelPagedActionResult({
-    itemsKey: "items",
-    items: threads,
-    extra: {
-      threads: params.value,
-      members,
-    },
+  return {
+    ok: true,
+    threads: params.value,
+    complete: !hasMore,
     hasMore,
-    nextCursor: nextBefore,
-    nextCursorKey: "nextBefore",
+    returnedCount: threadItems.length,
     source: params.includeArchived ? "discord.threadList.archived" : "discord.threadList.active",
     query: {
       guildId: params.guildId,
@@ -79,7 +90,8 @@ function normalizeDiscordThreadListActionResult(params: {
       ...(params.before ? { before: params.before } : {}),
       ...(params.limit !== undefined ? { limit: params.limit } : {}),
     },
-  });
+    ...(nextBefore ? { nextBefore } : {}),
+  };
 }
 
 async function appendDiscordThreadRenameResult(

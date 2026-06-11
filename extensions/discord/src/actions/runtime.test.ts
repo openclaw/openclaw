@@ -304,7 +304,6 @@ describe("handleDiscordMessagingAction", () => {
       hasMore: true,
       returnedCount: 1,
       source: "discord.threadList.archived",
-      nextCursor: "2026-05-25T17:00:00.000Z",
       nextBefore: "2026-05-25T17:00:00.000Z",
       query: {
         guildId: "G1",
@@ -313,15 +312,6 @@ describe("handleDiscordMessagingAction", () => {
         limit: 1,
       },
     });
-    expect((result.details as { items?: unknown[] }).items).toEqual([
-      {
-        id: "thread-1",
-        name: "Old project",
-        thread_metadata: {
-          archive_timestamp: "2026-05-25T17:00:00.000Z",
-        },
-      },
-    ]);
     expect((result.details as { threads?: unknown }).threads).toEqual({
       threads: [
         {
