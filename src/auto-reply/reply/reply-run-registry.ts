@@ -6,6 +6,9 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type ReplyRunKey = string;
 
@@ -13,11 +16,19 @@ export type ReplyBackendKind = "embedded" | "cli";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
+export type ReplyRunQueueMessageOptions = {
+  deliveryContext?: DeliveryContext;
+  deliveryTimeoutMs?: number;
+  inputProvenance?: InputProvenance;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  waitForTranscriptCommit?: boolean;
+};
+
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
-  queueMessage?: (text: string) => Promise<void>;
+  queueMessage?: (text: string, options?: ReplyRunQueueMessageOptions) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -531,7 +542,11 @@ export function isReplyRunStreamingForSessionId(sessionId: string): boolean {
   return getAttachedBackend(operation)?.isStreaming() ?? false;
 }
 
-export function queueReplyRunMessage(sessionId: string, text: string): boolean {
+export function queueReplyRunMessage(
+  sessionId: string,
+  text: string,
+  options?: ReplyRunQueueMessageOptions,
+): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const backend = operation ? getAttachedBackend(operation) : undefined;
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
@@ -540,7 +555,11 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!backend.isStreaming()) {
     return false;
   }
-  void backend.queueMessage(text);
+  if (options) {
+    void backend.queueMessage(text, options);
+  } else {
+    void backend.queueMessage(text);
+  }
   return true;
 }
 

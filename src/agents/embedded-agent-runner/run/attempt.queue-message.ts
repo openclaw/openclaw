@@ -1,7 +1,12 @@
 /**
  * Steers active embedded sessions and waits for transcript commits when needed.
  */
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { log } from "../logger.js";
+
+export type EmbeddedAgentActiveSessionSteerOptions = {
+  inputProvenance?: InputProvenance;
+};
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
@@ -10,7 +15,7 @@ import { log } from "../logger.js";
 export type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: unknown;
   getSteeringMessages?(): readonly string[];
-  steer(text: string): Promise<void>;
+  steer(text: string, options?: EmbeddedAgentActiveSessionSteerOptions): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
@@ -125,6 +130,7 @@ export async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   timeoutMs: number,
+  options?: EmbeddedAgentActiveSessionSteerOptions,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -205,7 +211,7 @@ export async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    activeSession.steer(text).catch((err: unknown) => {
+    activeSession.steer(text, options).catch((err: unknown) => {
       finish(err);
     });
   });
@@ -218,16 +224,23 @@ export async function steerAndWaitForTranscriptCommit(
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  options: { deliveryTimeoutMs?: number; waitForTranscriptCommit?: boolean } | undefined,
+  options:
+    | ({ deliveryTimeoutMs?: number; waitForTranscriptCommit?: boolean } &
+        EmbeddedAgentActiveSessionSteerOptions)
+    | undefined,
 ): Promise<void> {
+  const steerOptions: EmbeddedAgentActiveSessionSteerOptions | undefined = options?.inputProvenance
+    ? { inputProvenance: options.inputProvenance }
+    : undefined;
   if (options?.waitForTranscriptCommit !== true) {
-    await activeSession.steer(text);
+    await activeSession.steer(text, steerOptions);
     return;
   }
   await steerAndWaitForTranscriptCommit(
     activeSession,
     text,
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
+    steerOptions,
   );
 }
 
