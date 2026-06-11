@@ -189,9 +189,10 @@ async function deliverTextReply(params: {
           replyMarkup,
         },
       );
-      if (firstDeliveredMessageId == null) {
+      if (messageId != null && firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
+      return messageId;
     },
   });
   return firstDeliveredMessageId;
@@ -220,7 +221,7 @@ async function sendPendingFollowUpText(params: {
     replyMarkup: params.replyMarkup,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
-      await sendTelegramText(params.bot, params.chatId, chunk.text, params.runtime, {
+      return await sendTelegramText(params.bot, params.chatId, chunk.text, params.runtime, {
         replyToMessageId,
         thread: params.thread,
         textMode: "markdown",
@@ -291,6 +292,13 @@ async function sendTelegramVoiceFallbackText(opts: {
       silent: opts.silent,
       replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
     });
+    // Skipped sends (sendTelegramText returns undefined for chunks whose
+    // markdown rendered to empty content through the supported-tag filter)
+    // leave reply-target state untouched so the next real chunk still carries
+    // the reply reference, quote text, and buttons.
+    if (messageId == null) {
+      continue;
+    }
     if (firstDeliveredMessageId == null) {
       firstDeliveredMessageId = messageId;
     }
@@ -475,6 +483,15 @@ async function deliverMediaReply(params: {
               replyMarkup: params.replyMarkup,
               replyQuoteText: params.replyQuoteText,
             });
+            // The voice-text fallback funnels through sendTelegramText and can
+            // resolve `undefined` (skipped send) when the resolved fallback
+            // text strips to empty post-HTML normalization. Gate
+            // markReplyApplied + markDelivered on a real message id so an
+            // all-skipped fallback does not falsely register the outer reply
+            // as delivered (ClawSweeper P2 finding on #88810).
+            if (fallbackMessageId == null) {
+              continue;
+            }
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;
             }
@@ -493,7 +510,7 @@ async function deliverMediaReply(params: {
             await sendVoiceMedia(noCaptionParams);
             const fallbackText = resolveVoiceFallbackText(params.reply);
             if (fallbackText?.trim()) {
-              await sendTelegramVoiceFallbackText({
+              const captionFallbackMessageId = await sendTelegramVoiceFallbackText({
                 bot: params.bot,
                 chatId: params.chatId,
                 runtime: params.runtime,
@@ -505,7 +522,29 @@ async function deliverMediaReply(params: {
                 silent: params.silent,
                 replyMarkup: params.replyMarkup,
               });
-              visibleFallbackText = fallbackText;
+              // Mirror only the text that actually reached Telegram. The
+              // voice-text fallback funnels through sendTelegramText and can
+              // resolve undefined (skipped send) when the resolved fallback
+              // text strips to empty post-HTML normalization. Setting
+              // visibleFallbackText unconditionally would push a transcript /
+              // hook entry for text that was never delivered (ClawSweeper P2
+              // finding on #88810).
+              if (captionFallbackMessageId != null) {
+                visibleFallbackText = fallbackText;
+              } else {
+                // The voice already delivered (sendVoiceMedia above), but the
+                // caption text was skipped because the post-render payload
+                // was empty. Clear the outer `contentForSentHook` via the
+                // explicit empty-string sentinel so transcript mirroring,
+                // message_sent hooks, and delivered-contents accounting do
+                // not report the original `reply.text` as if Telegram had
+                // received it. Leaving `visibleFallbackText` undefined would
+                // fall through to the caller's `if (visibleFallbackText)`
+                // branch and keep `reply.text` -- the bug ClawSweeper called
+                // out where the voice media was delivered but the caption
+                // text was silently lost while still being mirrored as sent.
+                visibleFallbackText = "";
+              }
             }
             markReplyApplied(params.progress, replyToMessageId);
             continue;
@@ -867,7 +906,13 @@ export async function deliverReplies(params: {
           progress,
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
-        if (mediaDelivery.visibleFallbackText) {
+        if (mediaDelivery.visibleFallbackText !== undefined) {
+          // Non-undefined means the media delivery code attempted a fallback
+          // text path. An empty string signals "fallback attempted but the
+          // text send was skipped" (post-HTML empty payload); reaching the
+          // outer transcript mirror / message_sent hook with the original
+          // `reply.text` would falsely register a never-delivered payload
+          // (ClawSweeper P2 finding on #88810).
           contentForSentHook = mediaDelivery.visibleFallbackText;
         }
       }
