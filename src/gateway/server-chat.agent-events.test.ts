@@ -2662,6 +2662,82 @@ describe("agent event handler", () => {
     expect(clearAgentRunContext).not.toHaveBeenCalled();
   });
 
+  it("uses the tracked lifecycle start to reject stale same-session terminal snapshots", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-race",
+      kind: "direct",
+      sessionId: "same-session",
+      updatedAt: 2_000,
+      status: "running",
+      startedAt: 2_000,
+      endedAt: undefined,
+      runtimeMs: undefined,
+      abortedLastRun: false,
+    });
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-race",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "old-run",
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey: "session-race",
+      sessionId: "same-session",
+      ts: 1_050,
+      data: {
+        phase: "start",
+        startedAt: 1_000,
+      },
+    });
+    handler({
+      runId: "old-run",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-race",
+      sessionId: "same-session",
+      ts: 1_500,
+      data: {
+        phase: "end",
+        endedAt: 1_500,
+        aborted: true,
+        stopReason: "rpc",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(2);
+    });
+    const sessionsChangedCalls = broadcastToConnIds.mock.calls.filter(
+      ([event]) => event === "sessions.changed",
+    );
+    expect(sessionsChangedCalls).toHaveLength(2);
+    expectPayloadFields(sessionsChangedCalls[1]?.[1], {
+      sessionKey: "session-race",
+      phase: "end",
+      sessionId: "same-session",
+      status: "running",
+      startedAt: 2_000,
+      updatedAt: 2_000,
+      abortedLastRun: false,
+    });
+    const endPersistParams = requireRecord(
+      persistGatewaySessionLifecycleEventMock.mock.calls
+        .map((call) => call[0])
+        .find((params) => {
+          const event = (params as { event?: { data?: { phase?: string } } } | undefined)?.event;
+          return event?.data?.phase === "end";
+        }),
+      "terminal lifecycle persist params",
+    );
+    const persistedEvent = requireRecord(endPersistParams.event, "terminal lifecycle event");
+    expect(requireRecord(persistedEvent.data, "terminal lifecycle data").startedAt).toBe(1_000);
+    resetAgentRunContextForTest();
+  });
+
   it("clears tracked active runs before terminal sessions.changed broadcasts", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",

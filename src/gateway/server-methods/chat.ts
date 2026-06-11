@@ -153,6 +153,7 @@ import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
+import { isStaleLifecycleEventForRunGeneration } from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
@@ -1873,9 +1874,7 @@ function buildAbortedLifecyclePatch(
   const snapshotStartedAt = finitePositiveTimestamp(snapshot.startedAtMs);
   const currentStartedAt = finitePositiveTimestamp(current.startedAt);
   if (
-    snapshotStartedAt !== undefined &&
-    currentStartedAt !== undefined &&
-    currentStartedAt > snapshotStartedAt
+    isStaleLifecycleEventForRunGeneration({ eventStartedAt: snapshotStartedAt, currentStartedAt })
   ) {
     return null;
   }

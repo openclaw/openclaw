@@ -31,6 +31,7 @@ import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-sessi
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
+  isStaleLifecycleEventForRunGeneration,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -323,6 +324,7 @@ export function createAgentEventHandler({
   };
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
+  const lifecycleStartedAtByRunId = new Map<string, number>();
 
   type AgentTextThrottleStream = "assistant" | "thinking";
 
@@ -371,6 +373,34 @@ export function createAgentEventHandler({
     }
   };
 
+  const finiteLifecycleTimestamp = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+
+  const trackLifecycleStart = (evt: AgentEventPayload) => {
+    const startedAt =
+      finiteLifecycleTimestamp(evt.data?.startedAt) ??
+      finiteLifecycleTimestamp(evt.ts) ??
+      Date.now();
+    lifecycleStartedAtByRunId.set(evt.runId, startedAt);
+  };
+
+  const lifecycleEventWithStartedAt = (evt: AgentEventPayload): AgentEventPayload => {
+    if (finiteLifecycleTimestamp(evt.data?.startedAt) !== undefined) {
+      return evt;
+    }
+    const startedAt = lifecycleStartedAtByRunId.get(evt.runId);
+    if (startedAt === undefined) {
+      return evt;
+    }
+    return {
+      ...evt,
+      data: {
+        ...evt.data,
+        startedAt,
+      },
+    };
+  };
+
   // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
   // sessions-patch.ts). Short-circuit everyone else so high-volume chat streams
   // do not touch the session store. Results are cached per sessionKey because
@@ -408,6 +438,10 @@ export function createAgentEventHandler({
       !isStaleLifecycleEventForSession({
         owningSessionId: evt.sessionId,
         currentSessionId: row?.sessionId,
+      }) &&
+      !isStaleLifecycleEventForRunGeneration({
+        eventStartedAt: evt.data?.startedAt,
+        currentStartedAt: row?.startedAt,
       })
         ? deriveGatewaySessionLifecycleProjectionPatch({
             entry: row
@@ -549,6 +583,7 @@ export function createAgentEventHandler({
     const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
     const currentLifecycleGeneration =
       activeLifecycleGeneration ?? currentRunContext?.lifecycleGeneration;
+    const lifecycleEvent = lifecycleEventWithStartedAt(evt);
 
     const chatLink = chatRunState.registry.peek(evt.runId);
     const sessionAgentId = chatLink?.agentId ?? evt.agentId;
@@ -655,6 +690,7 @@ export function createAgentEventHandler({
       chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
     }
     clearAgentRunContext(evt.runId);
+    lifecycleStartedAtByRunId.delete(evt.runId);
     agentRunSeq.delete(evt.runId);
     agentRunSeq.delete(clientRunId);
 
@@ -664,7 +700,7 @@ export function createAgentEventHandler({
         const persistence = persistGatewaySessionLifecycleEvent({
           sessionKey,
           agentId: sessionAgentId,
-          event: evt,
+          event: lifecycleEvent,
         });
         trackTrackedRunTerminalPersistence?.({
           runId: evt.runId,
@@ -711,7 +747,7 @@ export function createAgentEventHandler({
           .catch(() => {
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
-            broadcastSessionChange(evt);
+            broadcastSessionChange(lifecycleEvent);
           });
       }
     }
@@ -1413,6 +1449,7 @@ export function createAgentEventHandler({
     }
 
     if (sessionKey && lifecyclePhase === "start") {
+      trackLifecycleStart(evt);
       void persistGatewaySessionLifecycleEvent({
         sessionKey,
         agentId: sessionAgentId,

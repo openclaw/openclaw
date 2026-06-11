@@ -173,7 +173,15 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
 export function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
-}): Partial<PersistedLifecycleSessionShape> {
+}): Partial<PersistedLifecycleSessionShape> | null {
+  if (
+    isStaleLifecycleEventForRunGeneration({
+      eventStartedAt: params.event.data?.startedAt,
+      currentStartedAt: params.entry?.startedAt,
+    })
+  ) {
+    return null;
+  }
   if (isRestartRecoveryLifecycleEvent(params)) {
     return {};
   }
@@ -211,8 +219,11 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
-  const { restartRecoveryRuns: _restartRecoveryRuns, ...patch } =
-    derivePersistedSessionLifecyclePatch(params);
+  const persistedPatch = derivePersistedSessionLifecyclePatch(params);
+  if (persistedPatch === null) {
+    return {};
+  }
+  const { restartRecoveryRuns: _restartRecoveryRuns, ...patch } = persistedPatch;
   return patch;
 }
 
@@ -250,6 +261,22 @@ export function isStaleLifecycleEventForSession(params: {
     params.owningSessionId &&
     params.currentSessionId &&
     params.owningSessionId !== params.currentSessionId,
+  );
+}
+
+/**
+ * Consecutive runs reuse a sessionId, so session identity alone cannot reject a
+ * late lifecycle end from the previous run. A row that already has a newer
+ * startedAt owns a newer run generation and must not be terminalized.
+ */
+export function isStaleLifecycleEventForRunGeneration(params: {
+  eventStartedAt?: unknown;
+  currentStartedAt?: unknown;
+}): boolean {
+  return (
+    isFiniteTimestamp(params.eventStartedAt) &&
+    isFiniteTimestamp(params.currentStartedAt) &&
+    params.currentStartedAt > params.eventStartedAt
   );
 }
 
@@ -293,6 +320,9 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         entry,
         event: params.event,
       });
+      if (patch === null) {
+        return null;
+      }
       return Object.keys(patch).length > 0 ? patch : null;
     },
   });
