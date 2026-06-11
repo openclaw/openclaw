@@ -61,6 +61,13 @@ export type PendingContinuationWork = {
   retryCount?: number;
   flowId?: string;
   expectedRevision?: number;
+  // Durable flow status carried onto the runtime object by the store reader
+  // ({@link workToRuntime}), sourced from the flow's PRE-claim status. The
+  // fold-side write-guard (#988-P2-1) needs this to tell a recovered `running`
+  // turn (actively executing) from genuine `queued` backlog so a live turn is
+  // never finished-as-superseded. Absent on freshly-constructed enqueue inputs;
+  // only store reads populate it.
+  status?: "queued" | "running";
 };
 
 function isContinuationWorkFlow(flow: TaskFlowRecord): boolean {
@@ -81,7 +88,11 @@ function workGoal(work: PendingContinuationWork): string {
   return reason ? `Continuation work: ${reason.slice(0, 80)}` : "Continuation work";
 }
 
-function workToRuntime(flow: TaskFlowRecord, state: PendingWorkState): PendingContinuationWork {
+function workToRuntime(
+  flow: TaskFlowRecord,
+  state: PendingWorkState,
+  status: "queued" | "running",
+): PendingContinuationWork {
   return {
     sessionKey: state.sessionKey,
     hop: state.hop,
@@ -98,6 +109,7 @@ function workToRuntime(flow: TaskFlowRecord, state: PendingWorkState): PendingCo
     ...(state.chainId ? { chainId: state.chainId } : {}),
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.retryCount !== undefined ? { retryCount: state.retryCount } : {}),
+    status,
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
@@ -130,7 +142,7 @@ export function enqueuePendingWork(work: PendingContinuationWork): PendingContin
     stateJson: state,
     createdAt: work.electedAt,
   });
-  return flow ? workToRuntime(flow, state) : null;
+  return flow ? workToRuntime(flow, state, "queued") : null;
 }
 
 export function listPendingWorkSessionKeysForRecovery(): string[] {
@@ -194,7 +206,12 @@ export function consumePendingWork(
     if (!claimed.applied || !claimed.flow) {
       continue;
     }
-    work.push(workToRuntime(claimed.flow, { ...state, releasedAt }));
+    // Carry the PRE-claim durable status: the claim above flips every consumed
+    // flow to `running`, so claimed.flow.status can no longer distinguish a
+    // recovered active turn from freshly-released queued backlog. The fold-side
+    // write-guard (#988-P2-1) keys off this original status.
+    const originalStatus: "queued" | "running" = flow.status === "running" ? "running" : "queued";
+    work.push(workToRuntime(claimed.flow, { ...state, releasedAt }, originalStatus));
   }
   return work;
 }
@@ -298,10 +315,7 @@ export function markPendingWorkFailed(work: PendingContinuationWork, summary: st
  * it stops re-arming. Distinct from failure (no system-warning, no retry): a
  * superseded wake was intentionally folded, not dropped by error.
  */
-export function markPendingWorkSuperseded(
-  work: PendingContinuationWork,
-  summary: string,
-): boolean {
+export function markPendingWorkSuperseded(work: PendingContinuationWork, summary: string): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
     return false;
   }
