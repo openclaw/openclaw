@@ -813,16 +813,17 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts,
+  initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
-  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
-  const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
-  const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
-  const prepared = await prepareAgentCommandExecution(opts, runtime);
-  opts = prepared.opts;
+  const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
+  const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
+  const preserveUserFacingSessionModelState =
+    initialOpts.preserveUserFacingSessionModelState === true;
+  const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
+  const opts = prepared.opts;
   const {
     body,
     transcriptBody,
