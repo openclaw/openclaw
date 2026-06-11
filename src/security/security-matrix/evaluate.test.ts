@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { evaluateSecurityMatrix, explainSecurityMatrixDecision } from "./evaluate.js";
+import { createSecurityMatrixAuditEvent } from "./facts.js";
+import { resolveSecurityMatrixCapabilityFromTool } from "./tool-capability.js";
 import type {
+  SecurityMatrixInfluenceSource,
   SecurityMatrixPolicy,
   SecurityMatrixToolCapability,
-  SecurityMatrixTrustSource,
 } from "./types.js";
 
 const externalSources = [
@@ -15,8 +17,10 @@ const externalSources = [
   "webhook",
   "memory",
   "skill",
+  "api",
+  "channel_metadata",
   "unknown_external",
-] as const satisfies readonly SecurityMatrixTrustSource[];
+] as const satisfies readonly SecurityMatrixInfluenceSource[];
 
 describe("Security Matrix evaluator", () => {
   it.each([
@@ -24,12 +28,17 @@ describe("Security Matrix evaluator", () => {
     "credential_access",
     "system_config",
   ] as const satisfies readonly SecurityMatrixToolCapability[])(
-    "returns block for external sources influencing %s",
+    "returns block for external influence over %s",
     (capability) => {
       for (const source of externalSources) {
-        expect(evaluateSecurityMatrix({ source, capability })).toMatchObject({
+        expect(
+          evaluateSecurityMatrix({ actor: "agent", influencedBy: [source], capability }),
+        ).toMatchObject({
+          actor: "agent",
           source,
+          influencedBy: [source],
           capability,
+          policyDecision: "block",
           decision: "block",
           matched: "policy",
         });
@@ -44,12 +53,13 @@ describe("Security Matrix evaluator", () => {
     "calendar_write",
     "memory_write",
   ] as const satisfies readonly SecurityMatrixToolCapability[])(
-    "returns require_confirm for external sources influencing %s",
+    "returns require_confirm for external influence over %s",
     (capability) => {
       for (const source of externalSources) {
-        expect(evaluateSecurityMatrix({ source, capability })).toMatchObject({
+        expect(evaluateSecurityMatrix({ influencedBy: [source], capability })).toMatchObject({
           source,
           capability,
+          policyDecision: "require_confirm",
           decision: "require_confirm",
           matched: "policy",
         });
@@ -63,12 +73,13 @@ describe("Security Matrix evaluator", () => {
     "browser",
     "memory_read",
   ] as const satisfies readonly SecurityMatrixToolCapability[])(
-    "returns warn for external sources influencing %s",
+    "returns warn for external influence over %s",
     (capability) => {
       for (const source of externalSources) {
-        expect(evaluateSecurityMatrix({ source, capability })).toMatchObject({
+        expect(evaluateSecurityMatrix({ influencedBy: [source], capability })).toMatchObject({
           source,
           capability,
+          policyDecision: "warn",
           decision: "warn",
           matched: "policy",
         });
@@ -76,79 +87,120 @@ describe("Security Matrix evaluator", () => {
     },
   );
 
-  it("returns require_confirm for unknown external capabilities", () => {
+  it("does not treat agent as a trust source when external content influenced the call", () => {
     expect(
-      evaluateSecurityMatrix({ source: "github", capability: "launch_missiles" }),
+      evaluateSecurityMatrix({ actor: "agent", influencedBy: ["web_fetch"], capability: "exec" }),
     ).toMatchObject({
-      source: "github",
-      capability: "unknown",
-      originalCapability: "launch_missiles",
-      decision: "require_confirm",
-      matched: "policy",
+      actor: "agent",
+      source: "web_fetch",
+      influencedBy: ["web_fetch"],
+      policyDecision: "block",
+      decision: "block",
     });
   });
 
-  it("returns allow for agent influencing exec", () => {
+  it("allows known capabilities when no external influence is present", () => {
+    expect(evaluateSecurityMatrix({ actor: "user", capability: "exec" })).toMatchObject({
+      actor: "user",
+      source: "none",
+      influencedBy: [],
+      capability: "exec",
+      policyDecision: "allow",
+      decision: "allow",
+    });
+  });
+
+  it("keeps source shorthand compatibility while ignoring actor-like sources", () => {
     expect(evaluateSecurityMatrix({ source: "agent", capability: "exec" })).toMatchObject({
-      source: "agent",
-      capability: "exec",
+      actor: "agent",
+      source: "none",
+      influencedBy: [],
       decision: "allow",
-      matched: "policy",
     });
   });
 
-  it("returns allow for user influencing git", () => {
-    expect(evaluateSecurityMatrix({ source: "user", capability: "git" })).toMatchObject({
-      source: "user",
-      capability: "git",
-      decision: "allow",
-      matched: "policy",
-    });
-  });
-
-  it("normalizes unknown sources to unknown_external", () => {
-    const evaluation = evaluateSecurityMatrix({
-      source: "feed_reader",
-      capability: "exec",
-    });
+  it("normalizes unknown external sources to unknown_external", () => {
+    const evaluation = evaluateSecurityMatrix({ source: "feed_reader", capability: "exec" });
 
     expect(evaluation).toMatchObject({
       source: "unknown_external",
       originalSource: "feed_reader",
+      influencedBy: ["unknown_external"],
       capability: "exec",
+      policyDecision: "block",
       decision: "block",
       matched: "policy",
     });
   });
 
   it("normalizes unknown capabilities to unknown", () => {
-    const evaluation = evaluateSecurityMatrix({
-      source: "email",
-      capability: "launch_missiles",
-    });
+    const evaluation = evaluateSecurityMatrix({ influencedBy: ["email"], capability: "new_tool" });
 
     expect(evaluation).toMatchObject({
       source: "email",
       capability: "unknown",
-      originalCapability: "launch_missiles",
+      originalCapability: "new_tool",
+      policyDecision: "require_confirm",
       decision: "require_confirm",
       matched: "policy",
     });
   });
 
-  it("returns warn for trusted sources influencing unknown capabilities", () => {
+  it("uses the strictest decision when multiple sources influenced a call", () => {
     expect(
-      evaluateSecurityMatrix({ source: "agent", capability: "launch_missiles" }),
+      evaluateSecurityMatrix({ influencedBy: ["browser", "github"], capability: "git" }),
     ).toMatchObject({
-      source: "agent",
-      capability: "unknown",
-      originalCapability: "launch_missiles",
-      decision: "warn",
+      source: "browser",
+      influencedBy: ["browser", "github"],
+      policyDecision: "require_confirm",
+      decision: "require_confirm",
+    });
+
+    expect(
+      evaluateSecurityMatrix({ influencedBy: ["browser", "email"], capability: "exec" }),
+    ).toMatchObject({
+      policyDecision: "block",
+      decision: "block",
+    });
+  });
+
+  it("allows approval to satisfy require_confirm without overriding block", () => {
+    expect(
+      evaluateSecurityMatrix({
+        influencedBy: ["email"],
+        capability: "write_file",
+        approvalState: "approved",
+      }),
+    ).toMatchObject({
+      policyDecision: "require_confirm",
+      decision: "allow",
+      matched: "approval_state",
+    });
+
+    expect(
+      evaluateSecurityMatrix({
+        influencedBy: ["email"],
+        capability: "exec",
+        approvalState: "approved",
+      }),
+    ).toMatchObject({
+      policyDecision: "block",
+      decision: "block",
       matched: "policy",
     });
   });
 
-  it("allows a custom policy to override a default decision", () => {
+  it("lets existing operator policy deny any matrix decision", () => {
+    expect(
+      evaluateSecurityMatrix({ actor: "user", capability: "read_file", operatorPolicy: "denied" }),
+    ).toMatchObject({
+      policyDecision: "allow",
+      decision: "block",
+      matched: "operator_policy",
+    });
+  });
+
+  it("does not allow a custom policy to weaken defaults unless explicitly enabled", () => {
     const policy = {
       web_fetch: {
         exec: {
@@ -158,13 +210,26 @@ describe("Security Matrix evaluator", () => {
       },
     } satisfies SecurityMatrixPolicy;
 
-    expect(evaluateSecurityMatrix({ source: "web_fetch", capability: "exec", policy })).toEqual({
+    expect(evaluateSecurityMatrix({ influencedBy: ["web_fetch"], capability: "exec", policy })).toMatchObject({
       source: "web_fetch",
-      originalSource: "web_fetch",
       capability: "exec",
-      originalCapability: "exec",
+      policyDecision: "block",
+      decision: "block",
+      matched: "policy",
+    });
+
+    expect(
+      evaluateSecurityMatrix({
+        influencedBy: ["web_fetch"],
+        capability: "exec",
+        policy,
+        allowPolicyWeakening: true,
+      }),
+    ).toMatchObject({
+      source: "web_fetch",
+      capability: "exec",
+      policyDecision: "allow",
       decision: "allow",
-      reason: "Test policy override.",
       matched: "policy",
     });
   });
@@ -172,26 +237,58 @@ describe("Security Matrix evaluator", () => {
   it("keeps default policy rules when a partial custom policy has no matching rule", () => {
     const policy = {
       web_fetch: {
-        exec: "block",
+        read_file: "warn",
       },
     } satisfies SecurityMatrixPolicy;
 
     expect(
-      evaluateSecurityMatrix({ source: "web_fetch", capability: "credential_access", policy }),
+      evaluateSecurityMatrix({ influencedBy: ["web_fetch"], capability: "credential_access", policy }),
     ).toMatchObject({
       source: "web_fetch",
       capability: "credential_access",
+      policyDecision: "block",
       decision: "block",
       matched: "policy",
     });
   });
 
-  it("explains the source, capability, decision, and match state", () => {
+  it("maps concrete tool names into capabilities", () => {
+    expect(resolveSecurityMatrixCapabilityFromTool("exec")).toBe("exec");
+    expect(resolveSecurityMatrixCapabilityFromTool("gmail.send")).toBe("email_send");
+    expect(resolveSecurityMatrixCapabilityFromTool("workspace.apply_patch")).toBe("write_file");
+    expect(resolveSecurityMatrixCapabilityFromTool("custom.opaque.tool")).toBe("unknown");
+  });
+
+  it("creates audit events from runtime tool facts", () => {
+    const event = createSecurityMatrixAuditEvent({
+      toolName: "exec",
+      toolSource: "core",
+      actor: "agent",
+      influencedBy: ["github"],
+      approvalState: "none",
+      operatorPolicy: "allowed",
+    });
+
+    expect(event).toMatchObject({
+      type: "security_matrix.evaluated",
+      toolName: "exec",
+      toolSource: "core",
+      actor: "agent",
+      influencedBy: ["github"],
+      capability: "exec",
+      policyDecision: "block",
+      decision: "block",
+      matched: "policy",
+    });
+  });
+
+  it("explains the actor, influence, capability, decision, and match state", () => {
     const explanation = explainSecurityMatrixDecision(
-      evaluateSecurityMatrix({ source: "web_fetch", capability: "exec" }),
+      evaluateSecurityMatrix({ actor: "agent", influencedBy: ["web_fetch"], capability: "exec" }),
     );
 
-    expect(explanation).toContain("web_fetch -> exec");
+    expect(explanation).toContain("agent influencedBy=web_fetch -> exec");
+    expect(explanation).toContain("policyDecision=block");
     expect(explanation).toContain("decision=block");
     expect(explanation).toContain("matched=policy");
   });
