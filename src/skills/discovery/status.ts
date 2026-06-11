@@ -260,10 +260,6 @@ function buildSkillStatus(
   const disabled = skillConfig?.enabled === false;
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const blockedByAgentFilter = agentSkillFilter !== undefined && !indexed.agentAllowed;
-  const blockedByPlatform =
-    entry.metadata?.os !== undefined &&
-    entry.metadata.os.length > 0 &&
-    !entry.metadata.os.includes(process.platform);
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
     Boolean(
@@ -284,6 +280,7 @@ function buildSkillStatus(
       isEnvSatisfied,
       isConfigSatisfied,
     });
+  const blockedByPlatform = missing.os.length > 0;
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
   const availableToAgent = eligible && !blockedByAgentFilter;
   const userInvocable = indexed.userInvocable;

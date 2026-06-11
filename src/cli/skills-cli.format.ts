@@ -350,7 +350,12 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
   );
   const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.blockedByAgentFilter,
+    (s) =>
+      !s.eligible &&
+      !s.disabled &&
+      !s.blockedByAllowlist &&
+      !s.blockedByAgentFilter &&
+      !s.blockedByPlatform,
   );
   const agentId = report.agentId ?? opts.agent;
 
