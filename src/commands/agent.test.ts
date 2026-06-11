@@ -1286,7 +1286,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
-      await writeSessionStoreSeed(store, {
+      writeSessionStoreSeed(store, {
         [sessionKey]: { sessionId: "wechat-session", updatedAt: Date.now() },
       });
       mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "work" }]);
@@ -1302,7 +1302,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
-      await writeSessionStoreSeed(store, {
+      writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "wechat-session",
           updatedAt: Date.now(),
