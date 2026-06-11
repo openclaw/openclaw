@@ -223,6 +223,7 @@ export class MsteamsProvider implements VoiceCallProvider {
         onAudioFrame: (frame) => this.handleAudioFrame(frame),
         onVideoFrame: (frame) => this.handleVideoFrame(frame),
         onParticipants: (info) => this.handleParticipants(info),
+        onDtmf: (info) => this.handleDtmf(info),
         onRecordingStatus: (info) => this.handleRecordingStatus(info),
       });
     } else {
@@ -696,6 +697,12 @@ export class MsteamsProvider implements VoiceCallProvider {
       `MsteamsProvider: participants ${info.callId} humanCount=${info.count}` +
         (info.count >= 2 ? " (group)" : " (1:1)"),
     );
+  }
+
+  /** DTMF keypress from the caller → surface it to the realtime model (IVR flows, #21). */
+  private handleDtmf(info: { callId: string; digit: string }): void {
+    this.logger?.debug?.(`MsteamsProvider: dtmf ${info.callId} digit=${info.digit}`);
+    this.realtimeCalls.get(info.callId)?.notifyDtmf(info.digit);
   }
 
   /** Effective group-call gate config (shared resolver applies the schema defaults). */

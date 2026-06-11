@@ -108,6 +108,12 @@ const ParticipantsSchema = z.object({
   count: z.number().int().nonnegative(),
 });
 
+/** Worker → OpenClaw: a DTMF key the caller pressed ("0"-"9", "*", "#"). See #21. */
+const DtmfSchema = z.object({
+  type: z.literal("dtmf"),
+  digit: z.string().min(1).max(1),
+});
+
 const InboundMessageSchema = z.discriminatedUnion("type", [
   SessionStartSchema,
   SessionEndSchema,
@@ -115,6 +121,7 @@ const InboundMessageSchema = z.discriminatedUnion("type", [
   AudioFrameSchema,
   VideoFrameSchema,
   ParticipantsSchema,
+  DtmfSchema,
   PingSchema,
 ]);
 
@@ -198,6 +205,8 @@ export interface MsteamsMediaStreamConfig {
   }) => void;
   /** Human participant count on the call changed (excludes the bot). count >= 2 ⇒ group/meeting. */
   onParticipants?: (info: { callId: string; count: number }) => void;
+  /** A DTMF key the caller pressed ("0"-"9", "*", "#"). See #21. */
+  onDtmf?: (info: { callId: string; digit: string }) => void;
 }
 
 const DEFAULT_HMAC_WINDOW_MS = 60_000;
@@ -569,6 +578,10 @@ export class MsteamsMediaStream {
       }
       case "participants": {
         this.config.onParticipants?.({ callId, count: parsed.count });
+        break;
+      }
+      case "dtmf": {
+        this.config.onDtmf?.({ callId, digit: parsed.digit });
         break;
       }
       case "ping": {
