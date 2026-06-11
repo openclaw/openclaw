@@ -85,6 +85,7 @@ export async function mergeHybridResults(params: {
       snippet: string;
       vectorScore: number;
       textScore: number;
+      hasVector: boolean;
     }
   >();
 
@@ -98,6 +99,7 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
+      hasVector: true,
     });
   }
 
@@ -118,13 +120,14 @@ export async function mergeHybridResults(params: {
         snippet: r.snippet,
         vectorScore: 0,
         textScore: r.textScore,
+        hasVector: false,
       });
     }
   }
 
   const merged = Array.from(byId.values()).map((entry) => {
-    const effectiveTextWeight =
-      params.isNonTextMediaPath?.(entry.path) === true ? 0 : params.textWeight;
+    const dropMediaTextSignal = entry.hasVector && params.isNonTextMediaPath?.(entry.path) === true;
+    const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;
     const weightSum = params.vectorWeight + effectiveTextWeight;
     const weighted =
       params.vectorWeight * entry.vectorScore + effectiveTextWeight * entry.textScore;
