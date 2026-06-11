@@ -516,8 +516,24 @@ export function queuedPendingWorkCount(sessionKey: string): number {
 }
 
 export function hasLiveOrRecentlyDispatchedContinuationWork(sessionKey: string): boolean {
-  return listTaskFlowsForOwnerKey(sessionKey).some(
-    (flow) =>
-      isContinuationWorkFlow(flow) && (flow.status === "queued" || flow.status === "running"),
-  );
+  return listTaskFlowsForOwnerKey(sessionKey).some((flow) => {
+    if (!isContinuationWorkFlow(flow)) {
+      return false;
+    }
+    if (flow.status !== "queued" && flow.status !== "running") {
+      return false;
+    }
+    // #990 P2 (#996): a durably delivered-marked flow is DONE, not live. The
+    // locus-3 mark deliberately leaves it `status:running` until finishFlow
+    // finalizes it; if the process crashed in the mark->finishFlow gap, the row
+    // stays `running` but is already delivered. The consume-guards (:221, :485)
+    // already exclude `state.succeeded` rows from re-delivery; the cleanup
+    // live-check must match, or `deleteSubagentSessionForCleanup` /
+    // the registry sweep treat the delivered row as live and strand its child
+    // session forever. Exclude delivered-marked rows here too.
+    if (decodeWorkState(flow)?.succeeded) {
+      return false;
+    }
+    return true;
+  });
 }

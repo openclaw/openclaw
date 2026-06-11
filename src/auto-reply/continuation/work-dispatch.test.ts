@@ -1086,6 +1086,37 @@ describe("durable continuation_work dispatch", () => {
     expect(turnGrants).toHaveLength(0);
   });
 
+  it("does not count a delivered-marked-but-still-running flow as live work (#990 P2 / #996 — cleanup-guard matches the consume-guard)", () => {
+    // Crash in the markPendingWorkDelivered -> finishFlow gap leaves the flow
+    // `status:running` with `stateJson.succeeded` set. The consume-guards (:221,
+    // :485) already exclude it from re-delivery; hasLiveOrRecentlyDispatchedContinuationWork
+    // must match, or deleteSubagentSessionForCleanup / the registry sweep treat
+    // the delivered row as live and strand its child session forever.
+    const sessionKey = "agent:main:delivered-but-running";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "delivered but crashed before finishFlow",
+    });
+    const flow = [...mockFlows.values()][0];
+    if (!flow) {
+      throw new Error("expected mock flow");
+    }
+    // delivered-marked, but finishFlow never ran (process died in the gap):
+    flow.status = "running";
+    flow.stateJson = {
+      ...(flow.stateJson as Record<string, unknown>),
+      succeeded: { point: "optimal", durability: "durable" },
+    };
+
+    expect(hasLiveOrRecentlyDispatchedContinuationWork(sessionKey)).toBe(false);
+  });
+
   describe("#990 bucket-1 parent-lineage reap (design-pass §5)", () => {
     const REALISTIC_NOW = Date.parse("2026-04-25T12:00:00Z");
 
