@@ -799,6 +799,127 @@ describe("resolveUsableCustomProviderApiKey", () => {
       }
     }
   });
+
+  describe("runtime snapshot secretref fallback", () => {
+    it("resolves file-backed SecretRef apiKey from matched runtime config snapshot", () => {
+      const sourceConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://api.example.com/v1",
+              apiKey: NON_ENV_SECRETREF_MARKER,
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://api.example.com/v1",
+              apiKey: "sk-resolved-from-snapshot", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: sourceConfig,
+        provider: "custom",
+      });
+      expect(resolved).toEqual({
+        apiKey: "sk-resolved-from-snapshot",
+        source: "runtime config snapshot (secretref)",
+      });
+    });
+
+    it("does not resolve when runtime snapshot exists but source config mismatches", () => {
+      const sourceConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://api.example.com/v1",
+              apiKey: NON_ENV_SECRETREF_MARKER,
+              models: [],
+            },
+          },
+        },
+      };
+      const mismatchedSourceConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://different.example.com/v1",
+              apiKey: NON_ENV_SECRETREF_MARKER,
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://api.example.com/v1",
+              apiKey: "sk-should-not-leak", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(runtimeConfig, mismatchedSourceConfig);
+
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: sourceConfig,
+        provider: "custom",
+      });
+      expect(resolved).toBeNull();
+    });
+
+    it("returns null when no runtime snapshot is available (graceful fallback)", () => {
+      // clearRuntimeConfigSnapshot already called in beforeEach
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://api.example.com/v1",
+                apiKey: NON_ENV_SECRETREF_MARKER,
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved).toBeNull();
+    });
+
+    it("does not resolve when applicable config equals input config (same object)", () => {
+      const cfg = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://api.example.com/v1",
+              apiKey: NON_ENV_SECRETREF_MARKER,
+              models: [],
+            },
+          },
+        },
+      };
+      // set snapshot with the same config as both runtime and source
+      setRuntimeConfigSnapshot(cfg, cfg);
+
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg,
+        provider: "custom",
+      });
+      expect(resolved).toBeNull();
+    });
+  });
 });
 
 describe("resolveApiKeyForProvider", () => {
