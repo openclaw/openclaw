@@ -219,6 +219,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 export type CronStatusSummary = {
   enabled: boolean;
   storePath: string;
+  databasePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
 };
