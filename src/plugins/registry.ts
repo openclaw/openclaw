@@ -191,6 +191,7 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
   PluginLogger,
   PluginRegistrationMode,
+  PluginToolSchemaContribution,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -240,6 +241,20 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
   source: string;
   rootDir?: string;
 };
+
+function stableJsonStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJsonStringify(entry)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJsonStringify(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 export type {
   PluginChannelRegistration,
@@ -644,6 +659,59 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names: normalized,
       declaredNames,
       optional,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerToolSchemaContribution = (
+    record: PluginRecord,
+    contribution: PluginToolSchemaContribution,
+  ) => {
+    const toolName = normalizeOptionalString(contribution?.toolName);
+    const properties = contribution?.properties;
+    const validProperties =
+      properties &&
+      typeof properties === "object" &&
+      !Array.isArray(properties) &&
+      Object.keys(properties).length > 0 &&
+      Object.values(properties).every(
+        (property) => property && typeof property === "object" && !Array.isArray(property),
+      );
+    if (!toolName || !validProperties) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "tool schema contribution requires toolName and object properties",
+      });
+      return;
+    }
+    for (const [propertyName, propertySchema] of Object.entries(properties)) {
+      const conflictingRegistration = registry.toolSchemaContributions.find((registration) => {
+        if (registration.contribution.toolName !== toolName) {
+          return false;
+        }
+        const existingSchema = registration.contribution.properties[propertyName];
+        return (
+          existingSchema !== undefined &&
+          stableJsonStringify(existingSchema) !== stableJsonStringify(propertySchema)
+        );
+      });
+      if (conflictingRegistration) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `tool schema contribution for ${toolName}.${propertyName} conflicts with plugin ${conflictingRegistration.pluginId}`,
+        });
+        return;
+      }
+    }
+    registry.toolSchemaContributions.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      contribution: { toolName, properties },
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -2734,6 +2802,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(registrationCapabilities.capabilityHandlers
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
+              registerToolSchemaContribution: (contribution) =>
+                registerToolSchemaContribution(record, contribution),
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
@@ -3226,6 +3296,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     rollbackPluginGlobalSideEffects,
     pushDiagnostic,
     registerTool,
+    registerToolSchemaContribution,
     registerChannel,
     registerHostedMediaResolver,
     registerProvider,

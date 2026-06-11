@@ -1,4 +1,5 @@
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -140,6 +141,41 @@ async function executeClientTool(params: unknown): Promise<{
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("applies plugin schema contributions to delegated client tools", () => {
+    const clientTool = makeClientTool("exec_command");
+    clientTool.function.parameters = {
+      type: "object",
+      properties: { cmd: { type: "string" } },
+      required: ["cmd"],
+      additionalProperties: false,
+    };
+    const [definition] = toClientToolDefinitions([clientTool], undefined, undefined, [
+      {
+        toolName: "exec_command",
+        properties: {
+          background: {
+            type: "boolean",
+            description: "Run the delegated command in the background.",
+          },
+        },
+      },
+    ]);
+    if (!definition) {
+      throw new Error("missing client tool definition");
+    }
+
+    expect(definition.parameters.properties).toMatchObject({
+      cmd: { type: "string" },
+      background: { type: "boolean" },
+    });
+    expect(
+      validateToolArguments(definition, {
+        name: "exec_command",
+        arguments: { cmd: "sleep 1", background: true },
+      }),
+    ).toEqual({ cmd: "sleep 1", background: true });
+  });
+
   it("returns terminal pending results for each client tool in a batch", async () => {
     const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
     const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {

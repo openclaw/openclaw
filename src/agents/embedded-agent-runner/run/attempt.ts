@@ -57,6 +57,7 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
@@ -2184,6 +2185,9 @@ export async function runEmbeddedAttempt(
               loopDetection: clientToolLoopDetection,
               onToolOutcome: params.onToolOutcome,
             },
+            getActivePluginRegistry()?.toolSchemaContributions.map(
+              (registration) => registration.contribution,
+            ),
           )
         : [];
       const clientToolSearch = codeModeControlsEnabledForRun

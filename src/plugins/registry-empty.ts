@@ -4,6 +4,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
   return {
     plugins: [],
     tools: [],
+    toolSchemaContributions: [],
     hooks: [],
     typedHooks: [],
     channels: [],

@@ -118,6 +118,7 @@ import type {
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
   PluginToolMetadataRegistration,
+  PluginToolSchemaContribution,
   PluginTrustedToolPolicyRegistration,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
@@ -177,6 +178,7 @@ export type {
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
   PluginToolMetadataRegistration,
+  PluginToolSchemaContribution,
   PluginTrustedToolPolicyRegistration,
   OpenClawPluginConfigSchema,
   OpenClawPluginHttpRouteHandler,

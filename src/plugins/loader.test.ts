@@ -3731,6 +3731,107 @@ module.exports = { id: "throws-after-import", register() {} };`,
     delete (globalThis as Record<string, unknown>)[marker];
   });
 
+  it("registers delegated client tool schema contributions", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "client-tool-schema",
+      filename: "client-tool-schema.cjs",
+      body: `module.exports = {
+        id: "client-tool-schema",
+        register(api) {
+          api.registerToolSchemaContribution({
+            toolName: "exec_command",
+            properties: {
+              background: { type: "boolean" },
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["client-tool-schema"],
+        },
+      },
+    });
+
+    expect(registry.toolSchemaContributions).toMatchObject([
+      {
+        pluginId: "client-tool-schema",
+        contribution: {
+          toolName: "exec_command",
+          properties: {
+            background: { type: "boolean" },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("rejects conflicting delegated client tool schema contributions", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "client-tool-schema-one",
+      filename: "client-tool-schema-one.cjs",
+      body: `module.exports = {
+        id: "client-tool-schema-one",
+        register(api) {
+          api.registerToolSchemaContribution({
+            toolName: "exec_command",
+            properties: {
+              background: { type: "boolean" },
+            },
+          });
+        },
+      };`,
+    });
+    const second = writePlugin({
+      id: "client-tool-schema-two",
+      filename: "client-tool-schema-two.cjs",
+      body: `module.exports = {
+        id: "client-tool-schema-two",
+        register(api) {
+          api.registerToolSchemaContribution({
+            toolName: "exec_command",
+            properties: {
+              background: { type: "string" },
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: first.dir,
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["client-tool-schema-one", "client-tool-schema-two"],
+        },
+      },
+    });
+
+    expect(registry.toolSchemaContributions).toHaveLength(1);
+    expect(registry.toolSchemaContributions[0]?.pluginId).toBe("client-tool-schema-one");
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          pluginId: "client-tool-schema-two",
+          message: expect.stringContaining("exec_command.background"),
+        }),
+      ]),
+    );
+  });
+
   it("rejects plugin tool registration without manifest tool ownership", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

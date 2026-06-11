@@ -58,6 +58,7 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
   PluginLogger,
   PluginOrigin,
+  PluginToolSchemaContribution,
   PluginTextTransformRegistration,
   MigrationProviderPlugin,
   ProviderPlugin,
@@ -77,6 +78,14 @@ export type PluginToolRegistration = {
   names: string[];
   declaredNames?: string[];
   optional: boolean;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginToolSchemaContributionRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  contribution: PluginToolSchemaContribution;
   source: string;
   rootDir?: string;
 };
@@ -429,6 +438,7 @@ export type PluginRecord = {
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
+  toolSchemaContributions: PluginToolSchemaContributionRegistration[];
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
+import type { PluginToolSchemaContribution } from "../plugins/types.js";
 import { isPlainObject } from "../utils.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -483,14 +484,28 @@ export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: ClientToolCallRecorder,
   hookContext?: HookContext,
+  schemaContributions: readonly PluginToolSchemaContribution[] = [],
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const func = tool.function;
+    const matchingContributions = schemaContributions.filter(
+      (contribution) => contribution.toolName === func.name,
+    );
+    const parameters =
+      matchingContributions.length === 0
+        ? func.parameters
+        : {
+            ...(func.parameters ?? { type: "object" }),
+            properties: {
+              ...Object.assign({}, ...matchingContributions.map((entry) => entry.properties)),
+              ...(isPlainObject(func.parameters?.properties) ? func.parameters.properties : {}),
+            },
+          };
     return {
       name: func.name,
       label: func.name,
       description: func.description ?? "",
-      parameters: func.parameters as ToolDefinition["parameters"],
+      parameters: parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         if (onClientToolCall && typeof onClientToolCall !== "function") {

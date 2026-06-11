@@ -2591,6 +2591,13 @@ export type OpenClawPluginLifecycleApi = {
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };
 
+export type PluginToolSchemaContribution = {
+  /** Exact delegated client tool name to extend. */
+  toolName: string;
+  /** Optional object properties added when the client schema does not already define them. */
+  properties: Record<string, JsonSchemaObject>;
+};
+
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
@@ -2625,6 +2632,8 @@ export type OpenClawPluginApi = {
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,
   ) => void;
+  /** Extend delegated client tool schemas without changing canonical OpenClaw tools. */
+  registerToolSchemaContribution: (contribution: PluginToolSchemaContribution) => void;
   registerHook: (
     events: string | string[],
     handler: InternalHookHandler,
