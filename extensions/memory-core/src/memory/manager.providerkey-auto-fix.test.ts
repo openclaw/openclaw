@@ -16,9 +16,33 @@ const MOCK_CACHE_KEY_DATA = {
   dimensions: 1024,
 };
 
+const MOCK_CACHE_KEY_DATA_DIFFERENT_DIMS = {
+  provider: "openai-compatible",
+  baseUrl: "https://dashscope.example.com/v1",
+  model: "text-embedding-v4",
+  dimensions: 3072,
+};
+
+const MOCK_CACHE_KEY_DATA_DIFFERENT_BASE_URL = {
+  provider: "openai-compatible",
+  baseUrl: "https://different-endpoint.example.com/v1",
+  model: "text-embedding-v4",
+  dimensions: 1024,
+};
+
 const STALE_PROVIDER_KEY = crypto
   .createHash("sha256")
   .update(JSON.stringify({ provider: "none", model: "fts-only" }))
+  .digest("hex");
+
+const DIFFERENT_DIMS_PROVIDER_KEY = crypto
+  .createHash("sha256")
+  .update(JSON.stringify(MOCK_CACHE_KEY_DATA_DIFFERENT_DIMS))
+  .digest("hex");
+
+const DIFFERENT_BASE_URL_PROVIDER_KEY = crypto
+  .createHash("sha256")
+  .update(JSON.stringify(MOCK_CACHE_KEY_DATA_DIFFERENT_BASE_URL))
   .digest("hex");
 
 const createEmbeddingProviderMock = vi.hoisted(() =>
@@ -45,7 +69,7 @@ vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 
-describe("memory manager auto-fixes providerKey mismatch from CLI index --force", () => {
+describe("memory manager auto-fixes stale FTS-only providerKey from CLI index --force", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let workspaceDir = "";
@@ -129,7 +153,7 @@ describe("memory manager auto-fixes providerKey mismatch from CLI index --force"
     db.close();
   }
 
-  it("auto-fixes stale providerKey and allows search after provider init", async () => {
+  it("auto-fixes stale FTS-only providerKey written by CLI before provider init", async () => {
     const firstManager = await createManager();
     await firstManager.sync({ reason: "cli", force: true });
     expect(indexIdentityStatus(firstManager)).toBe("valid");
@@ -142,15 +166,13 @@ describe("memory manager auto-fixes providerKey mismatch from CLI index --force"
 
     const reopenedManager = await createManager();
 
-    expect(indexIdentityStatus(reopenedManager)).toBe("valid");
-
     const results = await reopenedManager.search("Test topic");
 
     expect(indexIdentityStatus(reopenedManager)).toBe("valid");
     expect(results.length).toBeGreaterThan(0);
   });
 
-  it("does not auto-fix providerKey mismatch when provider id also differs", async () => {
+  it("does not auto-fix when provider id also differs", async () => {
     const firstManager = await createManager();
     await firstManager.sync({ reason: "cli", force: true });
 
@@ -174,6 +196,42 @@ describe("memory manager auto-fixes providerKey mismatch from CLI index --force"
       "memory_index_meta_v1",
     );
     db.close();
+
+    const reopenedManager = await createManager();
+
+    const results = await reopenedManager.search("Test topic");
+
+    expect(indexIdentityStatus(reopenedManager)).toBe("mismatched");
+    expect(results.length).toBe(0);
+  });
+
+  it("does not auto-fix when runtime dimensions differ from index", async () => {
+    const firstManager = await createManager();
+    await firstManager.sync({ reason: "cli", force: true });
+
+    await manager!.close();
+    manager = null;
+    await closeAllMemorySearchManagers();
+
+    overwriteProviderKeyInMeta(DIFFERENT_DIMS_PROVIDER_KEY);
+
+    const reopenedManager = await createManager();
+
+    const results = await reopenedManager.search("Test topic");
+
+    expect(indexIdentityStatus(reopenedManager)).toBe("mismatched");
+    expect(results.length).toBe(0);
+  });
+
+  it("does not auto-fix when runtime baseUrl differs from index", async () => {
+    const firstManager = await createManager();
+    await firstManager.sync({ reason: "cli", force: true });
+
+    await manager!.close();
+    manager = null;
+    await closeAllMemorySearchManagers();
+
+    overwriteProviderKeyInMeta(DIFFERENT_BASE_URL_PROVIDER_KEY);
 
     const reopenedManager = await createManager();
 
