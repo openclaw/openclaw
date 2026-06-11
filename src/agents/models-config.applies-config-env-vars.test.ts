@@ -157,6 +157,38 @@ beforeAll(async () => {
 });
 
 describe("models-config", () => {
+  it("keeps the implicit provider catalog when explicit baseUrl is blank", async () => {
+    let observedConfig: OpenClawConfig | undefined;
+    const providers = await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "   ",
+                apiKey: "OPENAI_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+      },
+      {
+        resolveImplicitProviders: async ({ config }) => {
+          observedConfig = config;
+          return { openai: createImplicitOpenAiProvider() };
+        },
+      },
+    );
+
+    expect(observedConfig?.models?.providers?.openai?.baseUrl).toBeUndefined();
+    expect(providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+    expect(providers.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
   it("threads plugin metadata snapshots into implicit provider discovery", async () => {
     const pluginMetadataSnapshot = {
       index: { plugins: [{ pluginId: "zai", enabled: true }] },

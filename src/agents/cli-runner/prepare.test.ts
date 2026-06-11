@@ -596,6 +596,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-turn-prepare",
+        messageChannel: "telegram",
+        currentChannelId: "chat-1",
+        senderId: "user-456",
         config: createCliBackendConfig(),
       });
 
@@ -610,10 +613,19 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         queuedInjections: [],
       });
       const turnPrepareContext = agentTurnPrepareCalls[0]?.[1] as
-        | { runId?: string; sessionKey?: string }
+        | {
+            channel?: string;
+            chatId?: string;
+            runId?: string;
+            senderId?: string;
+            sessionKey?: string;
+          }
         | undefined;
       expect(turnPrepareContext?.runId).toBe("run-test-turn-prepare");
       expect(turnPrepareContext?.sessionKey).toBe("agent:main:test");
+      expect(turnPrepareContext?.channel).toBe("telegram");
+      expect(turnPrepareContext?.chatId).toBe("chat-1");
+      expect(turnPrepareContext?.senderId).toBe("user-456");
       expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
       expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     } finally {
@@ -650,6 +662,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-legacy-merge",
+        messageChannel: "discord",
+        currentChannelId: "channel:room-1",
+        senderId: "user-789",
         config: createCliBackendConfig(),
       });
 
@@ -659,6 +674,24 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
       expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledOnce();
+      const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+        [unknown, unknown]
+      >;
+      const promptContext = beforePromptBuildCalls[0]?.[1] as
+        | { channel?: string; chatId?: string; senderId?: string }
+        | undefined;
+      expect(promptContext?.channel).toBe("discord");
+      expect(promptContext?.chatId).toBe("room-1");
+      expect(promptContext?.senderId).toBe("user-789");
+      const beforeAgentStartCalls = hookRunner.runBeforeAgentStart.mock.calls as unknown as Array<
+        [unknown, unknown]
+      >;
+      const legacyContext = beforeAgentStartCalls[0]?.[1] as
+        | { channel?: string; chatId?: string; senderId?: string }
+        | undefined;
+      expect(legacyContext?.channel).toBe("discord");
+      expect(legacyContext?.chatId).toBe("room-1");
+      expect(legacyContext?.senderId).toBe("user-789");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

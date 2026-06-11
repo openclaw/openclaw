@@ -1028,6 +1028,10 @@ export const dispatchTelegramMessage = async ({
   });
   let finalAnswerDeliveryStarted = false;
   let finalAnswerDelivered = false;
+  // While the durable verbose lane is active, the ephemeral draft yields its
+  // commentary lines so they render once. Tool/plan status lines keep the
+  // draft: they have no durable counterpart in streamed runs.
+  let verboseProgressActive: () => boolean = () => false;
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string; startImmediately?: boolean },
@@ -2035,6 +2039,18 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
+                        if (verboseProgressActive()) {
+                          // Durable lane owns tool payloads: send standalone instead
+                          // of diverting into the draft, which is discarded at final.
+                          if (
+                            await sendPayload(
+                              applyTextToPayload(effectivePayload, segment.update.text),
+                            )
+                          ) {
+                            blockDelivered = true;
+                          }
+                          continue;
+                        }
                         const canRepresentAsTransientProgress = canUseNativeToolProgressDraft({
                           payload: effectivePayload,
                           reply,
@@ -2325,6 +2341,9 @@ export const dispatchTelegramMessage = async ({
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
                     !isRoomEvent && Boolean(answerLane.stream),
+                  onVerboseProgressVisibility: (isActive) => {
+                    verboseProgressActive = isActive;
+                  },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
                   onToolStart: async (payload) => {
@@ -2349,6 +2368,9 @@ export const dispatchTelegramMessage = async ({
                   },
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
+                      if (verboseProgressActive()) {
+                        return;
+                      }
                       await progressDraft.pushCommentaryProgress(payload.progressText, {
                         itemId: payload.itemId,
                       });
