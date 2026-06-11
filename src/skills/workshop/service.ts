@@ -1,4 +1,3 @@
-// Workshop service orchestrates skill draft creation, validation, and persistence.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -12,6 +11,7 @@ import {
 } from "../discovery/status.js";
 import {
   assertInsideWorkspace,
+  assertWorkspaceSkillWriteTarget,
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
   readWorkspaceSkillFile,
@@ -538,6 +538,11 @@ export async function applySkillProposal(
         ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
         : [],
     };
+    await assertWorkspaceSkillWriteTarget({
+      workspaceDir: input.workspaceDir,
+      filePath: record.target.skillFile,
+      symlinkPolicy,
+    });
     const targetState = await readApplyTargetState(record, supportFiles);
     const rollback = createSkillProposalRollback({
       proposalId: record.id,
