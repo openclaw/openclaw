@@ -265,4 +265,45 @@ describe("continuation config schema validation", () => {
     const result = parseContinuation({ [retiredKey]: true });
     expect(result.success).toBe(false);
   });
+
+  /* ---------------------------------------------------------------- */
+  /*  #990 busySkipBackoff + orphanReapStaleCutoffMs                   */
+  /* ---------------------------------------------------------------- */
+
+  it("accepts a fully-specified busySkipBackoff", () => {
+    const result = parseContinuation({
+      busySkipBackoff: { baseMs: 1000, ceilingMs: 60_000, factor: 2 },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a partial busySkipBackoff (all fields optional)", () => {
+    expect(parseContinuation({ busySkipBackoff: { factor: 3 } }).success).toBe(true);
+    expect(parseContinuation({ busySkipBackoff: {} }).success).toBe(true);
+  });
+
+  it("rejects a busySkipBackoff factor <= 1", () => {
+    expect(parseContinuation({ busySkipBackoff: { factor: 1 } }).success).toBe(false);
+    expect(parseContinuation({ busySkipBackoff: { factor: 0.5 } }).success).toBe(false);
+  });
+
+  it("rejects non-positive / non-integer busySkipBackoff bounds", () => {
+    expect(parseContinuation({ busySkipBackoff: { baseMs: 0 } }).success).toBe(false);
+    expect(parseContinuation({ busySkipBackoff: { ceilingMs: -1 } }).success).toBe(false);
+    expect(parseContinuation({ busySkipBackoff: { baseMs: 1.5 } }).success).toBe(false);
+  });
+
+  it("rejects unknown busySkipBackoff keys (strict)", () => {
+    expect(parseContinuation({ busySkipBackoff: { nope: 1 } }).success).toBe(false);
+  });
+
+  it("accepts a positive integer orphanReapStaleCutoffMs", () => {
+    expect(parseContinuation({ orphanReapStaleCutoffMs: 1_800_000 }).success).toBe(true);
+  });
+
+  it("rejects a non-positive / non-integer orphanReapStaleCutoffMs", () => {
+    expect(parseContinuation({ orphanReapStaleCutoffMs: 0 }).success).toBe(false);
+    expect(parseContinuation({ orphanReapStaleCutoffMs: -5 }).success).toBe(false);
+    expect(parseContinuation({ orphanReapStaleCutoffMs: 1.5 }).success).toBe(false);
+  });
 });

@@ -198,9 +198,14 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
 
       const workLog = params.log.child("continuation-work-recovery");
       const workSummary = await workModule.recoverPendingContinuationWork();
-      if (workSummary.sessions > 0 || workSummary.dispatched > 0 || workSummary.failed > 0) {
+      if (
+        workSummary.sessions > 0 ||
+        workSummary.dispatched > 0 ||
+        workSummary.failed > 0 ||
+        workSummary.reaped > 0
+      ) {
         workLog.info(
-          `replayed sessions=${workSummary.sessions} dispatched=${workSummary.dispatched} failed=${workSummary.failed}`,
+          `replayed sessions=${workSummary.sessions} dispatched=${workSummary.dispatched} failed=${workSummary.failed} reaped=${workSummary.reaped}`,
         );
       }
     })().catch((err: unknown) => params.log.error(`Continuation recovery failed: ${String(err)}`));

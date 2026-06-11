@@ -20,6 +20,10 @@ const DEFAULT_CONTINUATION_COST_CAP_TOKENS = 500_000;
 const DEFAULT_CONTINUATION_MAX_DELEGATES_PER_TURN = 5;
 const DEFAULT_CONTINUATION_MAX_PENDING_WORK = 32;
 const DEFAULT_EARLY_WARNING_BAND = 0.3125;
+// #990 busy-skip exp-backoff defaults (preserve pre-config behavior: 1s base,
+// ×2 per consecutive busy-skip, capped at maxDelayMs).
+const DEFAULT_BUSY_SKIP_BACKOFF_BASE_MS = 1_000;
+const DEFAULT_BUSY_SKIP_BACKOFF_FACTOR = 2;
 
 function clampPositiveInt(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -56,6 +60,27 @@ function clampEarlyWarningBand(value: unknown): number {
   return value;
 }
 
+function clampFactor(value: unknown, fallback: number): number {
+  // A backoff factor must exceed 1 to actually decay the poll rate.
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 1) {
+    return fallback;
+  }
+  return value;
+}
+
+function resolveBusySkipBackoff(
+  backoff: { baseMs?: number; ceilingMs?: number; factor?: number } | undefined,
+  maxDelayMs: number,
+): { baseMs: number; ceilingMs: number; factor: number } {
+  // Default ceiling is maxDelayMs (the scheduling ceiling) — preserves the
+  // pre-config rate-cap. baseMs/factor default to the prior flat 1s ×2.
+  return {
+    baseMs: clampPositiveInt(backoff?.baseMs, DEFAULT_BUSY_SKIP_BACKOFF_BASE_MS),
+    ceilingMs: clampPositiveInt(backoff?.ceilingMs, maxDelayMs),
+    factor: clampFactor(backoff?.factor, DEFAULT_BUSY_SKIP_BACKOFF_FACTOR),
+  };
+}
+
 /**
  * Resolve the continuation runtime config from the gateway config.
  *
@@ -66,6 +91,10 @@ export function resolveContinuationRuntimeConfig(
   cfg: OpenClawConfig = getRuntimeConfig(),
 ): ContinuationRuntimeConfig {
   const continuation = cfg.agents?.defaults?.continuation;
+  const maxDelayMs = clampNonNegativeDelayMs(
+    continuation?.maxDelayMs,
+    DEFAULT_CONTINUATION_MAX_DELAY_MS,
+  );
 
   return {
     enabled: continuation?.enabled === true,
@@ -77,10 +106,7 @@ export function resolveContinuationRuntimeConfig(
       continuation?.minDelayMs,
       DEFAULT_CONTINUATION_MIN_DELAY_MS,
     ),
-    maxDelayMs: clampNonNegativeDelayMs(
-      continuation?.maxDelayMs,
-      DEFAULT_CONTINUATION_MAX_DELAY_MS,
-    ),
+    maxDelayMs,
     maxChainLength: clampPositiveInt(
       continuation?.maxChainLength,
       DEFAULT_CONTINUATION_MAX_CHAIN_LENGTH,
@@ -101,6 +127,12 @@ export function resolveContinuationRuntimeConfig(
     earlyWarningBand: clampEarlyWarningBand(continuation?.earlyWarningBand),
     crossSessionTargeting:
       continuation?.crossSessionTargeting === "enabled" ? "enabled" : "disabled",
+    busySkipBackoff: resolveBusySkipBackoff(continuation?.busySkipBackoff, maxDelayMs),
+    ...(typeof continuation?.orphanReapStaleCutoffMs === "number" &&
+    Number.isFinite(continuation.orphanReapStaleCutoffMs) &&
+    continuation.orphanReapStaleCutoffMs > 0
+      ? { orphanReapStaleCutoffMs: Math.trunc(continuation.orphanReapStaleCutoffMs) }
+      : {}),
   };
 }
 

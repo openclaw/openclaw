@@ -513,6 +513,29 @@ export type AgentDefaultsConfig = {
      */
     earlyWarningBand?: number;
     /**
+     * #990 busy-skip exp-backoff bounds for the continue_work re-arm (rate-cap,
+     * not a safety invariant). `baseMs` (default 1000) is the first re-arm delay,
+     * multiplied by `factor` (default 2) per consecutive busy-skip up to
+     * `ceilingMs` (default: maxDelayMs). The ceiling is the give-up rate-cap —
+     * the flow keeps deferring at this rate forever, never dropped.
+     */
+    busySkipBackoff?: {
+      /** First re-arm delay in ms (default 1000). */
+      baseMs?: number;
+      /** Maximum re-arm delay / give-up rate-cap in ms (default: maxDelayMs). */
+      ceilingMs?: number;
+      /** Exponential growth factor per consecutive busy-skip (default 2, must be > 1). */
+      factor?: number;
+    };
+    /**
+     * #990 orphan-reap confidence-gate floor in ms. An unended subagent run is
+     * treated as confident-terminal (reap-eligible) only after it ages past this
+     * cutoff; unset uses the subagent-registry default (2h). The per-run timeout
+     * is always respected. Safety invariants (uncertain→quiesce,
+     * never-wrongful-reap) are fixed — only this confidence window is tunable.
+     */
+    orphanReapStaleCutoffMs?: number;
+    /**
      * Cross-session delegate targeting policy.
      * - `"disabled"` (default): delegates can return to the dispatching session or
      *   use `fanoutMode: "tree"` for lineage-only routing. Non-self `targetSessionKey`,

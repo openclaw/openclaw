@@ -134,6 +134,48 @@ describe("resolveContinuationRuntimeConfig", () => {
     expect("generationGuardTolerance" in config).toBe(false);
   });
 
+  it("defaults busySkipBackoff to 1s base ×2 capped at maxDelayMs (#990)", () => {
+    const config = resolveContinuationRuntimeConfig({} as never);
+    expect(config.busySkipBackoff).toEqual({ baseMs: 1_000, ceilingMs: 300_000, factor: 2 });
+    // ceiling tracks a configured maxDelayMs.
+    const tight = resolveContinuationRuntimeConfig({
+      agents: { defaults: { continuation: { maxDelayMs: 60_000 } } },
+    } as never);
+    expect(tight.busySkipBackoff?.ceilingMs).toBe(60_000);
+  });
+
+  it("resolves configured busySkipBackoff and clamps invalid values (#990)", () => {
+    const config = resolveContinuationRuntimeConfig({
+      agents: {
+        defaults: {
+          continuation: { busySkipBackoff: { baseMs: 500, ceilingMs: 120_000, factor: 3 } },
+        },
+      },
+    } as never);
+    expect(config.busySkipBackoff).toEqual({ baseMs: 500, ceilingMs: 120_000, factor: 3 });
+    // factor must exceed 1; non-positive base falls back to the default.
+    const clamped = resolveContinuationRuntimeConfig({
+      agents: {
+        defaults: { continuation: { busySkipBackoff: { baseMs: 0, factor: 1 } } },
+      },
+    } as never);
+    expect(clamped.busySkipBackoff).toEqual({ baseMs: 1_000, ceilingMs: 300_000, factor: 2 });
+  });
+
+  it("leaves orphanReapStaleCutoffMs unset by default and resolves a positive override (#990)", () => {
+    expect(resolveContinuationRuntimeConfig({} as never).orphanReapStaleCutoffMs).toBeUndefined();
+    const configured = resolveContinuationRuntimeConfig({
+      agents: { defaults: { continuation: { orphanReapStaleCutoffMs: 1_800_000 } } },
+    } as never);
+    expect(configured.orphanReapStaleCutoffMs).toBe(1_800_000);
+    // Non-positive is rejected (stays unset → subagent default).
+    expect(
+      resolveContinuationRuntimeConfig({
+        agents: { defaults: { continuation: { orphanReapStaleCutoffMs: 0 } } },
+      } as never).orphanReapStaleCutoffMs,
+    ).toBeUndefined();
+  });
+
   it("prefers the active runtime snapshot when resolving live config", () => {
     getRuntimeConfigSnapshotMock.mockReturnValueOnce({
       agents: { defaults: { continuation: { maxDelegatesPerTurn: 9 } } },
