@@ -55,6 +55,8 @@ import {
 } from "./simple-completion-runtime.js";
 
 beforeEach(() => {
+  vi.clearAllMocks();
+
   hoisted.resolveModelMock.mockReset();
   hoisted.resolveModelAsyncMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
