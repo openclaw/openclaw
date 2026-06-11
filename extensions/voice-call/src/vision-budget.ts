@@ -25,6 +25,14 @@ export class VisionBudget {
     return true;
   }
 
+  /**
+   * Return the most recent hit for a call — the vision call it paid for never actually happened
+   * (e.g. the frame push threw before reaching the model), so the spend should not count.
+   */
+  refund(callId: string): void {
+    this.hitsByCall.get(callId)?.pop();
+  }
+
   /** Drop a call's window when it ends. */
   release(callId: string): void {
     this.hitsByCall.delete(callId);

@@ -30,6 +30,15 @@ describe("VisionBudget", () => {
     expect(b.tryConsume("a", 0)).toBe(false);
   });
 
+  it("refund returns the most recent hit (failed vision call does not count)", () => {
+    const b = new VisionBudget(1);
+    expect(b.tryConsume("c", 0)).toBe(true);
+    b.refund("c"); // the send failed — the spend never happened
+    expect(b.tryConsume("c", 0)).toBe(true);
+    expect(b.tryConsume("c", 0)).toBe(false);
+    b.refund("unknown"); // no-op for an untracked call
+  });
+
   it("release clears a call's window", () => {
     const b = new VisionBudget(1);
     expect(b.tryConsume("c", 0)).toBe(true);

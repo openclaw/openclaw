@@ -61,6 +61,12 @@ const MSTEAMS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
 const REALTIME_SAMPLE_RATE_HZ = 24_000;
 /** Cap the consult transcript context so it cannot grow without bound on long calls. */
 const MAX_TRANSCRIPT_ENTRIES = 40;
+/**
+ * Cap one coalesced transcript entry. Without it, a long same-speaker run (an hour of a group call
+ * heard as one "user" stream) coalesces into a single ever-growing entry that the entry-count cap
+ * never trims. A fragment that would exceed this starts a new entry instead. (Review B7)
+ */
+const MAX_TRANSCRIPT_ENTRY_CHARS = 1_000;
 
 /**
  * Notify-mode delivery: once the model finishes its first turn, treat its audio as drained after this
@@ -514,12 +520,15 @@ export function createMsteamsRealtimeCall(params: {
   // "per-phone" (default) keys by the caller's Teams AAD id so the same caller's memory carries across
   // calls; "per-call" keys by callId. An anonymous caller (no aadId) falls back to per-call so distinct
   // anonymous callers never collide into one session.
+  // `||` (not `??`): the session.start schema permits an empty-string aadId, which would otherwise
+  // survive the fallback and collapse every such caller into ONE consult session key — cross-caller
+  // memory bleed. (Review B11; the media-stream boundary also normalizes blanks to null.)
   const sessionScopeId =
     deps.voiceConfig?.sessionScope === "per-call"
       ? callId
       : deps.voiceConfig?.sessionScope === "per-thread"
-        ? session.threadId?.trim() || (session.caller.aadId ?? callId)
-        : (session.caller.aadId ?? callId);
+        ? session.threadId?.trim() || session.caller.aadId || callId
+        : session.caller.aadId || callId;
 
   let outboundSeq = 0;
   let outboundTimestampMs = 0;
@@ -573,7 +582,10 @@ export function createMsteamsRealtimeCall(params: {
   /** Outbound greeting fires once, on answer (setRecordingActive); guards against a re-trigger. */
   let greetingTriggered = false;
 
-  function recordTranscript(role: "user" | "assistant", text: string): void {
+  /** Speaker of the most recent "user" transcript entry, so coalescing never crosses speakers. */
+  let lastUserEntrySpeaker: string | undefined;
+
+  function recordTranscript(role: "user" | "assistant", text: string, speaker?: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
     // recording status is active. Otherwise pre-recording turns would sit in the
     // buffer and be sent to the agent once consult/task run after recording flips
@@ -585,13 +597,25 @@ export function createMsteamsRealtimeCall(params: {
     if (!trimmed) {
       return;
     }
-    // Coalesce consecutive fragments from the same speaker so one spoken turn is
-    // a single context entry (avoids feeding the agent half-sentences).
+    // Coalesce consecutive fragments from the same speaker so one spoken turn is a single context
+    // entry (avoids feeding the agent half-sentences) — but never across SPEAKERS (merging would
+    // attribute everyone's words to the first "Name:" prefix in a group call) and never past the
+    // per-entry cap (one entry would otherwise grow unbounded and defeat the entry-count cap).
+    // (Review B7)
     const last = transcript.at(-1);
-    if (last && last.role === role) {
+    const sameSpeaker = role !== "user" || speaker === lastUserEntrySpeaker;
+    if (
+      last &&
+      last.role === role &&
+      sameSpeaker &&
+      last.text.length + trimmed.length < MAX_TRANSCRIPT_ENTRY_CHARS
+    ) {
       last.text = `${last.text} ${trimmed}`.trim();
     } else {
       transcript.push({ role, text: trimmed });
+    }
+    if (role === "user") {
+      lastUserEntrySpeaker = speaker;
     }
     if (transcript.length > MAX_TRANSCRIPT_ENTRIES) {
       transcript.splice(0, transcript.length - MAX_TRANSCRIPT_ENTRIES);
@@ -756,6 +780,7 @@ export function createMsteamsRealtimeCall(params: {
         recordTranscript(
           role,
           role === "user" && currentSpeakerName ? `${currentSpeakerName}: ${text}` : text,
+          currentSpeakerName,
         );
         // Deterministic verbal interrupt ("stop" / "hold on" / "never mind"): flush the worker's
         // playback queue immediately instead of waiting for the model's own interruption handling —
@@ -809,6 +834,15 @@ export function createMsteamsRealtimeCall(params: {
       setThinking(true);
       const clearThinking = (): void => setThinking(false);
       if (event.name === MSTEAMS_MINUTES_TOOL_NAME) {
+        // Media Access API: minutes run the agent over media-derived transcript, so they are
+        // recording-gated like every other agent-running tool (consult / look / show / task) —
+        // this was the one path that skipped the gate. (Review B10)
+        if (recordingGateBlocks()) {
+          logger?.debug?.(`MsteamsRealtime: minutes refused for ${callId} — recording not active`);
+          rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
+          clearThinking();
+          return;
+        }
         // Ack on the call, then write+post the minutes in the background (same run as call-end recap).
         rtSession.submitToolResult(event.callId, {
           text: "Minutes are being written and posted to the Teams chat now.",
@@ -859,7 +893,6 @@ export function createMsteamsRealtimeCall(params: {
       if (deps.visionBudget && !deps.visionBudget.tryConsume(callId, Date.now())) {
         break; // over the per-call vision budget — stop for this round
       }
-      lastPushedFrameData[source] = frame.dataBase64;
       const label = source === "camera" ? "camera" : "screen-share";
       logger?.debug?.(`MsteamsRealtime: ambient vision push (${label}) for ${callId}`);
       try {
@@ -869,7 +902,12 @@ export function createMsteamsRealtimeCall(params: {
           mime: frame.mime,
           text: owner ? `Live ${label} — ${owner}.` : `Live ${label} of the call.`,
         });
+        // Latch only AFTER a successful send: latching first marked a failed push as "already
+        // pushed", so the frame was lost (never retried by the backstop) while its budget hit
+        // stayed spent — starving look_at_screen. (Review B12)
+        lastPushedFrameData[source] = frame.dataBase64;
       } catch (err) {
+        deps.visionBudget?.refund(callId);
         logger?.debug?.(
           `MsteamsRealtime: vision push failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -938,6 +976,13 @@ export function createMsteamsRealtimeCall(params: {
     rtSession: RealtimeVoiceBridgeSession,
   ): Promise<void> {
     if (event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      // An operator-configured custom tool (deps.tools) was advertised to the model but has no
+      // handler here. Answer SOMETHING — a tool call with no submitToolResult stalls the model's
+      // turn forever and the caller sits in silence. (Review B6)
+      logger?.warn(`MsteamsRealtime: no handler for tool '${event.name}' on ${callId}`);
+      rtSession.submitToolResult(event.callId, {
+        text: `The tool "${event.name}" is not available on this call.`,
+      });
       return;
     }
     // Media Access API: refuse to run the agent on call audio until recording is active.
@@ -1102,8 +1147,13 @@ export function createMsteamsRealtimeCall(params: {
         toolPolicy,
         timeoutMs: voiceConfig.responseTimeoutMs,
       });
-      lastLookData = frame.dataBase64;
-      lastLookText = result.text;
+      // Cache only LIVE looks. A history run answers about EARLIER keyframes; caching it under the
+      // current frame's bytes would make later live looks on a static screen return the history
+      // answer instead of describing what is on screen now. (Review B9)
+      if (!historyScope) {
+        lastLookData = frame.dataBase64;
+        lastLookText = result.text;
+      }
       rtSession.submitToolResult(event.callId, result);
     } catch (err) {
       logger?.warn(
@@ -1325,15 +1375,21 @@ export function createMsteamsRealtimeCall(params: {
     }
     const task = readArgText(event.args, "task") ?? readArgText(event.args, "question");
     const deliverVia = readArgText(event.args, "deliverVia") === "call" ? "call" : "message";
+    // No task text means nothing will run: refuse instead of acking a delivery that never
+    // happens (the caller would wait for a result that silently never arrives). (Review B10)
+    if (!task) {
+      logger?.warn(`MsteamsRealtime: task refused for ${callId} — no task text in tool args`);
+      rtSession.submitToolResult(event.callId, {
+        text: "I didn't catch what the task is — please tell me again what you'd like me to do.",
+      });
+      return;
+    }
     // Ack immediately so the model speaks the "I'll reach you" line and the call
     // is free to continue or hang up.
     rtSession.submitToolResult(
       event.callId,
       deliverVia === "call" ? MSTEAMS_ASYNC_TASK_ACK_CALL : MSTEAMS_ASYNC_TASK_ACK,
     );
-    if (!task) {
-      return;
-    }
     // Detached: not awaited and not cancelled on call teardown.
     void runAsyncTask(task, deliverVia);
   }

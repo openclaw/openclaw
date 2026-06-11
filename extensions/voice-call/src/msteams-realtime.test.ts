@@ -1404,4 +1404,290 @@ describe("createMsteamsRealtimeCall", () => {
       rmSync(imgPath, { force: true });
     }
   });
+
+  it("answers an unhandled custom tool call instead of stalling the model turn (B6)", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const customTool: RealtimeVoiceTool = {
+      type: "function",
+      name: "operator_custom_tool",
+      description: "operator-configured",
+      parameters: { type: "object", properties: {} },
+    };
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {}, tools: [CONSULT_TOOL, customTool] },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "i-custom",
+      callId: "custom-1",
+      name: "operator_custom_tool",
+      args: {},
+    });
+
+    // Previously this fell through without a submitToolResult — the model's turn waited forever.
+    expect(mock.submitToolResult).toHaveBeenCalledWith(
+      "custom-1",
+      expect.objectContaining({ text: expect.stringContaining("not available") }),
+      undefined,
+    );
+  });
+
+  it("transcript coalescing never merges different speakers (B7)", async () => {
+    consultSpy.mockClear();
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        agentRuntime: { resolveThinkingDefault: () => undefined } as unknown as CoreAgentDeps,
+        voiceConfig: {
+          agentId: "main",
+          realtime: { toolPolicy: "owner" },
+        } as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+      },
+    });
+    const req = mock.getRequest();
+
+    call.setCurrentSpeaker("Sara");
+    req.onTranscript?.("user", "the budget is fine", true);
+    call.setCurrentSpeaker("Omar");
+    req.onTranscript?.("user", "no it is not", true);
+
+    req.onToolCall?.({
+      itemId: "i-b7",
+      callId: "c-b7",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: { question: "q" },
+    });
+    await vi.waitFor(() => expect(consultSpy).toHaveBeenCalled());
+    const transcript =
+      (consultSpy.mock.calls.at(-1)?.[0] as { transcript?: Array<{ role: string; text: string }> })
+        ?.transcript ?? [];
+    // Two attributed entries — NOT one merged entry crediting Omar's words to Sara.
+    expect(transcript).toEqual([
+      { role: "user", text: "Sara: the budget is fine" },
+      { role: "user", text: "Omar: no it is not" },
+    ]);
+  });
+
+  it("caps a coalesced transcript entry so one speaker's run cannot grow unbounded (B7)", async () => {
+    consultSpy.mockClear();
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        agentRuntime: { resolveThinkingDefault: () => undefined } as unknown as CoreAgentDeps,
+        voiceConfig: {
+          agentId: "main",
+          realtime: { toolPolicy: "owner" },
+        } as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+      },
+    });
+    const req = mock.getRequest();
+
+    const fragment = "x".repeat(400);
+    for (let i = 0; i < 5; i += 1) {
+      req.onTranscript?.("user", fragment, true);
+    }
+
+    req.onToolCall?.({
+      itemId: "i-b7cap",
+      callId: "c-b7cap",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: { question: "q" },
+    });
+    await vi.waitFor(() => expect(consultSpy).toHaveBeenCalled());
+    const transcript =
+      (consultSpy.mock.calls.at(-1)?.[0] as { transcript?: Array<{ text: string }> })?.transcript ??
+      [];
+    // 5 × 400-char fragments split across entries instead of one ever-growing entry.
+    expect(transcript.length).toBeGreaterThan(1);
+    for (const entry of transcript) {
+      expect(entry.text.length).toBeLessThanOrEqual(1400);
+    }
+  });
+
+  it("history-scope look does not poison the live-look cache (B9)", async () => {
+    consultSpy.mockClear();
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const liveFrame = {
+      source: "screenshare" as const,
+      dataBase64: "LIVE",
+      mime: "image/jpeg",
+      width: 1,
+      height: 1,
+      ts: 0,
+    };
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+        voiceConfig: { realtime: {}, agentId: "main" } as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => liveFrame,
+        getFrameHistory: () => [liveFrame], // history ends at the same (static) frame
+      },
+    });
+    const req = mock.getRequest();
+
+    consultSpy.mockResolvedValueOnce({ text: "live answer" });
+    req.onToolCall?.({
+      itemId: "i-l1",
+      callId: "look-live-1",
+      name: "look_at_screen",
+      args: { question: "now" },
+    });
+    await vi.waitFor(() => expect(consultSpy).toHaveBeenCalledTimes(1));
+
+    consultSpy.mockResolvedValueOnce({ text: "history answer" });
+    req.onToolCall?.({
+      itemId: "i-h1",
+      callId: "look-history-1",
+      name: "look_at_screen",
+      args: { question: "earlier", scope: "history" },
+    });
+    await vi.waitFor(() => expect(consultSpy).toHaveBeenCalledTimes(2));
+
+    // A live look on the SAME static frame must serve the cached LIVE answer — the history run
+    // previously overwrote the cache, so this returned "history answer".
+    mock.submitToolResult.mockClear();
+    req.onToolCall?.({
+      itemId: "i-l2",
+      callId: "look-live-2",
+      name: "look_at_screen",
+      args: { question: "now again" },
+    });
+    await vi.waitFor(() => expect(mock.submitToolResult).toHaveBeenCalled());
+    expect(consultSpy).toHaveBeenCalledTimes(2); // cache hit — no third vision run
+    expect(mock.submitToolResult).toHaveBeenCalledWith(
+      "look-live-2",
+      { text: "live answer" },
+      undefined,
+    );
+  });
+
+  it("refuses post_meeting_minutes until recording status is active (B10)", () => {
+    consultSpy.mockClear();
+    const ctx = createMockSession("inactive");
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: {} as unknown as CoreAgentDeps,
+        voiceConfig: {} as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+      },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "i-min",
+      callId: "minutes-1",
+      name: "post_meeting_minutes",
+      args: {},
+    });
+
+    expect(mock.submitToolResult).toHaveBeenCalledWith(
+      "minutes-1",
+      expect.objectContaining({ text: expect.stringContaining("recording isn't active") }),
+      undefined,
+    );
+    expect(consultSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a background task with no task text instead of acking a no-op (B10)", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: {} as unknown as CoreAgentDeps,
+        voiceConfig: {} as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+      },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "i-task-empty",
+      callId: "task-empty",
+      name: "openclaw_agent_task",
+      args: {},
+    });
+
+    // Previously this acked "I'm on it … I'll message you" then silently did nothing.
+    const acked = mock.submitToolResult.mock.calls.some(
+      (args) =>
+        typeof (args[1] as { text?: string })?.text === "string" &&
+        (args[1] as { text: string }).text.includes("I'm on it"),
+    );
+    expect(acked).toBe(false);
+    expect(mock.submitToolResult).toHaveBeenCalledWith(
+      "task-empty",
+      expect.objectContaining({ text: expect.stringContaining("didn't catch") }),
+      undefined,
+    );
+  });
+
+  it("a failed ambient vision push stays retryable and refunds its budget hit (B12)", () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      // One slot per minute: a burned hit on the failed push would starve the retry below.
+      const budget = new VisionBudget(1);
+      mock.sendImage.mockImplementationOnce(() => {
+        throw new Error("bridge not ready");
+      });
+      createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: {
+          provider: mock.provider,
+          providerConfig: {},
+          getLatestFrame: (source) =>
+            source === "camera"
+              ? undefined
+              : {
+                  source: "screenshare",
+                  dataBase64: "AAAA",
+                  mime: "image/jpeg",
+                  width: 1,
+                  height: 1,
+                  ts: 0,
+                },
+          visionBudget: budget,
+        },
+      });
+
+      vi.advanceTimersByTime(6000); // first push throws
+      expect(mock.sendImage).toHaveBeenCalledTimes(1);
+      // Frame NOT latched as pushed + budget hit refunded → the backstop retries it.
+      vi.advanceTimersByTime(6000);
+      expect(mock.sendImage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

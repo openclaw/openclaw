@@ -534,7 +534,14 @@ export class MsteamsMediaStream {
         this.config.onSessionStart?.({
           callId,
           threadId: parsed.threadId,
-          caller: parsed.caller,
+          // Blank ids become null at the boundary: an empty-string aadId would survive every
+          // downstream `aadId ?? fallback` and collapse all such callers into one session key
+          // (cross-caller memory bleed) or one delivery target. (Review B11)
+          caller: {
+            aadId: blankToNull(parsed.caller.aadId),
+            displayName: blankToNull(parsed.caller.displayName),
+            tenantId: blankToNull(parsed.caller.tenantId),
+          },
           recordingStatus: parsed.recordingStatus,
           direction: parsed.direction,
           send: (message) => this.sendTo(callId, message),
@@ -634,6 +641,11 @@ export class MsteamsMediaStream {
     socket.write(`HTTP/1.1 ${code} ${reason}\r\nConnection: close\r\n\r\n`);
     socket.destroy();
   }
+}
+
+/** Blank/whitespace-only strings become null so downstream `?? fallback` checks fire. */
+function blankToNull(value: string | null | undefined): string | null | undefined {
+  return typeof value === "string" && value.trim() === "" ? null : value;
 }
 
 function normalizeIp(raw: string | undefined): string {
