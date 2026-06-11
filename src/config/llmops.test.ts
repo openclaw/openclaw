@@ -18,8 +18,8 @@ describe("LLMOps Configuration Structural Validation Matrix", () => {
       llmOps: {
         provider: "langfuse",
         langfuse: {
-          publicKey: "pk-lf-2207abb4-5368-4c23-adcc-6284d0a65b97",
-          secretKey: "sk-lf-373b0141-01b3-4d85-893e-de824473889a",
+          publicKey: "pk-*******",
+          secretKey: "sk-*****",
           baseUrl: "https://langfuse.guardianhub.com",
         },
         prompts: {
