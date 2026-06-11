@@ -184,6 +184,76 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("honors configured qmd timeout budgets for slow successful searches", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      setMemorySearchImpl(
+        async () =>
+          await new Promise((resolve) => {
+            setTimeout(
+              () =>
+                resolve([
+                  {
+                    path: "MEMORY.md",
+                    startLine: 1,
+                    endLine: 1,
+                    score: 0.9,
+                    snippet: "Slow QMD hit.",
+                    source: "memory" as const,
+                  },
+                ]),
+              20_000,
+            );
+          }),
+      );
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { backend: "qmd", qmd: { limits: { timeoutMs: 30_000 } } },
+        }),
+      });
+
+      const resultPromise = tool.execute("slow-qmd-success", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const result = await resultPromise;
+
+      expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+        "MEMORY.md",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out qmd searches after the configured timeout plus bounded overhead", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      setMemorySearchImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { backend: "qmd", qmd: { limits: { timeoutMs: 30_000 } } },
+        }),
+      });
+
+      const resultPromise = tool.execute("slow-qmd-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(34_999);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 35s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-resolves the manager once when a cached sqlite handle was closed", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {

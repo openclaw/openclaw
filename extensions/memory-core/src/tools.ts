@@ -45,6 +45,7 @@ type MemorySearchToolResult =
   | MemoryCorpusSearchResult;
 
 const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
+const MEMORY_SEARCH_TOOL_QMD_TIMEOUT_OVERHEAD_MS = 5_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -80,6 +81,24 @@ export const testing = {
     memorySearchToolCooldowns.clear();
   },
 } as const;
+
+function resolveMemorySearchToolTimeoutMs(params: {
+  backend: string | undefined;
+  qmdTimeoutMs: number | undefined;
+}): number {
+  if (
+    params.backend !== "qmd" ||
+    typeof params.qmdTimeoutMs !== "number" ||
+    !Number.isFinite(params.qmdTimeoutMs) ||
+    params.qmdTimeoutMs <= 0
+  ) {
+    return MEMORY_SEARCH_TOOL_TIMEOUT_MS;
+  }
+  return Math.max(
+    MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+    Math.floor(params.qmdTimeoutMs) + MEMORY_SEARCH_TOOL_QMD_TIMEOUT_OVERHEAD_MS,
+  );
+}
 
 async function runMemorySearchToolWithDeadline<T>(params: {
   timeoutMs: number;
@@ -345,6 +364,8 @@ export function createMemorySearchTool(options: {
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
+        const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
+        const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
         const rawParams = asToolParamsRecord(params);
         const query = readStringParam(rawParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(rawParams, "maxResults");
@@ -381,9 +402,11 @@ export function createMemorySearchTool(options: {
         };
 
         const outcome = await runMemorySearchToolWithDeadline({
-          timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+          timeoutMs: resolveMemorySearchToolTimeoutMs({
+            backend: resolvedMemoryBackend.backend,
+            qmdTimeoutMs: resolvedMemoryBackend.qmd?.limits?.timeoutMs,
+          }),
           run: async () => {
-            const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
             const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
             if (cooldown && !shouldQuerySupplements) {
@@ -502,10 +525,12 @@ export function createMemorySearchTool(options: {
                 }
                 const status = activeMemory.manager.status();
                 const decorated = decorateCitations(rawResults, includeCitations);
-                const resolved = resolveMemoryBackendConfig({ cfg, agentId });
                 const memoryResults =
                   status.backend === "qmd"
-                    ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+                    ? clampResultsByInjectedChars(
+                        decorated,
+                        resolvedMemoryBackend.qmd?.limits?.maxInjectedChars,
+                      )
                     : decorated;
                 surfacedMemoryResults = memoryResults.map((result) => ({
                   ...result,
