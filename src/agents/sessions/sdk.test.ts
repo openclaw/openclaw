@@ -372,6 +372,31 @@ describe("createAgentSession thinking level defaults", () => {
     expect(session.thinkingLevel).toBe("low");
   });
 
+  it("uses Ollama policy for custom providers backed by the Ollama API", async () => {
+    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
+    const customOllamaModel = {
+      ...testModel,
+      provider: "ollama-spark",
+      api: "ollama",
+      reasoning: true,
+    } satisfies Model;
+
+    const { session } = await createAgentSession({
+      model: customOllamaModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.thinkingLevel).toBe("off");
+    expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
+      provider: "ollama",
+      model: testModel.id,
+      catalog: [customOllamaModel],
+    });
+  });
+
   it("falls back to DEFAULT_THINKING_LEVEL for non-off provider defaults", async () => {
     // Non-off provider defaults (adaptive, high, low) preserve prior SDK behaviour
     // to avoid silent cost changes for DeepSeek, OpenRouter, xAI, and Anthropic users.

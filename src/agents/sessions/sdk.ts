@@ -274,7 +274,7 @@ export async function createAgentSession(
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
   const resolvedProviderDefault = model
     ? resolveThinkingDefaultForModel({
-        provider: model.provider,
+        provider: model.api === "ollama" ? "ollama" : model.provider,
         model: model.id,
         catalog: [model],
       })
