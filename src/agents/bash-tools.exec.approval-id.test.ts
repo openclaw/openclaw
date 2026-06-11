@@ -1092,9 +1092,7 @@ describe("exec approvals", () => {
       { length: 60 },
       (_, index) => `approval-output-line-${String(index).padStart(2, "0")}`,
     );
-    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-      `process.stdout.write(${JSON.stringify(outputLines.join("\n"))})`,
-    )}`;
+    const command = `printf '%s\\n' ${outputLines.map((line) => JSON.stringify(line)).join(" ")}`;
 
     mockAcceptedApprovalFlow({
       onAgent: (params) => {
