@@ -4,6 +4,7 @@
  * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
  */
 import { join } from "node:path";
+import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
 import { clampThinkingLevel } from "../../llm/model-utils.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -268,16 +269,29 @@ export async function createAgentSession(
 
   let thinkingLevel = options.thinkingLevel;
 
+  // Use "off" when a provider explicitly opts out of thinking (e.g. Ollama). Non-off
+  // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
+  // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
+  const resolvedProviderDefault = model
+    ? resolveThinkingDefaultForModel({
+        provider: model.api === "ollama" ? "ollama" : model.provider,
+        model: model.id,
+        catalog: [model],
+      })
+    : undefined;
+  const modelThinkingDefault: ThinkingLevel =
+    resolvedProviderDefault === "off" ? "off" : DEFAULT_THINKING_LEVEL;
+
   // If session has data, restore thinking level from it
   if (thinkingLevel === undefined && hasExistingSession) {
     thinkingLevel = hasThinkingEntry
       ? (existingSession.thinkingLevel as ThinkingLevel)
-      : (settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL);
+      : (settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault);
   }
 
   // Fall back to settings default
   if (thinkingLevel === undefined) {
-    thinkingLevel = settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
+    thinkingLevel = settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault;
   }
 
   // Clamp to model capabilities
