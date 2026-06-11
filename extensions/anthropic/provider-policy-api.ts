@@ -46,6 +46,19 @@ export function resolveThinkingProfile(params: {
         includeNativeMax: true,
       });
     default:
-      return null;
+      // Custom provider ids (e.g. jdcloud-anthropic) that reach this
+      // function via the API-family fallback path. Resolve the thinking
+      // profile from the model identity so that Anthropic-compatible
+      // providers using the anthropic-messages adapter are not silently
+      // clamped to off.
+      if (!contractModelId) {
+        return null;
+      }
+      if (contractModelId.startsWith("claude-fable-5")) {
+        return CLAUDE_CLI_OFF_THINKING_PROFILE;
+      }
+      return resolveClaudeThinkingProfile(contractModelId, undefined, {
+        includeNativeMax: false,
+      });
   }
 }

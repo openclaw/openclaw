@@ -196,6 +196,7 @@ export function resolveThinkingProfile(params: {
     reasoning: context.reasoning,
     ...(context.params ? { params: context.params } : {}),
     compat: context.compat,
+    api: context.api,
   };
   const providerProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,

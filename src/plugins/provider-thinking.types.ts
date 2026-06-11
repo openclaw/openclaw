@@ -30,6 +30,12 @@ export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext
   reasoning?: boolean;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
+  /**
+   * Provider API type (e.g. "anthropic-messages", "openai-completions").
+   * Used as a fallback routing key when the provider id does not directly
+   * match a bundled policy surface.
+   */
+  api?: string | null;
 };
 
 export type ProviderThinkingLevelId =

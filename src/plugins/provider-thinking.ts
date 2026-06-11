@@ -86,9 +86,25 @@ export function resolveProviderThinkingProfile(
   if (activeProfile !== undefined) {
     return activeProfile;
   }
-  return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(
-    params.context,
-  );
+  const bundledProfile = resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile
+    ?.(params.context);
+  if (bundledProfile !== undefined) {
+    return bundledProfile;
+  }
+  // When a custom provider id (e.g. jdcloud-anthropic) doesn't directly
+  // match a bundled policy surface, derive the canonical provider family
+  // from the API type (e.g. "anthropic-messages" → "anthropic") and try
+  // that provider's policy surface as a fallback.
+  const api = params.context.api;
+  if (api) {
+    const apiFamily = api.split("-")[0]?.trim();
+    if (apiFamily && normalizeProviderId(apiFamily) !== normalizeProviderId(params.provider)) {
+      return resolveBundledProviderPolicySurface(apiFamily)?.resolveThinkingProfile?.(
+        params.context,
+      );
+    }
+  }
+  return undefined;
 }
 
 /** Resolves the provider default thinking level from the active plugin registry. */
