@@ -156,6 +156,11 @@ const MsteamsConfigSchema = z
      * changed frame). 0 = unlimited.
      */
     maxVisionPerMinute: z.number().int().nonnegative().default(30),
+    /**
+     * Post meeting minutes (key points, decisions, action items) to the caller's Teams chat when a
+     * call ends. Opt-in: the bot posting unprompted to chat must be an explicit operator decision.
+     */
+    meetingRecap: z.boolean().default(false),
   })
   .strict();
 export type MsteamsConfig = z.infer<typeof MsteamsConfigSchema>;
@@ -810,6 +815,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
           ...config.msteams,
           path: config.msteams.path ?? "/voice/msteams/stream",
           requireRecordingStatus: config.msteams.requireRecordingStatus ?? true,
+          meetingRecap: config.msteams.meetingRecap ?? false,
           outbound: {
             enabled: config.msteams.outbound?.enabled ?? false,
             workerBaseUrl: config.msteams.outbound?.workerBaseUrl,

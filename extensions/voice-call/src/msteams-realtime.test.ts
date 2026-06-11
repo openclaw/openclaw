@@ -541,6 +541,49 @@ describe("createMsteamsRealtimeCall", () => {
     }
   });
 
+  it("meeting recap: posts minutes on close when enabled, and stays off by default", async () => {
+    consultSpy.mockClear();
+    const makeCall = (meetingRecap: boolean) => {
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      const call = createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: {
+          provider: mock.provider,
+          providerConfig: {},
+          agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+          voiceConfig: {
+            realtime: {},
+            agentId: "main",
+            responseTimeoutMs: 5000,
+            msteams: { meetingRecap },
+          } as unknown as VoiceCallConfig,
+          cfg: {} as unknown as OpenClawConfig,
+        },
+      });
+      const req = mock.getRequest();
+      // Four finished turns = a real conversation worth recapping.
+      req.onTranscript?.("user", "let's review the budget", true);
+      req.onTranscript?.("assistant", "the budget is on track", true);
+      req.onTranscript?.("user", "decide we ship friday", true);
+      req.onTranscript?.("assistant", "noted, shipping friday", true);
+      return call;
+    };
+
+    // Disabled (default) → no recap run.
+    makeCall(false).close();
+    expect(consultSpy).not.toHaveBeenCalled();
+
+    // Enabled → one detached recap run with the transcript + minutes instruction.
+    makeCall(true).close();
+    await vi.waitFor(() => {
+      expect(consultSpy).toHaveBeenCalledTimes(1);
+    });
+    const opts = consultSpy.mock.calls[0]?.[0] as { args?: { question?: string } } | undefined;
+    expect(String(opts?.args?.question)).toContain("meeting minutes");
+    expect(String(opts?.args?.question)).toContain("shipping friday");
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();

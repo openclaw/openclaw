@@ -461,6 +461,7 @@ export function createMsteamsRealtimeCall(params: {
   let turnId = 0;
   let closed = false;
   let deliveryComplete = false;
+  const callStartedAt = Date.now();
   /**
    * Estimated epoch ms when the audio we've sent finishes PLAYING on the call. The realtime model
    * generates audio faster than realtime and the worker queues it for playout, so send-time is NOT
@@ -1279,6 +1280,57 @@ export function createMsteamsRealtimeCall(params: {
     }
   }
 
+  /**
+   * Meeting recap (#18/#22): after the call ends, run a detached agent over the call transcript and
+   * post minutes to the caller's Teams chat (the proven delivery target; posting into the meeting
+   * thread itself is a follow-up). Transcript speaker labels are caller/assistant only — per-person
+   * attribution needs unmixed audio (worker follow-up) — so the minutes never invent name attribution.
+   */
+  async function runMeetingRecap(): Promise<void> {
+    const { agentRuntime, voiceConfig, cfg } = deps;
+    if (!agentRuntime || !voiceConfig || !cfg) {
+      return;
+    }
+    const aadId = session.caller.aadId;
+    const durationMin = Math.max(1, Math.round((Date.now() - callStartedAt) / 60_000));
+    const callerName = session.caller.displayName ?? "the caller";
+    const lines = transcript
+      .map((t) => `${t.role === "assistant" ? "Assistant" : "Caller side"}: ${t.text}`)
+      .join("\n");
+    const agentId = voiceConfig.agentId ?? "main";
+    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
+    try {
+      logger?.info(`MsteamsRealtime: posting meeting recap for ${callId}`);
+      await runMsteamsConsult({
+        agentRuntime,
+        voiceConfig,
+        cfg,
+        agentId,
+        sessionKey,
+        runIdPrefix: `voice-realtime-recap:${callId}`,
+        args: {
+          question:
+            `Write concise meeting minutes from this Microsoft Teams call transcript and deliver them.\n` +
+            `Call: with ${callerName}, ~${durationMin} min, ${humanCount} human participant(s).\n` +
+            `Transcript (most recent ${transcript.length} turns; "Caller side" may include multiple ` +
+            `people — do NOT attribute statements to named individuals):\n${lines}`,
+        },
+        surface: "a Microsoft Teams call that just ended (meeting recap)",
+        extraSystemPrompt:
+          `${MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT} Produce minutes with these sections, omitting ` +
+          `empty ones: Key points; Decisions; Action items (as a checklist). Keep it brief and ` +
+          `factual; no invented attribution. Then deliver by calling the message tool exactly once ` +
+          `with action "send", channel "msteams", target "user:${aadId}". The message IS the minutes.`,
+        toolPolicy: consultToolPolicy,
+        fastMode: false,
+      });
+    } catch (err) {
+      logger?.warn(
+        `MsteamsRealtime: meeting recap failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   void realtime.connect().catch((err: unknown) => {
     logger?.error(
       `MsteamsRealtime: connect failed — ${err instanceof Error ? err.message : String(err)}`,
@@ -1328,6 +1380,18 @@ export function createMsteamsRealtimeCall(params: {
         return;
       }
       closed = true;
+      // Meeting recap (#18/#22): on call end, post minutes to the caller's Teams chat. Opt-in via
+      // msteams.meetingRecap; skipped for notify call-backs (a delivered result is not a meeting)
+      // and for calls with no real conversation. Detached — teardown never waits on it.
+      if (
+        deps.voiceConfig?.msteams?.meetingRecap === true &&
+        !deps.onDeliveryComplete &&
+        recordingActive &&
+        session.caller.aadId &&
+        transcript.length >= 4
+      ) {
+        void runMeetingRecap();
+      }
       if (visionPushTimer) {
         clearInterval(visionPushTimer);
         visionPushTimer = undefined;
