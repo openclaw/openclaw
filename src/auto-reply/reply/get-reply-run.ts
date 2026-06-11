@@ -1329,6 +1329,8 @@ export async function runPreparedReply(
           : {}),
       },
       timeoutMs,
+      runTimeoutOverrideMs:
+        opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance,

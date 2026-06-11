@@ -124,6 +124,7 @@ export type FollowupRun = {
       defaultLevel: ElevatedLevel;
     };
     timeoutMs: number;
+    runTimeoutOverrideMs?: number;
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;

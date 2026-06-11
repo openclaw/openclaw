@@ -2188,6 +2188,7 @@ export async function runAgentTurnWithFallback(params: {
                     classifyCommentaryText: params.opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: params.followupRun.run.thinkLevel,
                     timeoutMs: params.followupRun.run.timeoutMs,
+                    runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
                     runId,
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
