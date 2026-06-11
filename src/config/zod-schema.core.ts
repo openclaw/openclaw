@@ -218,6 +218,7 @@ const ModelCompatSchema = z
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
+    systemPromptPlacement: z.union([z.literal("input"), z.literal("instructions")]).optional(),
     requiresStringContent: z.boolean().optional(),
     strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),

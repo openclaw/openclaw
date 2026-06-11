@@ -44,6 +44,7 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
 function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
   return {
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
+    systemPromptPlacement: model.compat?.systemPromptPlacement ?? "input",
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
   };
 }
