@@ -25,7 +25,11 @@ import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
-import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+import {
+  hasHeartbeatReasoningPrefix,
+  isHeartbeatReasoningPayload,
+  resolveHeartbeatReplyPayload,
+} from "../auto-reply/heartbeat-reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
   resolveHeartbeatToolResponseFromReplyResult,
@@ -745,10 +749,8 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
-      text.trimStart(),
-    );
-    if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {
+    const hasFormattedReasoningPrefix = hasHeartbeatReasoningPrefix(text);
+    if (!isHeartbeatReasoningPayload(payload)) {
       continue;
     }
 
@@ -1833,7 +1835,11 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
+    if (
+      !heartbeatToolResponse &&
+      (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&
+      reasoningPayloads.length === 0
+    ) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,

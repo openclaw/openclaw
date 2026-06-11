@@ -1254,6 +1254,18 @@ describe("runHeartbeatOnce", () => {
         expectedTexts: ["Thinking\n\n_Because it helps_"],
       },
       {
+        name: "raw flagged reasoning only",
+        caseDir: "hb-reasoning-only",
+        replies: [{ text: "Because it helps", isReasoning: true }],
+        expectedTexts: ["Thinking\n\n_Because it helps_"],
+      },
+      {
+        name: "legacy-prefixed reasoning only",
+        caseDir: "hb-reasoning-legacy-only",
+        replies: [{ text: "Reasoning:\n_Because it helps_" }],
+        expectedTexts: ["Reasoning:\n_Because it helps_"],
+      },
+      {
         name: "visible final that starts with thinking prose",
         caseDir: "hb-thinking-visible-final",
         replies: [{ text: "Thinking... all clear" }],
@@ -1332,6 +1344,78 @@ describe("runHeartbeatOnce", () => {
             text,
           });
         }
+      } finally {
+        replySpy.mockReset();
+      }
+    },
+  );
+
+  it.each(
+    typedCases<{
+      name: string;
+      replies: Array<{ text: string; isReasoning?: boolean }>;
+    }>([
+      {
+        name: "flagged reasoning after HEARTBEAT_OK",
+        replies: [{ text: "HEARTBEAT_OK" }, { text: "Because it helps", isReasoning: true }],
+      },
+      {
+        name: "legacy-prefixed reasoning after HEARTBEAT_OK",
+        replies: [{ text: "HEARTBEAT_OK" }, { text: "Reasoning:\n_Because it helps_" }],
+      },
+    ]),
+  )(
+    "does not deliver late reasoning payloads when includeReasoning is unset: $name",
+    async ({ replies }) => {
+      const replySpy = vi.fn();
+      try {
+        const tmpDir = await createCaseDir("hb-reasoning-default-hidden");
+        const storePath = path.join(tmpDir, "sessions.json");
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "whatsapp",
+              },
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        };
+        const sessionKey = resolveMainSessionKey(cfg);
+
+        await fs.writeFile(
+          storePath,
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastProvider: "whatsapp",
+              lastTo: "120363401234567890@g.us",
+            },
+          }),
+        );
+
+        replySpy.mockResolvedValue(replies);
+        const sendWhatsApp = vi
+          .fn<
+            (
+              to: string,
+              text: string,
+              opts?: unknown,
+            ) => Promise<{ messageId: string; toJid: string }>
+          >()
+          .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+        });
+
+        expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       } finally {
         replySpy.mockReset();
       }
