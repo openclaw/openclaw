@@ -1838,6 +1838,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.model = "gpt-5.4";
     followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
     followupRun.run.extraSystemPromptStatic = "stable group prompt";
+    followupRun.run.senderId = "sender-static";
     followupRun.originatingChannel = "telegram";
 
     const result = await runAgentTurnWithFallback({
@@ -1870,6 +1871,7 @@ describe("runAgentTurnWithFallback", () => {
       trigger: "user",
       messageChannel: "telegram",
       messageProvider: "telegram",
+      senderId: "sender-static",
     });
   });
 
