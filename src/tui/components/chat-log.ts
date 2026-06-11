@@ -17,6 +17,17 @@ type RepeatableSystemMessage = {
   count: number;
 };
 
+class SectionSeparatorComponent extends Container {
+  readonly isSectionSeparatorComponent = true;
+
+  constructor(label: string) {
+    super();
+    const textNode = new Text(theme.dim(`──────── ${label} ────────`), 1, 0);
+    this.addChild(new Spacer(1));
+    this.addChild(textNode);
+  }
+}
+
 /** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
@@ -89,6 +100,21 @@ export class ChatLog extends Container {
   private appendNonSystem(component: Component) {
     this.repeatableSystemMessage = null;
     this.append(component);
+  }
+
+  private lastChildIsTool() {
+    return this.children[this.children.length - 1] instanceof ToolExecutionComponent;
+  }
+
+  private lastChildIsSectionSeparator() {
+    return this.children[this.children.length - 1] instanceof SectionSeparatorComponent;
+  }
+
+  private addAssistantSeparatorIfNeeded() {
+    if (!this.lastChildIsTool() || this.lastChildIsSectionSeparator()) {
+      return;
+    }
+    this.append(new SectionSeparatorComponent("回答"));
   }
 
   clearAll(opts?: { preservePendingUsers?: boolean }) {
@@ -277,6 +303,7 @@ export class ChatLog extends Container {
       existing.setText(text);
       return existing;
     }
+    this.addAssistantSeparatorIfNeeded();
     const component = new AssistantMessageComponent(text);
     this.streamingRuns.set(effectiveRunId, component);
     this.appendNonSystem(component);
@@ -310,6 +337,7 @@ export class ChatLog extends Container {
       this.streamingRuns.delete(effectiveRunId);
       return;
     }
+    this.addAssistantSeparatorIfNeeded();
     this.appendNonSystem(new AssistantMessageComponent(text));
   }
 
@@ -361,6 +389,10 @@ export class ChatLog extends Container {
     this.toolById.set(toolCallId, component);
     this.appendNonSystem(component);
     return component;
+  }
+
+  hasTool(toolCallId: string) {
+    return this.toolById.has(toolCallId);
   }
 
   updateToolArgs(toolCallId: string, args: unknown) {

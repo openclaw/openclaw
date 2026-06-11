@@ -3,12 +3,17 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
+import {
+  attachToolOutputContent,
+  shouldDisplayToolExecution,
+} from "./components/tool-execution.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
+  hasTool?: (toolCallId: string) => boolean;
   updateToolResult: (
     toolCallId: string,
     result: unknown,
@@ -720,12 +725,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
-      const verbose = state.sessionInfo.verboseLevel ?? "off";
-      const allowToolEvents = verbose !== "off";
-      const allowToolOutput = verbose === "full";
-      if (!allowToolEvents) {
-        return;
-      }
       const data = evt.data ?? {};
       const phase = asString(data.phase, "");
       const toolCallId = asString(data.toolCallId, "");
@@ -733,23 +732,32 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!toolCallId) {
         return;
       }
+      const isToolError = Boolean(data.isError);
+      const isPartialToolEvent = phase !== "result";
+      const alreadyDisplayed = chatLog.hasTool?.(toolCallId) ?? false;
+      if (
+        !alreadyDisplayed &&
+        !shouldDisplayToolExecution(toolName, data.args, isPartialToolEvent, isToolError)
+      ) {
+        return;
+      }
       if (phase === "start") {
         chatLog.startTool(toolCallId, toolName, data.args);
       } else if (phase === "update") {
-        if (!allowToolOutput) {
-          return;
-        }
-        chatLog.updateToolResult(toolCallId, data.partialResult, {
-          partial: true,
-        });
+        chatLog.updateToolResult(
+          toolCallId,
+          attachToolOutputContent(data.partialResult, data.output),
+          {
+            partial: true,
+          },
+        );
       } else if (phase === "result") {
-        if (allowToolOutput) {
-          chatLog.updateToolResult(toolCallId, data.result, {
-            isError: Boolean(data.isError),
-          });
-        } else {
-          chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
+        if (!alreadyDisplayed) {
+          chatLog.startTool(toolCallId, toolName, data.args);
         }
+        chatLog.updateToolResult(toolCallId, attachToolOutputContent(data.result, data.output), {
+          isError: isToolError,
+        });
       }
       tui.requestRender();
       return;
