@@ -1584,6 +1584,85 @@ describe("runGlobalPackageUpdateSteps", () => {
     }
   });
 
+  it("prints preserved local override recovery when an in-place update command fails", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await withTempDir(
+        { prefix: "openclaw-package-update-in-place-command-fail-" },
+        async (base) => {
+          const globalDir = path.join(base, "pnpm", "global");
+          const globalRoot = path.join(globalDir, "5", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "index.js"),
+            "export const local = true;\n",
+            "utf8",
+          );
+
+          const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            expect(argv).toEqual([
+              "pnpm",
+              "add",
+              "-g",
+              "--global-dir",
+              globalDir,
+              "openclaw@2.0.0",
+            ]);
+            await writePackageRoot(packageRoot, "2.0.0");
+            await fs.writeFile(
+              path.join(packageRoot, "dist", "index.js"),
+              "export const partial = true;\n",
+              "utf8",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 1,
+              stderrTail: "package manager failed after mutation",
+            };
+          });
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createPnpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep,
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep?.name).toBe("global update");
+          expect(result.localOverrides?.status).toBe("preserved");
+          expect(result.localOverrides?.modified).toBe(1);
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.steps.map((step) => step.name)).toEqual([
+            "global update",
+            "local overrides",
+          ]);
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("export const partial = true;\n");
+          await expect(
+            fs.readFile(
+              path.join(result.localOverrides?.recoveryDir ?? "", "files", "dist", "index.js"),
+              "utf8",
+            ),
+          ).resolves.toBe("export const local = true;\n");
+        },
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("prints preserved local override recovery when an in-place update fails verification", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {

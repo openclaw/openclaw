@@ -715,6 +715,23 @@ export async function runGlobalPackageUpdateSteps(params: {
       null;
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
     let verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
+    const preservePreUpdateLocalOverrides = async () => {
+      if (localOverrides || !preUpdateLivePackageRoot) {
+        return;
+      }
+      localOverrides =
+        preUpdateLocalOverridesUnsupported ??
+        (await applyLocalPackageOverrides({
+          packageRoot: preUpdateLivePackageRoot,
+          plan: preUpdateLocalOverridesPlan,
+          reapply: false,
+        }));
+      pushLocalOverridesStep({
+        steps,
+        packageRoot: preUpdateLivePackageRoot,
+        localOverrides,
+      });
+    };
 
     let afterVersion: string | null = null;
     if (finalInstallStep.exitCode === 0 && verificationPackageRoot) {
@@ -814,6 +831,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       ) {
         afterVersion = await readPackageVersionIfPresent(livePackageRoot);
       }
+    }
+    if (finalInstallStep.exitCode !== 0) {
+      await preservePreUpdateLocalOverrides();
     }
 
     const failedStep =
