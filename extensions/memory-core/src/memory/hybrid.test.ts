@@ -183,4 +183,29 @@ describe("memory hybrid helpers", () => {
 
     expect(merged[0]?.score).toBeCloseTo(0.7 * 0.9 + 0.3 * 1);
   });
+
+  it("preserves keyword-only media candidates instead of dropping them to zero", async () => {
+    const mediaPath = "media/clip.wav";
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      isNonTextMediaPath: (path) => path.endsWith(".wav") || path.endsWith(".png"),
+      vector: [],
+      keyword: [
+        {
+          id: "media-kw-only",
+          path: mediaPath,
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Audio file: media/clip.wav",
+          textScore: 0.9,
+        },
+      ],
+    });
+
+    const media = merged.find((r) => r.path === mediaPath);
+    expect(media?.score).toBeCloseTo(0.3 * 0.9);
+    expect(media?.score ?? 0).toBeGreaterThan(0);
+  });
 });
