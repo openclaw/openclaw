@@ -323,6 +323,23 @@ describe("DiscordCommandDeployer cache scoping (multi-application)", () => {
     expect(keys).not.toContain("global:reconcile");
   });
 
+  test("successful deploy repairs a corrupt persisted cache file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    await fs.writeFile(hashStorePath, "{not json", "utf8");
+
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands: [new StaticCommand("ping")],
+      hashStorePath,
+      rest: () => createRest(),
+    }).deploy({ mode: "reconcile" });
+
+    const raw = await fs.readFile(hashStorePath, "utf8");
+    const parsed = JSON.parse(raw) as { hashes: Record<string, string> };
+    expect(parsed.hashes).toHaveProperty("app:app-default:global:reconcile");
+  });
+
   test("a deployer that loaded an empty cache before another deployer's write preserves the other deployer's entries on persist", async () => {
     // Regression for the codex follow-up on PR #77367: `server-channels.ts`
     // can start multiple Discord deployers concurrently. Before the fix, a
@@ -440,5 +457,77 @@ describe("DiscordCommandDeployer cache scoping (multi-application)", () => {
     expect(keys).toContain("app:app-default:global:reconcile");
     expect(keys).toContain("app:app-secondary:global:reconcile");
     expect(keys).toContain("app:app-tertiary:global:reconcile");
+  });
+
+  test("parallel changed deploys preserve fresher sibling cache entries", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const oldCommands = [new StaticCommand("ping")];
+    const newCommands = [new StaticCommand("status")];
+
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands: oldCommands,
+      hashStorePath,
+      rest: () => createRest(),
+    }).deploy({ mode: "reconcile" });
+    await new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands: oldCommands,
+      hashStorePath,
+      rest: () => createRest(),
+    }).deploy({ mode: "reconcile" });
+
+    let postStarts = 0;
+    let releasePosts: () => void = () => {};
+    const bothPostsStarted = new Promise<void>((resolve) => {
+      releasePosts = resolve;
+    });
+    function createWaitingRest(): RequestClient {
+      const rest = createRest();
+      rest.post = vi.fn(async () => {
+        postStarts += 1;
+        if (postStarts === 2) {
+          releasePosts();
+        }
+        await bothPostsStarted;
+      }) as RequestClient["post"];
+      return rest;
+    }
+
+    await Promise.all([
+      new DiscordCommandDeployer({
+        clientId: "app-default",
+        commands: newCommands,
+        hashStorePath,
+        rest: () => createWaitingRest(),
+      }).deploy({ mode: "reconcile" }),
+      new DiscordCommandDeployer({
+        clientId: "app-secondary",
+        commands: newCommands,
+        hashStorePath,
+        rest: () => createWaitingRest(),
+      }).deploy({ mode: "reconcile" }),
+    ]);
+
+    const restA = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands: newCommands,
+      hashStorePath,
+      rest: () => restA,
+    }).deploy({ mode: "reconcile" });
+    const restB = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands: newCommands,
+      hashStorePath,
+      rest: () => restB,
+    }).deploy({ mode: "reconcile" });
+
+    expect(restA.get).not.toHaveBeenCalled();
+    expect(restA.post).not.toHaveBeenCalled();
+    expect(restB.get).not.toHaveBeenCalled();
+    expect(restB.post).not.toHaveBeenCalled();
   });
 });

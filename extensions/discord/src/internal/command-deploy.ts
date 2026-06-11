@@ -41,16 +41,14 @@ async function withCachePersistLock<T>(storePath: string, fn: () => Promise<T>):
   const next = new Promise<void>((resolve) => {
     release = resolve;
   });
-  cachePersistLocks.set(
-    storePath,
-    previous.then(() => next),
-  );
+  const chained = previous.then(() => next);
+  cachePersistLocks.set(storePath, chained);
   try {
     await previous;
     return await fn();
   } finally {
     release();
-    if (cachePersistLocks.get(storePath) === previous.then(() => next)) {
+    if (cachePersistLocks.get(storePath) === chained) {
       cachePersistLocks.delete(storePath);
     }
   }
@@ -58,6 +56,7 @@ async function withCachePersistLock<T>(storePath: string, fn: () => Promise<T>):
 
 export class DiscordCommandDeployer {
   private readonly hashes = new Map<string, string>();
+  private readonly pendingHashes = new Map<string, string>();
   private hashesLoaded = false;
 
   constructor(
@@ -181,6 +180,7 @@ export class DiscordCommandDeployer {
     }
     await deploy();
     this.hashes.set(key, hash);
+    this.pendingHashes.set(key, hash);
     await this.persistHashes();
   }
 
@@ -228,16 +228,22 @@ export class DiscordCommandDeployer {
 
   private async persistHashesLocked(storePath: string): Promise<void> {
     try {
-      // Re-read the on-disk hashes immediately before writing and merge them
-      // with our in-memory entries. Our in-memory entries always win on key
-      // collisions (we just produced them); on-disk entries that we don't have
-      // in memory are preserved as-is.
+      // Re-read the on-disk hashes immediately before writing and merge only
+      // keys this deployer changed. Previously loaded hashes can be stale when
+      // sibling deployers update the same file, so on-disk wins for untouched
+      // keys while pending keys win because this deployer just produced them.
       const storeFile = path.basename(storePath);
       const fileStore = privateFileStore(path.dirname(storePath));
       const merged = new Map<string, string>();
-      const onDisk = await fileStore.readJsonIfExists<{
-        hashes?: unknown;
-      }>(storeFile);
+      let onDisk: { hashes?: unknown } | null = null;
+      try {
+        onDisk = await fileStore.readJsonIfExists<{
+          hashes?: unknown;
+        }>(storeFile);
+      } catch {
+        // A corrupt cache should not become permanent. Treat the re-read as
+        // empty and replace it with the fresh pending hashes after deploy.
+      }
       if (onDisk?.hashes && typeof onDisk.hashes === "object") {
         for (const [key, value] of Object.entries(onDisk.hashes)) {
           if (typeof value === "string" && key.trim() && value.trim()) {
@@ -245,7 +251,7 @@ export class DiscordCommandDeployer {
           }
         }
       }
-      for (const [key, value] of this.hashes.entries()) {
+      for (const [key, value] of this.pendingHashes.entries()) {
         merged.set(key, value);
       }
       await fileStore.writeJson(
@@ -264,6 +270,7 @@ export class DiscordCommandDeployer {
       for (const [key, value] of merged.entries()) {
         this.hashes.set(key, value);
       }
+      this.pendingHashes.clear();
     } catch {
       // The cache is only an optimization to avoid redundant Discord writes.
     }
