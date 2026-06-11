@@ -1,5 +1,6 @@
 // Restart catchup tests cover cron jobs missed while the service was stopped.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as activeJobs from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent } from "./service/state.js";
@@ -657,5 +658,75 @@ describe("CronService restart catch-up", () => {
     expect(deferredJobs[1]?.state.nextRunAtMs).toBe(startNow + 10_000);
 
     await store.cleanup();
+  });
+
+  describe("startup catch-up active marker", () => {
+    beforeEach(() => {
+      activeJobs.resetCronActiveJobsForTests();
+    });
+
+    it("marks the job active during startup catch-up execution", async () => {
+      const dueAt = Date.parse("2025-12-13T15:00:00.000Z");
+      const lastRunAt = Date.parse("2025-12-12T15:00:00.000Z");
+      const jobId = "restart-active-marker-job";
+
+      const markSpy = vi.spyOn(activeJobs, "markCronJobActive");
+      const clearSpy = vi.spyOn(activeJobs, "clearCronJobActive");
+
+      const store = await makeStorePath();
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const onEvent = vi.fn();
+
+      await saveCronStore(store.storePath, {
+        version: 1,
+        jobs: [
+          {
+            id: jobId,
+            name: "catch-up active marker",
+            enabled: true,
+            createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+            updatedAtMs: Date.parse("2025-12-12T15:00:00.000Z"),
+            schedule: { kind: "cron", expr: "0 15 * * *", tz: "UTC" },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "catch-up marker" },
+            state: {
+              nextRunAtMs: dueAt,
+              lastRunAtMs: lastRunAt,
+              lastStatus: "ok",
+            },
+          },
+        ],
+      });
+
+      const cron = createRestartCronService({
+        storePath: store.storePath,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        onEvent,
+      });
+
+      try {
+        await cron.start();
+
+        // Verify markCronJobActive was called with the catch-up job id
+        expect(markSpy).toHaveBeenCalledWith(jobId);
+
+        // Verify the started event was emitted (mark occurs before emit)
+        const startedEvent = onEvent.mock.calls
+          .map(([evt]) => evt as CronEvent)
+          .find((evt) => evt.action === "started" && evt.jobId === jobId);
+        expect(startedEvent).toBeDefined();
+
+        // Verify clearCronJobActive was called (symmetric mark/clear pair)
+        expect(clearSpy).toHaveBeenCalledWith(jobId);
+      } finally {
+        cron.stop();
+        await store.cleanup();
+        markSpy.mockRestore();
+        clearSpy.mockRestore();
+      }
+    });
   });
 });
