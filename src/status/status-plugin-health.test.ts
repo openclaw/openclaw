@@ -74,6 +74,7 @@ describe("plugin health status formatting", () => {
           {
             level: "error",
             pluginId: "broken-channel",
+            code: "channel-setup-failure",
             message: "failed to load setup entry: boom",
           },
         ],
@@ -97,6 +98,7 @@ describe("plugin health status formatting", () => {
           {
             level: "error",
             pluginId: "broken-channel",
+            code: "channel-setup-failure",
             message: "failed to load setup entry: boom",
           },
         ],
@@ -149,6 +151,7 @@ describe("plugin health status formatting", () => {
           {
             level: "error",
             pluginId: "runtime-broken",
+            code: "channel-setup-failure",
             message: "failed to load setup entry: runtime load failed",
           },
         ],

@@ -529,8 +529,7 @@ export function registerContextEngineForOwner(
     return { ok: false, existingOwner: existing.owner };
   }
   registry.set(id, { factory, owner: normalizedOwner });
-  getContextEngineRegistryState().quarantinedEngines.delete(id);
-  clearPersistedContextEngineQuarantineForProcess(id, process.pid);
+  clearContextEngineRuntimeQuarantine(id);
   return { ok: true };
 }
 
@@ -564,13 +563,11 @@ export function listContextEngineIds(): string[] {
 
 export function clearContextEnginesForOwner(owner: string): void {
   const normalizedOwner = requireContextEngineOwner(owner);
-  const registryState = getContextEngineRegistryState();
-  const registry = registryState.engines;
+  const registry = getContextEngineRegistryState().engines;
   for (const [id, entry] of registry.entries()) {
     if (entry.owner === normalizedOwner) {
       registry.delete(id);
-      registryState.quarantinedEngines.delete(id);
-      clearPersistedContextEngineQuarantineForProcess(id, process.pid);
+      clearContextEngineRuntimeQuarantine(id);
     }
   }
 }

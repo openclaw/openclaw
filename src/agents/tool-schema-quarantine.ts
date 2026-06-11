@@ -59,9 +59,6 @@ export function logRuntimeToolSchemaQuarantine(params: {
           ...(pluginId ? { owner: `plugin:${pluginId}` } : {}),
           reason: diagnostic.violations.join(", "),
           failedAt: new Date(),
-          runId: params.runId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         });
       } catch {
         // Diagnostic event/log output still carries the failure if persistence is unavailable.

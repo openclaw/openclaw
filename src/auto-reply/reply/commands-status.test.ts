@@ -38,14 +38,19 @@ const providerUsageMock = vi.hoisted(() => ({
     providers: [],
   })),
 }));
+type StatusPluginHealthSnapshot =
+  import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
+
 const pluginHealthRuntimeMock = vi.hoisted(() => ({
-  collectRuntimePluginHealthSnapshot: vi.fn(() => ({
-    plugins: [],
-    diagnostics: [],
-    contextEngineQuarantines: [],
-    runtimeToolQuarantines: [],
-    channelPluginFailures: [],
-  })),
+  collectRuntimePluginHealthSnapshot: vi.fn(
+    (): StatusPluginHealthSnapshot => ({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [],
+    }),
+  ),
 }));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {

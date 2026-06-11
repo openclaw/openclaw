@@ -27,7 +27,6 @@ type ContextEngineQuarantineTestRecord = {
   reason: string;
   failedAtMs: number;
   processId: number;
-  recordedAtMs: number;
 };
 
 async function withLiveSiblingProcess<T>(fn: (pid: number) => Promise<T>): Promise<T> {
@@ -92,7 +91,6 @@ describe("context engine quarantine health", () => {
           reason: "current process failure",
           failedAtMs: 123,
           processId: process.pid,
-          recordedAtMs: 456,
         });
         seedPersistedContextEngineQuarantineForTest({
           engineId: "lossless-claw",
@@ -101,7 +99,6 @@ describe("context engine quarantine health", () => {
           reason: "sibling process failure",
           failedAtMs: 789,
           processId: siblingProcessId,
-          recordedAtMs: 1_000,
         });
 
         clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
@@ -128,7 +125,6 @@ describe("context engine quarantine health", () => {
           reason: "current process failure a",
           failedAtMs: 123,
           processId: process.pid,
-          recordedAtMs: 456,
         });
         seedPersistedContextEngineQuarantineForTest({
           engineId: "local-b",
@@ -136,7 +132,6 @@ describe("context engine quarantine health", () => {
           reason: "current process failure b",
           failedAtMs: 234,
           processId: process.pid,
-          recordedAtMs: 567,
         });
         seedPersistedContextEngineQuarantineForTest({
           engineId: "lossless-claw",
@@ -145,7 +140,6 @@ describe("context engine quarantine health", () => {
           reason: "sibling process failure",
           failedAtMs: 789,
           processId: siblingProcessId,
-          recordedAtMs: 1_000,
         });
 
         clearContextEngineRuntimeQuarantine();

@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import {
+  dedupeChannelPluginFailures,
+  dedupePluginDiagnostics,
   isChannelPluginFailureDiagnostic,
   mergeStatusPluginHealthSnapshots,
 } from "./status-plugin-health.js";
@@ -18,6 +20,9 @@ import type {
   StatusPluginHealthSnapshot,
 } from "./status-plugin-health.js";
 
+// The normalize* helpers project registry records onto the snapshot types while
+// omitting absent fields entirely, so snapshot merges never see explicitly
+// undefined values and test fixtures stay minimal.
 function normalizeSnapshotPlugin(plugin: PluginHealthRecord): PluginHealthRecord {
   const normalized: PluginHealthRecord = { id: plugin.id };
   if (plugin.status !== undefined) {
@@ -46,6 +51,9 @@ function normalizeDiagnostic(diagnostic: PluginDiagnosticRecord): PluginDiagnost
   if (diagnostic.pluginId) {
     normalized.pluginId = diagnostic.pluginId;
   }
+  if (diagnostic.code) {
+    normalized.code = diagnostic.code;
+  }
   return normalized;
 }
 
@@ -58,20 +66,6 @@ function normalizeCompatibilityNotice(
     message: notice.message,
     ...(notice.code ? { code: notice.code } : {}),
   };
-}
-
-function mergeDiagnostics(
-  left: readonly PluginDiagnosticRecord[],
-  right: readonly PluginDiagnosticRecord[],
-): PluginDiagnosticRecord[] {
-  const merged = new Map<string, PluginDiagnosticRecord>();
-  for (const diagnostic of [...left, ...right]) {
-    merged.set(
-      JSON.stringify([diagnostic.level, diagnostic.pluginId ?? "", diagnostic.message]),
-      diagnostic,
-    );
-  }
-  return [...merged.values()];
 }
 
 function collectChannelPluginFailures(params: {
@@ -93,20 +87,8 @@ function collectChannelPluginFailures(params: {
       }
       return failure;
     });
-  const dedupeConcreteFailures = (
-    failures: readonly ChannelPluginFailureRecord[],
-  ): ChannelPluginFailureRecord[] => {
-    const byFailure = new Map<string, ChannelPluginFailureRecord>();
-    for (const failure of failures) {
-      const key = JSON.stringify([failure.channelId, failure.pluginId ?? "", failure.message]);
-      if (!byFailure.has(key)) {
-        byFailure.set(key, failure);
-      }
-    }
-    return [...byFailure.values()];
-  };
   if (!params.config) {
-    return dedupeConcreteFailures(diagnosticFailures);
+    return dedupeChannelPluginFailures(diagnosticFailures);
   }
   try {
     const resolution = resolveReadOnlyChannelPluginsForConfig(params.config, {
@@ -121,7 +103,7 @@ function collectChannelPluginFailures(params: {
       message: failure.message,
       ...(failure.source ? { source: failure.source } : {}),
     }));
-    const concreteFailures = dedupeConcreteFailures([...diagnosticFailures, ...loadFailures]);
+    const concreteFailures = dedupeChannelPluginFailures([...diagnosticFailures, ...loadFailures]);
     const failedChannelIds = new Set(concreteFailures.map((failure) => failure.channelId));
     return [
       ...concreteFailures,
@@ -197,25 +179,24 @@ export async function collectInstalledPluginHealthSnapshot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<StatusPluginHealthSnapshot> {
-  const runtimeRegistry = getActiveRuntimePluginRegistry();
-  const [{ buildPluginCompatibilityNotices, buildPluginSnapshotReport }, runtime] =
-    await Promise.all([
-      import("../plugins/status.js"),
-      Promise.resolve(collectRuntimePluginHealthSnapshot()),
-    ]);
+  const { buildPluginCompatibilityNotices, buildPluginSnapshotReport } =
+    await import("../plugins/status.js");
+  const runtime = collectRuntimePluginHealthSnapshot();
   const report = buildPluginSnapshotReport({
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
   const installedDiagnostics = report.diagnostics.map(normalizeDiagnostic);
-  const runtimeDiagnostics = (runtimeRegistry?.diagnostics ?? []).map(normalizeDiagnostic);
-  const diagnostics = mergeDiagnostics(installedDiagnostics, runtimeDiagnostics);
-  const installedChannelPluginFailures = collectChannelPluginFailures({
+  // Channel failures resolve once against the union of installed and runtime
+  // diagnostics so missing-channel entries cannot duplicate concrete failures
+  // that only one side observed.
+  const channelPluginFailures = collectChannelPluginFailures({
     config: params.config,
-    diagnostics,
+    diagnostics: dedupePluginDiagnostics([...installedDiagnostics, ...runtime.diagnostics]),
     workspaceDir: params.workspaceDir,
     includeSetupFallbackPlugins: true,
   });
+  const runtimeRegistry = getActiveRuntimePluginRegistry();
   const runtimeCompatibilityNotices = runtimeRegistry
     ? buildPluginCompatibilityNotices({
         config: params.config,
@@ -228,20 +209,13 @@ export async function collectInstalledPluginHealthSnapshot(params: {
       plugins: report.plugins.map(normalizeSnapshotPlugin),
       diagnostics: installedDiagnostics,
       contextEngineQuarantines: [],
-      channelPluginFailures: installedChannelPluginFailures,
+      channelPluginFailures,
       compatibilityNotices: buildPluginCompatibilityNotices({
         config: params.config,
         workspaceDir: params.workspaceDir,
         report,
       }).map(normalizeCompatibilityNotice),
     },
-    {
-      plugins: (runtimeRegistry?.plugins ?? []).map(normalizeSnapshotPlugin),
-      diagnostics: runtimeDiagnostics,
-      contextEngineQuarantines: runtime.contextEngineQuarantines,
-      runtimeToolQuarantines: runtime.runtimeToolQuarantines,
-      channelPluginFailures: runtime.channelPluginFailures,
-      compatibilityNotices: runtimeCompatibilityNotices,
-    },
+    { ...runtime, compatibilityNotices: runtimeCompatibilityNotices },
   );
 }
