@@ -1,4 +1,5 @@
 import type {
+  DeprecatedWebInboundMessageFlatAliases,
   LegacyFlatWebInboundMessage,
   WebInboundCallbackMessage,
   WebInboundMessage,
@@ -8,6 +9,10 @@ import type {
 } from "./types.js";
 
 type QuoteSender = NonNullable<WhatsAppInboundQuote["sender"]>;
+type AliasDescriptor = {
+  get: () => unknown;
+  set: (value: unknown) => void;
+};
 
 function normalizeQuoteSender(sender: QuoteSender | undefined): QuoteSender | undefined {
   if (!sender?.displayName && !sender?.jid && !sender?.e164) {
@@ -65,48 +70,222 @@ function buildGroupFromFlatAliases(
   };
 }
 
+function ensureQuote(msg: WebInboundCallbackMessage): WhatsAppInboundQuote {
+  return (msg.quote ??= {});
+}
+
+function ensureQuoteSender(msg: WebInboundCallbackMessage): QuoteSender {
+  const quote = ensureQuote(msg);
+  return (quote.sender ??= {});
+}
+
+function ensureGroup(msg: WebInboundCallbackMessage): WhatsAppInboundGroupContext {
+  return (msg.group ??= {});
+}
+
+function ensureGroupMentions(msg: WebInboundCallbackMessage): { jids?: string[]; text?: string[] } {
+  const group = ensureGroup(msg);
+  return (group.mentions ??= {});
+}
+
+function ensureMedia(
+  msg: WebInboundCallbackMessage,
+): NonNullable<WebInboundCallbackMessage["payload"]["media"]> {
+  return (msg.payload.media ??= {});
+}
+
+function setMediaField<K extends keyof NonNullable<WebInboundCallbackMessage["payload"]["media"]>>(
+  msg: WebInboundCallbackMessage,
+  key: K,
+  value: NonNullable<WebInboundCallbackMessage["payload"]["media"]>[K] | undefined,
+) {
+  if (value === undefined && !msg.payload.media) {
+    return;
+  }
+  ensureMedia(msg)[key] = value;
+}
+
+function defineDeprecatedAliasAccessors<T extends WebInboundCallbackMessage>(
+  msg: T,
+  descriptors: Record<keyof DeprecatedWebInboundMessageFlatAliases, AliasDescriptor>,
+): T & WebInboundMessage {
+  Object.defineProperties(
+    msg,
+    Object.fromEntries(
+      Object.entries(descriptors).map(([key, descriptor]) => [
+        key,
+        {
+          configurable: true,
+          enumerable: true,
+          get: descriptor.get,
+          set: descriptor.set,
+        },
+      ]),
+    ),
+  );
+  return msg as T & WebInboundMessage;
+}
+
 export function withDeprecatedWebInboundMessageFlatAliases<T extends WebInboundCallbackMessage>(
   msg: T,
 ): T & WebInboundMessage {
   // Keep the shipped callback shape alive while nested contexts remain canonical.
-  return {
-    ...msg,
-    id: msg.event.id,
-    to: msg.platform.recipientJid,
-    body: msg.payload.body,
-    pushName: msg.platform.pushName,
-    timestamp: msg.event.timestamp,
-    chatId: msg.platform.chatJid,
-    sender: msg.platform.sender,
-    senderJid: msg.platform.senderJid,
-    senderE164: msg.platform.senderE164,
-    senderName: msg.platform.senderName,
-    replyTo: msg.quote?.context,
-    replyToId: msg.quote?.id ?? msg.quote?.context?.id,
-    replyToBody: msg.quote?.body ?? msg.quote?.context?.body,
-    replyToSender: msg.quote?.context?.sender?.label ?? msg.quote?.sender?.displayName,
-    replyToSenderJid: msg.quote?.context?.sender?.jid ?? msg.quote?.sender?.jid,
-    replyToSenderE164: msg.quote?.context?.sender?.e164 ?? msg.quote?.sender?.e164,
-    groupSubject: msg.group?.subject,
-    groupParticipants: msg.group?.participants,
-    mentions: msg.group?.mentions?.jids,
-    mentionedJids: msg.group?.mentions?.jids,
-    self: msg.platform.self,
-    selfJid: msg.platform.selfJid,
-    selfLid: msg.platform.selfLid,
-    selfE164: msg.platform.selfE164,
-    fromMe: msg.platform.fromMe,
-    location: msg.payload.location,
-    sendComposing: msg.platform.sendComposing,
-    reply: msg.platform.reply,
-    sendMedia: msg.platform.sendMedia,
-    mediaPath: msg.payload.media?.path,
-    mediaType: msg.payload.media?.type,
-    mediaFileName: msg.payload.media?.fileName,
-    mediaUrl: msg.payload.media?.url,
-    untrustedStructuredContext: msg.payload.untrustedStructuredContext,
-    isBatched: msg.event.isBatched,
-  };
+  return defineDeprecatedAliasAccessors(msg, {
+    id: { get: () => msg.event.id, set: (value) => (msg.event.id = value as string | undefined) },
+    to: {
+      get: () => msg.platform.recipientJid,
+      set: (value) => (msg.platform.recipientJid = value as string),
+    },
+    body: { get: () => msg.payload.body, set: (value) => (msg.payload.body = value as string) },
+    pushName: {
+      get: () => msg.platform.pushName,
+      set: (value) => (msg.platform.pushName = value as string | undefined),
+    },
+    timestamp: {
+      get: () => msg.event.timestamp,
+      set: (value) => (msg.event.timestamp = value as number | undefined),
+    },
+    chatId: {
+      get: () => msg.platform.chatJid,
+      set: (value) => (msg.platform.chatJid = value as string),
+    },
+    sender: {
+      get: () => msg.platform.sender,
+      set: (value) => (msg.platform.sender = value as typeof msg.platform.sender),
+    },
+    senderJid: {
+      get: () => msg.platform.senderJid,
+      set: (value) => (msg.platform.senderJid = value as string | undefined),
+    },
+    senderE164: {
+      get: () => msg.platform.senderE164,
+      set: (value) => (msg.platform.senderE164 = value as string | undefined),
+    },
+    senderName: {
+      get: () => msg.platform.senderName,
+      set: (value) => (msg.platform.senderName = value as string | undefined),
+    },
+    replyTo: {
+      get: () => msg.quote?.context,
+      set: (value) => (ensureQuote(msg).context = value as WhatsAppInboundQuote["context"]),
+    },
+    replyToId: {
+      get: () => msg.quote?.id ?? msg.quote?.context?.id,
+      set: (value) => (ensureQuote(msg).id = value as string | undefined),
+    },
+    replyToBody: {
+      get: () => msg.quote?.body ?? msg.quote?.context?.body,
+      set: (value) => (ensureQuote(msg).body = value as string | undefined),
+    },
+    replyToSender: {
+      get: () => msg.quote?.context?.sender?.label ?? msg.quote?.sender?.displayName,
+      set: (value) => {
+        const sender = ensureQuoteSender(msg);
+        sender.displayName = value as string | undefined;
+        if (msg.quote?.context?.sender) {
+          msg.quote.context.sender.label = value as string | undefined;
+        }
+      },
+    },
+    replyToSenderJid: {
+      get: () => msg.quote?.context?.sender?.jid ?? msg.quote?.sender?.jid,
+      set: (value) => {
+        const jid = value as string | undefined;
+        ensureQuoteSender(msg).jid = jid;
+        if (msg.quote?.context?.sender) {
+          msg.quote.context.sender.jid = jid;
+        }
+      },
+    },
+    replyToSenderE164: {
+      get: () => msg.quote?.context?.sender?.e164 ?? msg.quote?.sender?.e164,
+      set: (value) => {
+        const e164 = value as string | undefined;
+        ensureQuoteSender(msg).e164 = e164;
+        if (msg.quote?.context?.sender) {
+          msg.quote.context.sender.e164 = e164;
+        }
+      },
+    },
+    groupSubject: {
+      get: () => msg.group?.subject,
+      set: (value) => (ensureGroup(msg).subject = value as string | undefined),
+    },
+    groupParticipants: {
+      get: () => msg.group?.participants,
+      set: (value) => (ensureGroup(msg).participants = value as string[] | undefined),
+    },
+    mentions: {
+      get: () => msg.group?.mentions?.jids,
+      set: (value) => (ensureGroupMentions(msg).jids = value as string[] | undefined),
+    },
+    mentionedJids: {
+      get: () => msg.group?.mentions?.jids,
+      set: (value) => (ensureGroupMentions(msg).jids = value as string[] | undefined),
+    },
+    self: {
+      get: () => msg.platform.self,
+      set: (value) => (msg.platform.self = value as typeof msg.platform.self),
+    },
+    selfJid: {
+      get: () => msg.platform.selfJid,
+      set: (value) => (msg.platform.selfJid = value as string | null | undefined),
+    },
+    selfLid: {
+      get: () => msg.platform.selfLid,
+      set: (value) => (msg.platform.selfLid = value as string | null | undefined),
+    },
+    selfE164: {
+      get: () => msg.platform.selfE164,
+      set: (value) => (msg.platform.selfE164 = value as string | null | undefined),
+    },
+    fromMe: {
+      get: () => msg.platform.fromMe,
+      set: (value) => (msg.platform.fromMe = value as boolean | undefined),
+    },
+    location: {
+      get: () => msg.payload.location,
+      set: (value) => (msg.payload.location = value as typeof msg.payload.location),
+    },
+    sendComposing: {
+      get: () => msg.platform.sendComposing,
+      set: (value) => (msg.platform.sendComposing = value as typeof msg.platform.sendComposing),
+    },
+    reply: {
+      get: () => msg.platform.reply,
+      set: (value) => (msg.platform.reply = value as typeof msg.platform.reply),
+    },
+    sendMedia: {
+      get: () => msg.platform.sendMedia,
+      set: (value) => (msg.platform.sendMedia = value as typeof msg.platform.sendMedia),
+    },
+    mediaPath: {
+      get: () => msg.payload.media?.path,
+      set: (value) => setMediaField(msg, "path", value as string | undefined),
+    },
+    mediaType: {
+      get: () => msg.payload.media?.type,
+      set: (value) => setMediaField(msg, "type", value as string | undefined),
+    },
+    mediaFileName: {
+      get: () => msg.payload.media?.fileName,
+      set: (value) => setMediaField(msg, "fileName", value as string | undefined),
+    },
+    mediaUrl: {
+      get: () => msg.payload.media?.url,
+      set: (value) => setMediaField(msg, "url", value as string | undefined),
+    },
+    untrustedStructuredContext: {
+      get: () => msg.payload.untrustedStructuredContext,
+      set: (value) =>
+        (msg.payload.untrustedStructuredContext =
+          value as typeof msg.payload.untrustedStructuredContext),
+    },
+    isBatched: {
+      get: () => msg.event.isBatched,
+      set: (value) => (msg.event.isBatched = value as boolean | undefined),
+    },
+  });
 }
 
 function normalizeLegacyFlatWebInboundMessage(msg: LegacyFlatWebInboundMessage): WebInboundMessage {
