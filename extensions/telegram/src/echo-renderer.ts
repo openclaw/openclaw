@@ -1,11 +1,7 @@
 import type { Bot } from "grammy";
 import {
-  buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
-  formatChannelProgressDraftText,
-  mergeChannelProgressDraftLine,
-  resolveChannelProgressDraftMaxLines,
-  resolveChannelStreamingPreviewToolProgress,
+  createChannelProgressDraftCompositor,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -15,6 +11,7 @@ import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { renderTelegramHtmlText } from "./format.js";
+import { buildTelegramProgressCallbacks } from "./streaming-progress-callbacks.js";
 
 const TELEGRAM_DRAFT_MAX_CHARS = 4096;
 
@@ -29,15 +26,15 @@ const TELEGRAM_DRAFT_MAX_CHARS = 4096;
  * re-running the agent and without going through the inbound dispatch pipeline
  * (so no admission, persistence, or message:sent hook → loop-safe by construction).
  *
- * The renderer RIDES the destination account's own streaming config so the mirror
- * renders the turn exactly as that channel would have natively:
- *  - `streamMode: "progress"` with `preview.toolProgress` on → the tool-progress
- *    lane is shown (the same `🔧 tool …` draft lines the native compositor builds,
- *    via the shared `buildChannelProgressDraftLineForEntry`/`formatChannelProgressDraftText`),
- *    then collapses to the final answer — matching native progress-mode rendering.
- *  - `streamMode: "partial"` → just the streamed answer draft (native groups do not
- *    surface a separate tool lane in partial mode).
- * Reasoning/thinking lanes remain a follow-up; the resolver no-ops those callbacks.
+ * The renderer RIDES the destination account's streaming config by reusing the
+ * exact same code the native inbound dispatch uses — NOT a parallel reimplementation:
+ *  - tool/commentary/plan/etc progress flows through `buildTelegramProgressCallbacks`
+ *    (the shared callback bundle factored out of the native dispatch), and
+ *  - that funnels into `createChannelProgressDraftCompositor`, the shared compositor
+ *    that owns all `streaming.preview.toolProgress` / `streaming.progress.*` gating.
+ * So whatever a native reply in this channel would render for a given config — the
+ * inline preview tool lane in `partial`, the durable progress draft + commentary in
+ * `progress` — the mirror renders the same, because it is the same code.
  */
 export type TelegramEchoRenderer = {
   /** Hand to the mirror resolver so it drives the draft from the origin run. */
@@ -54,7 +51,7 @@ export function createTelegramEchoRenderer(params: {
   thread?: TelegramThreadSpec | null;
   cfg: OpenClawConfig;
   accountId?: string;
-  /** The destination account config — gates the lanes so the mirror rides its config. */
+  /** The destination account config — the compositor rides its streaming config. */
   streamingEntry?: TelegramAccountConfig;
   /** Resolved stream mode of the destination account (off is filtered upstream). */
   streamMode?: TelegramStreamMode;
@@ -84,48 +81,34 @@ export function createTelegramEchoRenderer(params: {
     warn: params.log,
   });
 
-  // Tool-progress lane: ride the destination's config. Native only surfaces tool
-  // progress in `progress` stream mode (the separate DM-only native draft aside),
-  // so the mirror does the same — render the `🔧 tool …` lines into the single
-  // evolving draft until the answer text arrives, then collapse to the answer.
-  const showToolProgress =
-    params.streamMode === "progress" &&
-    resolveChannelStreamingPreviewToolProgress(params.streamingEntry);
-  const progressMaxLines = resolveChannelProgressDraftMaxLines(params.streamingEntry);
-  const progressSeed = `echo:${String(params.chatId)}:${params.thread?.id ?? ""}`;
-  let progressLines: Array<string | ChannelProgressDraftLine> = [];
-
-  let deltaAccumulator = "";
   let lastText: string | undefined;
-  let pendingAnswer: string | undefined;
+  let deltaAccumulator = "";
+  let finalStarted = false;
   let settled = false;
 
-  const renderProgress = () => {
-    if (!showToolProgress || progressLines.length === 0) {
-      return;
-    }
-    const text = formatChannelProgressDraftText({
-      entry: params.streamingEntry,
-      lines: progressLines,
-      seed: progressSeed,
-    });
-    if (text && text !== lastText) {
+  // Reuse the native streaming progress compositor: it renders the progress lines
+  // into our single echo draft and owns every config gate (preview.toolProgress,
+  // progress mode, commentary). The `update` callback is the only echo-specific bit.
+  const progressDraft = createChannelProgressDraftCompositor({
+    entry: params.streamingEntry,
+    mode: params.streamMode ?? "partial",
+    active: true,
+    seed: `echo:${String(params.chatId)}:${params.thread?.id ?? ""}`,
+    update: (text, options) => {
       lastText = text;
       answer.update(text);
-      // Flush so the tool-progress lane is delivered as its own draft edit rather
-      // than being throttle-coalesced with the final answer.
-      void answer.flush?.();
-    }
-  };
+      return options?.flush ? answer.flush() : undefined;
+    },
+  });
 
-  const pushProgress = (line: ChannelProgressDraftLine | undefined) => {
-    if (!showToolProgress || !line) {
-      return;
+  const pushToolProgress = (
+    line?: string | ChannelProgressDraftLine,
+    options?: { toolName?: string; startImmediately?: boolean },
+  ) => {
+    if (finalStarted || settled) {
+      return false;
     }
-    progressLines = mergeChannelProgressDraftLine(progressLines, line, {
-      maxLines: progressMaxLines,
-    });
-    renderProgress();
+    return progressDraft.pushToolProgress(line, options);
   };
 
   const options: GetReplyOptions = {
@@ -141,99 +124,30 @@ export function createTelegramEchoRenderer(params: {
       if (text === undefined) {
         return;
       }
-      pendingAnswer = text;
-      // In progress mode the tool-progress draft stays up for the whole turn and
-      // collapses to the answer at finalize — matching native progress rendering,
-      // where the answer does not pre-empt the tool lane mid-stream. In plain
-      // streaming mode (no tool lane), stream the answer live.
-      if (!showToolProgress) {
-        lastText = text;
-        answer.update(text);
+      // First answer chunk: tell the compositor the final reply has begun so it
+      // stops pushing progress, then the answer text takes over the draft.
+      if (!finalStarted) {
+        finalStarted = true;
+        progressDraft.markFinalReplyStarted();
       }
+      lastText = text;
+      answer.update(text);
     },
-    ...(showToolProgress
-      ? {
-          onToolStart: (payload) =>
-            pushProgress(
-              buildChannelProgressDraftLineForEntry(
-                params.streamingEntry,
-                {
-                  event: "tool",
-                  name: payload.name,
-                  phase: payload.phase,
-                  args: payload.args,
-                  itemId: payload.itemId,
-                  toolCallId: payload.toolCallId,
-                },
-                payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-              ),
-            ),
-          onItemEvent: (payload) =>
-            pushProgress(
-              buildChannelProgressDraftLineForEntry(params.streamingEntry, {
-                event: "item",
-                itemId: payload.itemId,
-                itemKind: payload.kind,
-                title: payload.title,
-                name: payload.name,
-                phase: payload.phase,
-                status: payload.status,
-                summary: payload.summary,
-                progressText: payload.progressText,
-                meta: payload.meta,
-              }),
-            ),
-          onPlanUpdate: (payload) =>
-            pushProgress(
-              buildChannelProgressDraftLineForEntry(params.streamingEntry, {
-                event: "plan",
-                phase: payload.phase,
-                title: payload.title,
-                explanation: payload.explanation,
-                steps: payload.steps,
-              }),
-            ),
-          onCommandOutput: (payload) =>
-            pushProgress(
-              buildChannelProgressDraftLineForEntry(params.streamingEntry, {
-                event: "command-output",
-                itemId: payload.itemId,
-                toolCallId: payload.toolCallId,
-                name: payload.name,
-                phase: payload.phase,
-                title: payload.title,
-                status: payload.status,
-                exitCode: payload.exitCode,
-              }),
-            ),
-          onPatchSummary: (payload) =>
-            pushProgress(
-              buildChannelProgressDraftLineForEntry(params.streamingEntry, {
-                event: "patch",
-                itemId: payload.itemId,
-                toolCallId: payload.toolCallId,
-                name: payload.name,
-                phase: payload.phase,
-                title: payload.title,
-                added: payload.added,
-                modified: payload.modified,
-                deleted: payload.deleted,
-                summary: payload.summary,
-              }),
-            ),
-          onApprovalEvent: (payload) =>
-            pushProgress(
-              buildChannelProgressDraftLineForEntry(params.streamingEntry, {
-                event: "approval",
-                phase: payload.phase,
-                title: payload.title,
-                command: payload.command,
-                reason: payload.reason,
-                message: payload.message,
-              }),
-            ),
-        }
-      : {}),
+    onReasoningStream: async (payload) => {
+      if (finalStarted || settled) {
+        return;
+      }
+      await progressDraft.pushReasoningProgress(
+        typeof payload.text === "string" ? payload.text : undefined,
+      );
+    },
+    // Tool / item / plan / approval / command / patch / compaction progress — the
+    // exact same wiring the native dispatch uses (no duplication).
+    ...buildTelegramProgressCallbacks({
+      entry: params.streamingEntry,
+      pushToolProgress,
+      pushCommentaryProgress: (text, opts) => progressDraft.pushCommentaryProgress(text, opts),
+    }),
   };
 
   const finalize = async (final?: ReplyPayload) => {
@@ -241,8 +155,8 @@ export function createTelegramEchoRenderer(params: {
       return;
     }
     settled = true;
-    const finalText =
-      typeof final?.text === "string" ? final.text : (pendingAnswer ?? lastText);
+    progressDraft.markFinalReplyDelivered();
+    const finalText = typeof final?.text === "string" ? final.text : lastText;
     if (finalText !== undefined && finalText !== lastText) {
       answer.update(finalText);
     }
@@ -254,6 +168,7 @@ export function createTelegramEchoRenderer(params: {
       return;
     }
     settled = true;
+    progressDraft.cancel();
     await (answer.discard?.() ?? answer.stop());
   };
 

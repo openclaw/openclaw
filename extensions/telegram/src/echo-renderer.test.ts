@@ -73,50 +73,25 @@ describe("createTelegramEchoRenderer", () => {
       ...api.editMessageText.mock.calls.map((c) => c[2]),
     ].join("|");
 
-  it("rides progress-mode config: wires the tool lane and renders it natively", async () => {
-    const api = fakeApi();
+  it("wires the same native progress callbacks (gating lives in the shared compositor)", () => {
     const r = createTelegramEchoRenderer({
-      api,
+      api: fakeApi(),
       chatId: 5,
       cfg,
       textLimit: 4096,
-      throttleMs: 250,
-      streamMode: "progress",
-      streamingEntry: {} as TelegramAccountConfig,
-    });
-    // Progress mode surfaces the verbose/tool lane the resolver already drives.
-    expect(r.options.onToolStart).toBeTypeOf("function");
-    expect(r.options.onItemEvent).toBeTypeOf("function");
-
-    // A tool event with no answer yet renders the tool-progress draft on its own.
-    await r.options.onToolStart?.({ name: "shell", args: { command: "date -u" } });
-    await r.finalize();
-    expect(api.sendMessage).toHaveBeenCalled();
-    expect(renderedOf(api).length).toBeGreaterThan(0);
-  });
-
-  it("rides partial-mode config: no separate tool lane, answer still streams", async () => {
-    const api = fakeApi();
-    const r = createTelegramEchoRenderer({
-      api,
-      chatId: 6,
-      cfg,
-      textLimit: 4096,
-      throttleMs: 250,
       streamMode: "partial",
       streamingEntry: {} as TelegramAccountConfig,
     });
-    // Native telegram groups do not surface a tool lane in partial mode, so the
-    // mirror does not wire one either — it rides what the channel would do.
-    expect(r.options.onToolStart).toBeUndefined();
-    expect(r.options.onItemEvent).toBeUndefined();
-
-    await r.options.onPartialReply?.({ text: "answer" });
-    await r.finalize({ text: "answer" });
-    expect(renderedOf(api)).toContain("answer");
+    // The renderer reuses buildTelegramProgressCallbacks (the native dispatch's
+    // bundle), so the progress callbacks are always present; the destination's
+    // streaming config is honored inside createChannelProgressDraftCompositor.
+    expect(r.options.onToolStart).toBeTypeOf("function");
+    expect(r.options.onItemEvent).toBeTypeOf("function");
+    expect(r.options.onPlanUpdate).toBeTypeOf("function");
+    expect(r.options.onReasoningStream).toBeTypeOf("function");
   });
 
-  it("collapses the tool-progress draft into the answer when it arrives", async () => {
+  it("renders tool progress through the compositor, then the final answer", async () => {
     const api = fakeApi();
     const r = createTelegramEchoRenderer({
       api,
