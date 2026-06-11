@@ -210,7 +210,9 @@ describe("Security Matrix evaluator", () => {
       },
     } satisfies SecurityMatrixPolicy;
 
-    expect(evaluateSecurityMatrix({ influencedBy: ["web_fetch"], capability: "exec", policy })).toMatchObject({
+    expect(
+      evaluateSecurityMatrix({ influencedBy: ["web_fetch"], capability: "exec", policy }),
+    ).toMatchObject({
       source: "web_fetch",
       capability: "exec",
       policyDecision: "block",
@@ -234,6 +236,43 @@ describe("Security Matrix evaluator", () => {
     });
   });
 
+  it.each([
+    [
+      "object",
+      {
+        web_fetch: {
+          exec: {
+            decision: "permit",
+            reason: "Invalid external policy override.",
+          },
+        },
+      },
+    ],
+    [
+      "string",
+      {
+        web_fetch: {
+          exec: "permit",
+        },
+      },
+    ],
+  ])("ignores malformed custom policy %s decisions", (_kind, policy) => {
+    expect(
+      evaluateSecurityMatrix({
+        influencedBy: ["web_fetch"],
+        capability: "exec",
+        policy: policy as unknown as SecurityMatrixPolicy,
+        allowPolicyWeakening: true,
+      }),
+    ).toMatchObject({
+      source: "web_fetch",
+      capability: "exec",
+      policyDecision: "block",
+      decision: "block",
+      matched: "policy",
+    });
+  });
+
   it("keeps default policy rules when a partial custom policy has no matching rule", () => {
     const policy = {
       web_fetch: {
@@ -242,7 +281,11 @@ describe("Security Matrix evaluator", () => {
     } satisfies SecurityMatrixPolicy;
 
     expect(
-      evaluateSecurityMatrix({ influencedBy: ["web_fetch"], capability: "credential_access", policy }),
+      evaluateSecurityMatrix({
+        influencedBy: ["web_fetch"],
+        capability: "credential_access",
+        policy,
+      }),
     ).toMatchObject({
       source: "web_fetch",
       capability: "credential_access",

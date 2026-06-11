@@ -2,6 +2,7 @@ import { defaultSecurityMatrixPolicy } from "./default-policy.js";
 import {
   SECURITY_MATRIX_ACTORS,
   SECURITY_MATRIX_APPROVAL_STATES,
+  SECURITY_MATRIX_DECISIONS,
   SECURITY_MATRIX_INFLUENCE_SOURCES,
   SECURITY_MATRIX_OPERATOR_POLICIES,
   SECURITY_MATRIX_TOOL_CAPABILITIES,
@@ -22,6 +23,7 @@ const approvalStateSet = new Set<string>(SECURITY_MATRIX_APPROVAL_STATES);
 const influenceSourceSet = new Set<string>(SECURITY_MATRIX_INFLUENCE_SOURCES);
 const operatorPolicySet = new Set<string>(SECURITY_MATRIX_OPERATOR_POLICIES);
 const toolCapabilitySet = new Set<string>(SECURITY_MATRIX_TOOL_CAPABILITIES);
+const decisionSet = new Set<string>(SECURITY_MATRIX_DECISIONS);
 
 const decisionRank: Record<SecurityMatrixDecision, number> = {
   allow: 0,
@@ -40,22 +42,26 @@ function normalizeToken(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
 
+function isSecurityMatrixDecision(value: unknown): value is SecurityMatrixDecision {
+  return typeof value === "string" && decisionSet.has(value);
+}
+
 function isSecurityMatrixRule(value: unknown): value is SecurityMatrixRule {
   return (
     typeof value === "object" &&
     value !== null &&
     "decision" in value &&
     "reason" in value &&
-    typeof value.decision === "string" &&
+    isSecurityMatrixDecision(value.decision) &&
     typeof value.reason === "string"
   );
 }
 
-function toRule(value: SecurityMatrixDecision | SecurityMatrixRule | undefined): ResolvedRule | undefined {
+function toRule(value: unknown): ResolvedRule | undefined {
   if (isSecurityMatrixRule(value)) {
     return { decision: value.decision, reason: value.reason, matched: "policy" };
   }
-  if (value) {
+  if (isSecurityMatrixDecision(value)) {
     return {
       decision: value,
       reason: "Policy decision matched without a rule reason.",
@@ -70,7 +76,9 @@ export function normalizeSecurityMatrixActor(actor: string | undefined): Securit
   return actorSet.has(normalized) ? (normalized as SecurityMatrixActor) : "unknown";
 }
 
-export function normalizeSecurityMatrixInfluenceSource(source: string): SecurityMatrixInfluenceSource {
+export function normalizeSecurityMatrixInfluenceSource(
+  source: string,
+): SecurityMatrixInfluenceSource {
   const normalized = normalizeToken(source);
   return influenceSourceSet.has(normalized)
     ? (normalized as SecurityMatrixInfluenceSource)
@@ -81,7 +89,9 @@ export function normalizeSecurityMatrixCapability(
   capability: string,
 ): SecurityMatrixToolCapability {
   const normalized = normalizeToken(capability);
-  return toolCapabilitySet.has(normalized) ? (normalized as SecurityMatrixToolCapability) : "unknown";
+  return toolCapabilitySet.has(normalized)
+    ? (normalized as SecurityMatrixToolCapability)
+    : "unknown";
 }
 
 export function normalizeSecurityMatrixApprovalState(
@@ -95,7 +105,9 @@ export function normalizeSecurityMatrixOperatorPolicy(
   operatorPolicy: string | undefined,
 ): SecurityMatrixOperatorPolicy {
   const normalized = normalizeToken(operatorPolicy);
-  return operatorPolicySet.has(normalized) ? (normalized as SecurityMatrixOperatorPolicy) : "unknown";
+  return operatorPolicySet.has(normalized)
+    ? (normalized as SecurityMatrixOperatorPolicy)
+    : "unknown";
 }
 
 function normalizeInfluences(input: SecurityMatrixEvaluationInput): {
