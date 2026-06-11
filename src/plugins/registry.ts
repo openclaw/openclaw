@@ -38,7 +38,6 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
-import { registerEchoRendererFactory } from "../infra/outbound/echo-streaming.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -1024,34 +1023,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
-  };
-
-  const registerChannelEchoRendererFactory = (
-    record: PluginRecord,
-    factory: Parameters<OpenClawPluginApi["registerEchoRendererFactory"]>[0],
-  ) => {
-    const ownsRuntimeChannel = registry.channels.some(
-      (entry) => entry.pluginId === record.id && entry.plugin.id === record.id,
-    );
-    if (!ownsRuntimeChannel) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "echo renderer factory registration requires ownership of a matching channel id",
-      });
-      return;
-    }
-    if (typeof factory !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "echo renderer factory registration missing factory",
-      });
-      return;
-    }
-    registerEchoRendererFactory(record.id, factory);
   };
 
   const registerProvider = (record: PluginRecord, provider: ProviderPlugin) => {
@@ -2812,8 +2783,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerHostedMediaResolver: (resolver) =>
                 registerHostedMediaResolver(record, resolver),
-              registerEchoRendererFactory: (factory) =>
-                registerChannelEchoRendererFactory(record, factory),
               registerProvider: (provider) => registerProvider(record, provider),
               registerModelCatalogProvider: (provider) =>
                 registerModelCatalogProvider(record, provider),

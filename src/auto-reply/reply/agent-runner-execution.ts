@@ -67,9 +67,9 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  launchStreamingEchoFanout,
-  type StreamingEchoFanoutHandle,
-} from "../../infra/outbound/echo-streaming.js";
+  launchMirrorDispatch,
+  type MirrorDispatchHandle,
+} from "../../infra/outbound/mirror-dispatch.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -1669,49 +1669,47 @@ export async function runAgentTurnWithFallback(params: {
       isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
-  // B-full native streaming echo: launch one live renderer per streaming-enabled
-  // echo target, fed by THIS run's agent-event stream (one agent run, N native
-  // renders). Must run before the model emits — the bus has no replay buffer, so
-  // each renderer subscribes synchronously here. On normal completion the renderers
-  // self-finalize from the run's lifecycle event; on abort we discard them.
-  let streamingEchoFanout: StreamingEchoFanoutHandle | undefined;
+  // Pin-from-here mirror (channel-agnostic): one agent run, broadcast on the bus
+  // by runId. For each pinned echo target, re-home a turn onto that target's OWN
+  // channel dispatch with a bus-sourced replyResolver — so it renders + persists
+  // through the channel's normal pipeline and honors that channel's config
+  // (streaming on → it streams; off → final only). Must run before the model
+  // emits: the bus has no replay buffer, so each target's resolver subscribes
+  // synchronously here. The resolvers self-settle on the run's lifecycle event;
+  // on abort we dispose them.
+  let mirrorDispatch: MirrorDispatchHandle | undefined;
   const echoEntryForStreaming = params.sessionKey ? params.getActiveSessionEntry() : undefined;
   if (echoEntryForStreaming?.echoTargets?.length) {
     try {
-      streamingEchoFanout = await launchStreamingEchoFanout({
+      mirrorDispatch = await launchMirrorDispatch({
         originRunId: runId,
         cfg: runtimeConfig,
         sessionKey: params.sessionKey,
         sessionEntry: echoEntryForStreaming,
-        // Origin = the channel that triggered THIS turn. Prefer the current
-        // turn's explicit origin (OriginatingChannel/To — set for webchat
-        // chat.send and any caller that does not claim the session's `last*`)
-        // over the session's `last*`, which is only fresh for channel inbounds
-        // that update it. Without this, a webchat-origin turn inherits the stale
-        // `last*` of the previously-active channel; if that channel is also a
-        // pinned echo target it gets self-excluded and the mirror silently falls
-        // back to the flat post-hoc echo instead of a native streaming render.
-        // `last*` remains the fallback so channel-origin turns are unchanged.
+        // Origin = the channel that triggered THIS turn. Prefer the explicit
+        // origin (OriginatingChannel/To — set for webchat chat.send and callers
+        // that do not claim the session's `last*`) over `last*`, which is only
+        // fresh for channel inbounds; otherwise a webchat-origin turn inherits a
+        // stale `last*` and may self-exclude a pinned target.
         originChannel:
           params.sessionCtx.OriginatingChannel ??
           echoEntryForStreaming.lastChannel ??
           echoEntryForStreaming.channel ??
           params.sessionCtx.Provider ??
           "",
-        originTo:
-          params.sessionCtx.OriginatingTo ?? echoEntryForStreaming.lastTo ?? "",
+        originTo: params.sessionCtx.OriginatingTo ?? echoEntryForStreaming.lastTo ?? "",
         originAccountId: echoEntryForStreaming.lastAccountId,
         originThreadId: echoEntryForStreaming.lastThreadId,
       });
     } catch (err) {
-      logVerbose(`streaming echo fan-out launch failed (non-fatal): ${String(err)}`);
+      logVerbose(`mirror dispatch launch failed (non-fatal): ${String(err)}`);
     }
     const echoAbortSignal = params.replyOperation?.abortSignal ?? params.opts?.abortSignal;
-    if (streamingEchoFanout && echoAbortSignal) {
+    if (mirrorDispatch && echoAbortSignal) {
       echoAbortSignal.addEventListener(
         "abort",
         () => {
-          void streamingEchoFanout?.dispose();
+          mirrorDispatch?.dispose();
         },
         { once: true },
       );

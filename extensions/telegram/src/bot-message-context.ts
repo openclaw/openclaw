@@ -149,6 +149,8 @@ export const buildTelegramMessageContext = async ({
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+  // Pin-from-here mirror: skip per-message admission (the pin authorized this).
+  const isMirror = options?.mirror === true;
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const reactionApi =
@@ -263,7 +265,7 @@ export const buildTelegramMessageContext = async ({
     candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
   const hasExplicitTopicRoute = isGroup && Boolean(topicConfig?.agentId?.trim());
-  if (isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
+  if (!isMirror && isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -302,7 +304,7 @@ export const buildTelegramMessageContext = async ({
     enforceAllowOverride: true,
     requireSenderForAllowOverride: false,
   });
-  if (!baseAccess.allowed) {
+  if (!isMirror && !baseAccess.allowed) {
     if (baseAccess.reason === "group-disabled") {
       logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
       return null;
@@ -323,7 +325,7 @@ export const buildTelegramMessageContext = async ({
 
   const requireTopic = directConfig?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
-  if (topicRequiredButMissing) {
+  if (!isMirror && topicRequiredButMissing) {
     logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }

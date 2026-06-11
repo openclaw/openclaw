@@ -24,7 +24,6 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerHttpRoute() {},
     registerHostedMediaResolver() {},
     registerChannel() {},
-    registerEchoRendererFactory() {},
     registerGatewayMethod() {},
     registerCli() {},
     registerNodeCliFeature() {},

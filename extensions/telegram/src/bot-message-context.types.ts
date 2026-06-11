@@ -25,6 +25,14 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  /**
+   * Pin-from-here mirror turn: a synthetic inbound re-homing an already-authorized
+   * session's turn onto this chat. The per-message admission gates (sender
+   * allowFrom, group/topic enablement) do not apply — the pin was the
+   * authorization — so they are skipped; everything else is built normally so the
+   * mirror renders + persists like a native turn.
+   */
+  mirror?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

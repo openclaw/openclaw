@@ -8,7 +8,8 @@ vi.mock("../../infra/outbound/echo.js", () => ({
   fireEchoDeliveries: vi.fn(),
 }));
 
-vi.mock("../../infra/outbound/echo-streaming.js", () => ({
+vi.mock("../../infra/outbound/mirror-dispatch.js", async (importActual) => ({
+  ...(await importActual<typeof import("../../infra/outbound/mirror-dispatch.js")>()),
   consumeStreamingEchoHandled: vi.fn(() => false),
 }));
 
@@ -53,7 +54,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
 
 import { dispatchInboundMessage as _mockDispatch } from "../../auto-reply/dispatch.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { consumeStreamingEchoHandled as _mockConsumeStreamingEchoHandled } from "../../infra/outbound/echo-streaming.js";
+import { consumeStreamingEchoHandled as _mockConsumeStreamingEchoHandled } from "../../infra/outbound/mirror-dispatch.js";
 import { fireEchoDeliveries as _mockFireEcho } from "../../infra/outbound/echo.js";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -67,6 +68,7 @@ function createMockContext() {
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
     chatAbortControllers: new Map(),
+    chatAbortedRuns: new Map(),
     agentRunSeq: new Map<string, number>(),
     dedupe: new Map(),
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),

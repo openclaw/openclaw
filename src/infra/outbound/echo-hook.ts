@@ -5,7 +5,7 @@ import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { registerInternalHook, type InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { consumeStreamingEchoHandled } from "./echo-streaming.js";
+import { consumeStreamingEchoHandled } from "./mirror-dispatch.js";
 import { fireEchoDeliveries } from "./echo.js";
 
 let registered = false;

@@ -1,10 +1,6 @@
 // Verifies plugin registry behavior with runtime config inputs.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveEchoRendererFactory,
-  resetEchoStreamingForTest,
-} from "../infra/outbound/echo-streaming.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -132,52 +128,4 @@ describe("plugin registry runtime config scope", () => {
     });
   });
 
-  it("binds echo renderer factory registration to the plugin-owned channel id", () => {
-    resetEchoStreamingForTest();
-    const runtime = createPluginRuntime();
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "owned-channel",
-      name: "Owned Channel",
-      source: "/plugins/owned-channel/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
-    const factory = vi.fn();
-
-    api.registerEchoRendererFactory(factory);
-
-    expect(resolveEchoRendererFactory("owned-channel")).toBeUndefined();
-    expect(pluginRegistry.registry.diagnostics.at(-1)).toMatchObject({
-      level: "error",
-      pluginId: "owned-channel",
-      message: "echo renderer factory registration requires ownership of a matching channel id",
-    });
-
-    api.registerChannel({
-      plugin: {
-        id: "owned-channel",
-        meta: {
-          id: "owned-channel",
-          label: "Owned Channel",
-          selectionLabel: "Owned Channel",
-          docsPath: "/channels/owned-channel",
-          blurb: "owned channel",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
-    api.registerEchoRendererFactory(factory);
-
-    expect(resolveEchoRendererFactory("owned-channel")).toBe(factory);
-    expect(resolveEchoRendererFactory("telegram")).toBeUndefined();
-    resetEchoStreamingForTest();
-  });
 });

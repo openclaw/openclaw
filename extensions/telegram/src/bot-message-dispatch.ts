@@ -25,8 +25,11 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
+  formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewNativeToolProgress,
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
@@ -48,7 +51,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { BlockReplyContext, GetReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   createSubsystemLogger,
@@ -120,7 +123,6 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
-import { buildTelegramProgressCallbacks } from "./streaming-progress-callbacks.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
@@ -249,6 +251,13 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  /**
+   * Replaces the model-backed reply for this turn. The channel-agnostic mirror
+   * dispatch passes a bus-sourced resolver here so a pinned-target turn renders
+   * through this channel's own pipeline (streaming honored per its config)
+   * without calling the agent again.
+   */
+  replyResolver?: GetReplyFromConfig;
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -719,6 +728,7 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
+  replyResolver,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
@@ -1895,6 +1905,7 @@ export const dispatchTelegramMessage = async ({
               return telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
                 ctx: ctxPayload,
                 cfg,
+                replyResolver,
                 dispatcherOptions: {
                   ...replyPipeline,
                   beforeDeliver: async (payload) => payload,
@@ -2344,14 +2355,123 @@ export const dispatchTelegramMessage = async ({
                   },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
-                  ...buildTelegramProgressCallbacks({
-                    entry: telegramCfg,
-                    pushToolProgress: pushStreamToolProgress,
-                    pushCommentaryProgress: (text, options) =>
-                      progressDraft.pushCommentaryProgress(text, options),
-                    verboseProgressActive: () => verboseProgressActive(),
-                    statusReactionController,
-                  }),
+                  onToolStart: async (payload) => {
+                    const toolName = payload.name?.trim();
+                    const progressPromise = pushStreamToolProgress(
+                      formatChannelProgressDraftLineForEntry(
+                        telegramCfg,
+                        {
+                          event: "tool",
+                          name: toolName,
+                          phase: payload.phase,
+                          args: payload.args,
+                        },
+                        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                      ),
+                      { toolName, startImmediately: true },
+                    );
+                    if (statusReactionController && toolName) {
+                      await statusReactionController.setTool(toolName);
+                    }
+                    await progressPromise;
+                  },
+                  onItemEvent: async (payload) => {
+                    if (payload.kind === "preamble") {
+                      if (verboseProgressActive()) {
+                        return;
+                      }
+                      await progressDraft.pushCommentaryProgress(payload.progressText, {
+                        itemId: payload.itemId,
+                      });
+                      return;
+                    }
+                    await pushStreamToolProgress(
+                      buildChannelProgressDraftLineForEntry(telegramCfg, {
+                        event: "item",
+                        itemId: payload.itemId,
+                        itemKind: payload.kind,
+                        title: payload.title,
+                        name: payload.name,
+                        phase: payload.phase,
+                        status: payload.status,
+                        summary: payload.summary,
+                        progressText: payload.progressText,
+                        meta: payload.meta,
+                      }),
+                    );
+                  },
+                  onPlanUpdate: async (payload) => {
+                    if (payload.phase !== "update") {
+                      return;
+                    }
+                    await pushStreamToolProgress(
+                      formatChannelProgressDraftLine({
+                        event: "plan",
+                        phase: payload.phase,
+                        title: payload.title,
+                        explanation: payload.explanation,
+                        steps: payload.steps,
+                      }),
+                    );
+                  },
+                  onApprovalEvent: async (payload) => {
+                    if (payload.phase !== "requested") {
+                      return;
+                    }
+                    await pushStreamToolProgress(
+                      formatChannelProgressDraftLine({
+                        event: "approval",
+                        phase: payload.phase,
+                        title: payload.title,
+                        command: payload.command,
+                        reason: payload.reason,
+                        message: payload.message,
+                      }),
+                    );
+                  },
+                  onCommandOutput: async (payload) => {
+                    if (payload.phase !== "end") {
+                      return;
+                    }
+                    await pushStreamToolProgress(
+                      formatChannelProgressDraftLine({
+                        event: "command-output",
+                        phase: payload.phase,
+                        title: payload.title,
+                        name: payload.name,
+                        status: payload.status,
+                        exitCode: payload.exitCode,
+                      }),
+                    );
+                  },
+                  onPatchSummary: async (payload) => {
+                    if (payload.phase !== "end") {
+                      return;
+                    }
+                    await pushStreamToolProgress(
+                      formatChannelProgressDraftLine({
+                        event: "patch",
+                        phase: payload.phase,
+                        title: payload.title,
+                        name: payload.name,
+                        added: payload.added,
+                        modified: payload.modified,
+                        deleted: payload.deleted,
+                        summary: payload.summary,
+                      }),
+                    );
+                  },
+                  onCompactionStart: statusReactionController
+                    ? async () => {
+                        await statusReactionController.setCompacting();
+                      }
+                    : undefined,
+                  onCompactionEnd: statusReactionController
+                    ? async () => {
+                        statusReactionController.cancelPending();
+                        await statusReactionController.setThinking();
+                      }
+                    : undefined,
                   onModelSelected,
                 },
               });
