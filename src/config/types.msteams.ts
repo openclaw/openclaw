@@ -204,4 +204,10 @@ export type MSTeamsConfig = {
   };
   /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
   sso?: MSTeamsSsoConfig;
+  /**
+   * Transcribe inbound voice/audio messages (#13). When on, an audio attachment in a chat is
+   * transcribed (media-understanding STT) and the text is folded into the message so the agent
+   * reads what was said. Off by default — it incurs an STT call per voice message.
+   */
+  transcribeVoiceMessages?: boolean;
 };
