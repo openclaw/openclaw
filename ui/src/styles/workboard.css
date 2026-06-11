@@ -459,7 +459,7 @@
   z-index: 1100;
   top: var(--workboard-select-menu-top, 0);
   left: var(--workboard-select-menu-left, 0);
-  display: grid;
+  display: none;
   gap: 2px;
   width: var(--workboard-select-menu-width, 100%);
   max-height: var(--workboard-select-menu-max-height, min(320px, calc(100vh - 220px)));
@@ -471,6 +471,10 @@
   box-shadow:
     0 16px 40px color-mix(in srgb, black 34%, transparent),
     inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
+}
+
+.workboard-select[open] .workboard-select__menu {
+  display: grid;
 }
 
 .workboard-select__option {

@@ -2219,7 +2219,7 @@ export async function createWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || !state.draftTitle.trim()) {
+  if (!params.client || !state.draftTitle.trim() || state.dispatching) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2248,7 +2248,7 @@ export async function saveWorkboardCardDraft(params: {
     await createWorkboardCard(params);
     return;
   }
-  if (!params.client || !state.draftTitle.trim()) {
+  if (!params.client || !state.draftTitle.trim() || state.dispatching) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2287,7 +2287,7 @@ export async function addWorkboardCardComment(params: {
   const state = getWorkboardState(params.host);
   const cardId = params.cardId ?? state.editingCardId;
   const body = (params.body ?? state.draftCommentBody).trim();
-  if (!cardId || !params.client || !body) {
+  if (!cardId || !params.client || !body || state.dispatching) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2322,7 +2322,7 @@ export async function moveWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client) {
+  if (!params.client || state.dispatching) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2358,7 +2358,7 @@ export async function deleteWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client) {
+  if (!params.client || state.dispatching) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2384,7 +2384,7 @@ export async function archiveWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client) {
+  if (!params.client || state.dispatching) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2614,7 +2614,7 @@ export async function startWorkboardCard(params: {
   requestUpdate?: () => void;
 }): Promise<string | null> {
   const state = getWorkboardState(params.host);
-  if (!params.client) {
+  if (!params.client || state.dispatching) {
     return null;
   }
   const engine = params.engine;
@@ -2768,7 +2768,7 @@ export async function stopWorkboardCard(params: {
   const sessionKey = workboardCardSessionKey(params.card);
   const task = state.tasksByCardId.get(params.card.id);
   const taskId = params.card.taskId ?? task?.taskId;
-  if (!params.client || (!sessionKey && !taskId)) {
+  if (!params.client || state.dispatching || (!sessionKey && !taskId)) {
     return;
   }
   invalidateWorkboardLoads(params.host);

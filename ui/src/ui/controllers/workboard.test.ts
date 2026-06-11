@@ -332,6 +332,36 @@ describe("workboard controller", () => {
     expect(state.lastRefreshStartedAt).toBeNull();
   });
 
+  it("blocks card writes while dispatch is relisting cards", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.dispatching = true;
+    state.cards = [sampleCard];
+    state.draftTitle = "Queued edit";
+    state.editingCardId = sampleCard.id;
+    const client = createClient({});
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      status: "review",
+      position: 2000,
+    });
+    await deleteWorkboardCard({ host, client: client as never, cardId: sampleCard.id });
+    await archiveWorkboardCard({ host, client: client as never, cardId: sampleCard.id });
+    await addWorkboardCardComment({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      body: "hold",
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([sampleCard]);
+  });
+
   it("does not let an older refresh overwrite cards listed after dispatch", async () => {
     const host = {};
     const refreshList = createDeferred<unknown>();
