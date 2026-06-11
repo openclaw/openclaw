@@ -39,7 +39,10 @@ import {
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  resolveBundledProviderPolicySurface,
+  resolveBundledProviderPolicySurfaces,
+} from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
@@ -819,8 +822,18 @@ export function resolveProviderThinkingProfile(params: {
     return runtimeProfile;
   }
   const providerRefs = resolveProviderHookRefs(params.provider, providerConfig, api);
-  const apiFallbackSurface = resolveBundledProviderPolicySurface(params.provider, { providerRefs });
-  return apiFallbackSurface?.resolveThinkingProfile?.(policyContext) ?? undefined;
+  for (const apiFallbackSurface of resolveBundledProviderPolicySurfaces(params.provider, {
+    providerRefs,
+  })) {
+    if (apiFallbackSurface === directSurface || !apiFallbackSurface.resolveThinkingProfile) {
+      continue;
+    }
+    const bundledProfile = apiFallbackSurface.resolveThinkingProfile(policyContext);
+    if (bundledProfile !== null && bundledProfile !== undefined) {
+      return bundledProfile;
+    }
+  }
+  return undefined;
 }
 
 export function resolveProviderDefaultThinkingLevel(params: {

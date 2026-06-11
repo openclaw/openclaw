@@ -30,6 +30,8 @@ type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 type ResolveBundledProviderPolicySurface =
   typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurface;
+type ResolveBundledProviderPolicySurfaces =
+  typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurfaces;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
@@ -45,6 +47,9 @@ const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForPro
 );
 const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPolicySurface>(
   (_) => null,
+);
+const resolveBundledProviderPolicySurfacesMock = vi.fn<ResolveBundledProviderPolicySurfaces>(
+  (_) => [],
 );
 const providerRuntimeWarnMock = vi.fn();
 
@@ -287,6 +292,9 @@ describe("provider-runtime", () => {
       resolveBundledProviderPolicySurface: (
         ...params: Parameters<ResolveBundledProviderPolicySurface>
       ) => resolveBundledProviderPolicySurfaceMock(...params),
+      resolveBundledProviderPolicySurfaces: (
+        ...params: Parameters<ResolveBundledProviderPolicySurfaces>
+      ) => resolveBundledProviderPolicySurfacesMock(...params),
     }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -385,6 +393,8 @@ describe("provider-runtime", () => {
     resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
     resolveBundledProviderPolicySurfaceMock.mockReset();
     resolveBundledProviderPolicySurfaceMock.mockReturnValue(null);
+    resolveBundledProviderPolicySurfacesMock.mockReset();
+    resolveBundledProviderPolicySurfacesMock.mockReturnValue([]);
     providerRuntimeWarnMock.mockReset();
   });
 
@@ -1474,11 +1484,7 @@ describe("provider-runtime", () => {
       levels: [{ id: "adaptive" as const }],
       defaultLevel: "adaptive" as const,
     }));
-    resolveBundledProviderPolicySurfaceMock.mockImplementation((_, options) => {
-      return options?.providerRefs?.includes("anthropic-messages")
-        ? { resolveThinkingProfile }
-        : null;
-    });
+    resolveBundledProviderPolicySurfacesMock.mockReturnValue([{ resolveThinkingProfile }]);
 
     expect(
       resolveProviderThinkingProfile({
@@ -1513,7 +1519,7 @@ describe("provider-runtime", () => {
       }),
     ).toEqual({ levels: [{ id: "adaptive" }], defaultLevel: "adaptive" });
 
-    expect(resolveBundledProviderPolicySurfaceMock).toHaveBeenCalledWith("jdcloud-anthropic", {
+    expect(resolveBundledProviderPolicySurfacesMock).toHaveBeenCalledWith("jdcloud-anthropic", {
       providerRefs: ["jdcloud-anthropic", "anthropic-messages"],
     });
     expect(resolveThinkingProfile).toHaveBeenCalledWith({
@@ -1524,6 +1530,70 @@ describe("provider-runtime", () => {
     });
     expect(resolvePluginProvidersMock).toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      api: "anthropic-messages",
+      provider: "jdcloud-anthropic",
+      modelId: "claude-opus-4-6",
+    },
+    {
+      api: "openai-responses",
+      provider: "custom-openai",
+      modelId: "gpt-5.5",
+    },
+  ])(
+    "continues API-ref bundled thinking policy lookup across shared $api owners",
+    ({ api, provider, modelId }) => {
+      const firstOwnerResolveThinkingProfile = vi.fn(() => null);
+      const secondOwnerResolveThinkingProfile = vi.fn(() => ({
+        levels: [{ id: "adaptive" as const }],
+        defaultLevel: "adaptive" as const,
+      }));
+      resolveBundledProviderPolicySurfacesMock.mockReturnValue([
+        { resolveThinkingProfile: firstOwnerResolveThinkingProfile },
+        { resolveThinkingProfile: secondOwnerResolveThinkingProfile },
+      ]);
+
+      expect(
+        resolveProviderThinkingProfile({
+          provider,
+          config: {
+            models: {
+              providers: {
+                [provider]: {
+                  api,
+                  baseUrl: "https://api.example.com/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          context: {
+            provider,
+            modelId,
+            reasoning: true,
+          },
+        }),
+      ).toEqual({ levels: [{ id: "adaptive" }], defaultLevel: "adaptive" });
+
+      expect(firstOwnerResolveThinkingProfile).toHaveBeenCalledWith({
+        provider,
+        api,
+        modelId,
+        reasoning: true,
+      });
+      expect(secondOwnerResolveThinkingProfile).toHaveBeenCalledWith({
+        provider,
+        api,
+        modelId,
+        reasoning: true,
+      });
+      expect(resolveBundledProviderPolicySurfacesMock).toHaveBeenCalledWith(provider, {
+        providerRefs: [provider, api],
+      });
+    },
+  );
 
   it("falls back to runtime plugins when an API-ref bundled thinking policy declines", () => {
     const resolveBundledThinkingProfile = vi.fn(() => null);
