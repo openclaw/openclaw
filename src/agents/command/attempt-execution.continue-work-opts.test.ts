@@ -25,6 +25,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -32,6 +33,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentAttempt } from "./attempt-execution.js";
 
@@ -115,6 +117,27 @@ function makeContinuationDisabledConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+// Continuation enabled but pinned at the chain cap (maxChainLength:1): a session
+// already at currentChainCount:1 trips checkContinuationBudget on the FIRST
+// election, so scheduleContinuationWorkBatch returns scheduledCount:0.
+function makeAtCapContinuationConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        continuation: {
+          enabled: true,
+          maxChainLength: 1,
+          defaultDelayMs: 15000,
+          minDelayMs: 5000,
+          maxDelayMs: 86400000,
+          costCapTokens: 50000000,
+          maxDelegatesPerTurn: 500,
+        },
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
 describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cure)", () => {
   let tmpDir: string;
   let sessionEntry: SessionEntry;
@@ -143,6 +166,8 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
     resetContinuationWorkDispatchForTests();
     resetTaskFlowRegistryForTests({ persist: false });
+    resetSystemEventsForTest();
+    clearRuntimeConfigSnapshot();
     clearSessionStoreCacheForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -230,6 +255,79 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted[sessionKey]?.continuationChainTokens).toBe(2);
+  });
+
+  // P2-2 never-silent symmetry: the spawn-init lane must surface a multi-election
+  // cap-drop even when NOTHING scheduled (scheduledCount:0, cappedCount>0). The
+  // cap-notice emit lives ABOVE the zero-scheduled early return so this lane
+  // matches the main-reply (agent-runner) and followup (followup-runner) lanes,
+  // which both emit the cap-notice regardless of scheduledCount.
+  it("emits the cap-notice on spawn-init when a multi continue_work batch schedules nothing at the cap (P2-2)", async () => {
+    // Seed the session already at the chain cap so the FIRST election is
+    // rejected: scheduleContinuationWorkBatch returns scheduledCount:0,
+    // cappedCount:2 — the exact case the spawn-init lane used to drop silently.
+    sessionEntry.continuationChainCount = 1;
+    sessionStore[sessionKey] = sessionEntry;
+    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    clearSessionStoreCacheForTest();
+    // The continuation budget reads the live runtime-config snapshot (see
+    // resolveLiveContinuationRuntimeConfig); set it to the at-cap config so the
+    // chain-cap fires deterministically regardless of ambient snapshot state.
+    setRuntimeConfigSnapshot(makeAtCapContinuationConfig());
+
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      // Two elections this turn — multi-election is required for the cap-notice.
+      opts?.requestContinuation({ reason: "first election", delaySeconds: 30 });
+      opts?.requestContinuation({ reason: "second election", delaySeconds: 30 });
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeAtCapContinuationConfig());
+
+    const events = peekSystemEvents(sessionKey);
+    expect(
+      events.some((text) => text.includes("2 of 2 continue_work elections were not scheduled")),
+    ).toBe(true);
+
+    // Nothing scheduled, so the seeded chain count must NOT advance.
+    expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
+  });
+
+  // Single-election guard: keep single-work behavior intact. A lone capped
+  // election stays silent on the spawn-init lane, matching the `requests > 1`
+  // guard shared by the main-reply and followup lanes.
+  it("stays silent for a single capped continue_work election on spawn-init (P2-2 guard)", async () => {
+    sessionEntry.continuationChainCount = 1;
+    sessionStore[sessionKey] = sessionEntry;
+    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    clearSessionStoreCacheForTest();
+    setRuntimeConfigSnapshot(makeAtCapContinuationConfig());
+
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "lone election", delaySeconds: 30 });
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeAtCapContinuationConfig());
+
+    const events = peekSystemEvents(sessionKey);
+    expect(events.some((text) => text.includes("continue_work elections were not scheduled"))).toBe(
+      false,
+    );
   });
 
   it("does not strip bracket continue_delegate markers while peeking for spawn-init continue_work", async () => {
