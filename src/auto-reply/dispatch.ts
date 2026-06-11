@@ -91,6 +91,12 @@ function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string 
     return undefined;
   }
 
+  // Scope the fence per inbound message so replies to distinct messages
+  // never cancel each other (e.g. two users @mention concurrently in a group).
+  // Falls back to session-target scope when no inbound message id is available.
+  const inboundMsgId =
+    normalizeForegroundReplyFencePart(finalized.MessageSid) ??
+    normalizeForegroundReplyFencePart(finalized.MessageSidFirst);
   // JSON keeps the composite key unambiguous across account/session/channel ids.
   return JSON.stringify([
     "foreground",
@@ -99,6 +105,7 @@ function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string 
     sessionKey,
     normalizeChatType(finalized.ChatType) ?? "unknown",
     target,
+    ...(inboundMsgId ? [inboundMsgId] : []),
   ]);
 }
 
