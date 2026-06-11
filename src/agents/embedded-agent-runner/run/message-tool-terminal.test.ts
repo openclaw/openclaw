@@ -160,7 +160,7 @@ describe("message-tool-only terminal sends", () => {
     ).toBe(false);
   });
 
-  it("preserves existing after-tool-call output while adding the terminal hint", async () => {
+  it("preserves existing after-tool-call output and records delivery without terminating the turn", async () => {
     const previousAfterToolCall = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "rewritten" }],
       details: { rewritten: true },
@@ -183,7 +183,6 @@ describe("message-tool-only terminal sends", () => {
     ).resolves.toEqual({
       content: [{ type: "text", text: "rewritten" }],
       details: { rewritten: true },
-      terminate: true,
     });
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
