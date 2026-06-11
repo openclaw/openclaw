@@ -139,7 +139,7 @@ describe("skill workshop proposals", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "applies updates through trusted workspace skills symlink targets",
+    "applies updates through opted-in trusted workspace skills symlink targets",
     async () => {
       const workspaceDir = await makeWorkspace();
       const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-skills-");
@@ -151,12 +151,20 @@ describe("skill workshop proposals", () => {
         description: "Shared skill target",
         body: "# Shared Skill\n\nOld body.\n",
       });
-      const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
+      await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+      await fs.writeFile(path.join(skillDir, "references", "shared.md"), "Old support.\n", "utf8");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
       const proposal = await proposeUpdateSkill({
         workspaceDir,
         config,
         skillName: "shared-skill",
         content: "# Shared Skill\n\nNew body.\n",
+        supportFiles: [{ path: "references/shared.md", content: "New support.\n" }],
       });
 
       const applied = await applySkillProposal({
@@ -171,6 +179,42 @@ describe("skill workshop proposals", () => {
       await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
         "New body.",
       );
+      await expect(
+        fs.readFile(path.join(skillDir, "references", "shared.md"), "utf8"),
+      ).resolves.toBe("New support.\n");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "blocks trusted workspace skills symlink writes until workshop writes are enabled",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-readonly-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Readonly Symlink Skill",
+        description: "Must not write without explicit workshop opt-in",
+        content: "# Readonly\n\nDo not write.\n",
+        supportFiles: [
+          {
+            path: "references/details.md",
+            content: "This support file must not be written.\n",
+          },
+        ],
+      });
+
+      await expect(
+        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).rejects.toThrow("allowSymlinkTargetWrites");
+      await expect(
+        fs.access(path.join(targetSkillsDir, "readonly-symlink-skill", "SKILL.md")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(targetSkillsDir, "readonly-symlink-skill", "references", "details.md")),
+      ).rejects.toThrow();
     },
   );
 

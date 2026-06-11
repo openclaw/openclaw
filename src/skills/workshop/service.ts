@@ -532,7 +532,10 @@ export async function applySkillProposal(
 
     assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
     assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
-    const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(input.config);
+    const workshopConfig = resolveSkillWorkshopConfig(input.config);
+    const allowedSymlinkTargetRealPaths = workshopConfig.allowSymlinkTargetWrites
+      ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
+      : [];
     await assertWorkspaceSkillWriteTarget({
       workspaceDir: input.workspaceDir,
       filePath: record.target.skillFile,
