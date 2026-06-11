@@ -82,7 +82,18 @@ function resolveUsableLocalCandidate(
 ): string | undefined {
   try {
     const realPath = realpathSync(candidate);
-    return statSync(realPath).isFile() && isInboundPathAllowed({ filePath: realPath, roots })
+    const canonicalRoots = roots.map((root) => {
+      if (root.includes("*")) {
+        return root;
+      }
+      try {
+        return realpathSync(root);
+      } catch {
+        return root;
+      }
+    });
+    return statSync(realPath).isFile() &&
+      isInboundPathAllowed({ filePath: realPath, roots: canonicalRoots })
       ? realPath
       : undefined;
   } catch {
