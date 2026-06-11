@@ -1696,10 +1696,12 @@ function renderGroupedMessage(
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const reserveActionSpace = hasActions && !isToolMessage;
   const bubbleClasses = [
     "chat-bubble",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     hasActions ? "has-copy" : "",
+    reserveActionSpace ? "chat-bubble--has-actions" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]

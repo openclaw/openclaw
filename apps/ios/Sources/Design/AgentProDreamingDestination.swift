@@ -4,6 +4,7 @@ import SwiftUI
 
 struct AgentProDreamingDestination: View {
     @Environment(NodeAppModel.self) private var appModel
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
     let overview: AgentOverviewSnapshot?
     let gatewayConnected: Bool
     let overviewLoading: Bool
@@ -20,6 +21,7 @@ struct AgentProDreamingDestination: View {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    self.header
                     self.detailSummaryCard(
                         icon: "moon",
                         title: "Dreaming",
@@ -55,6 +57,23 @@ struct AgentProDreamingDestination: View {
         }
         .navigationTitle("Dreaming")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        if let headerLeadingAction {
+            OpenClawAdaptiveHeaderRow(
+                title: "Dreaming",
+                subtitle: self.dreamingDetail,
+                titleFont: .title3.weight(.semibold),
+                subtitleFont: .callout)
+            {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            } accessory: {
+                EmptyView()
+            }
+            .padding(.horizontal, OpenClawProMetric.pagePadding)
+        }
     }
 
     private enum DreamAction: String, CaseIterable, Identifiable {

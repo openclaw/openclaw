@@ -1497,7 +1497,7 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.needs_build == '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
@@ -1593,8 +1593,11 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}"
+          live_image_extensions="matrix,acpx"
+          live_image_tag_suffix="${live_image_extensions//,/-}"
+          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
           echo "live_image=${live_image}" >> "$GITHUB_OUTPUT"
+          echo "live_image_extensions=${live_image_extensions}" >> "$GITHUB_OUTPUT"
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
@@ -1617,7 +1620,7 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.exists != '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
@@ -1629,7 +1632,7 @@ jobs:
           file: ./Dockerfile
           target: build
           build-args: |
-            OPENCLAW_EXTENSIONS=matrix
+            OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
           sbom: true

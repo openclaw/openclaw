@@ -408,6 +408,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "external-trusted-policy",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          trustedToolPolicies: ["workflow-budget"],
+        },
+      },
+      {
         id: "lossless-claw",
         kind: "context-engine",
         channels: [],
@@ -1442,6 +1453,17 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads explicit trusted policy plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        allowPluginIds: ["external-trusted-policy"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-trusted-policy"],
     });
   });
 

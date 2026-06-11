@@ -142,3 +142,88 @@ describe("agentLoop streaming updates", () => {
     }
   });
 });
+
+describe("agentLoop thinking state", () => {
+  function makeAssistantMessage(
+    activeModel: Model,
+    content: AssistantMessage["content"],
+  ): AssistantMessage {
+    return {
+      role: "assistant",
+      content,
+      api: activeModel.api,
+      provider: activeModel.provider,
+      model: activeModel.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+  }
+
+  it.each([
+    {
+      name: "disables reasoning after leaving Fable",
+      initialModel: { ...model, id: "claude-fable-5", thinkingLevelMap: { off: "low" } },
+      nextModel: model,
+      expected: ["low", undefined],
+    },
+    {
+      name: "uses Fable's low fallback after entering Fable",
+      initialModel: model,
+      nextModel: { ...model, id: "claude-fable-5", thinkingLevelMap: { off: "low" } },
+      expected: [undefined, "low"],
+    },
+  ])("$name", async ({ initialModel, nextModel, expected }) => {
+    const observedReasoning: Array<string | undefined> = [];
+    let callCount = 0;
+    const streamFn: StreamFn = (activeModel, _context, options) => {
+      observedReasoning.push(options?.reasoning);
+      callCount += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const content: AssistantMessage["content"] =
+          callCount === 1
+            ? [{ type: "toolCall", id: "tool-1", name: "missing_tool", arguments: {} }]
+            : [{ type: "text", text: "done" }];
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: makeAssistantMessage(activeModel, content),
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    let prepared = false;
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      {
+        ...config,
+        model: initialModel,
+        thinkingLevel: "off",
+        reasoning: initialModel.thinkingLevelMap?.off === "low" ? "low" : undefined,
+        prepareNextTurn: () => {
+          if (prepared) {
+            return undefined;
+          }
+          prepared = true;
+          return { model: nextModel };
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    await collectEvents(stream);
+
+    expect(observedReasoning).toEqual(expected);
+  });
+});

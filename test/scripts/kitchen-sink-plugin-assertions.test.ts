@@ -16,7 +16,8 @@ import { describe, expect, it } from "vitest";
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
-  "only bundled plugins can register trusted tool policies",
+  "agent tool result middleware must be a function",
+  "trusted tool policy registration requires id, description, and evaluate()",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
   'channel "kitchen-sink-channel-probe" registration missing required config helpers',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
@@ -112,6 +113,7 @@ function runAssertInstalled({
         ...spawnEnv,
         ...env,
         HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         KITCHEN_SINK_ID: pluginId,
         KITCHEN_SINK_LABEL: label,
         KITCHEN_SINK_SOURCE: "npm",
@@ -178,6 +180,7 @@ function runAssertClawhubInstalled({
       env: {
         ...process.env,
         HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         KITCHEN_SINK_ID: pluginId,
         KITCHEN_SINK_LABEL: label,
         KITCHEN_SINK_SOURCE: "clawhub",

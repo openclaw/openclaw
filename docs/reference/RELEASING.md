@@ -23,16 +23,24 @@ OpenClaw has three public release lanes:
   - Git tag: `vYYYY.M.PATCH-beta.N`
 - Do not zero-pad month or patch
 - Starting with the June 2026 release process update, the third component is a
-  monthly patch counter, not a calendar day. Pre-update tags and npm versions
-  keep their existing names and remain valid; release automation continues to
+  sequential monthly release-train number, not a calendar day. Stable and beta
+  releases determine the current train; alpha-only tags do not consume or
+  advance the beta/stable patch number. Pre-update tags and npm versions keep
+  their existing names and remain valid; release automation continues to
   compare them by year, month, patch, channel, and prerelease or correction
   number.
+- Alpha/nightly builds use the next unreleased patch train and increment only
+  `alpha.N` for repeated builds. Once that patch has a beta, new alpha builds
+  move to the following patch. Ignore legacy alpha-only tags with higher patch
+  numbers when selecting a beta or stable train.
 - npm versions are immutable. If a beta tag has already been published, do not
   delete, republish, or reuse it; cut the next beta number or the next monthly
   patch instead. Because `2026.6.5-beta.1` was already published during the
   transition, June 2026 release trains must use patch `5` or higher. Do not
   publish new June 2026 stable or beta trains as `2026.6.2`, `2026.6.3`, or
   `2026.6.4`.
+- After stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even
+  if automated alpha-only tags with higher patch numbers already exist.
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
 - Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later

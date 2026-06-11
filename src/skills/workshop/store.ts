@@ -9,6 +9,7 @@ import { pathExists, root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { isPathInside } from "../../infra/path-safety.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
+import { findContainingAllowedSkillSymlinkTarget } from "../loading/symlink-targets.js";
 import {
   SKILL_WORKSHOP_MANIFEST_SCHEMA,
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -514,30 +515,124 @@ export async function writeWorkspaceSkillFile(params: {
   filePath: string;
   content: string;
   overwrite?: boolean;
+  allowedSymlinkTargetRealPaths?: readonly string[];
 }): Promise<void> {
   assertInsideWorkspace(params.workspaceDir, params.filePath, "skill file");
-  const relativePath = path.relative(
-    path.resolve(params.workspaceDir),
-    path.resolve(params.filePath),
-  );
-  const workspaceRoot = await root(params.workspaceDir);
-  await workspaceRoot.write(relativePath, params.content, {
+  const target = await resolveWorkspaceSkillWriteTarget({
+    workspaceDir: params.workspaceDir,
+    filePath: params.filePath,
+    allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+  });
+  const targetRoot = await root(target.rootDir);
+  await targetRoot.write(target.relativePath, params.content, {
     encoding: "utf8",
     mkdir: true,
     ...(params.overwrite === undefined ? {} : { overwrite: params.overwrite }),
   });
 }
 
+export async function assertWorkspaceSkillWriteTarget(params: {
+  workspaceDir: string;
+  filePath: string;
+  allowedSymlinkTargetRealPaths?: readonly string[];
+}): Promise<void> {
+  assertInsideWorkspace(params.workspaceDir, params.filePath, "skill file");
+  await resolveWorkspaceSkillWriteTarget(params);
+}
+
+type WorkspaceSkillWriteTarget = {
+  rootDir: string;
+  relativePath: string;
+};
+
+async function resolveWorkspaceSkillWriteTarget(params: {
+  workspaceDir: string;
+  filePath: string;
+  allowedSymlinkTargetRealPaths?: readonly string[];
+}): Promise<WorkspaceSkillWriteTarget> {
+  const workspaceDir = path.resolve(params.workspaceDir);
+  const filePath = path.resolve(params.filePath);
+  const relativePath = path.relative(workspaceDir, filePath);
+  const aliasTarget = await resolveWorkspaceAliasTarget({
+    workspaceDir,
+    filePath,
+  });
+  if (!aliasTarget) {
+    return { rootDir: workspaceDir, relativePath };
+  }
+  const allowedRoot = findContainingAllowedSkillSymlinkTarget(
+    params.allowedSymlinkTargetRealPaths ?? [],
+    aliasTarget.realTarget,
+  );
+  if (!allowedRoot) {
+    throw new Error(
+      `Skill file resolves through an untrusted symlink target: ${params.filePath}. Configure skills.load.allowSymlinkTargets and enable skills.workshop.allowSymlinkTargetWrites for intentional Skill Workshop symlink writes.`,
+    );
+  }
+  return {
+    rootDir: allowedRoot,
+    relativePath: path.relative(allowedRoot, aliasTarget.realTarget),
+  };
+}
+
+async function resolveWorkspaceAliasTarget(params: {
+  workspaceDir: string;
+  filePath: string;
+}): Promise<{ realTarget: string } | null> {
+  const workspaceRealPath = (await tryRealpath(params.workspaceDir)) ?? params.workspaceDir;
+  const realTarget = await resolveRealPathThroughExistingAncestors(
+    params.workspaceDir,
+    params.filePath,
+  );
+  if (isPathInside(workspaceRealPath, realTarget)) {
+    return null;
+  }
+  return { realTarget };
+}
+
+async function resolveRealPathThroughExistingAncestors(
+  workspaceDir: string,
+  filePath: string,
+): Promise<string> {
+  const relativePath = path.relative(workspaceDir, filePath);
+  const segments = relativePath.split(path.sep).filter(Boolean);
+  let lexicalCursor = workspaceDir;
+  let realCursor = (await tryRealpath(workspaceDir)) ?? workspaceDir;
+  for (const segment of segments) {
+    lexicalCursor = path.join(lexicalCursor, segment);
+    const existingRealPath = await tryRealpath(lexicalCursor);
+    realCursor = existingRealPath ?? path.join(realCursor, segment);
+  }
+  return path.resolve(realCursor);
+}
+
+async function tryRealpath(filePath: string): Promise<string | null> {
+  try {
+    return await fs.realpath(filePath);
+  } catch {
+    return null;
+  }
+}
+
 export async function writeWorkspaceSupportFile(params: {
+  workspaceDir?: string;
   skillDir: string;
   relativePath: string;
   content: string;
   overwrite?: boolean;
+  allowedSymlinkTargetRealPaths?: readonly string[];
 }): Promise<void> {
   const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
-  await fs.mkdir(params.skillDir, { recursive: true });
-  const skillRoot = await root(params.skillDir);
-  await skillRoot.write(relativePath, params.content, {
+  const filePath = path.join(params.skillDir, ...relativePath.split("/"));
+  const target = params.workspaceDir
+    ? await resolveWorkspaceSkillWriteTarget({
+        workspaceDir: params.workspaceDir,
+        filePath,
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+      })
+    : { rootDir: params.skillDir, relativePath };
+  const targetRoot = await root(target.rootDir);
+  await targetRoot.write(target.relativePath, params.content, {
     encoding: "utf8",
     mkdir: true,
     ...(params.overwrite === undefined ? {} : { overwrite: params.overwrite }),
@@ -545,12 +640,22 @@ export async function writeWorkspaceSupportFile(params: {
 }
 
 export async function removeWorkspaceSupportFile(params: {
+  workspaceDir?: string;
   skillDir: string;
   relativePath: string;
+  allowedSymlinkTargetRealPaths?: readonly string[];
 }): Promise<void> {
   const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
-  const skillRoot = await root(params.skillDir);
-  await skillRoot.remove(relativePath).catch((error: unknown) => {
+  const filePath = path.join(params.skillDir, ...relativePath.split("/"));
+  const target = params.workspaceDir
+    ? await resolveWorkspaceSkillWriteTarget({
+        workspaceDir: params.workspaceDir,
+        filePath,
+        allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
+      })
+    : { rootDir: params.skillDir, relativePath };
+  const targetRoot = await root(target.rootDir);
+  await targetRoot.remove(target.relativePath).catch((error: unknown) => {
     if ((error as { code?: string })?.code !== "ENOENT") {
       throw error;
     }
