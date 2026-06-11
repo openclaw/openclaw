@@ -75,6 +75,75 @@ describe("session family carryover", () => {
     });
   });
 
+  it("ignores newer compaction summaries from off-branch reset ancestors", async () => {
+    const dir = makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const ancestorSessionId = "ancestor-session";
+    const currentSessionId = "current-session";
+    const activeSessionFile = path.join(dir, currentSessionId + ".jsonl");
+    writeTranscript(path.join(dir, ancestorSessionId + ".jsonl.reset.2026-06-04T01-00-00.000Z"), [
+      {
+        type: "session",
+        version: 1,
+        id: ancestorSessionId,
+        timestamp: "2026-06-04T00:00:00.000Z",
+        cwd: dir,
+      },
+      {
+        type: "message",
+        id: "root-msg",
+        parentId: null,
+        timestamp: "2026-06-04T00:05:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "root" }], timestamp: 1 },
+      },
+      {
+        type: "compaction",
+        id: "off-branch-carryover",
+        parentId: "root-msg",
+        timestamp: "2026-06-04T00:50:00.000Z",
+        summary: "Abandoned branch decisions.",
+        firstKeptEntryId: "root-msg",
+        tokensBefore: 99_999,
+      },
+      {
+        type: "compaction",
+        id: "active-carryover",
+        parentId: "root-msg",
+        timestamp: "2026-06-04T00:30:00.000Z",
+        summary: "Active branch decisions.",
+        firstKeptEntryId: "root-msg",
+        tokensBefore: 12_345,
+      },
+      {
+        type: "message",
+        id: "active-leaf",
+        parentId: "active-carryover",
+        timestamp: "2026-06-04T00:40:00.000Z",
+        message: { role: "assistant", content: [{ type: "text", text: "active" }], timestamp: 2 },
+      },
+    ]);
+
+    const entry = {
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      usageFamilySessionIds: [ancestorSessionId, currentSessionId],
+    } as SessionEntry;
+
+    const carryover = await resolveSessionFamilyCarryoverSummary({
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      storePath,
+      entry,
+    });
+
+    expect(carryover).toMatchObject({
+      role: "compactionSummary",
+      summary: "Active branch decisions.",
+      tokensBefore: 12_345,
+      firstKeptEntryId: "root-msg",
+    });
+  });
+
   it("injects carryover once before the LLM boundary", async () => {
     const messages: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "current ask" }], timestamp: 1 },

@@ -44,11 +44,7 @@ async function readLatestCompactionEntry(
   if (!state) {
     return undefined;
   }
-  return state
-    .getEntries()
-    .filter(isCompactionEntry)
-    .toSorted((left, right) => compactionTimestampMs(right) - compactionTimestampMs(left))
-    .at(0);
+  return state.getBranch().filter(isCompactionEntry).at(-1);
 }
 
 export async function resolveSessionFamilyCarryoverSummary(params: {

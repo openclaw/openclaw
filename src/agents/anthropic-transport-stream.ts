@@ -985,8 +985,12 @@ function buildAnthropicParams(
   if (options?.metadata && typeof options.metadata.user_id === "string") {
     params.metadata = { user_id: options.metadata.user_id };
   }
-  if (options?.toolChoice) {
-    params.tool_choice = normalizeAnthropicToolChoice(model, options.toolChoice);
+  const toolChoice = normalizeAnthropicToolChoice(
+    model,
+    options?.toolChoice ?? (supportsAdaptiveThinking(model) ? "auto" : undefined),
+  );
+  if (toolChoice) {
+    params.tool_choice = toolChoice;
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
   return params;
