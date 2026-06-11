@@ -223,10 +223,31 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
       },
-      "2026.5.21",
+      "2026.6.6",
       { includeContentInventory: false },
     );
   });
+
+  it.each(["2026.6.5", "2026.6.5-beta.6"])(
+    "allows published package %s without content inventory",
+    (version) => {
+      withTarball(
+        ["dist/index.js"],
+        { "dist/index.js": "export {};\n" },
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stderr).toContain(
+            "legacy package omits dist/postinstall-content-inventory.json",
+          );
+          expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+        },
+        version,
+        { includeContentInventory: false },
+      );
+    },
+  );
 
   it("rejects stale content inventory hashes", () => {
     withTarball(

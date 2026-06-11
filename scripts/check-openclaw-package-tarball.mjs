@@ -87,6 +87,7 @@ const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
+const LEGACY_CONTENT_INVENTORY_COMPAT_MAX = { year: 2026, month: 6, day: 5 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
@@ -159,6 +160,11 @@ function isLegacyLocalBuildMetadataCompatVersion(version) {
 function isLegacyShrinkwrapCompatVersion(version) {
   const parsed = parseCalver(version);
   return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_COMPAT_MAX) <= 0 : false;
+}
+
+function isLegacyContentInventoryCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_CONTENT_INVENTORY_COMPAT_MAX) <= 0 : false;
 }
 
 function isSafeTarEntryPath(entryPath) {
@@ -409,7 +415,11 @@ if (!entrySet.has("dist/postinstall-inventory.json")) {
   errors.push("missing dist/postinstall-inventory.json");
 }
 if (!entrySet.has("dist/postinstall-content-inventory.json")) {
-  errors.push("missing dist/postinstall-content-inventory.json");
+  if (isLegacyContentInventoryCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits dist/postinstall-content-inventory.json");
+  } else {
+    errors.push("missing dist/postinstall-content-inventory.json");
+  }
 }
 let packageDistImports = null;
 let normalizedInventory = null;
