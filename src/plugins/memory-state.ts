@@ -303,9 +303,10 @@ export function hasMemoryRuntime(): boolean {
 function cloneMemoryPublicArtifact(
   artifact: MemoryPluginPublicArtifact,
 ): MemoryPluginPublicArtifact {
+  const ids = artifact.agentIds;
   return {
     ...artifact,
-    agentIds: [...artifact.agentIds],
+    agentIds: Array.isArray(ids) ? [...ids] : [],
   };
 }
 
@@ -327,11 +328,13 @@ export async function listActiveMemoryPublicArtifacts(params: {
     if (kindOrder !== 0) {
       return kindOrder;
     }
-    const contentTypeOrder = left.contentType.localeCompare(right.contentType);
+    const contentTypeOrder = (left.contentType ?? "").localeCompare(right.contentType ?? "");
     if (contentTypeOrder !== 0) {
       return contentTypeOrder;
     }
-    const agentOrder = left.agentIds.join("\0").localeCompare(right.agentIds.join("\0"));
+    const agentOrder = (left.agentIds ?? [])
+      .join("\0")
+      .localeCompare((right.agentIds ?? []).join("\0"));
     if (agentOrder !== 0) {
       return agentOrder;
     }
