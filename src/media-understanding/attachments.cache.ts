@@ -1,6 +1,6 @@
 // Lazy attachment cache resolves local/remote media bytes and temporary files
 // under local-root and SSRF policy.
-import { existsSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -76,11 +76,17 @@ function getDefaultLocalPathRoots(): readonly string[] {
   return defaultLocalPathRoots;
 }
 
-function pathExists(candidate: string): boolean {
+function resolveUsableLocalCandidate(
+  candidate: string,
+  roots: readonly string[],
+): string | undefined {
   try {
-    return existsSync(candidate);
+    const realPath = realpathSync(candidate);
+    return statSync(realPath).isFile() && isInboundPathAllowed({ filePath: realPath, roots })
+      ? realPath
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -335,18 +341,17 @@ export class MediaAttachmentCache {
     }
     if (!path.isAbsolute(rawPath)) {
       const cwdCandidate = path.resolve(rawPath);
-      if (
-        pathExists(cwdCandidate) &&
-        isInboundPathAllowed({ filePath: cwdCandidate, roots: this.localPathRoots })
-      ) {
-        return cwdCandidate;
+      const usableCwdCandidate = resolveUsableLocalCandidate(cwdCandidate, this.localPathRoots);
+      if (usableCwdCandidate) {
+        return usableCwdCandidate;
       }
       const stateCandidate = path.resolve(resolveStateDir(), rawPath);
-      if (
-        pathExists(stateCandidate) &&
-        isInboundPathAllowed({ filePath: stateCandidate, roots: this.localPathRoots })
-      ) {
-        return stateCandidate;
+      const usableStateCandidate = resolveUsableLocalCandidate(
+        stateCandidate,
+        this.localPathRoots,
+      );
+      if (usableStateCandidate) {
+        return usableStateCandidate;
       }
     }
     return path.resolve(rawPath);
