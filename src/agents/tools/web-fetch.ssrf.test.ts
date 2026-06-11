@@ -166,6 +166,16 @@ describe("web_fetch SSRF protection", () => {
     expectRawFetchSuccessDetails(result?.details);
   });
 
+  it("preserves trailing Unicode URL text through tool argument parsing", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ok"));
+    const tool = createWebFetchToolForTest();
+
+    await tool?.execute?.("call", { url: "https://example.com/a\u00a0" });
+
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://example.com/a%C2%A0");
+  });
+
   it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
     // Benchmark ranges are fake-IP infrastructure in some deployments, but
     // remain denied unless the web_fetch config opts in.
