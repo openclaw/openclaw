@@ -69,6 +69,9 @@ const AudioFrameSchema = z.object({
   seq: z.number().int().nonnegative(),
   timestampMs: z.number().int().nonnegative(),
   payloadBase64: z.string(),
+  // Active speaker's display name when the worker runs unmixed meeting audio (additive) —
+  // real per-person transcript attribution for meeting minutes.
+  speakerName: z.string().optional(),
 });
 
 const PingSchema = z.object({
@@ -178,6 +181,8 @@ export interface MsteamsMediaStreamConfig {
     seq: number;
     timestampMs: number;
     payload: Buffer;
+    /** Active speaker (unmixed-audio worker), for transcript attribution. */
+    speakerName?: string;
   }) => void;
   /** A sampled inbound video frame (caller camera or screen-share) for the agent to "see". */
   onVideoFrame?: (info: {
@@ -544,6 +549,7 @@ export class MsteamsMediaStream {
           seq: parsed.seq,
           timestampMs: parsed.timestampMs,
           payload: Buffer.from(parsed.payloadBase64, "base64"),
+          speakerName: parsed.speakerName,
         });
         break;
       }
