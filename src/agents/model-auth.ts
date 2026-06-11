@@ -10,7 +10,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -337,9 +341,13 @@ export function resolveUsableCustomProviderApiKey(params: {
     };
   }
   if (customKey === NON_ENV_SECRETREF_MARKER) {
-    const runtimeConfig = getRuntimeConfigSnapshot();
-    if (runtimeConfig && runtimeConfig !== params.cfg) {
-      const runtimeProviderConfig = resolveProviderConfig(runtimeConfig, params.provider);
+    const applicableConfig = selectApplicableRuntimeConfig({
+      inputConfig: params.cfg,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+    });
+    if (applicableConfig && applicableConfig !== params.cfg) {
+      const runtimeProviderConfig = resolveProviderConfig(applicableConfig, params.provider);
       const runtimeApiKey = normalizeOptionalSecretInput(runtimeProviderConfig?.apiKey);
       if (runtimeApiKey && !isNonSecretApiKeyMarker(runtimeApiKey)) {
         return {
