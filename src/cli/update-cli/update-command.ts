@@ -3811,10 +3811,10 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       });
       const serviceMatchesUpdateRoot =
         resultWithPostUpdate.mode === "git"
-          ? await gatewayServiceCommandUsesRoot({
+          ? ((await gatewayServiceCommandUsesRoot({
               root: postUpdateRoot,
               command: serviceState.command,
-            })
+            })) ?? undefined)
           : undefined;
       skipLegacyServiceRestart =
         resultWithPostUpdate.mode === "git" &&

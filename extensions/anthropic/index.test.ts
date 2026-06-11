@@ -710,6 +710,28 @@ describe("anthropic provider replay hooks", () => {
     expect(resolved).toBeUndefined();
   });
 
+  it("normalizes Claude Mythos Preview with native max but no xhigh thinking map", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-mythos-preview",
+      model: {
+        id: "claude-mythos-preview",
+        name: "Claude Mythos Preview",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 64_000,
+      },
+    } as never);
+
+    expect(normalized?.thinkingLevelMap).toEqual({ max: "max" });
+  });
+
   it("normalizes stale text-only modern Claude vision rows to image-capable", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 

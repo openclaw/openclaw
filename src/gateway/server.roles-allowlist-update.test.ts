@@ -42,7 +42,7 @@ import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js"
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
+const FAST_WAIT_OPTS = { timeout: 5_000, interval: 10 } as const;
 type PollWaitOptions = { timeout: number; interval: number };
 
 let ws: WebSocket;

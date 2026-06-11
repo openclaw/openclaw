@@ -835,6 +835,44 @@ describe("amazon-bedrock provider plugin", () => {
     expect(payload.inferenceConfig).toEqual({});
   });
 
+  it("does not re-upgrade Mythos Preview max thinking in the final payload", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-mythos-preview",
+      streamFn: spyStreamFn,
+      thinkingLevel: "max",
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-mythos-preview",
+        name: "Claude Mythos Preview",
+        reasoning: true,
+      } as never,
+      { messages: [] } as never,
+      { reasoning: "max" } as never,
+    ) as Record<string, unknown> | undefined;
+
+    const payload = {
+      inferenceConfig: { temperature: 0.2 },
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive" },
+        output_config: { effort: "high" },
+      },
+    };
+
+    await (result?.onPayload as ((p: Record<string, unknown>) => unknown) | undefined)?.(payload);
+
+    expect(payload.additionalModelRequestFields).toEqual({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    });
+    expect(payload.inferenceConfig).toEqual({});
+  });
+
   it("classifies nested Bedrock deprecated-temperature validation as format failover", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 

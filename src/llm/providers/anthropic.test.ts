@@ -83,6 +83,62 @@ describe("Anthropic provider", () => {
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
   });
 
+  it("uses bearer auth for Microsoft Foundry Anthropic requests", async () => {
+    const model = makeAnthropicModel({
+      provider: "microsoft-foundry",
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      authHeader: true,
+      headers: {
+        "api-key": "stale-foundry-key",
+        "x-api-key": "stale-resource-key",
+      },
+    });
+    const context = {
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    } satisfies Context;
+
+    streamAnthropic(model, context, {
+      apiKey: "entra-access-token",
+    });
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+      defaultHeaders?: Record<string, string | null>;
+    };
+
+    expect(config.apiKey).toBeNull();
+    expect(config.authToken).toBe("entra-access-token");
+    expect(config.defaultHeaders?.Authorization).toBeUndefined();
+    expect(config.defaultHeaders?.["api-key"]).toBeUndefined();
+    expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
+  });
+
+  it("keeps Microsoft Foundry API-key profiles on Anthropic API key auth", async () => {
+    const model = makeAnthropicModel({
+      provider: "microsoft-foundry",
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      headers: { "api-key": "foundry-resource-key" },
+    });
+    const context = {
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    } satisfies Context;
+
+    streamAnthropic(model, context, {
+      apiKey: "foundry-resource-key",
+    });
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+    };
+
+    expect(config.apiKey).toBe("foundry-resource-key");
+    expect(config.authToken).toBeNull();
+  });
+
   it("preserves provider-signed Anthropic thinking and drops reasoning_content placeholders", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
@@ -449,6 +505,128 @@ describe("Anthropic provider", () => {
       output_config: { effort: "high" },
     });
     expect(capturedPayload).not.toHaveProperty("temperature");
+  });
+
+  it("preserves native max effort for Claude Mythos Preview", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-mythos-preview",
+        name: "Claude Mythos Preview",
+        reasoning: true,
+        maxTokens: 128_000,
+        thinkingLevelMap: { max: "max" },
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "max",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
+      effort: "max",
+    });
+  });
+
+  it("uses mandatory adaptive thinking for Foundry Mythos Preview", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "prod-mythos-preview",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-mythos-preview" },
+        reasoning: false,
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    });
+  });
+
+  it("uses adaptive high effort for Foundry Mythos Preview without native max metadata", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "prod-mythos-preview",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-mythos-preview" },
+        reasoning: true,
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "max",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    });
+  });
+
+  it("does not infer adaptive thinking from forward-compatible effort maps", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-future",
+        name: "Future Claude",
+        provider: "github-copilot",
+        reasoning: true,
+        thinkingLevelMap: { xhigh: null, max: "max" },
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "copilot-token",
+        reasoning: "max",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "enabled" },
+    });
+    expect((capturedPayload as { output_config?: unknown }).output_config).toBeUndefined();
   });
 
   it.each([

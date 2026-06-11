@@ -107,7 +107,7 @@ import {
   normalizeCommandBody,
   resolveTextCommand,
 } from "../commands-registry.js";
-import type { BlockReplyContext } from "../get-reply-options.types.js";
+import type { BlockReplyContext, GetReplyOptions } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -2142,6 +2142,55 @@ export async function dispatchReplyFromConfig(
       const reply = resolveSendableOutboundReplyParts(payload);
       return !reply.hasMedia && !hasExecApprovalPayload(payload);
     };
+    // Durable inter-tool commentary lane: with verbose progress on, preamble
+    // items become standalone progress messages like tool summaries. The latest
+    // text per item id is buffered (snapshot producers re-emit the same item)
+    // and flushed when the producer moves on, always before the final reply.
+    let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
+    const deliverCommentaryProgressMessage = async (text: string) => {
+      if (!shouldSendToolSummaries() || shouldSuppressProgressDelivery()) {
+        return;
+      }
+      const payload: ReplyPayload = { text: `💬 ${text}` };
+      if (shouldSuppressLateTextOnlyToolProgress(payload)) {
+        return;
+      }
+      if (shouldRouteToOriginating) {
+        await sendPayloadAsync(payload, undefined, false);
+      } else {
+        markInboundDedupeReplayUnsafe();
+        dispatcher.sendToolResult(payload);
+      }
+    };
+    const flushPendingCommentaryProgress = async () => {
+      const pending = pendingCommentaryProgress;
+      pendingCommentaryProgress = null;
+      const text = pending?.text.trim();
+      if (!text) {
+        return;
+      }
+      await deliverCommentaryProgressMessage(text);
+    };
+    const noteCommentaryProgress = async (payload: { itemId?: string; progressText?: string }) => {
+      const itemId = payload.itemId?.trim() || undefined;
+      const text = payload.progressText ?? "";
+      const updatesBufferedItem =
+        pendingCommentaryProgress !== null &&
+        pendingCommentaryProgress.itemId !== undefined &&
+        pendingCommentaryProgress.itemId === itemId;
+      if (!text.trim()) {
+        // Empty commentary with an item id means the producer retracted that
+        // item; drop it if it has not been sent yet.
+        if (updatesBufferedItem) {
+          pendingCommentaryProgress = null;
+        }
+        return;
+      }
+      if (pendingCommentaryProgress && !updatesBufferedItem) {
+        await flushPendingCommentaryProgress();
+      }
+      pendingCommentaryProgress = { itemId, text };
+    };
     const shouldSuppressMessageToolOnlyTextErrorProgress = (payload: ReplyPayload) => {
       if (
         sourceReplyDeliveryMode !== "message_tool_only" ||
@@ -2163,6 +2212,9 @@ export async function dispatchReplyFromConfig(
           throw new DispatchReplyOperationAbortedError();
         }
       };
+      throwIfFinalDeliveryAborted();
+      // Trailing commentary must land ahead of the final answer.
+      await flushPendingCommentaryProgress();
       throwIfFinalDeliveryAborted();
       const sourceReplyTranscriptMirror =
         getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
@@ -2577,7 +2629,7 @@ export async function dispatchReplyFromConfig(
       options?: {
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
-        onForward?: (...args: Args) => void;
+        onForward?: (...args: Args) => Promise<void> | void;
         waitForDirectBlockReplyDelivery?: boolean;
       },
     ): ((...args: Args) => Promise<void>) | undefined => {
@@ -2596,11 +2648,52 @@ export async function dispatchReplyFromConfig(
           }
         }
         if (shouldForwardProgressCallback(options)) {
-          options?.onForward?.(...args);
+          await options?.onForward?.(...args);
           await callback?.(...args);
         }
       };
     };
+
+    // Snapshot verbose progress visibility for this run: commentary
+    // classification in the CLI runners is wired once at run start, so a
+    // mid-run verbose toggle cannot move inter-tool commentary between lanes.
+    const deliverStandaloneCommentaryProgress = shouldEmitVerboseProgress();
+    const forwardItemEvent = wrapProgressCallback(params.replyOptions?.onItemEvent, {
+      forwardWhenSourceDeliverySuppressed: true,
+      requiresToolSummaryVisibility: true,
+      waitForDirectBlockReplyDelivery: true,
+      onForward: (payload) => {
+        if (hasFailedProgressStatus(payload)) {
+          markVisibleToolErrorProgress();
+        }
+      },
+    });
+    // Item-event presence gates CLI commentary classification downstream, so
+    // the handler exists exactly when verbose buffers it or a channel consumes it.
+    const onItemEvent =
+      deliverStandaloneCommentaryProgress || forwardItemEvent
+        ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
+            if (isDispatchOperationAborted()) {
+              return;
+            }
+            if (!forwardItemEvent) {
+              // The wrapped forwarder marks progress itself when present.
+              markProgress();
+            }
+            if (deliverStandaloneCommentaryProgress && payload.kind === "preamble") {
+              await noteCommentaryProgress(payload);
+            }
+            await forwardItemEvent?.(payload);
+          }
+        : undefined;
+    // Let draft-rendering channels yield their ephemeral commentary lines while
+    // the durable verbose commentary lane is delivering the same content.
+    params.replyOptions?.onVerboseProgressVisibility?.(
+      () =>
+        deliverStandaloneCommentaryProgress &&
+        shouldSendVerboseProgressMessages() &&
+        !shouldSuppressProgressDelivery(),
+    );
 
     const replyResolver =
       params.replyResolver ??
@@ -2636,17 +2729,14 @@ export async function dispatchReplyFromConfig(
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
-            }),
-            onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent, {
-              forwardWhenSourceDeliverySuppressed: true,
-              requiresToolSummaryVisibility: true,
-              waitForDirectBlockReplyDelivery: true,
-              onForward: (payload) => {
-                if (hasFailedProgressStatus(payload)) {
-                  markVisibleToolErrorProgress();
-                }
+              onForward: async () => {
+                // Commentary precedes the tool that follows it.
+                await flushPendingCommentaryProgress();
               },
             }),
+            onItemEvent,
+            commentaryProgressEnabled:
+              deliverStandaloneCommentaryProgress || params.replyOptions?.commentaryProgressEnabled,
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
@@ -2678,6 +2768,8 @@ export async function dispatchReplyFromConfig(
                   return;
                 }
                 markInboundDedupeReplayUnsafe();
+                // Buffered commentary preceded this tool; land it before the summary.
+                await flushPendingCommentaryProgress();
                 if (!suppressAutomaticSourceDelivery && shouldSendToolSummaries()) {
                   await onToolResultFromReplyOptions?.(payload);
                 }
@@ -2835,6 +2927,8 @@ export async function dispatchReplyFromConfig(
                 ) {
                   markInboundDedupeReplayUnsafe();
                 }
+                // Buffered commentary preceded this block; deliver it first.
+                await flushPendingCommentaryProgress();
                 if (suppressDelivery) {
                   return;
                 }
@@ -2986,6 +3080,9 @@ export async function dispatchReplyFromConfig(
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    // Backstop: silent/streaming-delivered turns end without a visible final
+    // reply; trailing commentary must still land.
+    await flushPendingCommentaryProgress();
     const beforeAgentRunBlocked = replies.some(
       (reply) => getReplyPayloadMetadata(reply)?.beforeAgentRunBlocked === true,
     );
