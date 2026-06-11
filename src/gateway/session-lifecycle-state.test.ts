@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveGatewaySessionLifecycleSnapshot,
   derivePersistedSessionLifecyclePatch,
+  isStaleLifecycleEventForRunGeneration,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
 
@@ -77,6 +78,50 @@ describe("session lifecycle state", () => {
     expect(
       isStaleLifecycleEventForSession({ owningSessionId: undefined, currentSessionId: "new-id" }),
     ).toBe(false);
+  });
+
+  it("treats older lifecycle events as stale once a same-session row has a newer run generation", () => {
+    expect(
+      isStaleLifecycleEventForRunGeneration({
+        eventStartedAt: 1_000,
+        currentStartedAt: 2_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("applies lifecycle events for the same run generation", () => {
+    expect(
+      isStaleLifecycleEventForRunGeneration({
+        eventStartedAt: 2_000,
+        currentStartedAt: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not let an old abort lifecycle event terminalize a newer same-session run", () => {
+    expect(
+      derivePersistedSessionLifecyclePatch({
+        entry: {
+          updatedAt: 2_000,
+          status: "running",
+          startedAt: 2_000,
+          endedAt: undefined,
+          runtimeMs: undefined,
+          abortedLastRun: false,
+        },
+        event: {
+          ts: 1_500,
+          sessionId: "same-session",
+          data: {
+            phase: "end",
+            startedAt: 1_000,
+            endedAt: 1_500,
+            aborted: true,
+            stopReason: "rpc",
+          },
+        },
+      }),
+    ).toBeNull();
   });
 
   it("reactivates completed sessions on lifecycle start", () => {
