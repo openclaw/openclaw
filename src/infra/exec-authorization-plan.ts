@@ -87,13 +87,13 @@ type PlanningContext = {
 };
 
 const PROMPT_ONLY_RISKS = new Set<CommandRisk["kind"]>([
-  "inline-eval",
   "eval",
   "source",
   "alias",
   "shell-wrapper-through-carrier",
   "command-carrier",
 ]);
+const NON_REUSABLE_RISKS = new Set<CommandRisk["kind"]>(["inline-eval"]);
 
 const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
   "command-substitution",
@@ -201,6 +201,16 @@ function stepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[]
   const reasons: string[] = [];
   for (const risk of risks) {
     if (PROMPT_ONLY_RISKS.has(risk.kind) && riskInsideStep(risk, step)) {
+      reasons.push(risk.kind);
+    }
+  }
+  return [...new Set(reasons)];
+}
+
+function nonReusableStepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[] {
+  const reasons: string[] = [];
+  for (const risk of risks) {
+    if (NON_REUSABLE_RISKS.has(risk.kind) && riskInsideStep(risk, step)) {
       reasons.push(risk.kind);
     }
   }
@@ -400,13 +410,16 @@ function createCandidate(params: {
     params.transport.kind === "direct" &&
     extractBindableShellWrapperInlineCommand(params.segment.argv);
   const stepPromptReasons = stepReasons(params.step, params.risks);
+  const stepNonReusableReasons = nonReusableStepReasons(params.step, params.risks);
   const preludeReasons = hasCommandPrelude(params.step)
     ? shellWrapperPreludeReasons({ step: params.step, risks: params.risks })
     : [];
   if (hasCommandPrelude(params.step) && preludeReasons.length === 0) {
     preludeReasons.push(SHELL_WRAPPER_PRELUDE_REASON);
   }
-  const reasons = [...new Set([...stepPromptReasons, ...preludeReasons])];
+  const reasons = [
+    ...new Set([...stepPromptReasons, ...stepNonReusableReasons, ...preludeReasons]),
+  ];
   const trustMode: ExecAuthorizationTrustMode =
     params.segment.resolution?.policyBlocked === true
       ? "prompt-only"
@@ -423,11 +436,13 @@ function createCandidate(params: {
     ...(params.step.id ? { sourceStepId: params.step.id } : {}),
     transport: params.transport,
     trustMode,
-    allowAlways: shouldPersistCandidate({
-      segment: params.segment,
-      relationship: params.relationship,
-      trustMode,
-    }),
+    allowAlways:
+      stepNonReusableReasons.length === 0 &&
+      shouldPersistCandidate({
+        segment: params.segment,
+        relationship: params.relationship,
+        trustMode,
+      }),
     reasons,
   };
 }

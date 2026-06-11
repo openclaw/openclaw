@@ -1,10 +1,21 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { detectPolicyInlineEval } from "./command-analysis/policy.js";
+import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateShellAllowlistWithAuthorization,
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalAllowedDecisions,
 } from "./exec-approvals.js";
+
+function makeExecutable(dir: string, name: string): string {
+  const fileName = process.platform === "win32" ? `${name}.exe` : name;
+  const exe = path.join(dir, fileName);
+  fs.writeFileSync(exe, "");
+  fs.chmodSync(exe, 0o755);
+  return exe;
+}
 
 describe("authorization-backed exec allowlist", () => {
   it("keeps later inline-eval segments visible when durable planning fails", async () => {
@@ -39,7 +50,7 @@ describe("authorization-backed exec allowlist", () => {
     }
 
     const result = await evaluateShellAllowlistWithAuthorization({
-      command: `sh -c 'echo "$HOME"; python3 -c "print(1)"'`,
+      command: `sh -c 'echo ok; python3 -c "print(1)"'`,
       allowlist: [],
       safeBins: new Set(),
       platform: process.platform,
@@ -48,7 +59,7 @@ describe("authorization-backed exec allowlist", () => {
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(false);
     expect(result.segments.map((segment) => segment.argv)).toEqual([
-      ["echo", "$HOME"],
+      ["echo", "ok"],
       ["python3", "-c", "print(1)"],
     ]);
     expect(detectPolicyInlineEval(result.segments)).toEqual(
@@ -57,6 +68,55 @@ describe("authorization-backed exec allowlist", () => {
         flag: "-c",
       }),
     );
+  });
+
+  it("allows allowlisted inline-eval commands while keeping allow-always one-shot", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = makeTempDir();
+    const pythonPath = makeExecutable(dir, "python3");
+    const env = makePathEnv(dir);
+    const command = "python3 -c 'print(1)'";
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command,
+      allowlist: [{ pattern: pythonPath }],
+      safeBins: new Set(),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-c", "print(1)"]]);
+    expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+    expect(detectPolicyInlineEval(result.segments)).toEqual(
+      expect.objectContaining({
+        executable: "python3",
+        flag: "-c",
+      }),
+    );
+
+    const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+      segments: result.segments,
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: result.authorizationPlan,
+    });
+
+    expect(allowAlwaysPersistence).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence })).toEqual([
+      "allow-once",
+      "deny",
+    ]);
   });
 
   it("does not satisfy path-scoped shell wrappers from trusted inner payloads", async () => {
@@ -73,9 +133,7 @@ describe("authorization-backed exec allowlist", () => {
 
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segments.map((segment) => segment.argv)).toEqual([
-      ["./sh", "-c", "git status"],
-    ]);
+    expect(result.segments.map((segment) => segment.argv)).toEqual([["./sh", "-c", "git status"]]);
     expect(result.segmentSatisfiedBy).toEqual([null]);
   });
 
