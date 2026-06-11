@@ -407,7 +407,10 @@ export class MsteamsMediaStream {
       this.rejectUpgrade(socket, 401, "Unauthorized");
       return;
     }
-    this.seenUpgrades.set(replayKey, now + this.hmacWindowMs);
+    // Expire the replay record when the TIMESTAMP stops being valid (ts + window), not at now +
+    // window. A future-dated handshake (worker clock skew) is signature-valid until ts + window; a
+    // record swept at now + window would leave it replayable in between. (Review S4.)
+    this.seenUpgrades.set(replayKey, ts + this.hmacWindowMs);
 
     const ip = normalizeIp(request.socket.remoteAddress);
     // Bound total + per-IP concurrent sockets before accepting the upgrade.
