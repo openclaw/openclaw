@@ -224,4 +224,10 @@ export type MSTeamsConfig = {
     /** Replacement template; "{category}" is substituted. Default "[REDACTED:{category}]". */
     placeholder?: string;
   };
+  /**
+   * Audit log channel (#15). When set to a Teams conversation target (e.g. "conversation:19:…" or
+   * "user:<aad-id>"), a compact DLP-redacted line of each agent reply is mirrored there so admins
+   * have a governance trail. The bot must have received ≥1 message from that conversation first.
+   */
+  auditChannel?: string;
 };
