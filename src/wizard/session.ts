@@ -1,6 +1,12 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
-import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
+import {
+  WizardCancelledError,
+  type WizardProgress,
+  type WizardPrompter,
+  type WizardStepAuth,
+  type WizardTextParams,
+} from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
@@ -20,6 +26,7 @@ export type WizardStep = {
   initialValue?: unknown;
   placeholder?: string;
   sensitive?: boolean;
+  auth?: WizardStepAuth;
   executor?: "gateway" | "client";
 };
 
@@ -49,6 +56,8 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 class WizardSessionPrompter implements WizardPrompter {
+  readonly presentsAuthChallenge = true;
+
   constructor(private session: WizardSession) {}
 
   async intro(title: string): Promise<void> {
@@ -115,19 +124,14 @@ class WizardSessionPrompter implements WizardPrompter {
     return (Array.isArray(res) ? res : []) as T[];
   }
 
-  async text(params: {
-    message: string;
-    initialValue?: string;
-    placeholder?: string;
-    validate?: (value: string) => string | undefined;
-    sensitive?: boolean;
-  }): Promise<string> {
+  async text(params: WizardTextParams): Promise<string> {
     const res = await this.prompt({
       type: "text",
       message: params.message,
       initialValue: params.initialValue,
       placeholder: params.placeholder,
       sensitive: params.sensitive,
+      auth: params.auth,
       executor: "client",
     });
     const value =

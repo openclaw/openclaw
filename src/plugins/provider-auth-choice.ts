@@ -285,7 +285,7 @@ export async function runProviderPluginAuthMethod(params: {
     opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
-    isRemote: isRemoteEnvironment(),
+    isRemote: isRemoteEnvironment() || params.prompter.presentsAuthChallenge === true,
     openUrl: async (url) => {
       await openUrl(url);
     },

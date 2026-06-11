@@ -37,9 +37,10 @@ export type GeminiCliOAuthCredentials = {
 
 export type GeminiCliOAuthContext = {
   isRemote: boolean;
+  presentsAuthChallenge?: boolean;
   openUrl: (url: string) => Promise<void>;
   log: (msg: string) => void;
   note: (message: string, title?: string) => Promise<void>;
-  prompt: (message: string) => Promise<string>;
+  prompt: (message: string, opts?: { url?: string }) => Promise<string>;
   progress: { update: (msg: string) => void; stop: (msg?: string) => void };
 };

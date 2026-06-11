@@ -1,6 +1,6 @@
 /** Coordinates provider OAuth flows exposed by plugin-owned auth integrations. */
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import type { WizardPrompter, WizardStepAuth } from "../wizard/prompts.js";
 
 /** Prompt payload used when OAuth flow code entry needs user input. */
 export type OAuthPrompt = { message: string; placeholder?: string };
@@ -8,6 +8,14 @@ export type OAuthPrompt = { message: string; placeholder?: string };
 const validateRequiredInput = (value: string) => (value.trim().length > 0 ? undefined : "Required");
 
 /** Creates OAuth callbacks that use local browser auth locally and manual code entry on VPS hosts. */
+function createOAuthRedirectAuth(url: string, provider?: string): WizardStepAuth {
+  return {
+    kind: "oauth-redirect",
+    url,
+    ...(provider ? { provider } : {}),
+  };
+}
+
 export function createVpsAwareOAuthHandlers(params: {
   isRemote: boolean;
   prompter: WizardPrompter;
@@ -16,6 +24,7 @@ export function createVpsAwareOAuthHandlers(params: {
   openUrl: (url: string) => Promise<unknown>;
   localBrowserMessage: string;
   manualPromptMessage?: string;
+  provider?: string;
 }): {
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
@@ -23,14 +32,17 @@ export function createVpsAwareOAuthHandlers(params: {
   const manualPromptMessage = params.manualPromptMessage ?? "Paste the redirect URL";
   // Remote hosts cannot open the user's browser, so auth starts in onAuth and finishes in onPrompt.
   let manualCodePromise: Promise<string> | undefined;
+  let lastAuthUrl: string | undefined;
 
   return {
     onAuth: async ({ url }) => {
+      lastAuthUrl = url;
       if (params.isRemote) {
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
         manualCodePromise = params.prompter.text({
           message: manualPromptMessage,
+          auth: createOAuthRedirectAuth(url, params.provider),
           validate: validateRequiredInput,
         });
         return;
@@ -47,6 +59,7 @@ export function createVpsAwareOAuthHandlers(params: {
       const code = await params.prompter.text({
         message: prompt.message,
         placeholder: prompt.placeholder,
+        auth: lastAuthUrl ? createOAuthRedirectAuth(lastAuthUrl, params.provider) : undefined,
         validate: validateRequiredInput,
       });
       return code;

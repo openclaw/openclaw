@@ -2,6 +2,10 @@
 import { join, parse } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const oauthRuntimeMocks = vi.hoisted(() => ({
+  loginGeminiCliOAuth: vi.fn(),
+}));
+
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
     "openclaw/plugin-sdk/runtime-env",
@@ -11,6 +15,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     isWSL2Sync: () => false,
   };
 });
+
+vi.mock("./oauth.runtime.js", () => ({
+  loginGeminiCliOAuth: oauthRuntimeMocks.loginGeminiCliOAuth,
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -754,19 +762,28 @@ describe("loginGeminiCliOAuth", () => {
     return request;
   }
 
+  type ManualPromptOptions = { url?: string };
+
   type LoginGeminiCliOAuthFn = (options: {
     isRemote: boolean;
+    presentsAuthChallenge?: boolean;
     openUrl: () => Promise<void>;
     log: (msg: string) => void;
-    note: () => Promise<void>;
-    prompt: () => Promise<string>;
+    note: (message: string, title?: string) => Promise<void>;
+    prompt: (message: string, opts?: ManualPromptOptions) => Promise<string>;
     progress: { update: () => void; stop: () => void };
   }) => Promise<{ projectId?: string }>;
 
-  async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
+  async function runRemoteLoginWithCapturedAuthUrl(
+    loginGeminiCliOAuth: LoginGeminiCliOAuthFn,
+    options: { presentsAuthChallenge?: boolean } = {},
+  ) {
     let authUrl = "";
+    const note = vi.fn(async () => {});
+    const promptCalls: Array<{ message: string; opts?: ManualPromptOptions }> = [];
     const result = await loginGeminiCliOAuth({
       isRemote: true,
+      presentsAuthChallenge: options.presentsAuthChallenge,
       openUrl: async () => {},
       log: (msg) => {
         const found = msg.match(/https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?[^\s]+/);
@@ -774,14 +791,15 @@ describe("loginGeminiCliOAuth", () => {
           authUrl = found[0];
         }
       },
-      note: async () => {},
-      prompt: async () => {
+      note,
+      prompt: async (message, opts) => {
+        promptCalls.push({ message, opts });
         const state = new URL(authUrl).searchParams.get("state");
         return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
       },
       progress: { update: () => {}, stop: () => {} },
     });
-    return { result, authUrl };
+    return { result, authUrl, note, promptCalls };
   }
 
   async function runProjectDiscoveryExpectingProjectId(projectId: string) {
@@ -894,6 +912,59 @@ describe("loginGeminiCliOAuth", () => {
       "PKCE code verifier",
     );
     expect(codeVerifier).not.toBe(authState);
+  });
+
+  it("passes manual OAuth auth URL to the prompt options", async () => {
+    installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD) {
+        return responseJson({
+          currentTier: { id: "standard-tier" },
+          cloudaicompanionProject: { id: "prod-project" },
+        });
+      }
+      return undefined;
+    });
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { authUrl, promptCalls } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(promptCalls).toEqual([
+      {
+        message: "Paste the redirect URL here: ",
+        opts: { url: authUrl },
+      },
+    ]);
+  });
+
+  it("collapses manual OAuth instructions into the auth URL prompt for auth-presenting clients", async () => {
+    installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD) {
+        return responseJson({
+          currentTier: { id: "standard-tier" },
+          cloudaicompanionProject: { id: "prod-project" },
+        });
+      }
+      return undefined;
+    });
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { authUrl, note, promptCalls } = await runRemoteLoginWithCapturedAuthUrl(
+      loginGeminiCliOAuth,
+      {
+        presentsAuthChallenge: true,
+      },
+    );
+
+    expect(note).not.toHaveBeenCalled();
+    expect(promptCalls).toEqual([
+      {
+        message: [
+          "Open the authorization URL shown below in your local browser.",
+          "After signing in, copy the redirect URL and paste it here:",
+        ].join("\n"),
+        opts: { url: authUrl },
+      },
+    ]);
   });
 
   it("rejects manual callback input when the returned state does not match", async () => {
@@ -1081,5 +1152,77 @@ describe("loginGeminiCliOAuth", () => {
 
     expect(Number.isSafeInteger(result.expires)).toBe(true);
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
+  });
+});
+
+describe("Gemini CLI provider OAuth wiring", () => {
+  beforeEach(() => {
+    oauthRuntimeMocks.loginGeminiCliOAuth.mockReset();
+  });
+
+  it("forwards manual OAuth URLs into wizard text auth metadata", async () => {
+    const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?state=abc";
+    oauthRuntimeMocks.loginGeminiCliOAuth.mockImplementation(
+      async (ctx: {
+        presentsAuthChallenge?: boolean;
+        prompt: (message: string, opts?: { url?: string }) => Promise<string>;
+      }) => {
+        expect(ctx.presentsAuthChallenge).toBe(true);
+        await ctx.prompt(
+          [
+            "Open the authorization URL shown below in your local browser.",
+            "After signing in, copy the redirect URL and paste it here:",
+          ].join("\n"),
+          { url: authUrl },
+        );
+        return {
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "lobster@openclaw.ai",
+        };
+      },
+    );
+
+    const { buildGoogleGeminiCliProvider } = await import("./gemini-cli-provider.js");
+    const provider = buildGoogleGeminiCliProvider();
+    const method = provider.auth?.find((candidate) => candidate.id === "oauth");
+    if (!method) {
+      throw new Error("expected Gemini CLI OAuth method");
+    }
+
+    const spin = { update: vi.fn(), stop: vi.fn() };
+    const text = vi.fn(async () => "http://localhost:8085/oauth2callback?code=oauth-code");
+
+    await method.run({
+      isRemote: true,
+      openUrl: vi.fn(async () => {}),
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn((code: number) => {
+          throw new Error(`exit:${code}`);
+        }),
+      },
+      prompter: {
+        presentsAuthChallenge: true,
+        note: vi.fn(async () => {}),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => spin),
+        text,
+      },
+    } as never);
+
+    expect(text).toHaveBeenCalledWith({
+      message: [
+        "Open the authorization URL shown below in your local browser.",
+        "After signing in, copy the redirect URL and paste it here:",
+      ].join("\n"),
+      auth: {
+        kind: "oauth-redirect",
+        url: authUrl,
+        provider: "google-gemini-cli",
+      },
+    });
   });
 });

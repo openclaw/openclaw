@@ -72,7 +72,14 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               openUrl: ctx.openUrl,
               log: (msg) => ctx.runtime.log(msg),
               note: ctx.prompter.note,
-              prompt: async (message) => ctx.prompter.text({ message }),
+              presentsAuthChallenge: ctx.prompter.presentsAuthChallenge === true,
+              prompt: async (message, opts) =>
+                ctx.prompter.text({
+                  message,
+                  auth: opts?.url
+                    ? { kind: "oauth-redirect", url: opts.url, provider: PROVIDER_ID }
+                    : undefined,
+                }),
               progress: spin,
             });
 

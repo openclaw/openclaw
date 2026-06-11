@@ -131,4 +131,35 @@ describe("WizardSession", () => {
     }
     await session.answer(plainStep.id, "alice");
   });
+
+  test("marks RPC prompters as auth-presenting clients", async () => {
+    const session = new WizardSession(async (prompter) => {
+      expect(prompter.presentsAuthChallenge).toBe(true);
+      await prompter.note("ready");
+    });
+
+    const step = await session.next();
+    expect(step.step?.type).toBe("note");
+  });
+
+  test("forwards auth metadata to emitted text steps", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({
+        message: "Paste the redirect URL",
+        auth: {
+          kind: "oauth-redirect",
+          url: "https://auth.example.test/oauth/authorize?state=abc",
+          provider: "openai-codex",
+        },
+      });
+    });
+
+    const step = (await session.next()).step;
+    expect(step?.type).toBe("text");
+    expect(step?.auth).toEqual({
+      kind: "oauth-redirect",
+      url: "https://auth.example.test/oauth/authorize?state=abc",
+      provider: "openai-codex",
+    });
+  });
 });
