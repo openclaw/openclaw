@@ -55,8 +55,13 @@ export function pruneDiagnosticSessionStates(now = Date.now(), force = false): v
 
   for (const [key, state] of diagnosticSessionStates.entries()) {
     const ageMs = now - state.lastActivity;
+    if (ageMs <= SESSION_STATE_TTL_MS) continue;
     const isIdle = state.state === "idle";
-    if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
+    if (isIdle && state.queueDepth <= 0) {
+      diagnosticSessionStates.delete(key);
+    } else if (!isIdle) {
+      // Clean up non-idle ghost entries that survived a failed recovery and
+      // never transitioned back to idle (e.g. recovery outcome was "failed").
       diagnosticSessionStates.delete(key);
     }
   }

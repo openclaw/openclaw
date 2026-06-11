@@ -168,6 +168,26 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
 
+  it("evicts stale non-idle session states (ghost entries after failed recovery)", () => {
+    // Simulate a non-idle ghost entry that survived a failed recovery
+    const now = Date.now();
+    diagnosticSessionStates.set("ghost-session", {
+      sessionId: "ghost-session",
+      lastActivity: now - 31 * 60 * 1000,
+      generation: 1,
+      state: "processing",
+      queueDepth: 1,
+    });
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+
+    // Trigger prune via a fresh getDiagnosticSessionState call
+    getDiagnosticSessionState({ sessionId: "fresh-1" });
+
+    // Non-idle ghost older than TTL should be cleaned up
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.has("ghost-session")).toBe(false);
+  });
+
   it("caps tracked session states to a bounded max", () => {
     const now = Date.now();
     for (let i = 0; i < 2001; i += 1) {
