@@ -1,14 +1,15 @@
 import type {
+  SecurityMatrixInfluenceSource,
   SecurityMatrixPolicy,
+  SecurityMatrixPolicySource,
   SecurityMatrixRule,
   SecurityMatrixToolCapability,
-  SecurityMatrixTrustSource,
 } from "./types.js";
 
-const trustedAllowReason =
-  "Trusted operator or agent-originated actions are allowed for known tool capabilities.";
-const trustedUnknownReason =
-  "Unknown tool capabilities should remain audit-visible even for trusted sources.";
+const noExternalAllowReason =
+  "No external-content influence is present; known capabilities defer to the existing operator tool policy.";
+const noExternalUnknownReason =
+  "Unknown tool capabilities remain audit-visible even when no external influence is present.";
 const externalWarnReason =
   "External content influencing read-only or network-visible flows should remain audit-visible.";
 const externalRequireConfirmReason =
@@ -16,7 +17,7 @@ const externalRequireConfirmReason =
 const externalBlockReason =
   "External content must not directly influence privileged local execution, credential access, or system configuration.";
 
-const trustedCapabilities = [
+const knownCapabilities = [
   "read_file",
   "write_file",
   "network",
@@ -53,8 +54,6 @@ const blockCapabilities = [
   "system_config",
 ] as const satisfies readonly SecurityMatrixToolCapability[];
 
-const trustedSources = ["agent", "user"] as const satisfies readonly SecurityMatrixTrustSource[];
-
 const externalSources = [
   "web_fetch",
   "browser",
@@ -64,43 +63,43 @@ const externalSources = [
   "webhook",
   "memory",
   "skill",
+  "api",
+  "channel_metadata",
   "unknown_external",
-] as const satisfies readonly SecurityMatrixTrustSource[];
+] as const satisfies readonly SecurityMatrixInfluenceSource[];
 
 function createRule(decision: SecurityMatrixRule["decision"], reason: string): SecurityMatrixRule {
   return { decision, reason };
 }
 
-function createTrustedPolicy(): SecurityMatrixPolicy {
-  const policy: SecurityMatrixPolicy = {};
-  for (const source of trustedSources) {
-    policy[source] = {};
-    for (const capability of trustedCapabilities) {
-      policy[source][capability] = createRule("allow", trustedAllowReason);
-    }
-    policy[source].unknown = createRule("warn", trustedUnknownReason);
+function createNoExternalPolicy(): SecurityMatrixPolicy {
+  const sourcePolicy: NonNullable<SecurityMatrixPolicy["none"]> = {};
+  for (const capability of knownCapabilities) {
+    sourcePolicy[capability] = createRule("allow", noExternalAllowReason);
   }
-  return policy;
+  sourcePolicy.unknown = createRule("warn", noExternalUnknownReason);
+  return { none: sourcePolicy };
 }
 
 function createExternalPolicy(): SecurityMatrixPolicy {
   const policy: SecurityMatrixPolicy = {};
   for (const source of externalSources) {
-    policy[source] = {};
+    const sourcePolicy: NonNullable<SecurityMatrixPolicy[SecurityMatrixPolicySource]> = {};
     for (const capability of warnCapabilities) {
-      policy[source][capability] = createRule("warn", externalWarnReason);
+      sourcePolicy[capability] = createRule("warn", externalWarnReason);
     }
     for (const capability of requireConfirmCapabilities) {
-      policy[source][capability] = createRule("require_confirm", externalRequireConfirmReason);
+      sourcePolicy[capability] = createRule("require_confirm", externalRequireConfirmReason);
     }
     for (const capability of blockCapabilities) {
-      policy[source][capability] = createRule("block", externalBlockReason);
+      sourcePolicy[capability] = createRule("block", externalBlockReason);
     }
+    policy[source] = sourcePolicy;
   }
   return policy;
 }
 
 export const defaultSecurityMatrixPolicy = {
-  ...createTrustedPolicy(),
+  ...createNoExternalPolicy(),
   ...createExternalPolicy(),
 } satisfies SecurityMatrixPolicy;
