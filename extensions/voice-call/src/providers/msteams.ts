@@ -1120,7 +1120,13 @@ export class MsteamsProvider implements VoiceCallProvider {
       callId: providerCallId,
       providerCallId,
       timestamp: Date.now(),
-      direction: "inbound",
+      // A call this provider placed is tracked in the outbound maps for its lifetime; otherwise it
+      // arrived inbound. (Was hardcoded "inbound", so outbound call.answered carried wrong metadata.)
+      direction:
+        this.pendingOutbound.has(providerCallId) ||
+        this.outboundRealtimeInternalIds.has(providerCallId)
+          ? "outbound"
+          : "inbound",
       from: fields.from,
       to: fields.to,
       // Teams chat thread for sessionScope "per-thread" (separate sessions per meeting/chat).
