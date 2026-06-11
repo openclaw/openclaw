@@ -3,7 +3,7 @@ import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
 import {
   isOpenAICodexProvider,
   openAIProviderUsesCodexRuntimeByDefault,
-} from "../openai-codex-routing.js";
+} from "../openai-codex-runtime-ids.js";
 import {
   normalizeEmbeddedAgentRuntime,
   type EmbeddedAgentRuntime,

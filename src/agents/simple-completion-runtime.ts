@@ -23,7 +23,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { OPENAI_CODEX_PROVIDER_ID, isOpenAIProvider } from "./openai-codex-routing.js";
+import { OPENAI_CODEX_PROVIDER_ID, isOpenAIProvider } from "./openai-codex-runtime-ids.js";
 import { resolveModel, resolveModelAsync } from "./pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 

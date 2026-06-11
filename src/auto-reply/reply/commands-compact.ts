@@ -5,7 +5,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
-} from "../../agents/openai-codex-routing.js";
+} from "../../agents/openai-codex-runtime-ids.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";

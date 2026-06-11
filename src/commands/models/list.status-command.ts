@@ -33,7 +33,7 @@ import {
 import {
   OPENAI_CODEX_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
-} from "../../agents/openai-codex-routing.js";
+} from "../../agents/openai-codex-runtime-ids.js";
 import {
   resolveProviderAuthAliasMap,
   resolveProviderIdForAuth,

@@ -63,11 +63,13 @@ import {
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  OPENAI_CODEX_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
-  resolveContextConfigProviderForRuntime,
   resolveSelectedOpenAIPiRuntimeProvider,
 } from "../openai-codex-routing.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  resolveContextConfigProviderForRuntime,
+} from "../openai-codex-runtime-ids.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,

@@ -9,7 +9,7 @@ import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-p
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-runtime-ids.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,

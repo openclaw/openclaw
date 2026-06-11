@@ -24,7 +24,7 @@ import {
   maybeCompactAgentHarnessSession,
   resolveAgentHarnessPolicy,
 } from "../harness/selection.js";
-import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-runtime-ids.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
