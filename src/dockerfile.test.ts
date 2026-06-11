@@ -194,10 +194,32 @@ describe("Dockerfile", () => {
 
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-
-    expect(dockerfile).toContain(
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const qaLabExtensionCheckIndex = collapsed.indexOf("grep -qx 'qa-lab'");
+    const privateQaExportIndex = collapsed.indexOf(
+      "export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1",
+    );
+    const buildDockerIndex = collapsed.indexOf(
       "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
     );
+    const qaLabBuildIndex = collapsed.indexOf(
+      "pnpm_config_verify_deps_before_run=false pnpm qa:lab:build",
+    );
+    const qaLabDistCopyIndex = collapsed.indexOf(
+      "cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist",
+    );
+    const runtimeAssetsIndex = collapsed.indexOf("FROM build AS runtime-assets");
+
+    expect(qaLabExtensionCheckIndex).toBeGreaterThan(-1);
+    expect(buildDockerIndex).toBeGreaterThan(-1);
+    expect(qaLabBuildIndex).toBeGreaterThan(-1);
+    expect(qaLabDistCopyIndex).toBeGreaterThan(-1);
+    expect(runtimeAssetsIndex).toBeGreaterThan(-1);
+    expect(privateQaExportIndex).toBeGreaterThan(qaLabExtensionCheckIndex);
+    expect(privateQaExportIndex).toBeLessThan(buildDockerIndex);
+    expect(qaLabBuildIndex).toBeGreaterThan(buildDockerIndex);
+    expect(qaLabDistCopyIndex).toBeGreaterThan(qaLabBuildIndex);
+    expect(qaLabDistCopyIndex).toBeLessThan(runtimeAssetsIndex);
     expect(dockerfile).toContain(
       "pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle",
     );
