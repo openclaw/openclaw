@@ -243,9 +243,11 @@ could be reachable). The factory wiring is deferred to a future PR.
 process can open, **outside the configured workspace** unless
 `tools.fs.workspaceOnly: true` is set. Strongly recommend pairing
 `directInvoke.hostFsWrite: true` with `tools.fs.workspaceOnly: true`. The
-config audit `gateway.tools_invoke_http.host_write_allow` warns when both
-keys are set without workspace confinement (escalates to critical when bind
-is non-loopback).
+config audit (`gateway.tools_invoke_http.host_write_allow`) warns whenever both
+keys are set — regardless of `tools.fs.workspaceOnly` — so the exposure is
+always visible in audit output; workspace confinement is the recommended
+remediation, not a condition that silences the warning. The finding escalates
+from warn to critical when `gateway.bind` is non-loopback.
 
 ### NOT yet exposed: `exec` / `process` / `spawn` / `shell`
 
