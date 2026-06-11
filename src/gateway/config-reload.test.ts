@@ -1590,6 +1590,93 @@ describe("startGatewayConfigReloader", () => {
   });
 });
 
+describe("startGatewayConfigReloader watcher error recovery", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function startReloaderWithWatchers(watchers: ReturnType<typeof createWatcherMock>[]) {
+    const watchSpy = vi.spyOn(chokidar, "watch");
+    for (const watcher of watchers) {
+      watchSpy.mockReturnValueOnce(watcher as unknown as never);
+    }
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const reloader = startGatewayConfigReloader({
+      initialConfig: { gateway: { reload: { debounceMs: 0 } } },
+      readSnapshot: vi.fn(async () => makeSnapshot()),
+      initialPluginInstallRecords: {},
+      readPluginInstallRecords: async () => ({}),
+      onHotReload: vi.fn(async () => {}),
+      onRestart: vi.fn(),
+      log,
+      watchPath: "/tmp/openclaw.json",
+    });
+    return { watchSpy, log, reloader };
+  }
+
+  it("re-creates the watcher with backoff after a transient error", async () => {
+    const first = createWatcherMock();
+    const second = createWatcherMock();
+    const { watchSpy, log, reloader } = startReloaderWithWatchers([first, second]);
+
+    expect(watchSpy).toHaveBeenCalledTimes(1);
+
+    first.emit("error");
+    expect(reloader.hotReloadStatus()).toBe("active");
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("re-creating watcher (attempt 1/3 in 500ms)"),
+    );
+    expect(first.close).toHaveBeenCalledTimes(1);
+
+    // Watcher is only re-created once the backoff timer fires.
+    expect(watchSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(watchSpy).toHaveBeenCalledTimes(2);
+    expect(reloader.hotReloadStatus()).toBe("active");
+    expect(log.error).not.toHaveBeenCalled();
+
+    await reloader.stop();
+  });
+
+  it("disables hot-reload and logs at error level after the retry budget is exhausted", async () => {
+    const watchers = [
+      createWatcherMock(),
+      createWatcherMock(),
+      createWatcherMock(),
+      createWatcherMock(),
+    ];
+    const { watchSpy, log, reloader } = startReloaderWithWatchers(watchers);
+
+    // Three errors consume the retry budget; the fourth error escalates.
+    watchers[0]?.emit("error");
+    await vi.advanceTimersByTimeAsync(500);
+    watchers[1]?.emit("error");
+    await vi.advanceTimersByTimeAsync(2000);
+    watchers[2]?.emit("error");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(watchSpy).toHaveBeenCalledTimes(4);
+    expect(reloader.hotReloadStatus()).toBe("active");
+
+    watchers[3]?.emit("error");
+    expect(reloader.hotReloadStatus()).toBe("disabled");
+    expect(log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "config hot-reload disabled: watcher failed after 3 re-create attempts",
+      ),
+    );
+    // No further watcher is created once disabled.
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(watchSpy).toHaveBeenCalledTimes(4);
+
+    await reloader.stop();
+  });
+});
+
 describe("shouldInvalidateSkillsSnapshotForPaths", () => {
   it.each([
     "skills",

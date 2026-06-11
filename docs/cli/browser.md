@@ -280,10 +280,14 @@ Use the built-in `user` profile, or create your own `existing-session` profile:
 openclaw browser --browser-profile user tabs
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
+openclaw browser create-profile --name chrome-port --driver existing-session --cdp-url http://127.0.0.1:9222
 openclaw browser --browser-profile chrome-live tabs
 ```
 
-This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
+The default existing-session path is host-only Chrome MCP auto-connect. If the browser is already
+running with a DevTools endpoint, pass `--cdp-url` so Chrome MCP attaches to that endpoint instead.
+For Docker, Browserless, or other remote setups where Chrome MCP semantics are not needed, use a
+CDP profile.
 
 Current existing-session limits:
 

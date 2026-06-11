@@ -33,6 +33,13 @@ export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 
+// Watcher 'error' events (for example EMFILE/ENOSPC inotify exhaustion) close
+// the chokidar watcher. Re-create it with bounded backoff so a transient fault
+// does not permanently kill config hot-reload, but escalate to error + a
+// persistent disabled status once the retry budget is exhausted.
+const WATCHER_RECREATE_MAX_RETRIES = 3;
+const WATCHER_RECREATE_BACKOFF_MS = [500, 2000, 5000] as const;
+
 /**
  * Paths under `skills.*` always change the snapshot that sessions cache in
  * sessions.json. Any prefix match here (for example `skills.allowBundled`,
@@ -71,8 +78,14 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
   );
 }
 
+// Hot-reload stays "active" while a watcher is live. It flips to "disabled" only
+// after watcher re-creation fails past the retry budget, so operators/callers
+// can detect silent degradation instead of assuming reloads still fire.
+export type GatewayHotReloadStatus = "active" | "disabled";
+
 type GatewayConfigReloader = {
   stop: () => Promise<void>;
+  hotReloadStatus: () => GatewayHotReloadStatus;
 };
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
@@ -371,12 +384,6 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const watcher = chokidar.watch(opts.watchPath, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    usePolling: Boolean(process.env.VITEST),
-  });
-
   const scheduleFromWatcher = () => {
     schedule();
   };
@@ -396,18 +403,59 @@ export function startGatewayConfigReloader(opts: {
       scheduleAfter(0);
     }) ?? (() => {});
 
-  watcher.on("add", scheduleFromWatcher);
-  watcher.on("change", scheduleFromWatcher);
-  watcher.on("unlink", scheduleFromWatcher);
-  let watcherClosed = false;
-  watcher.on("error", (err) => {
-    if (watcherClosed) {
+  let watcher: ReturnType<typeof chokidar.watch> | null = null;
+  let watcherRecreateRetries = 0;
+  let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
+  let hotReloadStatus: GatewayHotReloadStatus = "active";
+
+  const createWatcher = () => {
+    if (stopped) {
       return;
     }
-    watcherClosed = true;
-    opts.log.warn(`config watcher error: ${String(err)}`);
-    void watcher.close().catch(() => {});
-  });
+    const next = chokidar.watch(opts.watchPath, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      usePolling: Boolean(process.env.VITEST),
+    });
+    next.on("add", scheduleFromWatcher);
+    next.on("change", scheduleFromWatcher);
+    next.on("unlink", scheduleFromWatcher);
+    next.on("error", (err) => {
+      handleWatcherError(next, err);
+    });
+    watcher = next;
+    hotReloadStatus = "active";
+  };
+
+  const handleWatcherError = (source: typeof watcher, err: unknown) => {
+    // Ignore stale errors from a watcher we already replaced or stopped.
+    if (stopped || source !== watcher) {
+      return;
+    }
+    watcher = null;
+    void source?.close().catch(() => {});
+    if (watcherRecreateRetries >= WATCHER_RECREATE_MAX_RETRIES) {
+      hotReloadStatus = "disabled";
+      opts.log.error(
+        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts: ${String(err)}`,
+      );
+      return;
+    }
+    const backoff =
+      WATCHER_RECREATE_BACKOFF_MS[watcherRecreateRetries] ??
+      WATCHER_RECREATE_BACKOFF_MS[WATCHER_RECREATE_BACKOFF_MS.length - 1] ??
+      0;
+    watcherRecreateRetries += 1;
+    opts.log.warn(
+      `config watcher error; re-creating watcher (attempt ${watcherRecreateRetries}/${WATCHER_RECREATE_MAX_RETRIES} in ${backoff}ms): ${String(err)}`,
+    );
+    watcherRecreateTimer = setTimeout(() => {
+      watcherRecreateTimer = null;
+      createWatcher();
+    }, backoff);
+  };
+
+  createWatcher();
 
   return {
     stop: async () => {
@@ -416,9 +464,15 @@ export function startGatewayConfigReloader(opts: {
         clearTimeout(debounceTimer);
       }
       debounceTimer = null;
-      watcherClosed = true;
+      if (watcherRecreateTimer) {
+        clearTimeout(watcherRecreateTimer);
+        watcherRecreateTimer = null;
+      }
       unsubscribeFromWrites();
-      await watcher.close().catch(() => {});
+      const active = watcher;
+      watcher = null;
+      await active?.close().catch(() => {});
     },
+    hotReloadStatus: () => hotReloadStatus,
   };
 }

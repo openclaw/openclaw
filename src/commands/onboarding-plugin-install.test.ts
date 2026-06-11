@@ -63,6 +63,7 @@ const enablePluginInConfig = vi.hoisted(() =>
   })),
 );
 vi.mock("../plugins/enable.js", () => ({
+  enableExplicitlySelectedPluginInConfig: enablePluginInConfig,
   enablePluginInConfig,
 }));
 

@@ -10,7 +10,11 @@ import {
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
 } from "./memory-host-events.js";
-import { createClaimableDedupe, createPersistentDedupe } from "./persistent-dedupe.js";
+import {
+  createClaimableDedupe,
+  createPersistentDedupe,
+  listPersistentDedupeLegacyJsonFileEntries,
+} from "./persistent-dedupe.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createPluginSdkTestHarness();
@@ -127,6 +131,33 @@ describe("createPersistentDedupe", () => {
     expect(await dedupe.checkAndRecord("sqlite-only", { namespace: "x" })).toBe(true);
     expect(await dedupe.checkAndRecord("sqlite-only", { namespace: "x" })).toBe(false);
     await expect(fs.access(legacyPath)).rejects.toThrow();
+  });
+
+  it("lists retired JSON cache files as persistent dedupe entries", async () => {
+    const root = await createTempDir("openclaw-legacy-dedupe-");
+    const legacyPath = path.join(root, "legacy.json");
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        fresh: 1_000,
+        expired: 100,
+        invalid: "bad",
+      }),
+    );
+
+    await expect(
+      listPersistentDedupeLegacyJsonFileEntries({
+        filePath: legacyPath,
+        ttlMs: 500,
+        now: 1_100,
+      }),
+    ).resolves.toStrictEqual([
+      {
+        key: expect.stringMatching(/^k\.[a-f0-9]{32}$/),
+        value: { key: "fresh", seenAt: 1_000 },
+        ttlMs: 400,
+      },
+    ]);
   });
 
   it("warms empty namespaces and ignores retired JSON cache files", async () => {

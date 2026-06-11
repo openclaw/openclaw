@@ -177,6 +177,21 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(requiresDistShardNames).toEqual(["core-support-boundary"]);
   });
 
+  it("keeps tooling checks independent from built artifacts", () => {
+    const toolingShard = createNodeTestShards().find((shard) => shard.shardName === "core-tooling");
+
+    expect(toolingShard).toEqual({
+      checkName: "checks-node-core-tooling",
+      configs: [
+        "test/vitest/vitest.tooling.config.ts",
+        "test/vitest/vitest.tooling-isolated.config.ts",
+      ],
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      shardName: "core-tooling",
+    });
+  });
+
   it("assigns Blacksmith runners to every core node shard", () => {
     const shards = createNodeTestShards();
 

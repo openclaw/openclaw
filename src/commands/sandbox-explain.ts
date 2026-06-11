@@ -31,7 +31,6 @@ import {
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 
 type SandboxExplainOptions = {
   session?: string;
@@ -152,7 +151,6 @@ export async function sandboxExplainCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   const cfg = getRuntimeConfig();
-  await ensureSessionStateMigratedForCommand(cfg);
 
   const defaultAgentId = resolveAgentIdFromSessionKey(resolveMainSessionKey(cfg));
   const resolvedAgentId = normalizeAgentId(

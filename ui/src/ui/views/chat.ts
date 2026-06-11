@@ -86,6 +86,19 @@ function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boole
   return status?.phase === "done" || status?.phase === "interrupted";
 }
 
+function isCurrentSessionSubmittedProgress(
+  item: ChatQueueItem,
+  sessionKey: string,
+  status: ChatRunUiStatus | null | undefined,
+): boolean {
+  return (
+    item.sessionKey === sessionKey &&
+    !item.pendingRunId &&
+    (item.sendState === "sending" || item.sendState === "waiting-model") &&
+    (status == null || item.sendRunId !== status.runId)
+  );
+}
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -1569,8 +1582,15 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
-  const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
-  const composerRunStatus = showAbortableUi ? { phase: "in-progress" as const } : props.runStatus;
+  const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
+  const showAbortableUi = canAbort && !hasTerminalStatus;
+  const showSubmittedProgressUi = props.queue.some((item) =>
+    isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
+  );
+  const composerRunStatus =
+    showAbortableUi || showSubmittedProgressUi
+      ? { phase: "in-progress" as const }
+      : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);

@@ -50,7 +50,10 @@ chat APIs:
 Anthropic Claude deployments in Microsoft Foundry use the Anthropic Messages
 API shape, not the OpenAI-compatible `/openai/v1` shape. Configure those as a
 custom `anthropic-messages` provider until the Microsoft Foundry plugin grows a
-native Anthropic runtime.
+native Anthropic runtime. When the Foundry deployment name differs from the
+Claude model ID, set `params.canonicalModelId` on the model entry so OpenClaw
+can apply model-specific wire contracts, map `/think off` correctly, and
+preserve signed thinking safely.
 
 ## MAI image generation
 
