@@ -74,13 +74,12 @@ function sameSessionFileFingerprint(
   if (!left.exists || !right.exists) {
     return true;
   }
-  // ctimeNs intentionally excluded: unstable on Btrfs (background maintenance
-  // tasks like snapshots/scrub/quota update ctime without any file content change)
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
     left.size === right.size &&
-    left.mtimeNs === right.mtimeNs
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
   );
 }
 
@@ -89,6 +88,20 @@ function sameSessionFileIdentity(
   right: SessionFileFingerprint,
 ): boolean {
   return Boolean(left?.exists && right.exists && left.dev === right.dev && left.ino === right.ino);
+}
+
+function sameSessionFileContentMetadata(
+  left: SessionFileFingerprint | undefined,
+  right: SessionFileFingerprint,
+): boolean {
+  return Boolean(
+    left?.exists &&
+    right.exists &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs,
+  );
 }
 
 function splitSessionFileLines(text: string): string[] {
@@ -258,6 +271,27 @@ async function sessionFenceAdvanceIsBenign(params: {
   }
   const lines = normalizeStringEntries(text.split("\n"));
   return lines.length > 0 && lines.every(isTranscriptOnlyOpenClawAssistantLine);
+}
+
+async function sessionFenceCtimeDriftIsBenign(params: {
+  sessionFile: string;
+  previous: SessionFileFenceSnapshot | undefined;
+  current: SessionFileFingerprint;
+}): Promise<boolean> {
+  if (
+    !sameSessionFileContentMetadata(params.previous?.fingerprint, params.current) ||
+    params.previous?.fingerprint.exists !== true ||
+    !params.current.exists ||
+    params.previous.fingerprint.ctimeNs === params.current.ctimeNs ||
+    params.previous.text === undefined
+  ) {
+    return false;
+  }
+  try {
+    return (await fs.readFile(params.sessionFile, "utf8")) === params.previous.text;
+  } catch {
+    return false;
+  }
 }
 
 async function sessionFenceRewriteIsBenign(params: {
@@ -733,6 +767,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     if (
+      (await sessionFenceCtimeDriftIsBenign({
+        sessionFile: params.lockOptions.sessionFile,
+        previous: fenceSnapshot,
+        current,
+      })) ||
       (await sessionFenceAdvanceIsBenign({
         sessionFile: params.lockOptions.sessionFile,
         previous: fenceSnapshot,
