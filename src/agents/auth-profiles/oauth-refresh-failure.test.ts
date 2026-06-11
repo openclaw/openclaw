@@ -8,6 +8,7 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
+  classifyOAuthRefreshFailureReason,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
 
@@ -35,6 +36,21 @@ describe("oauth refresh failure hints", () => {
     ).toEqual({
       provider: "openai",
       reason: "invalid_grant",
+    });
+  });
+
+  it("classifies ended OpenAI app sessions as sign-in-required", () => {
+    expect(classifyOAuthRefreshFailureReason("401 app_session_terminated")).toBe("sign_in_again");
+    expect(classifyOAuthRefreshFailureReason("Your session has ended. Please log in again.")).toBe(
+      "sign_in_again",
+    );
+    expect(
+      classifyOAuthRefreshFailure(
+        "OAuth token refresh failed for openai-codex: 401 app_session_terminated: Your session has ended. Please log in again.",
+      ),
+    ).toEqual({
+      provider: "openai-codex",
+      reason: "sign_in_again",
     });
   });
 });
