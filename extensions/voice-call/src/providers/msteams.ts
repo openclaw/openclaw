@@ -792,7 +792,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     // Deterministic verbal interrupt ("stop" / "hold on" / "never mind"): onSpeechStart already cut
     // the audio; ALSO skip generating a reply so the bot goes quiet instead of answering "stop" —
     // the deterministic behavior a caller expects from those words. Recorded in the transcript above.
-    if (isVerbalInterrupt(trimmed)) {
+    if (isVerbalInterrupt(trimmed, this.groupCallGateConfig().wakePhrases)) {
       state.ttsAbort?.abort();
       state.ttsAbort = null;
       state.session.send({ type: "assistant.cancel", turnId: state.turnId });
