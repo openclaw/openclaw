@@ -104,6 +104,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
+import { recordTelegramInboundProcessingFailure } from "./inbound-processing-failures.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
@@ -552,6 +553,16 @@ export const registerTelegramHandlers = ({
       });
     },
     onError: (err, items) => {
+      // Record per source message so whichever update carried each message in
+      // the isolated-ingress spool can resolve the coalesced flush failure.
+      for (const item of items) {
+        recordTelegramInboundProcessingFailure({
+          accountId,
+          chatId: item.msg.chat.id,
+          messageId: item.msg.message_id,
+          error: err,
+        });
+      }
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
@@ -2956,6 +2967,12 @@ export const registerTelegramHandlers = ({
       });
     } catch (err) {
       releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
+      recordTelegramInboundProcessingFailure({
+        accountId,
+        chatId: event.chatId,
+        messageId: event.msg.message_id,
+        error: err,
+      });
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
       if (err instanceof TelegramPairingStoreReadError) {
         await withTelegramApiErrorLogging({

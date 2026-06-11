@@ -21,6 +21,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
+import { takeTelegramInboundProcessingFailureForUpdate } from "./inbound-processing-failures.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
@@ -120,6 +121,10 @@ const TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS = 5_000;
 const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
+// Failed spooled updates are released for retry; a deterministic failure must
+// dead-letter after a few attempts or it would re-dispatch (and re-apologize
+// to the sender) on every drain cycle.
+const TELEGRAM_SPOOLED_UPDATE_MAX_PROCESSING_ATTEMPTS = 3;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
@@ -533,6 +538,22 @@ export class TelegramPollingSession {
       });
       return false;
     }
+    // The turn pipeline swallows processing failures (log + user apology), so
+    // handleUpdate resolving does not prove the turn completed. Deleting the
+    // spooled update on a swallowed failure would lose the message silently.
+    // An undefined result usually means success; it can also mean the bounded
+    // failure registry evicted the record under very high failure volume.
+    const swallowedFailure = takeTelegramInboundProcessingFailureForUpdate({
+      accountId: this.opts.accountId,
+      update: params.update.update,
+    });
+    if (swallowedFailure) {
+      await this.#releaseFailedSpooledUpdate({
+        err: swallowedFailure.error,
+        update: params.update,
+      });
+      return false;
+    }
     try {
       await deleteTelegramSpooledUpdate(params.update);
       return true;
@@ -569,6 +590,30 @@ export class TelegramPollingSession {
       } catch (failErr) {
         this.opts.log(
           `[telegram][diag] spooled update ${params.update.updateId} failed with non-retryable ${nonRetryable.reason}, but could not be dead-lettered: ${formatErrorMessage(failErr)}`,
+        );
+      }
+    }
+    const attemptsAfterThisFailure = params.update.attempts + 1;
+    if (attemptsAfterThisFailure >= TELEGRAM_SPOOLED_UPDATE_MAX_PROCESSING_ATTEMPTS) {
+      try {
+        const failed = await failTelegramSpooledUpdateClaim({
+          update: params.update,
+          reason: "retry-exhausted",
+          message: formatErrorMessage(params.err),
+        });
+        if (failed) {
+          this.opts.log(
+            `[telegram][diag] spooled update ${params.update.updateId} failed ${attemptsAfterThisFailure} times; dead-lettered: ${formatErrorMessage(params.err)}`,
+          );
+          return;
+        }
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} exhausted retries, but no processing marker remained to dead-letter.`,
+        );
+        return;
+      } catch (failErr) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} exhausted retries, but could not be dead-lettered: ${formatErrorMessage(failErr)}`,
         );
       }
     }

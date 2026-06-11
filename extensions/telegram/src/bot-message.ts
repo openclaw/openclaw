@@ -18,6 +18,7 @@ import type { TelegramMessageContextOptions } from "./bot-message-context.types.
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
+import { recordTelegramInboundProcessingFailure } from "./inbound-processing-failures.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
@@ -201,6 +202,15 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         );
       }
     } catch (err) {
+      const failedMessageId = context.msg?.message_id;
+      if (context.chatId != null && typeof failedMessageId === "number") {
+        recordTelegramInboundProcessingFailure({
+          accountId: account.accountId,
+          chatId: context.chatId,
+          messageId: failedMessageId,
+          error: err,
+        });
+      }
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
       try {
         await bot.api.sendMessage(

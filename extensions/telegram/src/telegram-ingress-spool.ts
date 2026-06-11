@@ -37,6 +37,7 @@ export type TelegramSpooledUpdate = {
   path: string;
   update: unknown;
   receivedAt: number;
+  attempts: number;
   claim?: TelegramSpooledUpdateClaimOwner;
 };
 
@@ -173,6 +174,7 @@ function parseQueueRecord(
     path: pendingPath(spoolDir, payload.updateId),
     update: payload.update,
     receivedAt: payload.receivedAt,
+    attempts: record.attempts,
   };
 }
 

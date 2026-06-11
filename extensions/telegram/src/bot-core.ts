@@ -42,6 +42,11 @@ import {
   resolveTelegramOutboundClientTimeoutFloorSeconds,
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
+import {
+  clearTelegramInboundProcessingFailureForUpdate,
+  hasTelegramInboundProcessingFailureForUpdate,
+  recordTelegramInboundProcessingFailure,
+} from "./inbound-processing-failures.js";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -178,6 +183,23 @@ export function createTelegramBotCore(
   bot.api.config.use(getOrCreateAccountThrottler(opts.token, botRuntime.apiThrottler));
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
+    // grammY consumes the error here, so handleUpdate resolves; record the
+    // failure so the spool consumer does not mistake this turn for a success.
+    const update = err.ctx?.update;
+    const message =
+      update?.message ??
+      update?.edited_message ??
+      update?.channel_post ??
+      update?.edited_channel_post ??
+      update?.business_message;
+    if (message) {
+      recordTelegramInboundProcessingFailure({
+        accountId: account.accountId,
+        chatId: message.chat.id,
+        messageId: message.message_id,
+        error: err,
+      });
+    }
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
   });
 
@@ -211,9 +233,21 @@ export function createTelegramBotCore(
     if (!begin.accepted) {
       return;
     }
+    clearTelegramInboundProcessingFailureForUpdate({
+      accountId: account.accountId,
+      update: ctx.update,
+    });
     try {
       await next();
-      updateTracker.finishUpdate(begin.update, { completed: true });
+      // Downstream handlers swallow turn failures (log + user apology), so a
+      // resolved next() is not proof of completion; failed turns must not be
+      // marked completed or retries get deduplicated as already-handled.
+      updateTracker.finishUpdate(begin.update, {
+        completed: !hasTelegramInboundProcessingFailureForUpdate({
+          accountId: account.accountId,
+          update: ctx.update,
+        }),
+      });
     } catch (error) {
       updateTracker.finishUpdate(begin.update, { completed: false });
       throw error;

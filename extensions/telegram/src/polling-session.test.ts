@@ -77,6 +77,8 @@ let beginTelegramReplyFence: typeof import("./telegram-reply-fence.js").beginTel
 let buildTelegramReplyFenceLaneKey: typeof import("./telegram-reply-fence.js").buildTelegramReplyFenceLaneKey;
 let endTelegramReplyFence: typeof import("./telegram-reply-fence.js").endTelegramReplyFence;
 let resetTelegramReplyFenceForTests: typeof import("./telegram-reply-fence.js").resetTelegramReplyFenceForTests;
+let recordTelegramInboundProcessingFailure: typeof import("./inbound-processing-failures.js").recordTelegramInboundProcessingFailure;
+let resetTelegramInboundProcessingFailuresForTests: typeof import("./inbound-processing-failures.js").resetTelegramInboundProcessingFailuresForTests;
 
 type TelegramApiMiddleware = (
   prev: (...args: unknown[]) => Promise<unknown>,
@@ -412,6 +414,7 @@ type TestTelegramUpdate = {
   message: {
     text: string;
     chat: { id: number; type: "supergroup" };
+    message_id?: number;
     message_thread_id?: number;
     is_topic_message?: boolean;
   };
@@ -424,6 +427,21 @@ function topicUpdate(updateId: number, threadId: number, text: string): TestTele
       text,
       message_thread_id: threadId,
       is_topic_message: true,
+      chat: { id: -100, type: "supergroup" },
+    },
+  };
+}
+
+function spooledMessageUpdate(params: {
+  updateId: number;
+  messageId: number;
+  text: string;
+}): TestTelegramUpdate {
+  return {
+    update_id: params.updateId,
+    message: {
+      text: params.text,
+      message_id: params.messageId,
       chat: { id: -100, type: "supergroup" },
     },
   };
@@ -617,6 +635,8 @@ describe("TelegramPollingSession", () => {
       endTelegramReplyFence,
       resetTelegramReplyFenceForTests,
     } = await import("./telegram-reply-fence.js"));
+    ({ recordTelegramInboundProcessingFailure, resetTelegramInboundProcessingFailuresForTests } =
+      await import("./inbound-processing-failures.js"));
   });
 
   beforeEach(() => {
@@ -627,6 +647,7 @@ describe("TelegramPollingSession", () => {
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
     drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
     resetTelegramReplyFenceForTests();
+    resetTelegramInboundProcessingFailuresForTests();
     installTelegramIngressQueueRuntime(() =>
       path.join(os.tmpdir(), "openclaw-telegram-test-state"),
     );
@@ -1450,6 +1471,80 @@ describe("TelegramPollingSession", () => {
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
       expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
       expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("releases spooled updates when the turn pipeline swallowed the failure", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const handled: number[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        spooledMessageUpdate({ updateId: 42, messageId: 9001, text: "swallowed failure turn" }),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          handled.push(update.update_id ?? -1);
+          if (handled.length === 1) {
+            // The turn pipeline logs and apologizes instead of rejecting, so
+            // handleUpdate resolves; only the failure registry knows.
+            recordTelegramInboundProcessingFailure({
+              accountId: "default",
+              chatId: -100,
+              messageId: 9001,
+              error: new Error("agent turn failed mid-flight"),
+            });
+          }
+        },
+      });
+
+      await vi.waitFor(() => expect(handled).toEqual([42, 42]));
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters spooled updates after repeated swallowed failures", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const handled: number[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        spooledMessageUpdate({ updateId: 42, messageId: 9002, text: "poison turn" }),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          handled.push(update.update_id ?? -1);
+          recordTelegramInboundProcessingFailure({
+            accountId: "default",
+            chatId: -100,
+            messageId: 9002,
+            error: new Error("deterministic turn failure"),
+          });
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(handled).toEqual([42, 42, 42]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed 3 times; dead-lettered");
       abort.abort();
       stopWorker();
       await runPromise;
