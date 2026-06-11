@@ -44,7 +44,7 @@ function expectRawFetchSuccessDetails(details: unknown) {
 
 function firstFetchUrl(fetchSpy: ReturnType<typeof setMockFetch>): string {
   const input = fetchSpy.mock.calls[0]?.[0];
-  return input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+  return input instanceof Request ? input.url : input instanceof URL ? input.href : input;
 }
 
 function createWebFetchToolForTest(params?: {
