@@ -499,6 +499,8 @@
   align-items: stretch;
   gap: 12px;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 :root[data-theme-mode="light"] .chat-compose {
@@ -698,8 +700,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex: 0 0 auto;
-  min-width: 88px;
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: min(34vw, 150px);
   height: 36px;
   padding: 0 10px;
