@@ -24,10 +24,6 @@ import {
 import { resetApiProviders } from "../../llm/providers/register-builtins.js";
 import { cleanupSessionResources } from "../../llm/session-resources.js";
 import { streamSimple } from "../../llm/stream.js";
-import {
-  applyInputProvenanceToUserMessage,
-  type InputProvenance,
-} from "../../sessions/input-provenance.js";
 import type {
   AssistantMessage,
   ImageContent,
@@ -36,6 +32,10 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import {
+  applyInputProvenanceToUserMessage,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import type {
   Agent,
   AgentEvent,
@@ -1191,7 +1191,10 @@ export class AgentSession {
         if (options.streamingBehavior === "followUp") {
           await this.queueFollowUp(expandedText, currentImages);
         } else {
-          await this.queueSteer(expandedText, currentImages);
+          await this.queueSteer(
+            expandedText,
+            currentImages ? { images: currentImages } : undefined,
+          );
         }
         preflightResult?.(true);
         return;
@@ -1364,7 +1367,10 @@ export class AgentSession {
    * @param images Optional image attachments to include with the message
    * @throws Error if text is an extension command
    */
-  async steer(text: string, imagesOrOptions?: ImageContent[] | AgentSessionSteerOptions): Promise<void> {
+  async steer(
+    text: string,
+    imagesOrOptions?: ImageContent[] | AgentSessionSteerOptions,
+  ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
