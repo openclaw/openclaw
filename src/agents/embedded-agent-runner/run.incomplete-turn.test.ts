@@ -10,9 +10,12 @@ import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedIsFailoverAssistantError,
+  mockedIsRateLimitAssistantError,
   mockedLog,
   mockedRunEmbeddedAttempt,
   mockedResolveModelAsync,
+  mockedSleepWithAbort,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -406,6 +409,71 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       result: "success",
       stage: "assistant",
     });
+  });
+
+  it("records same-model rate-limit retries without a profile-rotation trace", async () => {
+    const rateLimitMessage =
+      "429 rate_limit_exceeded: requests per minute exceeded; Retry-After: 30";
+    mockedClassifyFailoverReason.mockImplementation((raw) =>
+      raw.includes("429") ? "rate_limit" : null,
+    );
+    mockedIsFailoverAssistantError.mockImplementation((assistant) =>
+      Boolean(assistant?.errorMessage?.includes("429")),
+    );
+    mockedIsRateLimitAssistantError.mockImplementation((assistant) =>
+      Boolean(assistant?.errorMessage?.includes("429")),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.5",
+          errorMessage: rateLimitMessage,
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered after a short rate-limit wait."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Recovered after a short rate-limit wait." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-same-model-rate-limit-trace",
+    });
+
+    expect(mockedSleepWithAbort).toHaveBeenCalledWith(30_000, undefined);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
+    expect(result.meta.executionTrace?.attempts).toMatchObject([
+      {
+        provider: "openai",
+        model: "gpt-5.5",
+        result: "same_model_rate_limit",
+        reason: "rate_limit",
+        stage: "assistant",
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.5",
+        result: "success",
+        stage: "assistant",
+      },
+    ]);
   });
 
   it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {

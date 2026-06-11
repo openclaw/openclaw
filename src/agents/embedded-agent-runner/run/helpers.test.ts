@@ -9,6 +9,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitBackoffMs,
+  resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
 
 function makeAssistantMessage(
@@ -100,6 +101,35 @@ describe("resolveSameModelRateLimitBackoffMs", () => {
 
   it("is deterministic so RPM windows clear predictably", () => {
     expect(resolveSameModelRateLimitBackoffMs(2)).toBe(resolveSameModelRateLimitBackoffMs(2));
+  });
+});
+
+describe("resolveSameModelRateLimitRetryDelayMs", () => {
+  it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 0,
+        retryAfterSeconds: 30,
+      }),
+    ).toBe(30_000);
+  });
+
+  it("keeps the existing fixed backoff when Retry-After is shorter", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 1,
+        retryAfterSeconds: 5,
+      }),
+    ).toBe(20_000);
+  });
+
+  it("caps provider Retry-After at the same short-window retry ceiling", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 0,
+        retryAfterSeconds: 120,
+      }),
+    ).toBe(60_000);
   });
 });
 

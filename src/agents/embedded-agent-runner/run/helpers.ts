@@ -70,6 +70,17 @@ export function resolveSameModelRateLimitBackoffMs(retriesSoFar: number): number
   return Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, delay);
 }
 
+export function resolveSameModelRateLimitRetryDelayMs(params: {
+  retriesSoFar: number;
+  retryAfterSeconds?: number;
+}): number {
+  const backoffMs = resolveSameModelRateLimitBackoffMs(params.retriesSoFar);
+  const retryAfterMs = Number.isFinite(params.retryAfterSeconds)
+    ? Math.ceil(Math.max(0, params.retryAfterSeconds ?? 0) * 1000)
+    : 0;
+  return Math.max(backoffMs, Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, retryAfterMs));
+}
+
 export function resolveNextSameModelRateLimitRetryCount(params: {
   retriesSoFar: number;
   retriedSameModelRateLimit: boolean;

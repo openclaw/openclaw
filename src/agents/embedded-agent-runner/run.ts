@@ -157,7 +157,7 @@ import {
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
   resolveNextSameModelRateLimitRetryCount,
-  resolveSameModelRateLimitBackoffMs,
+  resolveSameModelRateLimitRetryDelayMs,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -1058,6 +1058,8 @@ export async function runEmbeddedAgent(
       const profileFailureStore = pluginHarnessOwnsTransport ? attemptAuthProfileStore : authStore;
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
+      const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
+        attempt.result === "rotate_profile" || attempt.result === "fallback_model";
 
       const initialThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
@@ -1376,11 +1378,16 @@ export async function runEmbeddedAgent(
           throw err;
         }
       };
-      const maybeRetrySameModelRateLimit = async (): Promise<boolean> => {
+      const maybeRetrySameModelRateLimit = async (retry?: {
+        retryAfterSeconds?: number;
+      }): Promise<boolean> => {
         if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
           return false;
         }
-        const delayMs = resolveSameModelRateLimitBackoffMs(consecutiveSameModelRateLimitRetries);
+        const delayMs = resolveSameModelRateLimitRetryDelayMs({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retryAfterSeconds: retry?.retryAfterSeconds,
+        });
         log.warn(
           `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
         );
@@ -2890,6 +2897,7 @@ export async function runEmbeddedAgent(
               !fallbackConfigured &&
               canRestartForLiveSwitch &&
               sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
+            allowSameModelRateLimitRetry: rateLimitProfileRotations < rateLimitProfileRotationLimit,
             assistantProfileFailureReason,
             lastProfileId,
             modelId,
@@ -2916,14 +2924,17 @@ export async function runEmbeddedAgent(
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {
+            const retryTraceResult =
+              assistantFailoverOutcome.retryKind === "same_model_rate_limit"
+                ? "same_model_rate_limit"
+                : assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
+                    assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : "rotate_profile";
             traceAttempts.push({
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
-              result:
-                assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
-                assistantFailoverReason === "timeout"
-                  ? "timeout"
-                  : "rotate_profile",
+              result: retryTraceResult,
               ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
               stage: "assistant",
             });
@@ -3693,7 +3704,7 @@ export async function runEmbeddedAgent(
                         },
                       ]
                     : undefined,
-                fallbackUsed: traceAttempts.length > 0,
+                fallbackUsed: traceAttempts.some(traceAttemptUsesFallback),
                 runner: "embedded",
               },
               requestShaping: {

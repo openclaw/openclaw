@@ -24,6 +24,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     timedOutDuringCompaction: false,
     timedOutDuringToolExecution: false,
     allowSameModelIdleTimeoutRetry: false,
+    allowSameModelRateLimitRetry: true,
     assistantProfileFailureReason: null,
     lastProfileId: undefined,
     modelId: model,
@@ -134,8 +135,40 @@ describe("handleAssistantFailover", () => {
       }
       expect(outcome.retryKind).toBe("same_model_rate_limit");
       expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledWith({});
       expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
       expect(advanceAuthProfile).not.toHaveBeenCalled();
+    });
+
+    it("honors disabled rate-limit profile rotations before same-model retry", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          allowSameModelRateLimitRetry: false,
+          lastAssistant: {
+            errorMessage: "HTTP 429 Too Many Requests: requests per minute exceeded",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
     });
 
     it("does not spend same-model retry budget on quota-style rate limits", async () => {
@@ -197,6 +230,133 @@ describe("handleAssistantFailover", () => {
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not treat generic rate-limit text as a short-window throttle", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "rate limit exceeded",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not spend same-model retry budget when Retry-After is long", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "429 rate_limit_exceeded; Retry-After: 3600",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not spend same-model retry budget when Retry-After date is beyond the retry budget", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-11T00:00:00.000Z"));
+      try {
+        const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+        const maybeEscalateRateLimitProfileFallback = vi.fn();
+        const advanceAuthProfile = vi.fn(async () => true);
+
+        const outcome = await handleAssistantFailover(
+          makeParams({
+            initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+            failoverReason: "rate_limit",
+            billingFailure: false,
+            rateLimitFailure: true,
+            lastAssistant: {
+              errorMessage: "429 rate_limit_exceeded; Retry-After: Thu, 11 Jun 2026 01:05:00 GMT",
+            } as Params["lastAssistant"],
+            maybeRetrySameModelRateLimit,
+            maybeEscalateRateLimitProfileFallback,
+            advanceAuthProfile,
+          }),
+        );
+
+        expect(outcome.action).toBe("retry");
+        if (outcome.action !== "retry") {
+          return;
+        }
+        expect(outcome.retryKind).toBeUndefined();
+        expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+        expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+        expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("allows short Retry-After intervals to use same-model retry", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "429 rate_limit_exceeded; Retry-After: 30 seconds",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_rate_limit");
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledWith({ retryAfterSeconds: 30 });
+      expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
     });
 
     it("allows RESOURCE_EXHAUSTED messages with short-window 429 hints", async () => {
