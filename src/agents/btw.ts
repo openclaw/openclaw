@@ -27,6 +27,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
@@ -41,7 +42,6 @@ import {
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
-import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { sanitizeImageBlocks } from "./tool-images.js";

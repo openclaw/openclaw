@@ -10273,7 +10273,9 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   });
 
   it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
-    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
+    const assistant = getAssistantMessage(
+      buildReplayParams(gemma4Model, "reasoning_content"),
+    );
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");
