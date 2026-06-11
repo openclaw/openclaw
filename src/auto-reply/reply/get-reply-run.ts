@@ -1258,7 +1258,6 @@ export async function runPreparedReply(
           senderId: normalizeOptionalString(sessionCtx.SenderId),
           senderName: normalizeOptionalString(sessionCtx.SenderName),
           senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
-          senderE164: normalizeOptionalString(sessionCtx.SenderE164),
         }
       : undefined;
   const userTurnTranscriptRecorder =

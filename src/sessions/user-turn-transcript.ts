@@ -230,8 +230,7 @@ function buildUserTurnSenderMeta(params: UserTurnInput): Record<string, unknown>
   const senderId = normalizeOptionalText(params.senderId);
   const senderName = normalizeOptionalText(params.senderName);
   const senderUsername = normalizeOptionalText(params.senderUsername);
-  const senderE164 = normalizeOptionalText(params.senderE164);
-  if (!senderId && !senderName && !senderUsername && !senderE164) {
+  if (!senderId && !senderName && !senderUsername) {
     return undefined;
   }
   const meta: Record<string, unknown> = {};
@@ -243,9 +242,6 @@ function buildUserTurnSenderMeta(params: UserTurnInput): Record<string, unknown>
   }
   if (senderUsername) {
     meta.senderUsername = senderUsername;
-  }
-  if (senderE164) {
-    meta.senderE164 = senderE164;
   }
   return meta;
 }
