@@ -362,6 +362,26 @@ function withRosterInstruction(
   return instructions ? `${instructions}\n\n${clause}` : clause;
 }
 
+/**
+ * Bilingual mode (#19): pin Arabic↔English language behavior. The realtime model already mirrors
+ * languages, but this makes it explicit and adds on-request translation between the two.
+ */
+function withBilingualInstruction(
+  instructions: string | undefined,
+  bilingual: boolean | undefined,
+): string | undefined {
+  if (!bilingual) {
+    return instructions;
+  }
+  const clause = [
+    "BILINGUAL (Arabic / English): Detect the language the caller is speaking — Arabic or English —",
+    "and always reply in that same language, matching dialect and register. If the caller switches",
+    "language mid-call, switch with them. When asked to translate, translate accurately between",
+    "Arabic and English and read out only the translation.",
+  ].join(" ");
+  return instructions ? `${instructions}\n\n${clause}` : clause;
+}
+
 function withGroupGateInstruction(
   instructions: string | undefined,
   gate: GroupCallGateConfig | undefined,
@@ -664,7 +684,10 @@ export function createMsteamsRealtimeCall(params: {
     providerConfig: deps.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: withGroupGateInstruction(
-      withRosterInstruction(deps.instructions, session.caller.displayName ?? undefined),
+      withBilingualInstruction(
+        withRosterInstruction(deps.instructions, session.caller.displayName ?? undefined),
+        deps.voiceConfig?.msteams?.bilingual,
+      ),
       deps.groupCallGate,
     ),
     initialGreetingInstructions: deps.greetingInstructions,

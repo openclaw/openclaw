@@ -344,7 +344,8 @@
             }
           },
           "maxVisionPerMinute": { "type": "integer", "minimum": 0 },
-          "meetingRecap": { "type": "boolean" }
+          "meetingRecap": { "type": "boolean" },
+          "bilingual": { "type": "boolean" }
         }
       },
       "fromNumber": {

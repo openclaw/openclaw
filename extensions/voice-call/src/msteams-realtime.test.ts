@@ -628,6 +628,25 @@ describe("createMsteamsRealtimeCall", () => {
     expect(req.instructions).toContain("Caller"); // session.caller.displayName
   });
 
+  it("adds the bilingual preamble only when msteams.bilingual is on (#19)", () => {
+    const build = (bilingual: boolean) => {
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: {
+          provider: mock.provider,
+          providerConfig: {},
+          instructions: "Base.",
+          voiceConfig: { realtime: {}, msteams: { bilingual } } as unknown as VoiceCallConfig,
+        },
+      });
+      return mock.getRequest().instructions ?? "";
+    };
+    expect(build(true)).toContain("BILINGUAL");
+    expect(build(false)).not.toContain("BILINGUAL");
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();
