@@ -225,6 +225,37 @@ export function loadSkillsFromDirSafe(params: {
 const MAX_LINT_SCAN_DEPTH = 4;
 const MAX_LINT_CANDIDATE_DIRS = 2000;
 
+// Like listCandidateSkillDirs but also follows directory symlinks, matching runtime's
+// nested discovery so `skills lint` inspects the same candidate set. Cycle safety comes
+// from the caller's real-path dedupe; reads stay bounded by the skill-root boundary helper.
+function listLintCandidateChildDirs(dir: string): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const dirs: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      dirs.push(fullPath);
+    } else if (entry.isSymbolicLink()) {
+      try {
+        if (fs.statSync(fullPath).isDirectory()) {
+          dirs.push(fullPath);
+        }
+      } catch {
+        // Broken or unreadable symlink: skip it like runtime discovery does.
+      }
+    }
+  }
+  return dirs.toSorted((left, right) => left.localeCompare(right));
+}
+
 /**
  * Recursively collects SKILL.md load failures under a root for `skills lint`, descending
  * into nested skill groups the same way runtime discovery does (a directory that is itself
@@ -246,15 +277,26 @@ export function collectSkillLoadFailures(params: {
   }
 
   const failures: SkillLoadFailure[] = [];
-  const seen = new Set<string>();
+  // Dedupe by real path, not the symlinked path, so a directory symlink that loops back
+  // (or two links to the same target) cannot revisit a directory or spin forever.
+  const seenReal = new Set<string>();
   const queue: Array<{ dir: string; depth: number }> = [{ dir: rootDir, depth: 0 }];
   let scanned = 0;
   while (queue.length > 0 && scanned < MAX_LINT_CANDIDATE_DIRS) {
     const current = queue.shift();
-    if (!current || seen.has(current.dir)) {
+    if (!current) {
       continue;
     }
-    seen.add(current.dir);
+    let realDir: string;
+    try {
+      realDir = fs.realpathSync(current.dir);
+    } catch {
+      continue;
+    }
+    if (seenReal.has(realDir)) {
+      continue;
+    }
+    seenReal.add(realDir);
     scanned += 1;
 
     if (fs.existsSync(path.join(current.dir, "SKILL.md"))) {
@@ -274,7 +316,7 @@ export function collectSkillLoadFailures(params: {
     if (current.depth >= MAX_LINT_SCAN_DEPTH) {
       continue;
     }
-    for (const childDir of listCandidateSkillDirs(current.dir)) {
+    for (const childDir of listLintCandidateChildDirs(current.dir)) {
       queue.push({ dir: childDir, depth: current.depth + 1 });
     }
   }

@@ -648,6 +648,32 @@ describe("lintSkillRoots", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("follows a directory symlink into a malformed skill, matching runtime discovery", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      // A real skill group outside the scanned subtree, linked in via a directory symlink.
+      const realGroup = path.join(root, "real-group");
+      const brokenDir = path.join(realGroup, "broken");
+      await fs.mkdir(brokenDir, { recursive: true });
+      await fs.writeFile(path.join(brokenDir, "SKILL.md"), "---\nname: broken\n---\n", "utf8");
+
+      const linkedGroup = path.join(root, "linked");
+      try {
+        await fs.symlink(realGroup, linkedGroup, "dir");
+      } catch {
+        return; // Platform without symlink support (e.g. restricted Windows): skip.
+      }
+
+      // Lint only the symlinked path; runtime would follow it, so lint must too.
+      const report = lintSkillRoots([linkedGroup]);
+
+      expect(report.failures).toHaveLength(1);
+      expect(report.failures[0].reason).toBe("missing-required-field");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function skillStatusByName(skills: readonly SkillStatus[]): Map<string, SkillStatus> {
