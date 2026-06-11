@@ -45,6 +45,11 @@ const PendingWorkStateSchema = z.object({
   // count for exp-backoff on the re-arm. DISTINCT from retryCount — a busy-skip is
   // a legit defer, never a failed attempt, so it must not feed the fail-bound.
   busySkipCount: z.number().int().nonnegative().optional(),
+  // #990 locus-3: durable delivered-mark written AFTER a wake is confirmed
+  // delivered but BEFORE the persist-gap that precedes finishFlow. The
+  // consume read-guard skips any flow carrying it so a crash in that window
+  // never re-delivers (restart-gap dup cure). Two-axis legible: PRESENT=terminal.
+  succeeded: z.object({ point: z.literal("optimal"), durability: z.literal("durable") }).optional(),
 });
 
 type PendingWorkState = z.infer<typeof PendingWorkStateSchema>;
@@ -66,6 +71,9 @@ export type PendingContinuationWork = {
   // #990 Pillar-0: consecutive busy-skip count for exp-backoff on the busy re-arm.
   // Distinct from retryCount (the transient-error fail-bound). Never penalizes.
   busySkipCount?: number;
+  // #990 locus-3: durable delivered-mark (see schema). PRESENT once a wake was
+  // confirmed delivered; the consume read-guard refuses to re-drive it.
+  succeeded?: { point: "optimal"; durability: "durable" };
   flowId?: string;
   expectedRevision?: number;
   // Durable flow status carried onto the runtime object by the store reader
@@ -117,6 +125,7 @@ function workToRuntime(
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.retryCount !== undefined ? { retryCount: state.retryCount } : {}),
     ...(state.busySkipCount !== undefined ? { busySkipCount: state.busySkipCount } : {}),
+    ...(state.succeeded ? { succeeded: state.succeeded } : {}),
     status,
     flowId: flow.flowId,
     expectedRevision: flow.revision,
@@ -205,6 +214,13 @@ export function consumePendingWork(
       });
       continue;
     }
+    // #990 locus-3 read-guard: a durably delivered-marked flow was confirmed
+    // delivered before the persist-gap. Even if its status is still `running`
+    // (the process died after the durable mark but before finishFlow finalized
+    // it), never re-consume it — that would be a restart-gap double-delivery.
+    if (state.succeeded) {
+      continue;
+    }
     if (now < state.dueAt) {
       continue;
     }
@@ -239,7 +255,31 @@ export function consumePendingWork(
   return work;
 }
 
-export function markPendingWorkTurnGranted(work: PendingContinuationWork): boolean {
+function buildFallbackWorkState(work: PendingContinuationWork): PendingWorkState {
+  return {
+    kind: "continuation_work",
+    sessionKey: work.sessionKey,
+    hop: work.hop,
+    delayMs: work.delayMs,
+    electedAt: work.electedAt,
+    dueAt: work.dueAt,
+    maxChainLength: work.maxChainLength,
+  };
+}
+
+/**
+ * Finish a continuation-work flow cleanly (terminal, no failure/retry).
+ *
+ * Shared by the turn-granted, superseded (#986), and orphan-reaped (#990) paths:
+ * each is an INTENTIONAL terminal — the wake will not re-arm — distinct from
+ * {@link markPendingWorkFailed} (error path). `stateExtra` carries the
+ * path-specific durable state; `turnGrantedAt` is always stamped so the flow
+ * reads as delivered/closed by downstream consumers.
+ */
+function finishContinuationWorkFlow(
+  work: PendingContinuationWork,
+  params: { currentStep: string; stateExtra?: Record<string, unknown>; notCommittedTag: string },
+): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
     return false;
   }
@@ -249,31 +289,72 @@ export function markPendingWorkTurnGranted(work: PendingContinuationWork): boole
   const finished = finishFlow({
     flowId: work.flowId,
     expectedRevision: work.expectedRevision,
-    currentStep: "Same-session continuation turn granted",
+    currentStep: params.currentStep,
     stateJson: {
-      ...(state ?? {
-        kind: "continuation_work",
-        sessionKey: work.sessionKey,
-        hop: work.hop,
-        delayMs: work.delayMs,
-        electedAt: work.electedAt,
-        dueAt: work.dueAt,
-        maxChainLength: work.maxChainLength,
-      }),
+      ...(state ?? buildFallbackWorkState(work)),
       turnGrantedAt: now,
-      // #990 Pillar-0: a flow that drove is no longer busy-deferred — clear the
-      // exp-backoff counter so the granted record never carries a stale rate-cap.
-      busySkipCount: 0,
+      ...params.stateExtra,
     },
     updatedAt: now,
     endedAt: now,
   });
   if (!finished.applied) {
     log.warn(
-      `[continuation:work-finish-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
+      `[continuation:${params.notCommittedTag}] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
     );
   }
   return finished.applied;
+}
+
+export function markPendingWorkTurnGranted(work: PendingContinuationWork): boolean {
+  return finishContinuationWorkFlow(work, {
+    currentStep: "Same-session continuation turn granted",
+    // #990 Pillar-0: a flow that drove is no longer busy-deferred — clear the
+    // exp-backoff counter so the granted record never carries a stale rate-cap.
+    stateExtra: { busySkipCount: 0 },
+    notCommittedTag: "work-finish-not-committed",
+  });
+}
+
+/**
+ * Durably mark a continuation wake delivered, BEFORE the persist-gap (#990 locus-3).
+ *
+ * Written the instant a wake is confirmed delivered (the agent turn ran),
+ * before the dispatch loop's follow-on {@link markPendingWorkTurnGranted}
+ * finalizes the flow. The flow stays `running`; only `stateJson.succeeded` is
+ * set, so a crash in the deliver→finalize window leaves a row the consume
+ * read-guard recognizes as delivered (no restart-gap re-delivery). The bumped
+ * revision and durable marker are threaded back onto `work` so the follow-on
+ * finishFlow still applies. INVARIANT (load-bearing): the mark is durably
+ * persisted here — an in-memory-only mark is lost with the process and the gap
+ * stays open.
+ */
+export function markPendingWorkDelivered(work: PendingContinuationWork): boolean {
+  if (!work.flowId || work.expectedRevision === undefined) {
+    return false;
+  }
+  const current = getTaskFlowById(work.flowId);
+  const state = current ? decodeWorkState(current) : undefined;
+  const now = Date.now();
+  const succeeded = { point: "optimal", durability: "durable" } as const;
+  const updated = updateFlowRecordByIdExpectedRevision({
+    flowId: work.flowId,
+    expectedRevision: work.expectedRevision,
+    patch: {
+      currentStep: "Continuation wake delivered (durable mark)",
+      stateJson: { ...(state ?? buildFallbackWorkState(work)), succeeded },
+      updatedAt: now,
+    },
+  });
+  if (!updated.applied || !updated.flow) {
+    log.warn(
+      `[continuation:work-deliver-mark-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
+    );
+    return false;
+  }
+  work.expectedRevision = updated.flow.revision;
+  work.succeeded = succeeded;
+  return true;
 }
 
 export function requeuePendingWork(
@@ -343,37 +424,26 @@ export function markPendingWorkFailed(work: PendingContinuationWork, summary: st
  * superseded wake was intentionally folded, not dropped by error.
  */
 export function markPendingWorkSuperseded(work: PendingContinuationWork, summary: string): boolean {
-  if (!work.flowId || work.expectedRevision === undefined) {
-    return false;
-  }
-  const current = getTaskFlowById(work.flowId);
-  const state = current ? decodeWorkState(current) : undefined;
-  const now = Date.now();
-  const finished = finishFlow({
-    flowId: work.flowId,
-    expectedRevision: work.expectedRevision,
+  return finishContinuationWorkFlow(work, {
     currentStep: `superseded: ${summary}`.slice(0, 200),
-    stateJson: {
-      ...(state ?? {
-        kind: "continuation_work",
-        sessionKey: work.sessionKey,
-        hop: work.hop,
-        delayMs: work.delayMs,
-        electedAt: work.electedAt,
-        dueAt: work.dueAt,
-        maxChainLength: work.maxChainLength,
-      }),
-      turnGrantedAt: now,
-    },
-    updatedAt: now,
-    endedAt: now,
+    notCommittedTag: "work-supersede-not-committed",
   });
-  if (!finished.applied) {
-    log.warn(
-      `[continuation:work-supersede-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
-    );
-  }
-  return finished.applied;
+}
+
+/**
+ * Reap an orphan continuation-work flow (#990 bucket-1 cull).
+ *
+ * Used when the flow's parent run is CONFIDENT-terminal and can never rehydrate
+ * it (read-time liveness join). Finished cleanly like a supersede — no
+ * system-warning, no retry — because it is an intentional terminal, not an
+ * error. The delegate-flow-gate + confident-terminal requirement upstream
+ * guarantee a same-session/uncertain flow is never reaped here.
+ */
+export function markPendingWorkReaped(work: PendingContinuationWork, summary: string): boolean {
+  return finishContinuationWorkFlow(work, {
+    currentStep: `reaped: ${summary}`.slice(0, 200),
+    notCommittedTag: "work-reap-not-committed",
+  });
 }
 
 export function peekSoonestUnmaturedWorkDueAt(sessionKey: string): number | undefined {
@@ -407,6 +477,12 @@ export function peekSoonestRunningWorkRecoveryDueAt(
     }
     const state = decodeWorkState(flow);
     if (!state) {
+      continue;
+    }
+    // #990 locus-3: a delivered-marked flow stuck `running` (crash before
+    // finishFlow) must not arm a recovery wake — consume would skip it via the
+    // read-guard, so re-arming here would spin a tight no-op recovery loop.
+    if (state.succeeded) {
       continue;
     }
     const recoveryDueAt = Math.max(state.dueAt, flow.updatedAt + staleMs);

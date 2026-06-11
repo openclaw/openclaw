@@ -1,5 +1,6 @@
 /** Durable same-session continuation_work dispatch. */
 
+import type { SubagentRunLiveness } from "../../agents/subagent-run-liveness.js";
 import {
   emitContinuationWorkFireSpan,
   emitContinuationWorkSpan,
@@ -14,7 +15,9 @@ import {
   consumePendingWork,
   enqueuePendingWork,
   listPendingWorkSessionKeysForRecovery,
+  markPendingWorkDelivered,
   markPendingWorkFailed,
+  markPendingWorkReaped,
   markPendingWorkSuperseded,
   markPendingWorkTurnGranted,
   queuedPendingWorkCount,
@@ -26,7 +29,6 @@ import {
 
 const log = createSubsystemLogger("continuation/work-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
-const BUSY_RETRY_MS = 1_000;
 const TRANSIENT_ERROR_RETRY_MS = 5_000;
 const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
@@ -93,19 +95,72 @@ function isRetryableContinuationSkipReason(reason: string): boolean {
  * #990 Pillar-0 — exp-backoff delay for a PRE-drive busy-skip re-arm.
  *
  * A busy-skip (`requests-in-flight`/`draining`) means the turn never started — a
- * legit defer, never a failed attempt. Re-arming at a flat `BUSY_RETRY_MS` spins a
+ * legit defer, never a failed attempt. Re-arming at a flat `baseMs` spins a
  * chronically-busy seat at ~1Hz forever (the storm). Backing off exponentially on
  * the CONSECUTIVE busy-skip count decays the poll rate while the seat stays busy.
  *
  * RATE-cap, NEVER TOTAL: the result is bounded by `ceilingMs` but the flow is never
  * dropped — it keeps deferring at the ceiling rate and delivers the instant the seat
- * quiets. `busySkipCount` is the PRE-increment prior-skip count so the first skip
- * yields `BUSY_RETRY_MS` (2^0): 1s, 2s, 4s, … capped at `ceilingMs`. `2 ** n`
- * overflowing to Infinity is harmless — `Math.min` clamps it to the ceiling.
+ * quiets (give-up = rate-cap-forever). `busySkipCount` is the PRE-increment prior-skip
+ * count so the first skip yields `baseMs` (factor^0): base, base·f, base·f², … capped
+ * at `ceilingMs`. `factor ** n` overflowing to Infinity is harmless — `Math.min`
+ * clamps it to the ceiling. Bounds are operator-tunable (§6); the cap is a RATE knob,
+ * not a safety invariant.
  */
-export function computeBusySkipBackoffMs(busySkipCount: number, ceilingMs: number): number {
+export type BusySkipBackoffParams = { baseMs: number; ceilingMs: number; factor: number };
+
+export function computeBusySkipBackoffMs(
+  busySkipCount: number,
+  params: BusySkipBackoffParams,
+): number {
   const exponent = Math.max(0, busySkipCount);
-  return Math.min(ceilingMs, BUSY_RETRY_MS * 2 ** exponent);
+  return Math.min(params.ceilingMs, params.baseMs * params.factor ** exponent);
+}
+
+/**
+ * #990 bucket-1 — orphan-reap verdict for a busy-deferred continuation flow.
+ *
+ * Pure decision over the delegate-flow-gate + a read-time parent-liveness join.
+ * Asymmetric error cost is load-bearing (#952): wrongly culling a busy seat is
+ * unrecoverable; parking a zombie is harmless. So ONLY a confident-terminal
+ * parent authorizes the cull — `alive`, `uncertain`, and the no-lineage gate all
+ * quiesce (rate-cap-forever, the Pillar-0 trickle).
+ */
+export type BucketOneReapVerdict = "reap" | "rate-cap-forever";
+
+export function bucket1ReapVerdict(
+  parentRunId: string | undefined,
+  parentLiveness: SubagentRunLiveness,
+): BucketOneReapVerdict {
+  // Delegate-flow-gate FIRST: a flow with no spawning lineage (same-session
+  // continue_work, or a recovered row without parentRunId) is never an orphan we
+  // may reap. Never wrongful-reap.
+  if (parentRunId == null) {
+    return "rate-cap-forever";
+  }
+  if (parentLiveness === "confident-terminal") {
+    return "reap";
+  }
+  return "rate-cap-forever";
+}
+
+/**
+ * Read-time parent-liveness join (#990): classify the latest subagent run for a
+ * flow's own session against the LIVE registry map. Never persisted — liveness
+ * mutates after a flow is classified (a driver can die or finish between the
+ * classify and this read). Lazy dynamic import keeps the agents registry off the
+ * continuation static import graph (cycle-safe) while the read itself is a
+ * synchronous in-process Map lookup.
+ */
+async function readChildSessionRunLiveness(
+  sessionKey: string,
+  options: { now: number; staleCutoffMs?: number },
+): Promise<SubagentRunLiveness> {
+  const [{ subagentRuns }, { classifyChildSessionRunLivenessFromRuns }] = await Promise.all([
+    import("../../agents/subagent-registry-memory.js"),
+    import("../../agents/subagent-registry-queries.js"),
+  ]);
+  return classifyChildSessionRunLivenessFromRuns(subagentRuns, sessionKey, options);
 }
 
 function requeueWorkForRetry(
@@ -229,6 +284,12 @@ async function driveContinuationTurn(
   if (!hasNonDrainReplyPayload(reply) && isGatewayDraining()) {
     return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
   }
+  // #990 locus-3: the wake is confirmed delivered (the turn ran). Write the
+  // durable delivered-mark NOW — before the persist-gap between here and the
+  // dispatch loop's finishFlow — so a crash in that window leaves a row the
+  // consume read-guard skips (no restart-gap re-delivery). The mark bumps the
+  // revision on `work` so the follow-on markPendingWorkTurnGranted still applies.
+  markPendingWorkDelivered(work);
   return { status: "ran" };
 }
 
@@ -309,7 +370,7 @@ export async function dispatchPendingContinuationWork(params: {
   sessionKey: string;
   recoverRunning?: boolean;
   includeRunningUpdatedAtOrBefore?: number;
-}): Promise<{ dispatched: number; failed: number }> {
+}): Promise<{ dispatched: number; failed: number; reaped: number }> {
   const works = consumePendingWork(params.sessionKey, {
     includeRunning: params.recoverRunning === true,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
@@ -354,6 +415,7 @@ export async function dispatchPendingContinuationWork(params: {
 
   let dispatched = 0;
   let failed = 0;
+  let reaped = 0;
   for (const work of worksToDrive) {
     try {
       const fireDeferredMs = Date.now() - work.electedAt;
@@ -381,17 +443,53 @@ export async function dispatchPendingContinuationWork(params: {
         `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason}`,
       );
       if (isRetryableContinuationSkipReason(skippedReason)) {
-        // #990 Pillar-0: this is a legit PRE-drive busy-defer (the turn never
-        // started), NOT a failed attempt. Re-arm with exp-backoff on the
-        // consecutive busy-skip count — bounded by maxDelayMs (same ceiling as
-        // scheduling, see clampDelayMs) so a chronically-busy seat decays toward
-        // a slow poll instead of spinning at ~1Hz. busySkipCount is DISTINCT from
-        // retryCount: we never pass retryCount here, so a busy-defer never touches
+        // #990 bucket-1: a busy-defer is the storm symptom. Before re-arming
+        // (Pillar-0 exp-backoff = give-up-as-rate-cap-forever), check whether
+        // this is an ORPHAN whose parent run is confident-terminal and can never
+        // rehydrate it. Read-time liveness join (never persisted — liveness
+        // mutates after classify). Delegate-flow-gate FIRST: a flow with no
+        // parentRunId (same-session continue_work) skips the read entirely and
+        // quiesces (#952: never enter the orphan-branch for same-session work).
+        // Only a confident-terminal parent authorizes the reap; alive/uncertain
+        // all quiesce (asymmetric cost — wrongly-cull-busy is unrecoverable).
+        const now = Date.now();
+        const parentLiveness: SubagentRunLiveness =
+          work.parentRunId == null
+            ? "uncertain"
+            : await readChildSessionRunLiveness(work.sessionKey, {
+                now,
+                ...(runtimeConfig.orphanReapStaleCutoffMs !== undefined
+                  ? { staleCutoffMs: runtimeConfig.orphanReapStaleCutoffMs }
+                  : {}),
+              });
+        if (bucket1ReapVerdict(work.parentRunId, parentLiveness) === "reap") {
+          log.info(
+            `[continuation:work-orphan-reaped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} parentRunId=${work.parentRunId} — parent confident-terminal, can never rehydrate`,
+          );
+          markPendingWorkReaped(
+            work,
+            `Orphan continuation reaped: parent run ${work.parentRunId} is confident-terminal and can never rehydrate this flow.`,
+          );
+          reaped++;
+          continue;
+        }
+        // rate-cap-forever: re-arm with exp-backoff on the consecutive
+        // busy-skip count, bounded by the configured ceiling so a chronically
+        // busy seat decays toward a slow poll instead of spinning at ~1Hz.
+        // busySkipCount is DISTINCT from retryCount — a busy-defer never touches
         // the transient-error fail-bound (#952 never-penalize) and the flow is
-        // never dropped — it delivers the instant the seat quiets (rate-cap-forever).
+        // never dropped; it delivers the instant the seat quiets.
         const priorBusySkips = work.busySkipCount ?? 0;
-        const backoffMs = computeBusySkipBackoffMs(priorBusySkips, runtimeConfig.maxDelayMs);
-        const retryDueAt = Date.now() + backoffMs;
+        // busySkipBackoff is always set by resolveContinuationRuntimeConfig; the
+        // fallback only covers hand-built fixtures (mirrors the resolver default:
+        // 1s base ×2, capped at the scheduling ceiling).
+        const backoff = runtimeConfig.busySkipBackoff ?? {
+          baseMs: 1_000,
+          ceilingMs: runtimeConfig.maxDelayMs,
+          factor: 2,
+        };
+        const backoffMs = computeBusySkipBackoffMs(priorBusySkips, backoff);
+        const retryDueAt = now + backoffMs;
         requeueWorkForRetry(work, {
           dueAt: retryDueAt,
           summary: `Retryable continuation skip: ${skippedReason}`,
@@ -424,7 +522,7 @@ export async function dispatchPendingContinuationWork(params: {
       }
     }
   }
-  return { dispatched, failed };
+  return { dispatched, failed, reaped };
 }
 
 export async function scheduleContinuationWork(params: {
@@ -568,15 +666,17 @@ export async function recoverPendingContinuationWork(): Promise<{
   sessions: number;
   dispatched: number;
   failed: number;
+  reaped: number;
 }> {
   const runtimeConfig = resolveContinuationRuntimeConfig();
   if (!runtimeConfig.enabled) {
-    return { sessions: 0, dispatched: 0, failed: 0 };
+    return { sessions: 0, dispatched: 0, failed: 0, reaped: 0 };
   }
   const sessionKeys = listPendingWorkSessionKeysForRecovery();
   const includeRunningUpdatedAtOrBefore = Date.now() - RUNNING_WORK_RECOVERY_STALE_MS;
   let dispatched = 0;
   let failed = 0;
+  let reaped = 0;
   for (const sessionKey of sessionKeys) {
     const result = await dispatchPendingContinuationWork({
       sessionKey,
@@ -585,6 +685,7 @@ export async function recoverPendingContinuationWork(): Promise<{
     });
     dispatched += result.dispatched;
     failed += result.failed;
+    reaped += result.reaped;
   }
-  return { sessions: sessionKeys.length, dispatched, failed };
+  return { sessions: sessionKeys.length, dispatched, failed, reaped };
 }

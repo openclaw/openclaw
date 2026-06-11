@@ -281,6 +281,15 @@ export const AgentDefaultsSchema = z
         costCapTokens: z.number().int().nonnegative().optional(),
         maxDelegatesPerTurn: z.number().int().positive().optional(),
         maxPendingWork: z.number().int().positive().optional(),
+        busySkipBackoff: z
+          .object({
+            baseMs: z.number().int().positive().optional(),
+            ceilingMs: z.number().int().positive().optional(),
+            factor: z.number().gt(1).optional(),
+          })
+          .strict()
+          .optional(),
+        orphanReapStaleCutoffMs: z.number().int().positive().optional(),
         crossSessionTargeting: z
           .union([z.literal("disabled"), z.literal("enabled")])
           .default("disabled"),

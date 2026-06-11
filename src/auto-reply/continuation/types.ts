@@ -106,6 +106,24 @@ export type ContinuationRuntimeConfig = {
   crossSessionTargeting: ContinuationCrossSessionTargetingPolicy;
   contextPressureThreshold?: number;
   earlyWarningBand?: number;
+  /**
+   * #990 busy-skip exp-backoff bounds (rate-cap, NOT a safety invariant).
+   * `baseMs` = first re-arm delay, multiplied by `factor` per consecutive
+   * busy-skip up to `ceilingMs` (the give-up rate-cap — the flow keeps deferring
+   * at this rate forever, never dropped). Always populated by
+   * resolveContinuationRuntimeConfig; optional on the type (like earlyWarningBand)
+   * so hand-built fixtures may omit it.
+   */
+  busySkipBackoff?: { baseMs: number; ceilingMs: number; factor: number };
+  /**
+   * #990 orphan-reap confidence-gate floor (ms). An unended subagent run is
+   * treated as confident-terminal (reap-eligible) only after it ages past this
+   * cutoff; `undefined` uses the subagent-registry default. The per-run timeout
+   * is always respected (a run is never reaped before its own timeout + grace).
+   * The safety invariants (uncertain→quiesce, never-wrongful-reap) are NOT
+   * tunable — only this confidence-window floor is.
+   */
+  orphanReapStaleCutoffMs?: number;
 };
 
 // ---------------------------------------------------------------------------
