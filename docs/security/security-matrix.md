@@ -12,29 +12,45 @@ Status: audit model only
 
 ## Purpose
 
-The Security Matrix defines an inert audit classification model for trust-source and tool-capability pairs. It answers which source influenced an action, which capability the target tool provides, and what decision policy data assigns to that pair.
+The Security Matrix defines an inert audit classification model for runtime tool facts. It answers which actor requested a tool, which external or stored content influenced that decision, which capability the tool exposes, and which audit decision policy data assigns to those facts.
 
-The first Security Matrix implementation is model-only. It provides types, default policy data, a deterministic evaluator, tests, and this documentation so future PRs can add opt-in runtime visibility from a shared model.
+The model is intentionally audit-only. It provides types, default policy data, a deterministic evaluator, concrete tool-fact helpers, tests, and this documentation so future PRs can add opt-in runtime visibility from a shared contract.
 
-This PR is inert. It does not currently block tool calls, warn users, require confirmation, emit runtime events, add config, change UI, alter runtime tool execution, or change plugin behavior.
+This PR does not currently block tool calls, require confirmation, emit runtime diagnostic events, add config, change UI, alter runtime tool execution, or change plugin behavior.
 
-## Trust Sources
+## Runtime Facts
 
-| Source             | Meaning                                                                                   |
-| ------------------ | ----------------------------------------------------------------------------------------- |
-| `agent`            | Action originated from internal agent reasoning without known external-content influence. |
-| `user`             | Direct user instruction.                                                                  |
-| `web_fetch`        | Content retrieved from web fetch tooling.                                                 |
-| `browser`          | Content observed through browser automation or browser snapshot.                          |
-| `email`            | Content from email bodies, subjects, senders, or attachments.                             |
-| `file`             | Content from uploaded files or local file reads.                                          |
-| `github`           | Content from issues, PRs, comments, commits, or repository metadata.                      |
-| `webhook`          | Content from inbound webhook payloads.                                                    |
-| `memory`           | Content restored from memory or long-lived stored context.                                |
-| `skill`            | Content loaded from agent skill or markdown instruction files.                            |
-| `unknown_external` | Fallback for unrecognized or untrusted sources.                                           |
+The model is designed around facts that a real before-tool-call consumer can supply later:
 
-Unknown source strings normalize to `unknown_external`.
+| Fact              | Meaning                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| `toolName`        | Concrete normalized runtime tool id, such as `exec` or `gmail.send`.    |
+| `toolSource`      | Runtime owner class such as core, plugin, MCP, or channel.              |
+| `actor`           | Entity requesting the tool call: `user`, `agent`, `system`, or `tool`.  |
+| `influencedBy`    | External or stored content sources that influenced the tool decision.   |
+| `capability`      | Security capability resolved from tool metadata or the tool id.         |
+| `approvalState`   | Whether explicit approval is absent, requested, approved, or denied.    |
+| `operatorPolicy`  | Whether the existing operator tool policy allowed, denied, or is unknown. |
+
+`actor` is not a trust source. An agent-originated call influenced by web, email, file, GitHub, browser, memory, skill, or webhook content is still evaluated as externally influenced.
+
+## Influence Sources
+
+| Source             | Meaning                                                              |
+| ------------------ | -------------------------------------------------------------------- |
+| `web_fetch`        | Content retrieved from web fetch tooling.                            |
+| `browser`          | Content observed through browser automation or browser snapshots.    |
+| `email`            | Content from email bodies, subjects, senders, or attachments.        |
+| `file`             | Content from uploaded files or local file reads.                     |
+| `github`           | Content from issues, PRs, comments, commits, or repository metadata. |
+| `webhook`          | Content from inbound webhook payloads.                               |
+| `memory`           | Content restored from memory or long-lived stored context.           |
+| `skill`            | Content loaded from agent skill or markdown instruction files.       |
+| `api`              | Content returned by API or connector surfaces.                       |
+| `channel_metadata` | Content supplied by channel metadata.                                |
+| `unknown_external` | Fallback for unrecognized or untrusted sources.                      |
+
+Unknown influence strings normalize to `unknown_external`. Actor-like shorthand values such as `agent` and `user` are ignored as influence sources for compatibility with the first draft of this model.
 
 ## Tool Capabilities
 
@@ -54,28 +70,24 @@ Unknown source strings normalize to `unknown_external`.
 | `memory_write`      | Writes persistent memory.                                                   |
 | `unknown`           | Fallback for unclassified capabilities.                                     |
 
-Unknown capability strings normalize to `unknown`.
+Unknown capability strings normalize to `unknown`. The helper `resolveSecurityMatrixCapabilityFromTool` maps concrete tool ids to this taxonomy and leaves unrecognized tools as `unknown` until runtime metadata supplies a stronger classification.
 
 ## Decisions
 
 | Decision          | Meaning                                                                                                        |
 | ----------------- | -------------------------------------------------------------------------------------------------------------- |
-| `allow`           | Policy data allows the source and capability pair.                                                             |
-| `warn`            | Policy data marks the pair as security-relevant.                                                               |
-| `require_confirm` | Policy data says this pair should require explicit confirmation if a later opt-in runtime mode uses the model. |
-| `block`           | Policy data says this pair should not be allowed if a later opt-in enforcement mode uses the model.            |
+| `allow`           | Policy data allows the fact set.                                                                               |
+| `warn`            | Policy data marks the fact set as security-relevant.                                                           |
+| `require_confirm` | Policy data says this fact set should require explicit confirmation if a later opt-in runtime mode uses it.    |
+| `block`           | Policy data says this fact set should not be allowed if a later opt-in enforcement mode uses the model.        |
 
-For the first Security Matrix PR, these decisions are evaluator output only.
+For this PR, these decisions are evaluator output only.
 
 ## Default Policy Summary
 
-Trusted sources are `agent` and `user`.
+When no external influence is present, known capabilities are `allow` and `unknown` is `warn`. That does not bypass existing OpenClaw tool allow and deny policy. The evaluator also accepts `operatorPolicy`, and `denied` always produces `block`.
 
-Trusted sources allow known capabilities and warn on `unknown`.
-
-External or untrusted sources are `web_fetch`, `browser`, `email`, `file`, `github`, `webhook`, `memory`, `skill`, and `unknown_external`.
-
-External or untrusted sources use these default decisions:
+External or untrusted influence sources use these default decisions:
 
 | Decision          | Capabilities                                                                   |
 | ----------------- | ------------------------------------------------------------------------------ |
@@ -83,32 +95,27 @@ External or untrusted sources use these default decisions:
 | `require_confirm` | `write_file`, `git`, `email_send`, `calendar_write`, `memory_write`, `unknown` |
 | `block`           | `exec`, `credential_access`, `system_config`                                   |
 
-The policy rationale is that external content must not directly influence privileged local execution, credential access, or system configuration. State-changing actions should require explicit confirmation. Read-only or network-visible flows should remain audit-visible.
+Multiple influence sources are evaluated independently, and the strictest decision wins. Explicit approval can satisfy `require_confirm`, but it cannot override `block`. Operator policy denial also produces `block` regardless of the matrix policy result.
 
-This policy table is future-policy rationale only. It is not current runtime behavior.
-
-## Opt-in Policy Note
-
-Future runtime wiring must be opt-in. Audit emission, confirmation behavior, and enforcement must not become default behavior without explicit maintainer and secops approval.
+Custom policy overlays cannot weaken the default decision unless `allowPolicyWeakening` is set explicitly by the caller. This keeps ordinary custom policy from turning an external `exec` block into allow by accident.
 
 ## Example Evaluations
 
-- `web_fetch` + `exec` = `block`
-- `email` + `write_file` = `require_confirm`
-- `github` + `git` = `require_confirm`
-- `browser` + `network` = `warn`
-- `user` + `exec` = `allow`
-- unknown source + `exec` = `block` through `unknown_external`
+- `actor=agent`, `influencedBy=[web_fetch]`, `capability=exec` = `block`
+- `actor=user`, `influencedBy=[email]`, `capability=write_file` = `require_confirm`
+- `actor=agent`, `influencedBy=[github]`, `capability=git`, `approvalState=approved` = `allow` with `policyDecision=require_confirm`
+- `actor=user`, `influencedBy=[]`, `capability=exec`, `operatorPolicy=allowed` = `allow`
+- unknown external source plus `exec` = `block` through `unknown_external`
 
 ## Non-enforcement Note
 
-This document describes the inert audit model introduced by the first Security Matrix PR. It does not mean OpenClaw currently blocks, confirms, warns, audits, or emits runtime events based on these decisions. Runtime wiring and enforcement must be added in later opt-in PRs.
+This document describes the inert audit model introduced by the Security Matrix PR. It does not mean OpenClaw currently blocks, confirms, warns, audits, or emits runtime events based on these decisions. Runtime wiring and enforcement must be added in later opt-in PRs.
 
-Runtime audit wiring must be a future opt-in PR. Enforcement must also be a future opt-in PR.
+Runtime audit wiring must use real tool-call facts from the existing before-tool-call policy path. Enforcement must also be a future opt-in PR.
 
 ## Future PR Sequence
 
-1. Inert audit model and evaluator.
+1. Inert runtime-fact model, evaluator, and audit event builder.
 2. Opt-in runtime audit event wiring through the real tool-call policy path.
 3. User-invoked CLI visibility.
 4. Opt-in narrow enforcement for high-confidence dangerous transitions.
