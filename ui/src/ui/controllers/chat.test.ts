@@ -27,6 +27,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatRunId: null,
     chatSending: false,
     chatStream: null,
+    chatStreamKind: null,
     chatStreamStartedAt: null,
     chatThinkingLevel: null,
     client: null,
@@ -790,6 +791,27 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
     expectTextChatMessage(state.chatMessages[1], "assistant", "Here is my reply");
+  });
+
+  it("does not persist progress-only stream text on final", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Checking the app-server stream",
+      chatStreamKind: "progress",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamKind).toBe(null);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("does not persist empty or whitespace-only stream on final", () => {

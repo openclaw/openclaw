@@ -265,6 +265,7 @@ export class OpenClawApp extends LitElement {
   @state() activityAtBottom = true;
   @state() chatStreamSegments: Array<{ text: string; ts: number }> = [];
   @state() chatStream: string | null = null;
+  @state() chatStreamKind: "assistant" | "progress" | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
   @state() chatSideResult: ChatSideResult | null = null;
