@@ -28,7 +28,7 @@ echo "diagnostic-cron run @ $(date '+%Y-%m-%d %H:%M:%S %Z')"
 # 1. Start from a clean bug_list so `git pull` never collides with the last
 #    run's uncommitted AUTOSCAN write, then sync to latest main.
 git checkout -- scripts/ops/bug_list.md 2>/dev/null || true
-git pull -q --rebase origin main || echo "WARN: git pull failed; continuing with local tree"
+git pull -q --rebase --autostash origin main || echo "WARN: git pull failed; continuing with local tree"
 
 # 2. Run the scan (writes the AUTOSCAN block) and capture the full report.
 REPORT="$(/bin/bash scripts/ops/agents_server_diagnostic.sh all 2>&1)"
