@@ -672,12 +672,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     cfg,
     overrideSeconds: timeoutSecondsRaw,
   });
-  const hasConfiguredTimeout =
-    !isSubagentLane &&
-    typeof agentCfg?.timeoutSeconds === "number" &&
-    Number.isFinite(agentCfg.timeoutSeconds) &&
-    agentCfg.timeoutSeconds > 0;
-  const runTimeoutOverrideMs = hasExplicitTimeoutOption || hasConfiguredTimeout ? timeoutMs : undefined;
+  const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
   const sessionResolution = resolveSession({
     cfg,

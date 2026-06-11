@@ -36,7 +36,11 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 /** Re-export CLI reliability helpers used by older runner call sites. */
-export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
+export {
+  buildCliSupervisorScopeKey,
+  resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
+} from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 

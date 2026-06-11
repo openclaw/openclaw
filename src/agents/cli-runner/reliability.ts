@@ -4,6 +4,8 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CliBackendConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
@@ -92,6 +94,24 @@ export function resolveCliNoOutputTimeoutMs(params: {
   const computed = Math.floor(params.timeoutMs * profile.noOutputTimeoutRatio);
   const bounded = Math.min(profile.maxMs, Math.max(profile.minMs, computed));
   return Math.min(bounded, cap);
+}
+
+export function resolveCliRunTimeoutOverrideMs(params: {
+  config?: OpenClawConfig;
+  lane?: string;
+  timeoutMs: number;
+  runTimeoutOverrideMs?: number;
+}): number | undefined {
+  if (params.runTimeoutOverrideMs !== undefined) {
+    return params.runTimeoutOverrideMs;
+  }
+  const configuredTimeoutSeconds = params.config?.agents?.defaults?.timeoutSeconds;
+  const hasConfiguredTimeout =
+    params.lane !== AGENT_LANE_SUBAGENT &&
+    typeof configuredTimeoutSeconds === "number" &&
+    Number.isFinite(configuredTimeoutSeconds) &&
+    configuredTimeoutSeconds > 0;
+  return hasConfiguredTimeout ? params.timeoutMs : undefined;
 }
 
 /** Builds a supervisor scope key for session-owned CLI processes. */
