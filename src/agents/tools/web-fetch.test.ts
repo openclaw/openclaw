@@ -22,6 +22,10 @@ describe("sanitizeWebFetchUrl", () => {
     expect(sanitizeWebFetchUrl("https://example.com/a\u00a0")).toBe("https://example.com/a\u00a0");
   });
 
+  it("trims trailing Unicode whitespace after a bare authority", () => {
+    expect(sanitizeWebFetchUrl("https://example.com\u00a0")).toBe("https://example.com");
+  });
+
   it("preserves spaces in the path component", () => {
     // WHATWG URL parser percent-encodes path spaces — they must not be stripped
     const result = sanitizeWebFetchUrl("https://example.com/a b");

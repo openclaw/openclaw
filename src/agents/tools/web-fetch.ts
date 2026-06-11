@@ -342,7 +342,8 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
  */
 export function sanitizeWebFetchUrl(raw: string): string {
   const trimmed = raw.replace(/^\s+/, "").replace(/[\u0000-\u0020]+$/, "");
-  return trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
+  const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
+  return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
 }
 
 function normalizeProviderWebFetchPayload(params: {
