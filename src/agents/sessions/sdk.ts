@@ -4,7 +4,10 @@
  * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
  */
 import { join } from "node:path";
-import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
+import {
+  resolveThinkingDefaultForModel,
+  type ThinkingCatalogEntry,
+} from "../../auto-reply/thinking.js";
 import { clampThinkingLevel } from "../../llm/model-utils.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -41,6 +44,28 @@ import {
   type ToolName,
   withFileMutationQueue,
 } from "./tools/index.js";
+
+type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
+
+function projectThinkingCatalogCompat(compat: Model["compat"]) {
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  const record = compat as Record<string, unknown>;
+  const projected: ThinkingCatalogCompat = {};
+  if (typeof record.thinkingFormat === "string") {
+    projected.thinkingFormat = record.thinkingFormat;
+  }
+  if (record.supportedReasoningEfforts === null) {
+    projected.supportedReasoningEfforts = null;
+  } else if (
+    Array.isArray(record.supportedReasoningEfforts) &&
+    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
+  ) {
+    projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
+  }
+  return Object.keys(projected).length > 0 ? projected : undefined;
+}
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -272,13 +297,25 @@ export async function createAgentSession(
   // Use "off" when a provider explicitly opts out of thinking (e.g. Ollama). Non-off
   // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
-  const resolvedProviderDefault = model
-    ? resolveThinkingDefaultForModel({
-        provider: model.api === "ollama" ? "ollama" : model.provider,
-        model: model.id,
-        catalog: [model],
-      })
-    : undefined;
+  const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
+  const modelThinkingCompat = model ? projectThinkingCatalogCompat(model.compat) : undefined;
+  const resolvedProviderDefault =
+    model && modelThinkingProvider
+      ? resolveThinkingDefaultForModel({
+          provider: modelThinkingProvider,
+          model: model.id,
+          catalog: [
+            {
+              provider: modelThinkingProvider,
+              id: model.id,
+              api: model.api,
+              reasoning: model.reasoning,
+              ...(model.params ? { params: model.params } : {}),
+              ...(modelThinkingCompat ? { compat: modelThinkingCompat } : {}),
+            },
+          ],
+        })
+      : undefined;
   const modelThinkingDefault: ThinkingLevel =
     resolvedProviderDefault === "off" ? "off" : DEFAULT_THINKING_LEVEL;
 
