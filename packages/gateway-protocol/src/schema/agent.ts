@@ -31,7 +31,7 @@ export const AgentGeneratedAttachmentSchema = Type.Object(
 );
 
 /** Internal completion event surfaced when child automation reports back to a parent run. */
-const CONTINUATION_TRIGGER_VALUES = ["work-wake", "delegate-return"] as const;
+const CONTINUATION_TRIGGER_VALUES = ["work-wake", "delegate-return", "subagent-return"] as const;
 
 export const AgentInternalEventSchema = Type.Object(
   {

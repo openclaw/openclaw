@@ -57,60 +57,62 @@ let mockConfig: ReturnType<(typeof import("../config/config.js"))["loadConfig"]>
   session: { mainKey: "main", scope: "per-sender" },
 };
 
-const { continuationTargetingMock, subagentRegistryRuntimeMock } = vi.hoisted(() => ({
-  continuationTargetingMock: {
-    CONTINUATION_DELEGATE_FANOUT_MODES: ["tree", "all"] as const,
-    enqueueContinuationReturnDeliveries: vi.fn(async (_params: unknown) => ({
-      enqueued: 0,
-      delivered: 0,
-      deliveryIds: [],
-    })),
-    normalizeContinuationTargetKey: (value?: string) => {
-      const trimmed = value?.trim();
-      return trimmed || undefined;
-    },
-    normalizeContinuationTargetKeys: (values?: readonly string[]) => {
-      const seen = new Set<string>();
-      const keys: string[] = [];
-      for (const value of values ?? []) {
-        const trimmed = value.trim();
-        if (!trimmed || seen.has(trimmed)) {
-          continue;
+const { continuationTargetingMock, subagentRegistryRuntimeMock, deliverSubagentAnnouncementMock } =
+  vi.hoisted(() => ({
+    continuationTargetingMock: {
+      CONTINUATION_DELEGATE_FANOUT_MODES: ["tree", "all"] as const,
+      enqueueContinuationReturnDeliveries: vi.fn(async (_params: unknown) => ({
+        enqueued: 0,
+        delivered: 0,
+        deliveryIds: [],
+      })),
+      normalizeContinuationTargetKey: (value?: string) => {
+        const trimmed = value?.trim();
+        return trimmed || undefined;
+      },
+      normalizeContinuationTargetKeys: (values?: readonly string[]) => {
+        const seen = new Set<string>();
+        const keys: string[] = [];
+        for (const value of values ?? []) {
+          const trimmed = value.trim();
+          if (!trimmed || seen.has(trimmed)) {
+            continue;
+          }
+          seen.add(trimmed);
+          keys.push(trimmed);
         }
-        seen.add(trimmed);
-        keys.push(trimmed);
-      }
-      return keys;
+        return keys;
+      },
+      hasContinuationDelegateTargeting: () => false,
+      resolveContinuationReturnTargetSessionKeys: vi.fn((params: Record<string, unknown>) => {
+        if (Array.isArray(params.targetSessionKeys)) {
+          return params.targetSessionKeys;
+        }
+        if (typeof params.targetSessionKey === "string") {
+          return [params.targetSessionKey];
+        }
+        if (Array.isArray(params.treeSessionKeys)) {
+          return params.treeSessionKeys;
+        }
+        if (Array.isArray(params.allSessionKeys)) {
+          return params.allSessionKeys;
+        }
+        return typeof params.defaultSessionKey === "string" ? [params.defaultSessionKey] : [];
+      }),
     },
-    hasContinuationDelegateTargeting: () => false,
-    resolveContinuationReturnTargetSessionKeys: vi.fn((params: Record<string, unknown>) => {
-      if (Array.isArray(params.targetSessionKeys)) {
-        return params.targetSessionKeys;
-      }
-      if (typeof params.targetSessionKey === "string") {
-        return [params.targetSessionKey];
-      }
-      if (Array.isArray(params.treeSessionKeys)) {
-        return params.treeSessionKeys;
-      }
-      if (Array.isArray(params.allSessionKeys)) {
-        return params.allSessionKeys;
-      }
-      return typeof params.defaultSessionKey === "string" ? [params.defaultSessionKey] : [];
-    }),
-  },
-  subagentRegistryRuntimeMock: {
-    shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
-    isSubagentSessionRunActive: vi.fn(() => true),
-    countActiveDescendantRuns: vi.fn(() => 0),
-    countPendingDescendantRuns: vi.fn(() => 0),
-    countPendingDescendantRunsExcludingRun: vi.fn(() => 0),
-    listAncestorSessionKeys: vi.fn(() => []),
-    listSubagentRunsForRequester: vi.fn(() => []),
-    replaceSubagentRunAfterSteer: vi.fn(() => true),
-    resolveRequesterForChildSession: vi.fn(() => null),
-  },
-}));
+    subagentRegistryRuntimeMock: {
+      shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
+      isSubagentSessionRunActive: vi.fn(() => true),
+      countActiveDescendantRuns: vi.fn(() => 0),
+      countPendingDescendantRuns: vi.fn(() => 0),
+      countPendingDescendantRunsExcludingRun: vi.fn(() => 0),
+      listAncestorSessionKeys: vi.fn(() => []),
+      listSubagentRunsForRequester: vi.fn(() => []),
+      replaceSubagentRunAfterSteer: vi.fn(() => true),
+      resolveRequesterForChildSession: vi.fn(() => null),
+    },
+    deliverSubagentAnnouncementMock: vi.fn(async () => ({ delivered: true, path: "direct" })),
+  }));
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
@@ -166,7 +168,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
 );
 
 vi.mock("./subagent-announce-delivery.js", () => ({
-  deliverSubagentAnnouncement: async () => ({ delivered: true, path: "direct" }),
+  deliverSubagentAnnouncement: deliverSubagentAnnouncementMock,
   loadRequesterSessionEntry: (sessionKey: string) => {
     const store = loadSessionStoreMock("/tmp/sessions.json");
     return { entry: store?.[sessionKey] };
@@ -263,6 +265,9 @@ describe("subagent-announce continuation drain (F7)", () => {
         }
         return typeof params.defaultSessionKey === "string" ? [params.defaultSessionKey] : [];
       });
+    deliverSubagentAnnouncementMock
+      .mockReset()
+      .mockResolvedValue({ delivered: true, path: "direct" });
   });
 
   it("drains the child session's continue_delegate queue using inherited chain state", async () => {
@@ -760,6 +765,85 @@ describe("subagent-announce continuation drain (F7)", () => {
     );
     expect(continuationTargetingMock.enqueueContinuationReturnDeliveries).toHaveBeenCalledWith(
       expect.not.objectContaining({ traceparent: expect.any(String) }),
+    );
+  });
+
+  // #989-P2: the trigger minted on the direct-announce path must distinguish an
+  // ordinary inter-session subagent completion from an actual continuation-chain
+  // hop. Ordinary completions are external turn-entries and must reset the
+  // chain budget downstream; only `[continuation:chain-hop:N]` returns are
+  // mid-chain wakes that preserve the runaway leash.
+  it("tags an ordinary subagent completion with continuationTrigger=subagent-return", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:ordinary": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+          "agent:main:main": {
+            sessionId: "session-main",
+            updatedAt: Date.now(),
+          },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:ordinary",
+      childRunId: "run-ordinary",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "ordinary inter-session subagent task",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(deliverSubagentAnnouncementMock).toHaveBeenCalledWith(
+      expect.objectContaining({ continuationTriggerOverride: "subagent-return" }),
+    );
+  });
+
+  it("tags an in-chain continuation-chain-hop return with continuationTrigger=delegate-return", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:hop": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+          "agent:main:main": {
+            sessionId: "session-main",
+            updatedAt: Date.now(),
+          },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:hop",
+      childRunId: "run-hop",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(deliverSubagentAnnouncementMock).toHaveBeenCalledWith(
+      expect.objectContaining({ continuationTriggerOverride: "delegate-return" }),
     );
   });
 });

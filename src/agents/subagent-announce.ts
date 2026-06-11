@@ -10,6 +10,7 @@ import {
   markPendingDelegateFailed,
   stagePostCompactionDelegate,
 } from "../auto-reply/continuation-delegate-store.js";
+import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -1456,9 +1457,19 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
-    // Structured completion wakes are enabled fleet-wide through the same
-    // continuation flag, even for ordinary subagent returns.
-    const delegateReturnTrigger = continuationEnabled ? "delegate-return" : undefined;
+    // Structured completion wakes ride the continuation flag for every subagent
+    // return, but the trigger must distinguish an in-chain continuation hop from
+    // an ordinary inter-session subagent completion. An actual
+    // `[continuation:chain-hop:N]` return (`isContinuationChainDelegate`) is a
+    // mid-chain wake — it carries `delegate-return` so the reset gate preserves
+    // the runaway leash. An ordinary subagent completion is an external
+    // turn-entry, so it carries `subagent-return` and the reset gate rewinds the
+    // chain budget instead of skipping it (#989).
+    const delegateReturnTrigger: ContinuationTrigger | undefined = continuationEnabled
+      ? isContinuationChainDelegate
+        ? "delegate-return"
+        : "subagent-return"
+      : undefined;
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
