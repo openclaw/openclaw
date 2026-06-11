@@ -60,8 +60,21 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
 type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
   candidates: PluginReleasePlanItem[];
+  bootstrapCandidates: PluginReleasePlanItem[];
+  missingTrustedPublisher: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];
 };
+
+type ClawHubPackageDetail = {
+  trustedPublisher?: unknown;
+};
+
+type ClawHubPackageReleaseState = {
+  packageExists: boolean;
+  hasTrustedPublisher: boolean;
+};
+
+type PluginReleasePlanItemWithPackageState = PluginReleasePlanItem & ClawHubPackageReleaseState;
 
 type ClawHubPublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
@@ -357,6 +370,63 @@ async function isPluginVersionPublishedOnClawHub(
   );
 }
 
+async function queryClawHubPackageReleaseState(
+  packageName: string,
+  options: {
+    fetchImpl?: typeof fetch;
+    registryBaseUrl?: string;
+  } = {},
+): Promise<ClawHubPackageReleaseState> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const url = new URL(
+    `/api/v1/packages/${encodeURIComponent(packageName)}`,
+    getRegistryBaseUrl(options.registryBaseUrl),
+  );
+  const response = await fetchImpl(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (response.status === 404) {
+    return {
+      packageExists: false,
+      hasTrustedPublisher: false,
+    };
+  }
+  if (!response.ok) {
+    throw new Error(
+      `Failed to query ClawHub package ${packageName}: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  let packageDetail: ClawHubPackageDetail;
+  try {
+    packageDetail = (await response.json()) as ClawHubPackageDetail;
+  } catch (error) {
+    throw new Error(`Failed to parse ClawHub package ${packageName} detail response.`, {
+      cause: error,
+    });
+  }
+
+  return {
+    packageExists: true,
+    hasTrustedPublisher: Boolean(packageDetail.trustedPublisher),
+  };
+}
+
+function stripPackageReleaseState(
+  item: PluginReleasePlanItemWithPackageState,
+): PluginReleasePlanItem {
+  const {
+    packageExists: _packageExists,
+    hasTrustedPublisher: _hasTrustedPublisher,
+    ...planItem
+  } = item;
+  return planItem;
+}
+
 export async function collectPluginClawHubReleasePlan(params?: {
   rootDir?: string;
   selection?: string[];
@@ -395,22 +465,46 @@ export async function collectPluginClawHubReleasePlan(params?: {
     assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
   }
 
-  const all = await Promise.all(
-    selectedPublishable.map(async (plugin) =>
-      Object.assign({}, plugin, {
-        alreadyPublished: await isPluginVersionPublishedOnClawHub(
-          plugin.packageName,
-          plugin.version,
-          { registryBaseUrl: params?.registryBaseUrl, fetchImpl: params?.fetchImpl },
-        ),
+  const planned = await Promise.all(
+    selectedPublishable.map(async (plugin): Promise<PluginReleasePlanItemWithPackageState> => {
+      const packageState = await queryClawHubPackageReleaseState(plugin.packageName, {
+        registryBaseUrl: params?.registryBaseUrl,
+        fetchImpl: params?.fetchImpl,
+      });
+      const alreadyPublished = packageState.packageExists
+        ? await isPluginVersionPublishedOnClawHub(plugin.packageName, plugin.version, {
+            registryBaseUrl: params?.registryBaseUrl,
+            fetchImpl: params?.fetchImpl,
+          })
+        : false;
+
+      return {
+        ...plugin,
+        ...packageState,
+        alreadyPublished,
         artifactName: formatClawHubPackageArtifactName(plugin),
-      }),
-    ),
+      };
+    }),
   );
+  const all = planned.map(stripPackageReleaseState);
 
   return {
     all,
-    candidates: all.filter((plugin) => !plugin.alreadyPublished),
-    skippedPublished: all.filter((plugin) => plugin.alreadyPublished),
+    candidates: planned
+      .filter(
+        (plugin) => plugin.packageExists && plugin.hasTrustedPublisher && !plugin.alreadyPublished,
+      )
+      .map(stripPackageReleaseState),
+    bootstrapCandidates: planned
+      .filter((plugin) => !plugin.packageExists)
+      .map(stripPackageReleaseState),
+    missingTrustedPublisher: planned
+      .filter(
+        (plugin) => plugin.packageExists && !plugin.hasTrustedPublisher && !plugin.alreadyPublished,
+      )
+      .map(stripPackageReleaseState),
+    skippedPublished: planned
+      .filter((plugin) => plugin.alreadyPublished)
+      .map(stripPackageReleaseState),
   };
 }
