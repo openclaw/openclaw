@@ -667,4 +667,68 @@ describe("foreground reply freshness", () => {
       { kind: "final", text: "first chat final" },
     ]);
   });
+
+  it("keeps concurrent foreground finals isolated for different senders in the same group target", async () => {
+    const deliveries: Delivery[] = [];
+    const firstStarted = createDeferred<void>();
+    const releaseFirstFinal = createDeferred<void>();
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "user-a-msg") {
+          firstStarted.resolve();
+          await releaseFirstFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "reply to user A" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "user-b-msg") {
+          params.dispatcher.sendFinalReply({ text: "reply to user B" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    // Same group JID (OriginatingTo), same session, but different senders (From)
+    const groupSessionKey = "agent:main:whatsapp:group:120363@g.us";
+    const groupJid = "whatsapp:120363@g.us";
+    const firstDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({
+        MessageSid: "user-a-msg",
+        SessionKey: groupSessionKey,
+        From: "whatsapp:+1000",
+        OriginatingTo: groupJid,
+        ChatType: "group",
+      }),
+      deliveries,
+    );
+    await firstStarted.promise;
+
+    const secondDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({
+        MessageSid: "user-b-msg",
+        SessionKey: groupSessionKey,
+        From: "whatsapp:+2000",
+        OriginatingTo: groupJid,
+        ChatType: "group",
+      }),
+      deliveries,
+    );
+    await expect(secondDispatch).resolves.toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    releaseFirstFinal.resolve();
+    await expect(firstDispatch).resolves.toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    // Both replies must be delivered — User B's reply must NOT suppress User A's
+    expect(deliveries).toEqual([
+      { kind: "final", text: "reply to user B" },
+      { kind: "final", text: "reply to user A" },
+    ]);
+  });
 });

@@ -92,6 +92,10 @@ function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string 
   }
 
   // JSON keeps the composite key unambiguous across account/session/channel ids.
+  // Include the sender (From) so that in group chats, concurrent replies to
+  // different senders are isolated. Without this, a newer reply to User B
+  // can suppress an already-completed reply to User A in the same group.
+  const sender = normalizeForegroundReplyFencePart(finalized.From) ?? "unknown";
   return JSON.stringify([
     "foreground",
     channel,
@@ -99,6 +103,7 @@ function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string 
     sessionKey,
     normalizeChatType(finalized.ChatType) ?? "unknown",
     target,
+    sender,
   ]);
 }
 
