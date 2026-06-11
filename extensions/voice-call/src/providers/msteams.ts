@@ -48,6 +48,7 @@ import type {
   WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
+import { isVerbalInterrupt } from "../verbal-interrupt.js";
 import type { VoiceCallProvider } from "./base.js";
 
 export interface MsteamsProviderOptions {
@@ -788,6 +789,18 @@ export class MsteamsProvider implements VoiceCallProvider {
       transcript: trimmed,
       isFinal: true,
     });
+    // Deterministic verbal interrupt ("stop" / "hold on" / "never mind"): onSpeechStart already cut
+    // the audio; ALSO skip generating a reply so the bot goes quiet instead of answering "stop" —
+    // the deterministic behavior a caller expects from those words. Recorded in the transcript above.
+    if (isVerbalInterrupt(trimmed)) {
+      state.ttsAbort?.abort();
+      state.ttsAbort = null;
+      state.session.send({ type: "assistant.cancel", turnId: state.turnId });
+      this.logger?.debug?.(
+        `MsteamsProvider: verbal interrupt on ${providerCallId} — playback cut, no reply`,
+      );
+      return;
+    }
     // Group-call gate: in a meeting, stay quiet until addressed by name (mirrors the chat @mention
     // gate). 1:1 calls always respond.
     const now = Date.now();
