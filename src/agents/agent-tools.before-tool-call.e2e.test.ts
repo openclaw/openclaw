@@ -358,6 +358,46 @@ describe("before_tool_call loop detection behavior", () => {
     expectToolLoopBlockedResult(result, "identical outcomes");
   });
 
+  it("emits hashless tool-loop veto observations for terminal fallback handling", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      runId: "run-tool-loop-veto-observer",
+      onToolOutcome,
+    };
+    const tool = createWrappedTool("read", execute, loopDetectionContext);
+    const params = { path: "/tmp/file" };
+
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+      await expectUnblockedToolExecution(tool, `read-observer-${i}`, params);
+    }
+
+    const result = await tool.execute(
+      `read-observer-${CRITICAL_THRESHOLD}`,
+      params,
+      undefined,
+      undefined,
+    );
+    expectToolLoopBlockedResult(result, "identical outcomes");
+
+    const blockedObservation = onToolOutcome.mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(blockedObservation).toEqual(
+      expect.objectContaining({
+        toolName: "read",
+        argsHash: expect.any(String),
+        blockedReason: "tool-loop",
+        blockedMessage: expect.stringContaining("identical outcomes"),
+      }),
+    );
+    expect(blockedObservation?.resultHash).toBeUndefined();
+  });
+
   it("does not carry loop history across run ids", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],

@@ -451,6 +451,9 @@ async function loadRestartSentinelStartupTask(params: {
   }
   const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
+  if (payload.kind === "update") {
+    recordLatestUpdateRestartSentinel(payload);
+  }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);
@@ -648,8 +651,16 @@ export function shouldWakeFromRestartSentinel() {
 }
 
 export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
+  const current = await readRestartSentinel();
+  if (
+    current?.payload.kind === "update" &&
+    isPendingControlPlaneUpdateRestartSentinel(current.payload)
+  ) {
+    latestUpdateRestartSentinel = cloneRestartSentinelPayload(current.payload);
+    return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+  }
   const finalized = await finalizeUpdateRestartSentinelRunningVersion();
-  const sentinel = finalized ?? (await readRestartSentinel());
+  const sentinel = finalized ?? current;
   if (sentinel?.payload.kind === "update") {
     latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);
   }

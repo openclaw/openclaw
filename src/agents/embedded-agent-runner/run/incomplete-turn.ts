@@ -665,6 +665,7 @@ function hasReplayBlockingToolError(
   return error.mutatingAction ?? isLikelyMutatingToolName(error.toolName);
 }
 
+/** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -677,6 +678,14 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (
+    params.payloadCount === 0 &&
+    assistant?.stopReason !== "error" &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
+  ) {
+    return true;
   }
   // Post-tool empty stops are ambiguous provider failures, not intentional silence.
   // Let the retry/incomplete-turn paths decide whether replay is safe.

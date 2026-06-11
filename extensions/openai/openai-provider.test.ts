@@ -167,6 +167,16 @@ describe("buildOpenAIProvider", () => {
     expect(manifest.modelCatalog.discovery.openai).toBe("runtime");
   });
 
+  it("does not hardcode chatgpt-responses transport on gpt-5.3-codex catalog entry (#91710)", () => {
+    const openaiModels = manifest.modelCatalog.providers.openai.models as Array<
+      Record<string, unknown>
+    >;
+    const codexEntry = openaiModels.find((m) => m.id === "gpt-5.3-codex");
+    expect(codexEntry).toBeDefined();
+    expect(codexEntry?.api).toBeUndefined();
+    expect(codexEntry?.baseUrl).toBeUndefined();
+  });
+
   it("keeps a network-free OpenAI static catalog", async () => {
     const provider = buildOpenAIProvider();
 
@@ -319,8 +329,6 @@ describe("buildOpenAIProvider", () => {
     expect(provider.apiKey).toBe("sk-custom-openai-compatible");
     const apiModel = provider.models.find((model) => model.api !== "openai-chatgpt-responses");
     expect(apiModel?.baseUrl).toBe(customBaseUrl);
-    const codexModel = provider.models.find((model) => model.api === "openai-chatgpt-responses");
-    expect(codexModel?.baseUrl).toBe("https://chatgpt.com/backend-api");
   });
 
   it("uses the Codex backend catalog for OpenAI OAuth discovery", async () => {

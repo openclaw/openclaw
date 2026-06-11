@@ -1593,8 +1593,11 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}"
+          live_image_extensions="matrix,acpx"
+          live_image_tag_suffix="${live_image_extensions//,/-}"
+          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
           echo "live_image=${live_image}" >> "$GITHUB_OUTPUT"
+          echo "live_image_extensions=${live_image_extensions}" >> "$GITHUB_OUTPUT"
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
@@ -1629,7 +1632,7 @@ jobs:
           file: ./Dockerfile
           target: build
           build-args: |
-            OPENCLAW_EXTENSIONS=matrix
+            OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
           sbom: true

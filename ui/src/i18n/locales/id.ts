@@ -1603,6 +1603,8 @@ export const id: TranslationMap = {
     },
     jobDetail: {
       system: "Sistem",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Pengiriman",
       agent: "Agen",

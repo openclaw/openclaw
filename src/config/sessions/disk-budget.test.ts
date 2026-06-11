@@ -11,10 +11,7 @@ import {
 } from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { enforceSessionDiskBudget, pruneUnreferencedSessionArtifacts } from "./disk-budget.js";
-import {
-  replaceSqliteSessionStore,
-  resolveSqliteSessionStoreDatabasePath,
-} from "./store-sqlite.js";
+import { saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
@@ -89,29 +86,6 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
-  it("ignores unrelated structural SQLite database bytes outside the sessions directory", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (stateDir) => {
-      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-      const sqlitePath = resolveSqliteSessionStoreDatabasePath(storePath);
-      await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
-      await fs.writeFile(sqlitePath, "d".repeat(1024), "utf-8");
-
-      const result = await enforceSessionDiskBudget({
-        store: {},
-        storePath,
-        maintenance: {
-          maxDiskBytes: 512,
-          highWaterBytes: 256,
-        },
-        warnOnly: true,
-      });
-
-      expectBudgetResult(result);
-      expect(result.overBudget).toBe(false);
-      expect(result.totalBytesBefore).toBe(0);
-    });
-  });
-
   it("removes true archived transcript artifacts while preserving referenced primary transcripts", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -177,7 +151,7 @@ describe("enforceSessionDiskBudget", () => {
         store,
         storePath,
         maintenance: {
-          maxDiskBytes: 650,
+          maxDiskBytes: 750,
           highWaterBytes: 600,
         },
         warnOnly: false,
@@ -230,7 +204,7 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
-  it("accounts for inline SQLite skills prompts before evicting sessions", async () => {
+  it("accounts for deduped skills prompt blobs before evicting sessions", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const prompt = `<available_skills>\n${"shared prompt\n".repeat(200)}</available_skills>`;
@@ -263,9 +237,9 @@ describe("enforceSessionDiskBudget", () => {
       });
 
       expectBudgetResult(result);
-      expect(result.totalBytesAfter).toBeLessThanOrEqual(result.highWaterBytes);
-      expect(result.removedEntries).toBeGreaterThan(0);
-      expect(Object.keys(store).length).toBeLessThan(12);
+      expect(result.overBudget).toBe(false);
+      expect(result.removedEntries).toBe(0);
+      expect(Object.keys(store)).toHaveLength(12);
     });
   });
 
@@ -274,20 +248,14 @@ describe("enforceSessionDiskBudget", () => {
       const storePath = path.join(dir, "sessions.json");
       const activeKey = "agent:main:active";
       const oldKey = "agent:main:old";
-      const oldHash = "a".repeat(64);
-      const activeHash = "b".repeat(64);
+      const oldPrompt = `<available_skills>\n${"old prompt\n".repeat(200)}</available_skills>`;
+      const activePrompt = `<available_skills>\n${"active prompt\n".repeat(200)}</available_skills>`;
       const store: Record<string, SessionEntry> = {
         [oldKey]: {
           sessionId: "old",
           updatedAt: 1,
           skillsSnapshot: {
-            prompt: "old prompt",
-            promptRef: {
-              version: 1,
-              algorithm: "sha256",
-              hash: oldHash,
-              bytes: 128,
-            },
+            prompt: oldPrompt,
             skills: [{ name: "old" }],
             version: 1,
           },
@@ -296,18 +264,19 @@ describe("enforceSessionDiskBudget", () => {
           sessionId: "active",
           updatedAt: 2,
           skillsSnapshot: {
-            prompt: "active prompt",
-            promptRef: {
-              version: 1,
-              algorithm: "sha256",
-              hash: activeHash,
-              bytes: 128,
-            },
+            prompt: activePrompt,
             skills: [{ name: "active" }],
             version: 1,
           },
         },
       };
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+      const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const oldHash = raw[oldKey]?.skillsSnapshot?.promptRef?.hash;
+      const activeHash = raw[activeKey]?.skillsSnapshot?.promptRef?.hash;
+      if (!oldHash || !activeHash) {
+        throw new Error("expected prompt refs");
+      }
       const oldBlob = path.join(
         dir,
         "skills-prompts",
@@ -322,10 +291,6 @@ describe("enforceSessionDiskBudget", () => {
         activeHash.slice(0, 2),
         `${activeHash}.txt`,
       );
-      await fs.mkdir(path.dirname(oldBlob), { recursive: true });
-      await fs.mkdir(path.dirname(activeBlob), { recursive: true });
-      await fs.writeFile(oldBlob, "old prompt".repeat(80), "utf-8");
-      await fs.writeFile(activeBlob, "active prompt".repeat(80), "utf-8");
       await expectPathExists(oldBlob);
       await expectPathExists(activeBlob);
       const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
@@ -647,20 +612,14 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       const storePath = path.join(dir, "sessions.json");
       const oldKey = "agent:main:old";
       const keepKey = "agent:main:keep";
-      const oldHash = "c".repeat(64);
-      const keepHash = "d".repeat(64);
+      const oldPrompt = `<available_skills>\n${"old prompt\n".repeat(200)}</available_skills>`;
+      const keepPrompt = `<available_skills>\n${"keep prompt\n".repeat(200)}</available_skills>`;
       const store: Record<string, SessionEntry> = {
         [oldKey]: {
           sessionId: "old",
           updatedAt: 1,
           skillsSnapshot: {
-            prompt: "old prompt",
-            promptRef: {
-              version: 1,
-              algorithm: "sha256",
-              hash: oldHash,
-              bytes: 128,
-            },
+            prompt: oldPrompt,
             skills: [{ name: "old" }],
             version: 1,
           },
@@ -669,18 +628,20 @@ describe("pruneUnreferencedSessionArtifacts", () => {
           sessionId: "keep",
           updatedAt: 2,
           skillsSnapshot: {
-            prompt: "keep prompt",
-            promptRef: {
-              version: 1,
-              algorithm: "sha256",
-              hash: keepHash,
-              bytes: 128,
-            },
+            prompt: keepPrompt,
             skills: [{ name: "keep" }],
             version: 1,
           },
         },
       };
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+      const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const oldHash = raw[oldKey]?.skillsSnapshot?.promptRef?.hash;
+      const keepHash = raw[keepKey]?.skillsSnapshot?.promptRef?.hash;
+      if (!oldHash || !keepHash) {
+        throw new Error("expected prompt refs");
+      }
       const oldBlob = path.join(
         dir,
         "skills-prompts",
@@ -695,10 +656,6 @@ describe("pruneUnreferencedSessionArtifacts", () => {
         keepHash.slice(0, 2),
         `${keepHash}.txt`,
       );
-      await fs.mkdir(path.dirname(oldBlob), { recursive: true });
-      await fs.mkdir(path.dirname(keepBlob), { recursive: true });
-      await fs.writeFile(oldBlob, "old prompt".repeat(80), "utf-8");
-      await fs.writeFile(keepBlob, "keep prompt".repeat(80), "utf-8");
       await expectPathExists(oldBlob);
       await expectPathExists(keepBlob);
       const oldMtime = new Date(Date.now() - 10 * 60 * 1000);
@@ -714,171 +671,6 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await expectPathMissing(oldBlob);
       await expectPathExists(keepBlob);
       expect(result.removedFiles).toBe(1);
-    });
-  });
-
-  it("keeps hydrated prompt blobs while persisted SQLite rows still reference them", async () => {
-    await withTempDir({ prefix: "openclaw-prune-hydrated-prompt-blob-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const keepKey = "agent:main:keep";
-      const keepHash = "e".repeat(64);
-      const staleHash = "f".repeat(64);
-      const keepBlob = path.join(
-        dir,
-        "skills-prompts",
-        "sha256",
-        keepHash.slice(0, 2),
-        `${keepHash}.txt`,
-      );
-      const staleBlob = path.join(
-        dir,
-        "skills-prompts",
-        "sha256",
-        staleHash.slice(0, 2),
-        `${staleHash}.txt`,
-      );
-      await fs.mkdir(path.dirname(keepBlob), { recursive: true });
-      await fs.mkdir(path.dirname(staleBlob), { recursive: true });
-      await fs.writeFile(keepBlob, "keep prompt".repeat(80), "utf-8");
-      await fs.writeFile(staleBlob, "stale prompt".repeat(80), "utf-8");
-      const oldMtime = new Date(Date.now() - 10 * 60 * 1000);
-      await fs.utimes(keepBlob, oldMtime, oldMtime);
-      await fs.utimes(staleBlob, oldMtime, oldMtime);
-      replaceSqliteSessionStore(storePath, {
-        [keepKey]: {
-          sessionId: "keep",
-          updatedAt: 2,
-          skillsSnapshot: {
-            promptRef: {
-              version: 1,
-              algorithm: "sha256",
-              hash: keepHash,
-              bytes: 128,
-            },
-            skills: [{ name: "keep" }],
-            version: 1,
-          } as never,
-        },
-      });
-      const hydratedStore: Record<string, SessionEntry> = {
-        [keepKey]: {
-          sessionId: "keep",
-          updatedAt: 2,
-          skillsSnapshot: {
-            prompt: "keep prompt".repeat(80),
-            skills: [{ name: "keep" }],
-            version: 1,
-          },
-        },
-      };
-
-      const result = await pruneUnreferencedSessionArtifacts({
-        store: hydratedStore,
-        storePath,
-        olderThanMs: 60_000,
-      });
-
-      await expectPathExists(keepBlob);
-      await expectPathMissing(staleBlob);
-      expect(result.removedFiles).toBe(1);
-    });
-  });
-
-  it("frees hydrated prompt blobs when budget eviction removes their SQLite row", async () => {
-    await withTempDir({ prefix: "openclaw-budget-hydrated-prompt-blob-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const oldKey = "agent:main:old";
-      const keepKey = "agent:main:keep";
-      const oldHash = "a".repeat(64);
-      const keepHash = "b".repeat(64);
-      const oldBlob = path.join(
-        dir,
-        "skills-prompts",
-        "sha256",
-        oldHash.slice(0, 2),
-        `${oldHash}.txt`,
-      );
-      const keepBlob = path.join(
-        dir,
-        "skills-prompts",
-        "sha256",
-        keepHash.slice(0, 2),
-        `${keepHash}.txt`,
-      );
-      await fs.mkdir(path.dirname(oldBlob), { recursive: true });
-      await fs.mkdir(path.dirname(keepBlob), { recursive: true });
-      await fs.writeFile(oldBlob, "old prompt".repeat(200), "utf-8");
-      await fs.writeFile(keepBlob, "keep prompt".repeat(200), "utf-8");
-      const oldMtime = new Date(Date.now() - 10 * 60 * 1000);
-      await fs.utimes(oldBlob, oldMtime, oldMtime);
-      await fs.utimes(keepBlob, oldMtime, oldMtime);
-      replaceSqliteSessionStore(storePath, {
-        [oldKey]: {
-          sessionId: "old",
-          updatedAt: 1,
-          skillsSnapshot: {
-            promptRef: {
-              version: 1,
-              algorithm: "sha256",
-              hash: oldHash,
-              bytes: 128,
-            },
-            skills: [{ name: "old" }],
-            version: 1,
-          } as never,
-        },
-        [keepKey]: {
-          sessionId: "keep",
-          updatedAt: 2,
-          skillsSnapshot: {
-            promptRef: {
-              version: 1,
-              algorithm: "sha256",
-              hash: keepHash,
-              bytes: 128,
-            },
-            skills: [{ name: "keep" }],
-            version: 1,
-          } as never,
-        },
-      });
-      const hydratedStore: Record<string, SessionEntry> = {
-        [oldKey]: {
-          sessionId: "old",
-          updatedAt: 1,
-          skillsSnapshot: {
-            prompt: "old prompt".repeat(200),
-            skills: [{ name: "old" }],
-            version: 1,
-          },
-        },
-        [keepKey]: {
-          sessionId: "keep",
-          updatedAt: 2,
-          skillsSnapshot: {
-            prompt: "keep prompt".repeat(200),
-            skills: [{ name: "keep" }],
-            version: 1,
-          },
-        },
-      };
-
-      const result = await enforceSessionDiskBudget({
-        store: hydratedStore,
-        storePath,
-        activeSessionKey: keepKey,
-        maintenance: {
-          maxDiskBytes: 1,
-          highWaterBytes: 1,
-        },
-        warnOnly: false,
-      });
-
-      expectBudgetResult(result);
-      expect(result.removedEntries).toBe(1);
-      expect(hydratedStore).not.toHaveProperty(oldKey);
-      await expectPathMissing(oldBlob);
-      await expectPathExists(keepBlob);
     });
   });
 

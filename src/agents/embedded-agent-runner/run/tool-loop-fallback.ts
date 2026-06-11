@@ -8,7 +8,8 @@ import type {
 import { normalizeGenericTerminalToolResultText } from "../../terminal-reply.js";
 import type { PostCompactionGuardObservation } from "../post-compaction-loop-guard.js";
 
-export type ToolLoopObservation = PostCompactionGuardObservation & {
+export type ToolLoopObservation = Omit<PostCompactionGuardObservation, "resultHash"> & {
+  resultHash?: string;
   resultText?: string;
   terminalSummary?: AgentToolTerminalSummary;
   terminalResultFallback?: AgentToolTerminalResultFallback;

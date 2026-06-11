@@ -79,7 +79,7 @@ import { callGatewayTool } from "./tools/gateway.js";
 export type ToolOutcomeObservation = {
   toolName: string;
   argsHash: string;
-  resultHash: string;
+  resultHash?: string;
   resultText?: string;
   terminalSummary?: AgentToolTerminalSummary;
   terminalResultFallback?: AgentToolTerminalResultFallback;
@@ -949,11 +949,18 @@ export async function recordToolLoopOutcome(args: {
   }
   let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
-    const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
+    const { getDiagnosticSessionState, hashToolCall, recordToolCallOutcome } =
+      await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
     });
+    const details = readResultDetailsRecord(args.result);
+    const deniedReason =
+      typeof details?.deniedReason === "string" ? details.deniedReason : undefined;
+    const blockedReason = deniedReason || undefined;
+    const shouldEmitHashlessToolLoopBlock =
+      blockedReason === "tool-loop" && Boolean(args.ctx.onToolOutcome);
     const record = recordToolCallOutcome(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
@@ -963,14 +970,7 @@ export async function recordToolLoopOutcome(args: {
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
-    if (record?.resultHash && args.ctx.onToolOutcome) {
-      const details =
-        isPlainObject(args.result) && isPlainObject(args.result.details)
-          ? args.result.details
-          : undefined;
-      const deniedReason =
-        typeof details?.deniedReason === "string" ? details.deniedReason : undefined;
-      const blockedReason = deniedReason || undefined;
+    if ((record?.resultHash || shouldEmitHashlessToolLoopBlock) && args.ctx.onToolOutcome) {
       const blockedMessage = typeof details?.reason === "string" ? details.reason : undefined;
       const failed = Boolean(args.error);
       const resultText = blockedReason
@@ -979,7 +979,7 @@ export async function recordToolLoopOutcome(args: {
       const terminalSummary =
         blockedReason || failed ? undefined : readToolTerminalSummary(args.result);
       const didSendViaMessagingTool = hasCommittedMessagingToolSendOutcome({
-        toolName: record.toolName,
+        toolName: record?.toolName ?? args.toolName,
         toolParams: args.toolParams,
         result: args.result,
         failed,
@@ -1001,16 +1001,16 @@ export async function recordToolLoopOutcome(args: {
       const messagingTarget =
         didSendViaMessagingTool && isPlainObject(args.toolParams)
           ? buildMessagingToolSentTarget({
-              toolName: record.toolName,
+              toolName: record?.toolName ?? args.toolName,
               toolParams: args.toolParams,
               text: messagingText,
               mediaUrls: messagingMediaUrls,
             })
           : undefined;
       recordedOutcome = {
-        toolName: record.toolName,
-        argsHash: record.argsHash,
-        resultHash: record.resultHash,
+        toolName: record?.toolName ?? args.toolName,
+        argsHash: record?.argsHash ?? hashToolCall(args.toolName, args.toolParams),
+        ...(record?.resultHash ? { resultHash: record.resultHash } : {}),
         ...(resultText ? { resultText } : {}),
         ...(terminalSummary ? { terminalSummary } : {}),
         ...(didSendViaMessagingTool ? { didSendViaMessagingTool } : {}),

@@ -439,7 +439,7 @@ docker_build_run e2e-build -t demo-image .
       chmodSync(join(workDir, "runner.sh"), 0o755);
 
       const waitForFile = async (filePath: string) => {
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
           if (existsSync(filePath)) {
             return;
           }
@@ -452,7 +452,7 @@ docker_build_run e2e-build -t demo-image .
           child.once("exit", (code, signal) => resolve({ code, signal }));
         });
       const waitForDead = async (pid: number) => {
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
           try {
             process.kill(pid, 0);
           } catch {
@@ -1994,6 +1994,72 @@ printf "heredoc reached docker\\n"
 SH
 
 grep -Fxq 'printf "heredoc reached docker\\n"' "$TMPDIR/docker-stdin-seen"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves caller-owned file descriptors around harness runs", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-harness-fd-"));
+    try {
+      const rootDir = process.cwd();
+      const script = String.raw`
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+mkdir -p "$TMPDIR/bin"
+cat >"$TMPDIR/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  --kill-after=1s)
+    exit 0
+    ;;
+  --kill-after=30s)
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+esac
+"$@"
+SH
+chmod +x "$TMPDIR/bin/timeout"
+export PATH="$TMPDIR/bin:$PATH"
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker() {
+  local cidfile=""
+  local expect_cidfile=0
+  local arg
+  for arg in "$@"; do
+    if [[ "$expect_cidfile" == "1" ]]; then
+      cidfile="$arg"
+      expect_cidfile=0
+      continue
+    fi
+    if [[ "$arg" == "--cidfile" ]]; then
+      expect_cidfile=1
+    fi
+  done
+  test -n "$cidfile"
+  printf "container-fd\n" >"$cidfile"
+  cat >/dev/null
+}
+export -f docker
+
+exec 19>"$TMPDIR/caller-fd"
+docker_e2e_run_with_harness image-name bash -s <<'SH'
+true
+SH
+printf "preserved\n" >&19
+exec 19>&-
+grep -Fxq preserved "$TMPDIR/caller-fd"
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

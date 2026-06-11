@@ -233,20 +233,21 @@ function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
   });
 }
 
-function hasSuccessfulSideEffectDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
-  directlySentBlockKeys?: Set<string>;
-  messagingToolSentTexts?: string[];
-  messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: unknown[];
-  successfulCronAdds?: number;
-  didSendDeterministicApprovalPrompt?: boolean;
-}): boolean {
-  return (
-    hasSuccessfulSourceReplyDelivery(params) ||
-    (params.successfulCronAdds ?? 0) > 0 ||
-    params.didSendDeterministicApprovalPrompt === true
-  );
+function hasVisibleMessagingTargetDeliveryEvidence(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const record = entry as { text?: unknown; mediaUrl?: unknown; mediaUrls?: unknown };
+    return (
+      (typeof record.text === "string" && record.text.trim().length > 0) ||
+      (typeof record.mediaUrl === "string" && record.mediaUrl.trim().length > 0) ||
+      hasNonEmptyStringArray(record.mediaUrls)
+    );
+  });
 }
 
 function hasSuccessfulSourceReplyDelivery(params: {
@@ -263,6 +264,64 @@ function hasSuccessfulSourceReplyDelivery(params: {
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
   );
+}
+
+function hasFallbackSuppressingSideEffectDelivery(params: {
+  directlySentBlockKeys?: Set<string>;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+  successfulCronAdds?: number;
+  didSendDeterministicApprovalPrompt?: boolean;
+}): boolean {
+  return (
+    (params.directlySentBlockKeys?.size ?? 0) > 0 ||
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasVisibleMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
+    (params.successfulCronAdds ?? 0) > 0 ||
+    params.didSendDeterministicApprovalPrompt === true
+  );
+}
+
+function buildSideEffectProgressPayload(params: {
+  successfulCronAdds?: number;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+  didSendViaMessagingTool?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  silentExpected?: boolean;
+}): ReplyPayload | undefined {
+  if (params.allowEmptyAssistantReplyAsSilent === true || params.silentExpected === true) {
+    return undefined;
+  }
+  if (
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasVisibleMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+  ) {
+    return undefined;
+  }
+  const successfulCronAdds = params.successfulCronAdds ?? 0;
+  if (successfulCronAdds > 0) {
+    const subject =
+      successfulCronAdds === 1
+        ? "A scheduled task was created"
+        : `${successfulCronAdds} scheduled tasks were created`;
+    return markReplyPayloadForSourceSuppressionDelivery({
+      text: `${subject}, but the agent did not provide a final response.`,
+    });
+  }
+  if (
+    params.didSendViaMessagingTool === true ||
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+  ) {
+    return markReplyPayloadForSourceSuppressionDelivery({
+      text: "An external action completed, but the agent did not provide a final response.",
+    });
+  }
+  return undefined;
 }
 
 function resolveConfiguredFallbackModel(params: {
@@ -1687,6 +1746,7 @@ export async function runReplyAgent(params: {
       fallbackModel,
       fallbackAttempts,
       directlySentBlockKeys,
+      directlySentBlockPayloads,
     } = runOutcome;
     const { autoCompactionCount } = runOutcome;
     let { didLogHeartbeatStrip } = runOutcome;
@@ -1717,6 +1777,7 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+    const hadVisibleRunPayload = hasVisibleAgentPayload({ payloads: payloadArray });
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
@@ -1828,8 +1889,7 @@ export async function runReplyAgent(params: {
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
-    const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
-      blockReplyPipeline,
+    const fallbackSuppressingSideEffectDelivery = hasFallbackSuppressingSideEffectDelivery({
       directlySentBlockKeys,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
@@ -1859,7 +1919,7 @@ export async function runReplyAgent(params: {
         fallbackFailureKnown:
           fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback,
         isHeartbeat,
-        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
+        hasSuccessfulSideEffectDelivery: fallbackSuppressingSideEffectDelivery,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
       });
@@ -1874,6 +1934,22 @@ export async function runReplyAgent(params: {
       );
       await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+    };
+    const returnSideEffectProgressIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+      const sideEffectProgressPayload = buildSideEffectProgressPayload({
+        successfulCronAdds: runResult.successfulCronAdds,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+      });
+      if (!sideEffectProgressPayload) {
+        return undefined;
+      }
+      await signalTypingIfNeeded([sideEffectProgressPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(sideEffectProgressPayload);
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
@@ -1944,6 +2020,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const sideEffectProgressPayload = await returnSideEffectProgressIfNeeded();
+      if (sideEffectProgressPayload) {
+        return sideEffectProgressPayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -1959,6 +2039,7 @@ export async function runReplyAgent(params: {
       blockStreamingEnabled,
       blockReplyPipeline,
       directlySentBlockKeys,
+      directlySentBlockPayloads,
       replyToMode,
       replyToChannel,
       currentMessageId,
@@ -1985,14 +2066,21 @@ export async function runReplyAgent(params: {
       blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
     );
     const canDeliverStandaloneFallbackNotice =
-      hasDeliveredBlockStream || successfulSideEffectDelivery;
+      fallbackSuppressingSideEffectDelivery && !hasDeliveredBlockStream;
     if (
       replyPayloads.length === 0 ||
       (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
     ) {
+      if (!hasReplyPayloadBeyondFallbackNotice && hasDeliveredBlockStream && hadVisibleRunPayload) {
+        return returnWithQueuedFollowupDrain(undefined);
+      }
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const sideEffectProgressPayload = await returnSideEffectProgressIfNeeded();
+      if (sideEffectProgressPayload) {
+        return sideEffectProgressPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }

@@ -153,9 +153,12 @@ import {
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
+  MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
+  resolveNextSameModelRateLimitRetryCount,
+  resolveSameModelRateLimitRetryDelayMs,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -398,6 +401,17 @@ function hasVisibleAssistantTextForTerminalProgress(attempt: EmbeddedRunAttemptF
 
 function hasAsyncStartedTerminalProgress(attempt: EmbeddedRunAttemptForRunner): boolean {
   return attempt.toolMetas.some((toolMeta) => toolMeta.asyncStarted === true);
+}
+
+const ASYNC_TASK_PROGRESS_PLACEHOLDER_RE =
+  /\b(?:waiting|checking|monitoring|watching|polling)\b[\s\S]{0,120}\b(?:task|job|run|generation|generating|result|output|finish|finished|complete|completed)\b/iu;
+
+function hasAsyncTaskProgressPlaceholderText(attempt: EmbeddedRunAttemptForRunner): boolean {
+  if ((attempt.asyncTaskTerminalResults?.length ?? 0) === 0) {
+    return false;
+  }
+  const text = attempt.assistantTexts.join("\n\n").trim();
+  return text.length > 0 && ASYNC_TASK_PROGRESS_PLACEHOLDER_RE.test(text);
 }
 
 function buildAssistantTextTerminalPayloads(
@@ -1211,6 +1225,8 @@ export async function runEmbeddedAgent(
       const profileFailureStore = pluginHarnessOwnsTransport ? attemptAuthProfileStore : authStore;
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
+      const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
+        attempt.result === "rotate_profile" || attempt.result === "fallback_model";
 
       const initialThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
@@ -1368,6 +1384,7 @@ export async function runEmbeddedAgent(
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let consecutiveSameModelRateLimitRetries = 0;
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
@@ -1405,7 +1422,14 @@ export async function runEmbeddedAgent(
           postCompactionAbortController?.abort(toolLoopAbortError);
           return;
         }
-        const verdict = postCompactionGuard.observe(observation);
+        if (!observation.resultHash) {
+          return;
+        }
+        const verdict = postCompactionGuard.observe({
+          toolName: observation.toolName,
+          argsHash: observation.argsHash,
+          resultHash: observation.resultHash,
+        });
         if (verdict.shouldAbort) {
           const blockedObservation = {
             ...observation,
@@ -1541,6 +1565,35 @@ export async function runEmbeddedAgent(
           }
           throw err;
         }
+      };
+      const maybeRetrySameModelRateLimit = async (retry?: {
+        retryAfterSeconds?: number;
+      }): Promise<boolean> => {
+        if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+          return false;
+        }
+        const delayMs = resolveSameModelRateLimitRetryDelayMs({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retryAfterSeconds: retry?.retryAfterSeconds,
+        });
+        log.warn(
+          `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
+        );
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (err) {
+          if (params.abortSignal?.aborted) {
+            const abortErr = new Error("Operation aborted", { cause: err });
+            abortErr.name = "AbortError";
+            throw abortErr;
+          }
+          throw err;
+        }
+        consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retriedSameModelRateLimit: true,
+        });
+        return true;
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
@@ -1826,6 +1879,7 @@ export async function runEmbeddedAgent(
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
+            chatType: params.chatType,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
@@ -2201,6 +2255,7 @@ export async function runEmbeddedAgent(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
@@ -2393,6 +2448,7 @@ export async function runEmbeddedAgent(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
@@ -3105,6 +3161,7 @@ export async function runEmbeddedAgent(
               !fallbackConfigured &&
               canRestartForLiveSwitch &&
               sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
+            allowSameModelRateLimitRetry: rateLimitProfileRotations < rateLimitProfileRotationLimit,
             assistantProfileFailureReason,
             lastProfileId,
             modelId,
@@ -3125,28 +3182,42 @@ export async function runEmbeddedAgent(
             warn: (message) => log.warn(message),
             maybeMarkAuthProfileFailure,
             maybeEscalateRateLimitProfileFallback,
+            maybeRetrySameModelRateLimit,
             maybeBackoffBeforeOverloadFailover,
             advanceAuthProfile: advanceAttemptAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {
+            const retryTraceResult =
+              assistantFailoverOutcome.retryKind === "same_model_rate_limit"
+                ? "same_model_rate_limit"
+                : assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
+                    assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : "rotate_profile";
             traceAttempts.push({
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
-              result:
-                assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
-                assistantFailoverReason === "timeout"
-                  ? "timeout"
-                  : "rotate_profile",
+              result: retryTraceResult,
               ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
               stage: "assistant",
             });
             if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
               sameModelIdleTimeoutRetries += 1;
             }
+            if (assistantFailoverOutcome.retryKind !== "same_model_rate_limit") {
+              consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+                retriesSoFar: consecutiveSameModelRateLimitRetries,
+                retriedSameModelRateLimit: false,
+              });
+            }
             lastRetryFailoverReason = assistantFailoverOutcome.lastRetryFailoverReason;
             continue;
           }
+          consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+            retriesSoFar: consecutiveSameModelRateLimitRetries,
+            retriedSameModelRateLimit: false,
+          });
           if (assistantFailoverOutcome.action === "throw") {
             traceAttempts.push({
               provider: activeErrorContext.provider,
@@ -3206,6 +3277,7 @@ export async function runEmbeddedAgent(
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
+            assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
@@ -4036,14 +4108,42 @@ export async function runEmbeddedAgent(
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
           const renderedTerminalPayloads = terminalPayloads?.length ? terminalPayloads : undefined;
-          const hasAsyncTaskTerminalResults = (attempt.asyncTaskTerminalResults?.length ?? 0) > 0;
+          const renderedPayloadsArePlanningOnlyText =
+            areTerminalPayloadsPlanningOnlyText(renderedTerminalPayloads);
+          const renderedPayloadsHaveMedia =
+            renderedTerminalPayloads?.some(hasPayloadMedia) === true;
+          const renderedPayloadsHaveError =
+            renderedTerminalPayloads?.some(
+              (payload) => "isError" in payload && payload.isError === true,
+            ) === true;
+          const finalAssistantStopReasonForTerminalPayloads = (
+            attempt.lastAssistant?.stopReason ??
+            stopReason ??
+            ""
+          )
+            .trim()
+            .toLowerCase();
+          const hasCompletedAssistantForTerminalPayloads = [
+            "completed",
+            "end_turn",
+            "stop",
+          ].includes(finalAssistantStopReasonForTerminalPayloads);
+          const completedAssistantTextTerminalPayloads =
+            !renderedTerminalPayloads &&
+            hasCompletedAssistantForTerminalPayloads &&
+            !isPlanningOnlyAssistantText(attempt.assistantTexts) &&
+            !hasAsyncTaskProgressPlaceholderText(attempt)
+              ? buildAssistantTextTerminalPayloads(attempt)
+              : undefined;
           const asyncTaskTerminalPayloads =
-            (hasAsyncTaskTerminalResults || !renderedTerminalPayloads) &&
+            !completedAssistantTextTerminalPayloads &&
+            (!renderedTerminalPayloads || renderedPayloadsArePlanningOnlyText) &&
             canUseAttemptTerminalFallback
               ? buildAsyncTaskTerminalPayloads(attempt)
               : undefined;
           const assistantTextTerminalPayloads =
-            !renderedTerminalPayloads &&
+            completedAssistantTextTerminalPayloads ??
+            (!renderedTerminalPayloads &&
             !asyncTaskTerminalPayloads &&
             !emptyAssistantReplyIsSilent &&
             !attempt.didSendDeterministicApprovalPrompt &&
@@ -4053,15 +4153,7 @@ export async function runEmbeddedAgent(
             !hasAsyncStartedTerminalProgress(attempt) &&
             !hasVisibleOutboundDeliveryEvidence(attempt)
               ? buildAssistantTextTerminalPayloads(attempt)
-              : undefined;
-          const renderedPayloadsArePlanningOnlyText =
-            areTerminalPayloadsPlanningOnlyText(renderedTerminalPayloads);
-          const renderedPayloadsHaveMedia =
-            renderedTerminalPayloads?.some(hasPayloadMedia) === true;
-          const renderedPayloadsHaveError =
-            renderedTerminalPayloads?.some(
-              (payload) => "isError" in payload && payload.isError === true,
-            ) === true;
+              : undefined);
           const assistantTextPayloadsArePlanningOnlyText = areTerminalPayloadsPlanningOnlyText(
             assistantTextTerminalPayloads,
           );
@@ -4201,7 +4293,7 @@ export async function runEmbeddedAgent(
                         },
                       ]
                     : undefined,
-                fallbackUsed: traceAttempts.length > 0,
+                fallbackUsed: traceAttempts.some(traceAttemptUsesFallback),
                 runner: "embedded",
               },
               requestShaping: {
