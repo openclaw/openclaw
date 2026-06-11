@@ -44,7 +44,7 @@ async function readLatestCompactionEntry(
   if (!state) {
     return undefined;
   }
-  return state.getBranch().filter(isCompactionEntry).at(-1);
+  return state.getBranch().findLast(isCompactionEntry);
 }
 
 export async function resolveSessionFamilyCarryoverSummary(params: {
