@@ -42,6 +42,17 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("line"))?.npmSpec).toBe(
       "@openclaw/line",
     );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("diffs-language-pack"))).toEqual(
+      {
+        npmSpec: "@openclaw/diffs-language-pack",
+        clawhubSpec: "clawhub:@openclaw/diffs-language-pack",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.5.27",
+      },
+    );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("llama-cpp"))?.npmSpec).toBe(
+      "@openclaw/llama-cpp-provider",
+    );
   });
 
   it("allows invalid-config recovery for externalized stock plugins", () => {
@@ -57,6 +68,33 @@ describe("official external plugin catalog", () => {
       npmSpec: "@openclaw/discord",
       allowInvalidConfigRecovery: true,
     });
+  });
+
+  it("lists iFlow as an external web search provider plugin with correct install spec", () => {
+    const entry = expectCatalogEntry("iflow");
+    expect(resolveOfficialExternalPluginId(entry)).toBe("iflow");
+    const install = resolveOfficialExternalPluginInstall(entry);
+    expect(install?.npmSpec).toBe("@iflow-ai/iflow-plugin@0.1.6");
+    expect(install?.defaultChoice).toBe("npm");
+    expect(install?.minHostVersion).toBe(">=2026.5.7");
+  });
+
+  it("exposes iFlow web search provider metadata for onboarding", () => {
+    const entry = expectCatalogEntry("iflow");
+    const manifest = entry.openclaw;
+    const providers = manifest?.webSearchProviders ?? [];
+    expect(providers.length).toBe(1);
+
+    const provider = providers[0]!;
+    expect(provider.id).toBe("iflow");
+    expect(provider.label).toBe("iFlow Search");
+    expect(provider.credentialLabel).toBe("iFlow API key");
+    expect(provider.envVars).toEqual(["IFLOW_API_KEY"]);
+    expect(provider.credentialPath).toBe("plugins.entries.iflow.config.webSearch.apiKey");
+    expect(provider.autoDetectOrder).toBe(80);
+    expect(provider.signupUrl).toBe("https://platform.iflow.cn");
+    expect(provider.docsUrl).toBe("https://docs.openclaw.ai/tools/iflow-search");
+    expect(provider.placeholder).not.toContain("sk-");
   });
 
   it("lists Matrix as an official external ClawHub channel after cutover", () => {

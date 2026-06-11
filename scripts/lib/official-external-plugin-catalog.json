@@ -51,6 +51,24 @@
       }
     },
     {
+      "name": "@openclaw/copilot",
+      "description": "OpenClaw GitHub Copilot agent runtime plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "copilot",
+          "label": "GitHub Copilot agent runtime"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/copilot",
+          "npmSpec": "@openclaw/copilot",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.28"
+        }
+      }
+    },
+    {
       "name": "@openclaw/diagnostics-otel",
       "description": "OpenClaw diagnostics OpenTelemetry exporter",
       "source": "official",
@@ -104,6 +122,56 @@
       }
     },
     {
+      "name": "@openclaw/diffs-language-pack",
+      "description": "OpenClaw diffs viewer syntax highlighting language pack",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "diffs-language-pack",
+          "label": "Diff Viewer Language Pack"
+        },
+        "install": {
+          "npmSpec": "@openclaw/diffs-language-pack",
+          "clawhubSpec": "clawhub:@openclaw/diffs-language-pack",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.27"
+        }
+      }
+    },
+    {
+      "name": "@iflow-ai/iflow-plugin",
+      "description": "iFlow Search (心流搜索) — Chinese-first web search, image search, and web content fetch.",
+      "source": "external",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "iflow",
+          "label": "iFlow Search"
+        },
+        "webSearchProviders": [
+          {
+            "id": "iflow",
+            "label": "iFlow Search",
+            "hint": "Connect Your AI Agent to the Real World",
+            "onboardingScopes": ["text-inference"],
+            "credentialLabel": "iFlow API key",
+            "envVars": ["IFLOW_API_KEY"],
+            "placeholder": "Enter iFlow API key",
+            "signupUrl": "https://platform.iflow.cn",
+            "docsUrl": "https://docs.openclaw.ai/tools/iflow-search",
+            "credentialPath": "plugins.entries.iflow.config.webSearch.apiKey",
+            "autoDetectOrder": 80
+          }
+        ],
+        "install": {
+          "npmSpec": "@iflow-ai/iflow-plugin@0.1.6",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.7"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",
@@ -150,7 +218,27 @@
         "install": {
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
+          "minHostVersion": ">=2026.5.31"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/llama-cpp-provider",
+      "description": "OpenClaw llama.cpp embedding provider plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "llama-cpp",
+          "label": "llama.cpp Provider"
+        },
+        "contracts": {
+          "embeddingProviders": ["local"]
+        },
+        "install": {
+          "npmSpec": "@openclaw/llama-cpp-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.2"
         }
       }
     },
@@ -168,6 +256,42 @@
           "npmSpec": "@openclaw/openshell-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/pixverse-provider",
+      "description": "OpenClaw PixVerse video generation provider plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "pixverse",
+          "label": "PixVerse"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/pixverse-provider",
+          "npmSpec": "@openclaw/pixverse-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.26"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/tokenjuice",
+      "description": "OpenClaw tokenjuice exec output compaction plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "tokenjuice",
+          "label": "Tokenjuice"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/tokenjuice",
+          "npmSpec": "@openclaw/tokenjuice",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.28"
         }
       }
     },
