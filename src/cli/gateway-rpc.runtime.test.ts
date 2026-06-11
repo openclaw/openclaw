@@ -17,6 +17,17 @@ describe("callGatewayFromCliRuntime", () => {
     callGatewayMock.mockClear().mockResolvedValue({ ok: true });
   });
 
+  it("uses the 30s Gateway RPC default timeout when --timeout is omitted", async () => {
+    await callGatewayFromCliRuntime("cron.status", {});
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "cron.status",
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
   it.each([
     ["cron status", "cron.status"],
     ["cron list", "cron.list"],
@@ -31,6 +42,14 @@ describe("callGatewayFromCliRuntime", () => {
   ])("rejects malformed shared --timeout before gateway call for %s", async (_name, method) => {
     await expect(callGatewayFromCliRuntime(method, { timeout: "10ms" })).rejects.toThrow(
       'Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "10ms".',
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])("rejects explicit empty shared --timeout value %j", async (timeout) => {
+    await expect(callGatewayFromCliRuntime("cron.status", { timeout })).rejects.toThrow(
+      "Invalid --timeout",
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();

@@ -944,6 +944,7 @@ export async function getReplyFromConfig(
               messageProvider: hookMessageProvider,
               currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+              senderId: sessionCtx.SenderId ?? ctx.SenderId,
             }),
           },
         ),

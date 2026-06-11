@@ -836,10 +836,15 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
     expect(buildVitestRunPlans(targets, process.cwd())).toEqual([
       {
+        config: "test/vitest/vitest.tooling-docker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/docker-build-helper.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
         includePatterns: [
-          "test/scripts/docker-build-helper.test.ts",
           "test/scripts/plugin-prerelease-test-plan.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
           "test/scripts/openclaw-test-state.test.ts",
@@ -912,6 +917,12 @@ describe("scripts/test-projects changed-target routing", () => {
   it("includes the isolated tooling shard for broad shell helper targets", () => {
     expect(buildVitestRunPlans(["test/scripts"], process.cwd())).toEqual([
       {
+        config: "test/vitest/vitest.tooling-docker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/docker-build-helper.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
         includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
@@ -928,6 +939,12 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("includes the isolated tooling shard for broad shell helper globs", () => {
     expect(buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-docker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/docker-build-helper.test.ts"],
+        watchMode: false,
+      },
       {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
@@ -2271,6 +2288,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.unit-support.config.ts",
       "test/vitest/vitest.boundary.config.ts",
       "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",
