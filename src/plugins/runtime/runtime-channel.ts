@@ -87,6 +87,12 @@ import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
+  const inboundRuntime = {
+    buildContext: buildChannelInboundEventContext,
+    run: runChannelInboundEvent,
+    runPreparedReply: runPreparedInboundReply,
+    dispatchReply: dispatchChannelInboundReply,
+  } satisfies PluginRuntime["channel"]["inbound"];
   const channelRuntime = {
     text: {
       chunkByNewline,
@@ -180,12 +186,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
     },
-    inbound: {
-      buildContext: buildChannelInboundEventContext,
-      run: runChannelInboundEvent,
-      runPreparedReply: runPreparedInboundReply,
-      dispatchReply: dispatchChannelInboundReply,
-    },
+    inbound: inboundRuntime,
+    turn: inboundRuntime,
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
         setChannelConversationBindingIdleTimeoutBySessionKey({
