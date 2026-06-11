@@ -28,9 +28,9 @@ export function parseBooleanValue(
     truthy === DEFAULT_TRUTHY
       ? DEFAULT_TRUTHY_SET
       : new Set(
-          Array.isArray(truthy)
-            ? truthy.map((s) => (typeof s === "string" ? s.toLowerCase() : s))
-            : [],
+            ? truthy
+                .filter((s): s is string => typeof s === "string")
+                .map((s) => s.toLowerCase())
         );
   const falsySet =
     falsy === DEFAULT_FALSY
