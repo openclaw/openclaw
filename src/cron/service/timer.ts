@@ -1273,6 +1273,7 @@ async function runStartupCatchupCandidate(
   candidate: StartupCatchupCandidate,
 ): Promise<TimedCronRunOutcome> {
   const startedAt = state.deps.nowMs();
+  markCronJobActive(candidate.job.id);
   const taskRunId = tryCreateCronTaskRun({
     state,
     job: candidate.job,
