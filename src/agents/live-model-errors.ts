@@ -49,6 +49,9 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/invalid model/i.test(msg) && !/invalid model reference/i.test(msg)) {
     return true;
   }
+  if (/not supported model/i.test(msg)) {
+    return true;
+  }
   return false;
 }
 
