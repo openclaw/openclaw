@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -147,8 +147,6 @@ function buildNonAcpSessionEntry(): SessionEntry {
 
 describe("sessionsCommand model/modelProvider display for ACP sessions (catalog #20)", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-06T00:00:00Z"));
     originalStateDir = process.env.OPENCLAW_STATE_DIR;
     mockAgentConfigWithCopilotModel();
   });
@@ -165,7 +163,6 @@ describe("sessionsCommand model/modelProvider display for ACP sessions (catalog 
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
     resetMockSessionsConfig();
-    vi.useRealTimers();
   });
 
   it("RED: ACP control-plane session must NOT report the agent-configured model", async () => {

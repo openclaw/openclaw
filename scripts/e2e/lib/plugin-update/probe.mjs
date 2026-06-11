@@ -240,12 +240,12 @@ function assertCorruptPluginDetails(plugins, pluginId) {
     ? [
         `Disabled "${pluginId}" after plugin update failure`,
         "OpenClaw will continue without it",
-        "Run openclaw doctor --fix to attempt automatic repair.",
+        "Run openclaw update repair to retry post-update plugin repair.",
         `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
       ]
     : [
         "package.json is missing",
-        "Run openclaw doctor --fix to attempt automatic repair.",
+        "Run openclaw update repair to retry post-update plugin repair.",
         `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
       ];
   for (const expected of expectedFragments) {

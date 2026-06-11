@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images via image_generate across OpenAI, Google, fal, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra"
+summary: "Generate and edit images via image_generate across OpenAI, Google, fal, Microsoft Foundry, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra"
 read_when:
   - Generating or editing images via the agent
   - Configuring image-generation providers and models
@@ -83,6 +83,7 @@ internal image endpoints remain blocked by default.
 | fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
 | LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
+| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
 | Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same `image_generate` tool handles text-to-image and reference-image
@@ -97,18 +98,19 @@ backend emits it.
 
 ## Supported providers
 
-| Provider   | Default model                           | Edit support                       | Auth                                                  |
-| ---------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| ComfyUI    | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
-| DeepInfra  | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
-| fal        | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
-| Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
-| LiteLLM    | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
-| MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
-| OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
-| Vydra      | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
-| xAI        | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| Provider          | Default model                           | Edit support                       | Auth                                                  |
+| ----------------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| ComfyUI           | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
+| fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
+| Google            | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
+| Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
+| MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| OpenAI            | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
+| OpenRouter        | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| Vydra             | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
+| xAI               | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -125,13 +127,13 @@ current session:
 
 ## Provider capabilities
 
-| Capability            | ComfyUI            | DeepInfra | fal                                            | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
-| --------------------- | ------------------ | --------- | ---------------------------------------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | Workflow-defined   | 4         | 4                                              | 4              | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
-| Size control          | -                  | ✓         | ✓                                              | ✓              | -                     | Up to 4K       | -     | -              |
-| Aspect ratio          | -                  | -         | ✓                                              | ✓              | ✓                     | -              | -     | ✓              |
-| Resolution (1K/2K/4K) | -                  | -         | ✓                                              | ✓              | -                     | -              | -     | 1K, 2K         |
+| Capability            | ComfyUI            | DeepInfra | fal                                            | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |
+| --------------------- | ------------------ | --------- | ---------------------------------------------- | -------------- | ----------------- | --------------------- | -------------- | ----- | -------------- |
+| Generate (max count)  | Workflow-defined   | 4         | 4                                              | 4              | 1                 | 9                     | 4              | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
+| Size control          | -                  | ✓         | ✓                                              | ✓              | ✓                 | -                     | Up to 4K       | -     | -              |
+| Aspect ratio          | -                  | -         | ✓                                              | ✓              | -                 | ✓                     | -              | -     | ✓              |
+| Resolution (1K/2K/4K) | -                  | -         | ✓                                              | ✓              | -                 | -                     | -              | -     | 1K, 2K         |
 
 ## Tool parameters
 
@@ -249,10 +251,10 @@ from each attempt.
     backends. A per-call `timeoutMs` tool parameter overrides the configured
     default, and configured defaults override plugin-authored provider
     defaults. Google and OpenRouter hosted image providers use 180 second
-    defaults; xAI and Azure OpenAI image generation use 600 seconds. Codex
-    dynamic-tool calls use a 120 second `image_generate` bridge default and
-    honor the same timeout budget when configured, bounded by OpenClaw's 600000
-    ms dynamic-tool bridge maximum.
+    defaults; Microsoft Foundry MAI, xAI, and Azure OpenAI image generation use
+    600 seconds. Codex dynamic-tool calls use a 120 second `image_generate`
+    bridge default and honor the same timeout budget when configured, bounded by
+    OpenClaw's 600000 ms dynamic-tool bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,
@@ -262,9 +264,10 @@ from each attempt.
 
 ### Image editing
 
-OpenAI, OpenRouter, Google, DeepInfra, fal, MiniMax, ComfyUI, and xAI support editing
-reference images. Krea 2 models on fal use the same `image` / `images` fields
-as style references instead of edit inputs. Pass a reference image path or URL:
+OpenAI, OpenRouter, Google, DeepInfra, fal, Microsoft Foundry, MiniMax,
+ComfyUI, and xAI support editing reference images. Krea 2 models on fal use the
+same `image` / `images` fields as style references instead of edit inputs. Pass
+a reference image path or URL:
 
 ```text
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
@@ -273,7 +276,7 @@ as style references instead of edit inputs. Pass a reference image path or URL:
 OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the
 `images` parameter. fal supports 1 reference image for Flux image-to-image, up
 to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
-14 for Nano Banana 2 edits. MiniMax and ComfyUI support 1.
+14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax, and ComfyUI support 1.
 
 ## Provider deep dives
 
@@ -333,6 +336,47 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     To route OpenAI image generation through an Azure OpenAI deployment
     instead of `api.openai.com`, see
     [Azure OpenAI endpoints](/providers/openai#azure-openai-endpoints).
+
+  </Accordion>
+  <Accordion title="Microsoft Foundry MAI image models">
+    Microsoft Foundry image generation uses deployed MAI image deployment names
+    under the `microsoft-foundry/` provider prefix. There is no provider-level
+    default model because the MAI API expects your deployment name in the
+    `model` field:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "microsoft-foundry/<deployment-name>",
+            timeoutMs: 600_000,
+          },
+        },
+      },
+    }
+    ```
+
+    The provider uses Microsoft Foundry's MAI API, not the OpenAI Images API:
+
+    - Generation endpoint: `/mai/v1/images/generations`
+    - Edit endpoint: `/mai/v1/images/edits`
+    - Auth: `AZURE_OPENAI_API_KEY` / provider API key, or Entra ID through `az login`
+    - Output: one PNG image
+    - Size: default `1024x1024`; width and height must each be at least 768 px,
+      and total pixels must be at most 1,048,576
+    - Edits: one PNG or JPEG reference image, supported only by
+      `MAI-Image-2.5-Flash` and `MAI-Image-2.5` deployments
+
+    Prompt-only generation can use a custom deployment name with just the
+    Foundry endpoint configured. Edits with custom deployment names need
+    onboarding/model metadata so OpenClaw can verify that the deployment is
+    backed by `MAI-Image-2.5-Flash` or `MAI-Image-2.5`.
+
+    Current MAI image models are `MAI-Image-2.5-Flash`, `MAI-Image-2.5`,
+    `MAI-Image-2e`, and `MAI-Image-2`. See
+    [Microsoft Foundry plugin](/plugins/reference/microsoft-foundry) for setup
+    and chat-model behavior.
 
   </Accordion>
   <Accordion title="OpenRouter image models">
@@ -485,6 +529,7 @@ as ignored for them.
 - [ComfyUI](/providers/comfy) - local ComfyUI and Comfy Cloud workflow setup
 - [fal](/providers/fal) - fal image and video provider setup
 - [Google (Gemini)](/providers/google) - Gemini image provider setup
+- [Microsoft Foundry plugin](/plugins/reference/microsoft-foundry) - Microsoft Foundry chat and MAI image setup
 - [MiniMax](/providers/minimax) - MiniMax image provider setup
 - [OpenAI](/providers/openai) - OpenAI Images provider setup
 - [Vydra](/providers/vydra) - Vydra image, video, and speech setup

@@ -73,6 +73,11 @@ function expectLogExcludes(source: MockCallSource, text: string): void {
   expect(logIncludes(source, text), `Expected log not to include ${text}`).toBe(false);
 }
 
+async function flushNarrativeSettleTimers<T>(operation: Promise<T>): Promise<T> {
+  await vi.runAllTimersAsync();
+  return operation;
+}
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   const accessResult = await fs
     .access(targetPath)
@@ -683,6 +688,88 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(logger.info).toHaveBeenCalled();
   });
 
+  it("waits for persisted assistant text before falling back", async () => {
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+      const subagent = createMockSubagent("");
+      subagent.getSessionMessages
+        .mockResolvedValueOnce({
+          messages: [{ role: "user", content: "prompt" }],
+        })
+        .mockResolvedValueOnce({
+          messages: [
+            { role: "user", content: "prompt" },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "The delayed diary text finally settled." }],
+            },
+          ],
+        });
+      const logger = createMockLogger();
+
+      const operation = generateAndAppendDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: {
+          phase: "light",
+          snippets: ["The narrative assistant persisted after the run completed."],
+        },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+        logger,
+      });
+      await flushNarrativeSettleTimers(operation);
+
+      expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
+      expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(1, {
+        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        limit: expect.any(Number),
+      });
+      expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(2, {
+        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        limit: expect.any(Number),
+      });
+      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(content).toContain("The delayed diary text finally settled.");
+      expect(content).not.toContain("A memory trace surfaced");
+      expectLogExcludes(logger.warn, "produced no text");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back after settled assistant text never appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+      const subagent = createMockSubagent("");
+      const logger = createMockLogger();
+
+      const operation = generateAndAppendDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: {
+          phase: "light",
+          snippets: ["The narrative assistant never persisted text."],
+        },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+        logger,
+      });
+      await flushNarrativeSettleTimers(operation);
+
+      expect(subagent.getSessionMessages).toHaveBeenCalledTimes(5);
+      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(content).toContain(
+        "A memory trace surfaced, but details were unavailable in this run.",
+      );
+      expectLogIncludes(logger.warn, "produced no text");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries with the session default when the configured model cannot start", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("The default model carried the diary home.");
@@ -1020,20 +1107,24 @@ describe("generateAndAppendDreamNarrative", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     const orphanPath = path.join(sessionsDir, "orphan.jsonl");
     const livePath = path.join(sessionsDir, "still-live.jsonl");
-    await fs.writeFile(
+    const updatedAt = Date.now();
+    await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
-      `${JSON.stringify({
+      {
         "agent:main:dreaming-narrative-light-1": {
           sessionId: "missing",
+          updatedAt,
         },
         "agent:main:kept-session": {
           sessionId: "still-live",
+          updatedAt,
         },
         "agent:main:telegram:group:dreaming-narrative-room": {
           sessionId: "still-missing-non-dreaming",
+          updatedAt,
         },
-      })}\n`,
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
     await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
@@ -1063,10 +1154,9 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const updatedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      unknown
-    >;
+    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
+      skipCache: true,
+    }) as Record<string, unknown>;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
@@ -1088,20 +1178,24 @@ describe("generateAndAppendDreamNarrative", () => {
     // A second dreaming row whose transcript is fresh (a live/just-started run)
     // must be preserved.
     const liveTranscript = path.join(sessionsDir, "live-dreaming.jsonl");
-    await fs.writeFile(
+    const updatedAt = Date.now();
+    await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
-      `${JSON.stringify({
+      {
         "agent:main:dreaming-narrative-deep-orphan": {
           sessionId: "orphan-dreaming",
+          updatedAt,
         },
         "agent:main:dreaming-narrative-deep-live": {
           sessionId: "live-dreaming",
+          updatedAt,
         },
         "agent:main:kept-session": {
           sessionId: "still-live",
+          updatedAt,
         },
-      })}\n`,
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     await fs.writeFile(orphanTranscript, '{"runId":"dreaming-narrative-deep-orphan"}\n', "utf-8");
     await fs.writeFile(liveTranscript, '{"runId":"dreaming-narrative-deep-live"}\n', "utf-8");
@@ -1133,10 +1227,9 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const updatedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      unknown
-    >;
+    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
+      skipCache: true,
+    }) as Record<string, unknown>;
     // The aged orphan dreaming row is reclaimed even though its transcript existed.
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-deep-orphan");
     // The fresh dreaming row and the non-dreaming row survive.

@@ -471,6 +471,13 @@ two-party event loops that do not go through the shared inbound reply runner.
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
 
+    `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
+    truncation counts, `code`, `signal`, `killed`, `termination`, and
+    `noOutputTimedOut`. Timeout and no-output-timeout results report `code: 124`
+    when the child process does not provide a non-zero exit code. Non-timeout
+    signal exits can still return `code: null`, so use `termination` and
+    `noOutputTimedOut` to distinguish timeout reasons.
+
   </Accordion>
   <Accordion title="api.runtime.events">
     Event subscriptions.

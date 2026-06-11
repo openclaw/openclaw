@@ -115,5 +115,8 @@ export type SandboxContext = {
 
 export type SandboxWorkspaceInfo = {
   workspaceDir: string;
-  containerWorkdir: string;
+  containerWorkdir?: string;
+  skillsWorkspaceDir?: string;
+  skillsEligibility?: SkillEligibilityContext;
+  workspaceAccess?: SandboxWorkspaceAccess;
 };

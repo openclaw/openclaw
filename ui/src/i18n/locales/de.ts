@@ -1624,6 +1624,8 @@ export const de: TranslationMap = {
     },
     jobDetail: {
       system: "System",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Zustellung",
       agent: "Agent",

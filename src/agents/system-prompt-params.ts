@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
@@ -26,6 +27,7 @@ type RuntimeInfoInput = {
   defaultModel?: string;
   shell?: string;
   channel?: string;
+  chatType?: ChatType;
   capabilities?: string[];
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];

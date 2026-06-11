@@ -293,6 +293,18 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
+function assertCronExpressionSatisfiable(job: CronJob, nowMs: number) {
+  if (job.schedule.kind !== "cron") {
+    return;
+  }
+  if (computeJobNextRunAtMs({ ...job, enabled: true }, nowMs) !== undefined) {
+    return;
+  }
+  throw new Error(
+    `cron expression "${job.schedule.expr}" has no upcoming run time and would never fire`,
+  );
+}
+
 function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId">,
   defaultAgentId: string | undefined,
@@ -781,6 +793,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  assertCronExpressionSatisfiable(job, now);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -789,7 +802,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
-  opts?: { defaultAgentId?: string },
+  opts?: { defaultAgentId?: string; scheduleValidationNowMs?: number },
 ) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -869,6 +882,12 @@ export function applyJobPatch(
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  if (
+    opts?.scheduleValidationNowMs !== undefined &&
+    (patch.schedule !== undefined || patch.enabled === true)
+  ) {
+    assertCronExpressionSatisfiable(job, opts.scheduleValidationNowMs);
+  }
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
@@ -923,6 +942,8 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
   if (typeof patch.model === "string") {
     next.model = patch.model;
+  } else if (patch.model === null) {
+    delete next.model;
   }
   if (Array.isArray(patch.fallbacks)) {
     next.fallbacks = patch.fallbacks;
@@ -978,7 +999,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   return {
     kind: "agentTurn",
     message: patch.message,
-    model: patch.model,
+    model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: patch.fallbacks,
     toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
     thinking: patch.thinking,

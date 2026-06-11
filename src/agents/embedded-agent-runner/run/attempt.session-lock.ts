@@ -2,7 +2,8 @@
  * Coordinates embedded-attempt session ownership, takeover, and prompt locks.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -57,10 +58,12 @@ const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES =
   MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES + MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES;
+const MAX_BENIGN_SESSION_FENCE_CTIME_DIGEST_BYTES = 32 * 1024 * 1024;
 const MAX_SAFE_FILE_OFFSET = BigInt(Number.MAX_SAFE_INTEGER);
 
 type SessionFileFenceSnapshot = {
   fingerprint: SessionFileFingerprint;
+  digest?: string;
   text?: string;
 };
 
@@ -88,6 +91,20 @@ function sameSessionFileIdentity(
   right: SessionFileFingerprint,
 ): boolean {
   return Boolean(left?.exists && right.exists && left.dev === right.dev && left.ino === right.ino);
+}
+
+function sameSessionFileContentMetadata(
+  left: SessionFileFingerprint | undefined,
+  right: SessionFileFingerprint,
+): boolean {
+  return Boolean(
+    left?.exists &&
+    right.exists &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs,
+  );
 }
 
 function splitSessionFileLines(text: string): string[] {
@@ -218,21 +235,45 @@ async function readSessionFileFenceSnapshot(
   sessionFile: string,
 ): Promise<SessionFileFenceSnapshot> {
   const fingerprint = await readSessionFileFingerprint(sessionFile);
+  if (!fingerprint.exists) {
+    return { fingerprint };
+  }
   if (
-    !fingerprint.exists ||
-    fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES) ||
-    fingerprint.size > MAX_SAFE_FILE_OFFSET
+    fingerprint.size <= BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES) &&
+    fingerprint.size <= MAX_SAFE_FILE_OFFSET
   ) {
+    try {
+      return {
+        fingerprint,
+        text: await fs.readFile(sessionFile, "utf8"),
+      };
+    } catch {
+      return { fingerprint };
+    }
+  }
+  if (fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_CTIME_DIGEST_BYTES)) {
     return { fingerprint };
   }
-  try {
-    return {
-      fingerprint,
-      text: await fs.readFile(sessionFile, "utf8"),
-    };
-  } catch {
-    return { fingerprint };
-  }
+  return {
+    fingerprint,
+    digest: await readSessionFileDigest(sessionFile),
+  };
+}
+
+async function readSessionFileDigest(sessionFile: string): Promise<string | undefined> {
+  const hash = createHash("sha256");
+  return await new Promise<string | undefined>((resolve) => {
+    const stream = createReadStream(sessionFile);
+    stream.on("data", (chunk) => {
+      hash.update(chunk);
+    });
+    stream.on("error", () => {
+      resolve(undefined);
+    });
+    stream.on("end", () => {
+      resolve(hash.digest("hex"));
+    });
+  });
 }
 
 async function sessionFenceAdvanceIsBenign(params: {
@@ -257,6 +298,33 @@ async function sessionFenceAdvanceIsBenign(params: {
   }
   const lines = normalizeStringEntries(text.split("\n"));
   return lines.length > 0 && lines.every(isTranscriptOnlyOpenClawAssistantLine);
+}
+
+async function sessionFenceCtimeDriftIsBenign(params: {
+  sessionFile: string;
+  previous: SessionFileFenceSnapshot | undefined;
+  current: SessionFileFingerprint;
+}): Promise<boolean> {
+  if (
+    !sameSessionFileContentMetadata(params.previous?.fingerprint, params.current) ||
+    params.previous?.fingerprint.exists !== true ||
+    !params.current.exists ||
+    params.previous.fingerprint.ctimeNs === params.current.ctimeNs
+  ) {
+    return false;
+  }
+  if (params.previous.text === undefined) {
+    if (params.previous.digest === undefined) {
+      return false;
+    }
+    const currentDigest = await readSessionFileDigest(params.sessionFile);
+    return currentDigest !== undefined && currentDigest === params.previous.digest;
+  }
+  try {
+    return (await fs.readFile(params.sessionFile, "utf8")) === params.previous.text;
+  } catch {
+    return false;
+  }
 }
 
 async function sessionFenceRewriteIsBenign(params: {
@@ -500,6 +568,19 @@ function recordOwnedSessionFileWrite(
   return ownedSessionFileWriteGeneration;
 }
 
+function recordTrustedSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): number {
+  ownedSessionFileWriteGeneration += 1;
+  const state = {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+  };
+  trustedSessionFileStates.set(sessionFileKey, state);
+  return ownedSessionFileWriteGeneration;
+}
+
 function trustSessionFileState(
   sessionFileKey: string,
   fingerprint: SessionFileFingerprint,
@@ -728,6 +809,19 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       fenceFingerprint = current;
       fenceSnapshot = { fingerprint: current };
       fenceGeneration = ownedWrite.generation;
+      return;
+    }
+
+    if (
+      await sessionFenceCtimeDriftIsBenign({
+        sessionFile: params.lockOptions.sessionFile,
+        previous: fenceSnapshot,
+        current,
+      })
+    ) {
+      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceFingerprint = fenceSnapshot.fingerprint;
+      fenceGeneration = recordTrustedSessionFileState(sessionFileFenceKey, current);
       return;
     }
 

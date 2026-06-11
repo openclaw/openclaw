@@ -64,15 +64,20 @@ export function resolveGroupConfig(
   groupOpenid?: string | null,
   accountId?: string | null,
 ): GroupConfig {
+  const account = resolveAccountBase(cfg, accountId);
   const groups = readGroupsMap(cfg, accountId);
   const wildcard = groups["*"] ?? {};
   const specific = groupOpenid ? (groups[groupOpenid] ?? {}) : {};
+
+  // 账户级默认值：defaultRequireMention 配置 > 默认 true
+  const accountDefaultRequireMention =
+    asBoolean(account.config.defaultRequireMention) ?? DEFAULT_GROUP_CONFIG.requireMention;
 
   return {
     requireMention:
       readBoolean(specific, "requireMention") ??
       readBoolean(wildcard, "requireMention") ??
-      DEFAULT_GROUP_CONFIG.requireMention,
+      accountDefaultRequireMention,
     ignoreOtherMentions:
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
