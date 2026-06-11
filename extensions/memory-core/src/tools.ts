@@ -451,6 +451,7 @@ export function createMemorySearchTool(options: {
               await runUnavailablePhase("memory", async () => {
                 let activeMemory = memory;
                 const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+                const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
                 const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
                   cfg,
                   options.agentSessionKey,
@@ -466,7 +467,9 @@ export function createMemorySearchTool(options: {
                   minScore,
                   sessionKey: options.agentSessionKey,
                   qmdSearchModeOverride,
-                  signal: deadlineSignal,
+                  ...(resolvedMemoryBackend.backend === "builtin"
+                    ? { signal: deadlineSignal }
+                    : {}),
                   onDebug: (debug: MemorySearchRuntimeDebug) => {
                     runtimeDebug.push(debug);
                   },
