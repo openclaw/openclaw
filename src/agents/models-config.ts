@@ -1813,3 +1813,83 @@ export async function ensureOpenClawModelsJson(
     throw error;
   }
 }
+
+// Compatibility shims: the old public API surface expected by model-catalog.ts
+// and list.provider-catalog.ts.  The refactored internals inlined these into
+// ensureOpenClawModelsJson; we re-expose them here so callers that only need
+// the fingerprint (for cache keying) don't have to trigger a full write.
+
+export async function buildModelsJsonSourceFingerprint(
+  config?: OpenClawConfig,
+  agentDirOverride?: string,
+  options: {
+    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
+    workspaceDir?: string;
+    providerDiscoveryProviderIds?: readonly string[];
+    providerDiscoveryTimeoutMs?: number;
+    providerDiscoveryEntriesOnly?: boolean;
+  } = {},
+): Promise<{ agentDir: string; fingerprint: string; workspaceDir?: string }> {
+  const resolved = resolveModelsConfigInput(config);
+  const cfg = resolved.config;
+  const workspaceDir =
+    options.workspaceDir ??
+    (agentDirOverride?.trim()
+      ? undefined
+      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
+  const pluginMetadataSnapshot =
+    options.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
+      env: createConfigRuntimeEnv(cfg),
+      ...(workspaceDir ? { workspaceDir } : {}),
+      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
+    });
+  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
+  const authProfilesOutcome = readAuthProfilesStableOutcome(agentDir);
+  if (authProfilesOutcome.kind === "uncacheable") {
+    // Uncacheable auth state means no stable fingerprint is possible; return a
+    // unique-per-dir sentinel so callers treat this as a cache miss rather than
+    // a hit or an error.
+    return {
+      agentDir,
+      fingerprint: `uncacheable:${agentDir}`,
+      ...(workspaceDir ? { workspaceDir } : {}),
+    };
+  }
+  const fingerprint = buildModelsJsonFingerprint({
+    config: cfg,
+    sourceConfigForSecrets: resolved.sourceConfigForSecrets,
+    agentDir,
+    authProfilesOutcome,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(options.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+      : {}),
+    ...(options.providerDiscoveryTimeoutMs !== undefined
+      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+      : {}),
+    ...(options.providerDiscoveryEntriesOnly === true
+      ? { providerDiscoveryEntriesOnly: true }
+      : {}),
+  });
+  return { agentDir, fingerprint, ...(workspaceDir ? { workspaceDir } : {}) };
+}
+
+export async function prepareOpenClawModelsJsonSource(
+  config?: OpenClawConfig,
+  agentDirOverride?: string,
+  options: EnsureOpenClawModelsJsonOptions = {},
+): Promise<{ agentDir: string; fingerprint: string; workspaceDir?: string; wrote: boolean }> {
+  const [sourceInfo, result] = await Promise.all([
+    buildModelsJsonSourceFingerprint(config, agentDirOverride, options),
+    ensureOpenClawModelsJson(config, agentDirOverride, options),
+  ]);
+  return {
+    ...result,
+    fingerprint: sourceInfo.fingerprint,
+    ...(sourceInfo.workspaceDir ? { workspaceDir: sourceInfo.workspaceDir } : {}),
+  };
+}
