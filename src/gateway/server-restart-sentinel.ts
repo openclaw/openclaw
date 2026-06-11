@@ -451,6 +451,9 @@ async function loadRestartSentinelStartupTask(params: {
   }
   const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
+  if (payload.kind === "update") {
+    recordLatestUpdateRestartSentinel(payload);
+  }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);

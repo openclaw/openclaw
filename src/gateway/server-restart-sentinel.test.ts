@@ -292,7 +292,8 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const { getLatestUpdateRestartSentinel, scheduleRestartSentinelWake } =
+  await import("./server-restart-sentinel.js");
 
 function expectRecordFields(
   record: unknown,
@@ -1310,6 +1311,38 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a consumed update sentinel available for reconnect status polling", async () => {
+    const payload = {
+      kind: "update",
+      status: "ok",
+      ts: 123,
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "+15550002",
+        accountId: "acct-2",
+      },
+      stats: {
+        mode: "git",
+        root: "/repo",
+        before: { version: "1.0.0" },
+        after: { version: "2.0.0" },
+        steps: [],
+        reason: null,
+        durationMs: 10,
+      },
+    } as const;
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload,
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.removeRestartSentinelFile).toHaveBeenCalledWith("/tmp/restart-sentinel.json");
+    expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
   it("does not wake the main session when the sentinel has no sessionKey", async () => {
