@@ -7,14 +7,15 @@
 # refreshed bug list, and emails the full report to the ops address.
 #
 # Everything here is deterministic — no LLM. Install via crontab, e.g.:
-#   0 8 * * *  /bin/bash /root/projects/openclaw/scripts/ops/diagnostic-cron.sh >> /var/log/agentglob-diag.log 2>&1
+#   0 8 * * *  /bin/bash <repo>/scripts/ops/diagnostic-cron.sh >> /var/log/agentglob-diag.log 2>&1
 #
 set -uo pipefail
 
 # Cron runs with a minimal environment — pin PATH and key locations explicitly.
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export SSH_KEY=/root/.ssh/hetzner-openclaw
-REPO=/root/projects/openclaw
+# Repo root = two levels above this script — survives the checkout being moved.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EMAIL_TO=liran@agentglob.com
 EMAIL_FROM="AgentGlob Diagnostics <onetrue2023@gmail.com>"
 BUG_LIST_URL=https://github.com/cryptolir/openclaw/blob/main/scripts/ops/bug_list.md
