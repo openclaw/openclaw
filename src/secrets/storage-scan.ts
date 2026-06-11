@@ -1,3 +1,4 @@
+/** Filesystem discovery and bounded JSON readers for local secret storage audits. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
@@ -21,6 +22,7 @@ export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: stri
   );
 }
 
+/** Lists agent directories that own canonical auth-profile stores. */
 export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: string): string[] {
   return listAuthProfileStoreAgentDirsFromAuthStorePaths(config, stateDir);
 }

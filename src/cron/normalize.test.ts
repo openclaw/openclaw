@@ -1,3 +1,4 @@
+// Cron normalization tests cover job config normalization and defaults.
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
@@ -139,6 +140,17 @@ describe("normalizeCronJobCreate", () => {
 
     const delivery = normalized.delivery as Record<string, unknown>;
     expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
+  });
+
+  it("preserves explicit null model clear in payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: null,
+      },
+    }) as unknown as Record<string, { model?: unknown }>;
+
+    expect(normalized.payload?.model).toBeNull();
   });
 
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {
@@ -358,6 +370,52 @@ describe("normalizeCronJobCreate", () => {
 
     const delivery = normalized.delivery as Record<string, unknown>;
     expect(delivery.mode).toBe("announce");
+  });
+
+  it("defaults command payloads to isolated announce jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "command default",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        cwd: " /srv/example ",
+        env: { FOO: "bar" },
+        timeoutSeconds: 30,
+        noOutputTimeoutSeconds: 5,
+        outputMaxBytes: 4096,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect((normalized.delivery as Record<string, unknown>).mode).toBe("announce");
+    expect(normalized.payload).toEqual({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+      cwd: "/srv/example",
+      env: { FOO: "bar" },
+      timeoutSeconds: 30,
+      noOutputTimeoutSeconds: 5,
+      outputMaxBytes: 4096,
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("preserves command argv argument bytes", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "command exact argv",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "command",
+        argv: ["printf", "%s", "  padded value  "],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.payload).toMatchObject({
+      kind: "command",
+      argv: ["printf", "%s", "  padded value  "],
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
   });
 
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {

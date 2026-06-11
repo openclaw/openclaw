@@ -1,3 +1,8 @@
+/**
+ * gateway built-in tool.
+ *
+ * Exposes selected Gateway control/config/update actions with fail-closed config mutation boundaries.
+ */
 import { isDeepStrictEqual } from "node:util";
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -8,6 +13,7 @@ import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
@@ -26,6 +32,7 @@ import {
   type AnyAgentTool,
   jsonResult,
   readNonNegativeIntegerParam,
+  readStringArrayParam,
   readStringParam,
 } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
@@ -40,9 +47,7 @@ const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 // trust-boundary control on `config.apply`/`config.patch`, so the runtime tool
 // must fail closed and allow only a narrow set of agent-tunable paths.
 const ALLOWED_GATEWAY_CONFIG_PATHS = [
-  // Agent prompt/model tuning.
-  "agents.defaults.promptOverlays",
-  "agents.defaults.model",
+  // Low-risk agent runtime tuning.
   "agents.defaults.thinkingDefault",
   "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",
@@ -77,6 +82,7 @@ export function assertGatewayConfigMutationAllowedForTest(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
   raw: string;
+  replacePaths?: string[];
 }): void {
   assertGatewayConfigMutationAllowed(params);
 }
@@ -309,6 +315,7 @@ function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
   raw: string;
+  replacePaths?: string[];
 }): void {
   const parsed = parseGatewayConfigMutationRaw(params.raw, params.action);
   const nextConfig =
@@ -316,6 +323,7 @@ function assertGatewayConfigMutationAllowed(params: {
       ? (parsed as Record<string, unknown>)
       : (applyMergePatch(params.currentConfig, parsed, {
           mergeObjectArraysById: true,
+          replaceArrayPaths: new Set(params.replacePaths ?? []),
         }) as Record<string, unknown>);
   const changedPaths = [...collectChangedConfigPaths(params.currentConfig, nextConfig)].toSorted();
   const disallowedPaths = changedPaths.filter((path) => !isAllowedGatewayConfigPath(path));
@@ -364,6 +372,7 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch
   raw: Type.Optional(Type.String()),
   baseHash: Type.Optional(Type.String()),
+  replacePaths: Type.Optional(Type.Array(Type.String(), { maxItems: 256 })),
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
@@ -382,7 +391,7 @@ export function createGatewayTool(opts?: {
     label: "Gateway",
     name: "gateway",
     description:
-      "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
+      "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. For config.patch that intentionally removes array entries, pass replacePaths with the exact affected array path. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -392,8 +401,8 @@ export function createGatewayTool(opts?: {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
         const sessionKey =
-          normalizeOptionalString(params.sessionKey) ??
-          normalizeOptionalString(opts?.agentSessionKey);
+          normalizeOptionalString(opts?.agentSessionKey) ??
+          normalizeOptionalString(params.sessionKey);
         const delayMs = readNonNegativeIntegerParam(params, "delayMs");
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
@@ -426,6 +435,9 @@ export function createGatewayTool(opts?: {
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          // Ownership and sentinel routing use the same trusted session identity,
+          // so model-supplied params cannot queue work into another session.
+          sessionKey,
           emitHooks: {
             beforeEmit: async () => {
               sentinelPath = await writeRestartSentinel(payload);
@@ -435,7 +447,10 @@ export function createGatewayTool(opts?: {
             },
           },
         });
-        return jsonResult(scheduled);
+        return jsonResult({
+          ...scheduled,
+          ...(payload.continuation ? { continuationQueued: scheduled.emitHooksQueued } : {}),
+        });
       }
 
       const gatewayOpts = readGatewayCallOptions(params);
@@ -446,8 +461,8 @@ export function createGatewayTool(opts?: {
         restartDelayMs: number | undefined;
       } => {
         const sessionKey =
-          normalizeOptionalString(params.sessionKey) ??
-          normalizeOptionalString(opts?.agentSessionKey);
+          normalizeOptionalString(opts?.agentSessionKey) ??
+          normalizeOptionalString(params.sessionKey);
         const note = normalizeOptionalString(params.note);
         const restartDelayMs = readNonNegativeIntegerParam(params, "restartDelayMs");
         return { sessionKey, note, restartDelayMs };
@@ -460,8 +475,14 @@ export function createGatewayTool(opts?: {
         sessionKey: string | undefined;
         note: string | undefined;
         restartDelayMs: number | undefined;
+        replacePaths: string[] | undefined;
       }> => {
         const raw = readStringParam(params, "raw", { required: true });
+        const rawReplacePaths =
+          action === "config.patch" ? readStringArrayParam(params, "replacePaths") : undefined;
+        const replacePaths = rawReplacePaths
+          ? [...normalizeConfigPatchReplacePaths(rawReplacePaths)]
+          : undefined;
         const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
         // Always fetch config.get so we can compare protected exec settings
         // against the current snapshot before forwarding any write RPC.
@@ -473,7 +494,7 @@ export function createGatewayTool(opts?: {
         if (!baseHash) {
           throw new Error("Missing baseHash from config snapshot.");
         }
-        return { raw, baseHash, snapshotConfig, ...resolveGatewayWriteMeta() };
+        return { raw, baseHash, snapshotConfig, replacePaths, ...resolveGatewayWriteMeta() };
       };
 
       if (action === "config.get") {
@@ -518,12 +539,13 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "config.patch") {
-        const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs, replacePaths } =
           await resolveConfigWriteParams();
         assertGatewayConfigMutationAllowed({
           action: "config.patch",
           currentConfig: snapshotConfig,
           raw,
+          replacePaths,
         });
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
@@ -531,6 +553,7 @@ export function createGatewayTool(opts?: {
           sessionKey,
           note,
           restartDelayMs,
+          ...(replacePaths ? { replacePaths } : {}),
         });
         return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }

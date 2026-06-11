@@ -1,3 +1,4 @@
+// Exposes regular-file IO helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
 
 // Regular-file IO helpers reject symlinks and non-file targets before reads or

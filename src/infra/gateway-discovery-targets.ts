@@ -1,3 +1,4 @@
+// Normalizes gateway discovery targets for local and remote lookups.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveGatewayDiscoveryEndpoint,

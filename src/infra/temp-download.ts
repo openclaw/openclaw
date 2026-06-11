@@ -1,3 +1,4 @@
+// Creates private temporary workspaces for downloads.
 import "./fs-safe-defaults.js";
 import crypto from "node:crypto";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -202,6 +203,16 @@ function isConfigPatchNoopForSnapshot(config: Record<string, unknown>, raw: stri
   return areJsonValuesEqual(applyQaMergePatch(config, patch), config);
 }
 
+function isConfigMutationNoopForSnapshot(
+  action: "config.patch" | "config.apply",
+  config: Record<string, unknown>,
+  raw: string,
+) {
+  return action === "config.patch"
+    ? isConfigPatchNoopForSnapshot(config, raw)
+    : isConfigApplyNoopForSnapshot(config, raw);
+}
+
 async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   const snapshot = (await env.gateway.call(
     "config.get",
@@ -230,25 +241,17 @@ async function runConfigMutation(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  replacePaths?: readonly string[];
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
   const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
-    if (
-      params.action === "config.patch" &&
-      isConfigPatchNoopForSnapshot(snapshot.config, params.raw)
-    ) {
+    if (isConfigMutationNoopForSnapshot(params.action, snapshot.config, params.raw)) {
       // QA scenarios do best-effort cleanup in finally blocks. Skipping
       // client-known no-op patches keeps that cleanup from burning the
       // control-plane write budget and making later capability checks flaky.
-      return { ok: true, noop: true };
-    }
-    if (
-      params.action === "config.apply" &&
-      isConfigApplyNoopForSnapshot(snapshot.config, params.raw)
-    ) {
       return { ok: true, noop: true };
     }
     try {
@@ -261,6 +264,7 @@ async function runConfigMutation(params: {
           ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
         },
         { timeoutMs },
       );
@@ -286,7 +290,14 @@ async function runConfigMutation(params: {
         throw error;
       }
       await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
-      return { ok: true, restarted: true };
+      const postRestartSnapshot = await readConfigSnapshot(params.env);
+      if (isConfigMutationNoopForSnapshot(params.action, postRestartSnapshot.config, params.raw)) {
+        return { ok: true, restarted: true };
+      }
+      lastConflict = new Error(
+        `${params.action} restart race settled before the config mutation was visible`,
+      );
+      continue;
     }
   }
   throw toLintErrorObject(
@@ -307,6 +318,7 @@ async function patchConfig(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  replacePaths?: readonly string[];
 }) {
   return await runConfigMutation({
     env: params.env,
@@ -316,6 +328,7 @@ async function patchConfig(params: {
     deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
+    replacePaths: params.replacePaths,
   });
 }
 

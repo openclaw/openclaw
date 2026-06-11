@@ -1,4 +1,9 @@
-import { redactSensitiveText, resolveRedactOptions } from "../logging/redact.js";
+// Sanitizes command text before it is displayed in approval prompts.
+import {
+  computeSensitiveRedactionBitmap,
+  redactSensitiveText,
+  resolveRedactOptions,
+} from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
 // Escape control characters, Unicode format/line/paragraph separators, and non-ASCII space
@@ -59,31 +64,6 @@ function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
   };
 }
 
-// Build a boolean bitmap of positions in `text` that ANY redaction pattern would match.
-// Patterns are applied independently to the raw text (not sequentially against a
-// progressively-redacted view) so later patterns can still find matches that the in-place
-// redaction would have replaced first. That is conservative — it may over-count overlapping
-// matches — but that is acceptable for a coverage check. Indices are UTF-16 code-unit
-// offsets, matching what `matchAll` returns and aligning with `String#length`.
-function computeRedactionBitmap(text: string, patterns: RegExp[]): boolean[] {
-  const bitmap: boolean[] = Array.from({ length: text.length }, () => false);
-  for (const pattern of patterns) {
-    const iter = pattern.flags.includes("g")
-      ? new RegExp(pattern.source, pattern.flags)
-      : new RegExp(pattern.source, `${pattern.flags}g`);
-    for (const match of text.matchAll(iter)) {
-      if (match.index === undefined) {
-        continue;
-      }
-      const end = match.index + match[0].length;
-      for (let i = match.index; i < end; i++) {
-        bitmap[i] = true;
-      }
-    }
-  }
-  return bitmap;
-}
-
 // Iterate by full Unicode code point so astral-plane invisibles (e.g. U+E0061 TAG LATIN
 // SMALL LETTER A, category Cf) are matched as single characters instead of being seen as a
 // surrogate pair whose halves are category Cs and would escape the invisible-char regex.
@@ -125,17 +105,16 @@ function sanitizeExecApprovalDisplayTextInternal(
   if (strippedRedacted === stripped) {
     return truncateForDisplay(escapeInvisibles(rawRedacted, options));
   }
-  // Detect bypass by position-bitmap coverage. Run each redaction pattern independently on
-  // both views and map stripped-view match positions back to original coordinates. If every
-  // position the stripped view would mask is also masked by the raw view, the raw view
-  // already covered everything — for example, an ordinary multi-line PEM private key where
-  // raw produces `BEGIN/…redacted…/END` while stripped collapses to `***`. A real bypass
-  // exists only when the stripped view masks at least one original position raw missed (e.g.
-  // the tail of an `sk-` token whose prefix-boundary was broken by a spliced zero-width or
-  // NBSP character).
-  const { patterns } = resolveRedactOptions({ mode: "tools" });
-  const rawMask = computeRedactionBitmap(commandText, patterns);
-  const strippedMask = computeRedactionBitmap(stripped, patterns);
+  // Detect bypass by position-bitmap coverage. Run the redaction matchers on both views and
+  // map stripped-view match positions back to original coordinates. If every position the
+  // stripped view would mask is also masked by the raw view, the raw view already covered
+  // everything — for example, an ordinary multi-line PEM private key where raw produces
+  // `BEGIN/…redacted…/END` while stripped collapses to `***`. A real bypass exists only when
+  // the stripped view masks at least one original position raw missed (e.g. the tail of an
+  // `sk-` token whose prefix-boundary was broken by a spliced zero-width or NBSP character).
+  const redaction = resolveRedactOptions({ mode: "tools" });
+  const rawMask = computeSensitiveRedactionBitmap(commandText, redaction);
+  const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
   let bypassDetected = false;
   for (let i = 0; i < strippedMask.length; i++) {
     if (strippedMask[i] && !rawMask[strippedToOrig[i]]) {

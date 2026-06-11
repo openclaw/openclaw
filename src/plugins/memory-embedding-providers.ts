@@ -1,3 +1,4 @@
+// Resolves plugin-provided memory embedding providers from config and registry.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import type { EmbeddingInput } from "../memory-host-sdk/host/embedding-inputs.js";
@@ -30,6 +31,7 @@ export type MemoryEmbeddingProviderRuntime = {
   cacheKeyData?: Record<string, unknown>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
+  sourceWideBatchEmbed?: boolean;
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 

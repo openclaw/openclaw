@@ -1,3 +1,4 @@
+/** Session initialization path for ACP runtime handles and persisted manager metadata. */
 import {
   createIdentityFromEnsure,
   mergeSessionIdentity,

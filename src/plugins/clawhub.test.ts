@@ -1,3 +1,4 @@
+/** Verifies ClawHub plugin spec parsing and install metadata handling. */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -858,7 +859,7 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("installs when a CalVer correction runtime satisfies the base plugin API range", async () => {
+  it("installs when a release correction runtime satisfies the base plugin API range", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.3-1");
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {

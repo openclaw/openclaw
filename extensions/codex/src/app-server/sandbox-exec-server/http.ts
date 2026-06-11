@@ -1,14 +1,21 @@
+/**
+ * Implements sandboxed HTTP requests for Codex native tools by routing network
+ * access through the active OpenClaw sandbox backend.
+ */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
 import { requireBackend } from "./runtime.js";
 import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
+/** Maximum JSON-line size accepted from the streaming HTTP helper process. */
 export const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
 
+/** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
   execServer: OpenClawExecServer,
   socket: WebSocket,
@@ -16,9 +23,11 @@ export async function httpRequest(
 ): Promise<JsonObject> {
   const record = requireObject(params, "http/request params");
   const requestId = requireString(record.requestId, "requestId");
+  const url = requireString(record.url, "url");
+  assertSandboxHttpRequestTargetAllowed(url);
   const request = {
     method: requireString(record.method, "method"),
-    url: requireString(record.url, "url"),
+    url,
     headers: readHttpHeaders(record.headers),
     bodyBase64: typeof record.bodyBase64 === "string" ? record.bodyBase64 : undefined,
     timeoutMs:
@@ -45,6 +54,25 @@ type SandboxHttpRequest = {
   timeoutMs?: number;
   streamResponse: boolean;
 };
+
+function assertSandboxHttpRequestTargetAllowed(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SsrFBlockedError("Invalid URL supplied to sandbox http/request");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new SsrFBlockedError(
+      `Blocked non-HTTP(S) protocol in sandbox http/request: ${parsed.protocol}`,
+    );
+  }
+  if (isBlockedHostnameOrIp(parsed.hostname)) {
+    throw new SsrFBlockedError(
+      `Blocked hostname or private/internal IP in sandbox http/request: ${parsed.hostname}`,
+    );
+  }
+}
 
 async function runSandboxHttpRequest(
   execServer: OpenClawExecServer,
@@ -224,12 +252,14 @@ function readStreamingSandboxHttpResponse(params: {
   });
 }
 
-const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
+export const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
 tmp=$(mktemp "$TMPDIR/openclaw-http.XXXXXX.py" 2>/dev/null || mktemp "/tmp/openclaw-http.XXXXXX.py") || exit 1
 trap 'rm -f "$tmp"' EXIT
 cat > "$tmp" <<'PY'
 import base64
 import json
+import ipaddress
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -240,6 +270,127 @@ def emit(payload):
 
 def response_headers(response):
     return [{"name": name, "value": value} for name, value in response.headers.items()]
+
+BLOCKED_HOSTNAMES = {
+    "localhost",
+    "localhost.localdomain",
+    "metadata.google.internal",
+}
+CLOUD_METADATA_IP_ADDRESSES = {
+    "100.100.100.200",
+    "fd00:ec2::254",
+}
+BLOCKED_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "100.64.0.0/10",
+        "198.18.0.0/15",
+    )
+)
+BLOCKED_IPV6_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "100::/64",
+        "2001:2::/48",
+        "2001:20::/28",
+        "2001:db8::/32",
+        "fec0::/10",
+    )
+)
+PINNED_ADDRESSES = {}
+
+def normalize_hostname(hostname):
+    return (hostname or "").strip("[]").rstrip(".").lower()
+
+def is_blocked_hostname(hostname):
+    normalized = normalize_hostname(hostname)
+    return (
+        normalized in BLOCKED_HOSTNAMES
+        or normalized.endswith(".localhost")
+        or normalized.endswith(".local")
+        or normalized.endswith(".internal")
+    )
+
+def is_blocked_ip(address):
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    embedded_ipv4 = extract_embedded_ipv4(parsed)
+    if embedded_ipv4 is not None and is_blocked_ip(str(embedded_ipv4)):
+        return True
+    if str(parsed).lower() in CLOUD_METADATA_IP_ADDRESSES:
+        return True
+    if isinstance(parsed, ipaddress.IPv4Address):
+        if any(parsed in network for network in BLOCKED_IPV4_NETWORKS):
+            return True
+    else:
+        if any(parsed in network for network in BLOCKED_IPV6_NETWORKS):
+            return True
+    return (
+        parsed.is_loopback
+        or parsed.is_private
+        or parsed.is_link_local
+        or parsed.is_multicast
+        or parsed.is_reserved
+        or parsed.is_unspecified
+    )
+
+def ipv4_from_int(value):
+    return ipaddress.IPv4Address(value & 0xffffffff)
+
+def extract_embedded_ipv4(address):
+    if not isinstance(address, ipaddress.IPv6Address):
+        return None
+    if address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    value = int(address)
+    hextets = [(value >> shift) & 0xffff for shift in range(112, -1, -16)]
+    if hextets[:6] == [0, 0, 0, 0, 0, 0]:
+        return ipv4_from_int(value)
+    if hextets[:6] == [0x64, 0xff9b, 0, 0, 0, 0]:
+        return ipv4_from_int(value)
+    if hextets[:6] == [0x64, 0xff9b, 1, 0, 0, 0]:
+        return ipv4_from_int(value)
+    if hextets[0] == 0x2002:
+        return ipv4_from_int((hextets[1] << 16) | hextets[2])
+    if hextets[0] == 0x2001 and hextets[1] == 0:
+        return ipv4_from_int(((hextets[6] << 16) | hextets[7]) ^ 0xffffffff)
+    if (hextets[4] & 0xfcff) == 0 and hextets[5] == 0x5efe:
+        return ipv4_from_int((hextets[6] << 16) | hextets[7])
+    return None
+
+def assert_url_allowed(url):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("http/request only supports http and https URLs")
+    hostname = normalize_hostname(parsed.hostname)
+    if not hostname or is_blocked_hostname(hostname) or is_blocked_ip(hostname):
+        raise ValueError("Blocked hostname or private/internal/special-use IP address")
+    try:
+        results = socket.getaddrinfo(hostname, parsed.port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as error:
+        raise ValueError(f"Unable to resolve hostname: {hostname}") from error
+    addresses = {entry[4][0] for entry in results if entry[4]}
+    if not addresses or any(is_blocked_ip(address) for address in addresses):
+        raise ValueError("Blocked: resolves to private/internal/special-use IP address")
+    PINNED_ADDRESSES[hostname] = sorted(addresses)
+
+class GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        assert_url_allowed(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def pinned_getaddrinfo(original_getaddrinfo):
+    def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        pinned = PINNED_ADDRESSES.get(normalize_hostname(host))
+        if not pinned:
+            return original_getaddrinfo(host, port, family, type, proto, flags)
+        results = []
+        for address in pinned:
+            results.extend(original_getaddrinfo(address, port, family, type, proto, flags))
+        return results
+    return getaddrinfo
 
 def handle_response(input_data, response):
     headers = response_headers(response)
@@ -270,9 +421,7 @@ def handle_response(input_data, response):
 def main():
     input_data = json.load(sys.stdin)
     url = str(input_data.get("url", ""))
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("http/request only supports http and https URLs")
+    assert_url_allowed(url)
     body_base64 = input_data.get("bodyBase64")
     data = base64.b64decode(body_base64) if isinstance(body_base64, str) else None
     request = urllib.request.Request(
@@ -286,11 +435,16 @@ def main():
     timeout = None
     if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
         timeout = timeout_ms / 1000
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), GuardedRedirectHandler)
+    original_getaddrinfo = socket.getaddrinfo
+    socket.getaddrinfo = pinned_getaddrinfo(original_getaddrinfo)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             handle_response(input_data, response)
     except urllib.error.HTTPError as response:
         handle_response(input_data, response)
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 if __name__ == "__main__":
     main()

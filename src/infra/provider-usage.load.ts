@@ -1,3 +1,4 @@
+// Loads provider usage snapshots from built-in and plugin providers.
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
@@ -54,7 +55,7 @@ async function fetchProviderUsageSnapshot(params: {
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
   const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
-    provider: params.auth.provider,
+    provider: params.auth.hookProvider ?? params.auth.provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -66,6 +67,7 @@ async function fetchProviderUsageSnapshot(params: {
       provider: params.auth.provider,
       token: params.auth.token,
       accountId: params.auth.accountId,
+      authProfileId: params.auth.authProfileId,
       timeoutMs: params.timeoutMs,
       fetchFn: params.fetchFn,
     },

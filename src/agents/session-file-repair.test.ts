@@ -1,8 +1,16 @@
+/**
+ * Regression coverage for persisted session JSONL repair.
+ * Exercises malformed lines, blank turns, empty assistant errors, and missing tool results.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BLANK_USER_FALLBACK_TEXT, repairSessionFileIfNeeded } from "./session-file-repair.js";
+import {
+  BLANK_USER_FALLBACK_TEXT,
+  CORRUPTED_IMAGE_FALLBACK_TEXT,
+  repairSessionFileIfNeeded,
+} from "./session-file-repair.js";
 
 function buildSessionHeaderAndMessage() {
   const header = {
@@ -47,6 +55,10 @@ function requireFirstLogMessage(log: ReturnType<typeof vi.fn>): string {
   }
   return message;
 }
+
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+const BMP_HEADER = Buffer.from("BMfixture", "ascii").toString("base64");
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -282,7 +294,7 @@ describe("repairSessionFileIfNeeded", () => {
         role: "user",
         content: [
           { type: "text", text: "   " },
-          { type: "image", data: "AA==", mimeType: "image/png" },
+          { type: "image", data: PNG_1X1, mimeType: "image/png" },
         ],
       },
     };
@@ -296,7 +308,123 @@ describe("repairSessionFileIfNeeded", () => {
     const repaired = await fs.readFile(file, "utf-8");
     const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
     expect(repairedEntry.message.content).toEqual([
-      { type: "image", data: "AA==", mimeType: "image/png" },
+      { type: "image", data: PNG_1X1, mimeType: "image/png" },
+    ]);
+  });
+
+  it("rewrites corrupted image blocks so replay can continue", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const poisonedUserEntry = {
+      type: "message",
+      id: "msg-poisoned-image",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this" },
+          { type: "image", data: "iVBORw0KGgoAKID…MNOPAAA=", mimeType: "image/png" },
+        ],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(poisonedUserEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCorruptedImageBlocks).toBe(1);
+    expect(requireFirstLogMessage(debug)).toContain("removed 1 corrupted image block(s)");
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
+    expect(repairedEntry.message.content).toEqual([
+      { type: "text", text: "inspect this" },
+      { type: "text", text: CORRUPTED_IMAGE_FALLBACK_TEXT },
+    ]);
+  });
+
+  it("preserves valid image blocks during repair", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const validUserEntry = {
+      type: "message",
+      id: "msg-valid-image",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this" },
+          { type: "image", data: PNG_1X1, mimeType: "image/png" },
+        ],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(validUserEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    const repaired = await fs.readFile(file, "utf-8");
+    expect(repaired).toBe(original);
+  });
+
+  it("preserves valid non-browser image blocks during repair", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const validUserEntry = {
+      type: "message",
+      id: "msg-valid-bmp",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this" },
+          { type: "image", data: BMP_HEADER, mimeType: "image/bmp" },
+        ],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(validUserEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    const repaired = await fs.readFile(file, "utf-8");
+    expect(repaired).toBe(original);
+  });
+
+  it("rewrites syntactically valid base64 that is not image bytes", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const fakeImageUserEntry = {
+      type: "message",
+      id: "msg-fake-image",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this" },
+          { type: "image", data: "SGVsbG8=", mimeType: "image/png" },
+        ],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(fakeImageUserEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCorruptedImageBlocks).toBe(1);
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
+    expect(repairedEntry.message.content).toEqual([
+      { type: "text", text: "inspect this" },
+      { type: "text", text: CORRUPTED_IMAGE_FALLBACK_TEXT },
     ]);
   });
 

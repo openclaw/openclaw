@@ -1,3 +1,4 @@
+// Resolves provider thinking-level policy from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type {
@@ -82,7 +83,7 @@ export function resolveProviderThinkingProfile(
   const activeProfile = resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(
     params.context,
   );
-  if (activeProfile) {
+  if (activeProfile !== undefined) {
     return activeProfile;
   }
   return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(

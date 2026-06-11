@@ -1,3 +1,4 @@
+// Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
@@ -578,7 +579,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
       await closeStreaming(options);
-      await Promise.resolve(typingCallbacks?.onIdle?.());
+      typingCallbacks?.onIdle?.();
     });
     idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
     return nextIdleSideEffects;

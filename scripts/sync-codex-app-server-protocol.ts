@@ -1,6 +1,8 @@
+// Sync Codex App Server Protocol script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  formatCodexAppServerProtocolJsonText,
   generateExperimentalCodexAppServerProtocolSource,
   selectedCodexAppServerJsonSchemas,
 } from "./lib/codex-app-server-protocol-source.js";
@@ -26,7 +28,7 @@ async function main(): Promise<void> {
       const schemaSource = await fs.readFile(path.join(source.jsonRoot, schema), "utf8");
       await fs.writeFile(
         path.join(targetRoot, "json", schema),
-        `${JSON.stringify(JSON.parse(schemaSource), null, 2)}\n`,
+        formatCodexAppServerProtocolJsonText(schemaSource),
       );
     }
   } finally {

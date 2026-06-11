@@ -1,3 +1,4 @@
+// Persists update-control-plane sentinel files used by updater coordination.
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {

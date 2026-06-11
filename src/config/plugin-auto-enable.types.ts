@@ -1,3 +1,4 @@
+// Defines plugin auto-enable decision and candidate types.
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Reasons a configured surface can cause a plugin to be auto-enabled. */

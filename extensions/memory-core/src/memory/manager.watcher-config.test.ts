@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.watcher config plugin behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -139,6 +140,8 @@ vi.mock("./sqlite-vec.js", () => ({
 
 vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
     provider: {

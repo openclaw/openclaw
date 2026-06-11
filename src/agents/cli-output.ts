@@ -1,3 +1,8 @@
+/**
+ * Parses output from CLI-backed model providers. It supports plain text, JSON,
+ * JSONL streaming, Claude stream-json dialects, usage metadata, and tool event
+ * reconstruction.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
@@ -311,6 +316,7 @@ function shouldUnwrapNestedCliResultText(params: {
 }
 
 /** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
+/** Parses a single JSON payload emitted by a CLI backend. */
 export function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
@@ -619,20 +625,52 @@ function dispatchClaudeCliStreamingToolEvent(params: {
 }
 
 /** Creates an incremental JSONL parser for CLI streaming responses and tool events. */
+/** Creates a stateful parser for streaming JSONL CLI backend output. */
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  classifyCommentaryText?: boolean;
+  onCommentaryText?: (text: string) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
+  let pendingClaudeText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
   const texts: string[] = [];
   const toolTracker = createToolUseTracker();
+  const classifyClaudeCommentary =
+    params.classifyCommentaryText === true && usesClaudeStreamJsonDialect(params);
+
+  const flushPendingClaudeAssistantText = () => {
+    if (!pendingClaudeText) {
+      return;
+    }
+    const delta = pendingClaudeText;
+    pendingClaudeText = "";
+    assistantText = `${assistantText}${delta}`;
+    params.onAssistantDelta({
+      text: assistantText,
+      delta,
+      sessionId,
+      usage,
+    });
+  };
+
+  const flushPendingClaudeCommentaryText = () => {
+    if (!pendingClaudeText) {
+      return;
+    }
+    const text = pendingClaudeText.trim();
+    pendingClaudeText = "";
+    if (text) {
+      params.onCommentaryText?.(text);
+    }
+  };
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
@@ -648,6 +686,10 @@ export function createCliJsonlStreamingParser(params: {
       }) || !usage;
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
+    }
+
+    if (classifyClaudeCommentary && parsed.type === "result") {
+      flushPendingClaudeAssistantText();
     }
 
     const result = parseClaudeCliJsonlResult({
@@ -667,6 +709,19 @@ export function createCliJsonlStreamingParser(params: {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {
         texts.push(item.text);
+      }
+    }
+
+    if (classifyClaudeCommentary && parsed.type === "stream_event" && isRecord(parsed.event)) {
+      const evt = parsed.event;
+      if (
+        evt.type === "content_block_start" &&
+        isRecord(evt.content_block) &&
+        isClaudeToolUseBlockType(evt.content_block.type)
+      ) {
+        flushPendingClaudeCommentaryText();
+      } else if (evt.type === "content_block_start" || evt.type === "message_stop") {
+        flushPendingClaudeAssistantText();
       }
     }
 
@@ -690,6 +745,10 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (!delta) {
+      return;
+    }
+    if (classifyClaudeCommentary) {
+      pendingClaudeText = `${pendingClaudeText}${delta.delta}`;
       return;
     }
     assistantText = delta.text;
@@ -734,6 +793,9 @@ export function createCliJsonlStreamingParser(params: {
     },
     finish() {
       flushLines(true);
+      if (classifyClaudeCommentary) {
+        flushPendingClaudeAssistantText();
+      }
     },
     getOutput() {
       if (output) {
@@ -746,6 +808,7 @@ export function createCliJsonlStreamingParser(params: {
 }
 
 /** Parses complete JSONL CLI output into the final assistant result and metadata. */
+/** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
 export function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
@@ -798,6 +861,7 @@ export function parseCliJsonl(
 }
 
 /** Parses CLI output according to the backend output mode with text fallback. */
+/** Parses CLI backend output using the configured JSON/JSONL/plain-text mode. */
 export function parseCliOutput(params: {
   raw: string;
   backend: CliBackendConfig;
@@ -826,6 +890,7 @@ export function parseCliOutput(params: {
 }
 
 /** Extracts the most specific structured CLI error message from mixed or JSON output. */
+/** Extracts a human-readable error message from mixed CLI stderr/stdout text. */
 export function extractCliErrorMessage(raw: string): string | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {

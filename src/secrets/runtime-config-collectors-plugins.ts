@@ -1,3 +1,4 @@
+/** Collects plugin config secret refs from runtime plugin metadata. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -30,6 +31,7 @@ function parsePluginConfigArrayIndex(segment: string): number | undefined {
  * installed). This prevents resolution failures for SecretRefs belonging to
  * non-loadable plugins from blocking startup or preflight validation.
  */
+/** Collects SecretRef assignments from plugin-owned config contract paths. */
 export function collectPluginConfigAssignments(params: {
   /** Mutable config snapshot whose plugin config values will receive resolved secrets. */
   config: OpenClawConfig;

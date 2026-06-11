@@ -1,3 +1,4 @@
+// Exercises npm-spec plugin install behavior through the CLI path.
 import { execFile, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";

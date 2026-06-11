@@ -1,3 +1,7 @@
+/**
+ * Runs `/btw` side questions against the active conversation without resuming
+ * or continuing the main task.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -23,6 +27,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
@@ -312,6 +317,7 @@ type RunBtwSideQuestionParams = {
   currentChannelId?: string;
 };
 
+/** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
   params: RunBtwSideQuestionParams,
 ): Promise<ReplyPayload | undefined> {
@@ -478,12 +484,7 @@ export async function runBtwSideQuestion(
         profileId: resolvedAuthProfileId,
       },
     });
-    if (preparedAuth?.baseUrl) {
-      runtimeModel = {
-        ...runtimeModel,
-        baseUrl: preparedAuth.baseUrl,
-      };
-    }
+    runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
     if (preparedAuth?.apiKey) {
       apiKey = preparedAuth.apiKey;
     }

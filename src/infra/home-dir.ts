@@ -1,3 +1,4 @@
+// Resolves OpenClaw home and platform-specific config directories.
 import os from "node:os";
 import path from "node:path";
 

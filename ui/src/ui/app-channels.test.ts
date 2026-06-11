@@ -1,3 +1,4 @@
+// Control UI tests cover app channels behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleChannelConfigReload, handleChannelConfigSave } from "./app-channels.ts";
 import type { ChannelsState } from "./controllers/channels.ts";
@@ -72,6 +73,7 @@ function createHost(request: ReturnType<typeof vi.fn> = vi.fn()): ChannelsAction
     nostrProfileAccountId: null,
     nostrProfileFormState: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     settings: {},
     updateStatusBanner: null,
     updateRunning: false,

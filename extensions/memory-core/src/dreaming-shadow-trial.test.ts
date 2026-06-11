@@ -1,3 +1,4 @@
+// Memory Core tests cover dreaming shadow trial plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -61,6 +62,7 @@ describe("dreaming shadow trial runner", () => {
       verdict: "neutral",
       workspaceDir,
       nowMs: Date.parse("2026-05-18T18:00:00.000Z"),
+      timezone: "UTC",
     });
 
     expect(report.recommendation).toBe("defer");

@@ -1,3 +1,4 @@
+// Builds approval prompt view models from request and resolution events.
 import type {
   ApprovalMetadataView,
   ApprovalRequest,

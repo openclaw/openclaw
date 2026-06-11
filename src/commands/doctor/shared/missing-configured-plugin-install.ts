@@ -1,3 +1,4 @@
+// Doctor repair for configured plugins, runtimes, channels, and providers missing install records.
 import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -23,6 +24,7 @@ import {
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
+import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -46,6 +48,7 @@ import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
   listOfficialExternalPluginCatalogEntries,
+  getOfficialExternalPluginCatalogManifest,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
@@ -132,6 +135,35 @@ function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfi
   }
 }
 
+function addConfiguredMemoryEmbeddingProviderPluginIds(
+  ids: Set<string>,
+  cfg: OpenClawConfig,
+): void {
+  const configuredProviderIds = collectConfiguredMemoryEmbeddingProviderIds(cfg);
+  if (configuredProviderIds.size === 0) {
+    return;
+  }
+  for (const entry of listOfficialExternalPluginCatalogEntries()) {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    if (!pluginId) {
+      continue;
+    }
+    const ownedProviderIds = [
+      ...(manifest?.contracts?.embeddingProviders ?? []),
+      ...(manifest?.contracts?.memoryEmbeddingProviders ?? []),
+    ];
+    if (
+      ownedProviderIds.some((providerId) => {
+        const normalized = normalizeOptionalLowercaseString(providerId);
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      })
+    ) {
+      ids.add(pluginId);
+    }
+  }
+}
+
 function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
@@ -153,6 +185,7 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
     }
   }
   addConfiguredAgentRuntimePluginIds(ids, cfg);
+  addConfiguredMemoryEmbeddingProviderPluginIds(ids, cfg);
   return ids;
 }
 
@@ -1153,8 +1186,11 @@ async function adoptExistingNpmPackage(params: {
 }
 
 export type RepairMissingPluginInstallsResult = {
+  /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
+  /** User-facing warnings for failed or skipped plugin install repairs. */
   warnings: string[];
+  /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
   failedPluginIds?: string[];
   /**
    * The full install-record map after repair. Equal to the input
@@ -1168,6 +1204,7 @@ export type RepairMissingPluginInstallsResult = {
   records: Record<string, PluginInstallRecord>;
 };
 
+/** Repair missing installs inferred from the current OpenClaw config. */
 export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1190,6 +1227,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   });
 }
 
+/** Repair missing installs for an explicit plugin/channel id set. */
 export async function repairMissingPluginInstallsForIds(params: {
   cfg: OpenClawConfig;
   pluginIds: Iterable<string>;

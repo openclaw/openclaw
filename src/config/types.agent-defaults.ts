@@ -1,3 +1,4 @@
+// Defines agent default configuration types shared by runtime schemas.
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentModelConfig,
@@ -540,7 +541,7 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
-  /** Maximum time in seconds for a single compaction operation (default: 900). */
+  /** Maximum time in seconds for a single compaction operation (default: 180). */
   timeoutSeconds?: number;
   /**
    * Id of a registered compaction provider plugin.
