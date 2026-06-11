@@ -566,7 +566,7 @@ describe("listSessionsFromStore search", () => {
     const missing = result.sessions.find((row) => row.key === "agent:main:missing");
     expect(fresh?.totalTokens).toBe(1200);
     expect(fresh?.totalTokensFresh).toBe(true);
-    expect(stale?.totalTokens).toBeUndefined();
+    expect(stale?.totalTokens).toBe(2200);
     expect(stale?.totalTokensFresh).toBe(false);
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);

@@ -72,7 +72,7 @@ export async function resolveParentForkTokenCountRuntime(params: {
   storePath: string;
 }): Promise<number | undefined> {
   const freshPersistedTokens = resolveFreshSessionTotalTokens(params.parentEntry);
-  if (typeof freshPersistedTokens === "number") {
+  if (typeof freshPersistedTokens === "number" && params.parentEntry.totalTokensFresh !== false) {
     return freshPersistedTokens;
   }
 

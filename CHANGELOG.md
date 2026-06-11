@@ -953,6 +953,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: add a personal-agent no-fake-progress scenario so completion claims stay tied to local evidence instead of unsupported external progress. (#83824) Thanks @iFiras-Max1.
 
 ### Fixes
+- Agents/sessions: return preserved totalTokens from resolveFreshSessionTotalTokens even when stale, so /context and Control UI context meter show correct utilization without affecting compaction or memory flush. Fixes #82900. (#82919) Thanks @njuboy11.
 
 - Agents/exec approvals: return approved WebChat gateway exec output inline after native approval instead of leaving the model waiting for an async follow-up. (#82019) Thanks @Zac-W.
 - CLI/node: reject invalid explicit `node run --port` values instead of silently falling back to the configured or default port. Fixes #83923. Thanks @davinci282828.
