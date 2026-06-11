@@ -915,6 +915,11 @@ agents:
       crossSessionTargeting: disabled
       contextPressureThreshold: 0.8 # optional; omit to disable ordinary pre-run pressure events
       earlyWarningBand: 0.3125 # multiplier against contextPressureThreshold; 0 disables early warning
+      busySkipBackoff: # optional; #990 busy-skip re-arm rate-cap (NOT a safety invariant)
+        baseMs: 1000 # first re-arm delay; default 1000
+        ceilingMs: 300000 # give-up rate-cap; default = maxDelayMs (flow never dropped, just slows)
+        factor: 2 # exponential growth per consecutive busy-skip; default 2, must be > 1
+      orphanReapStaleCutoffMs: 7200000 # optional; #990 orphan-reap confidence-gate floor; default = subagent stale cutoff (2h)
 ```
 
 Operational notes:
@@ -925,6 +930,8 @@ Operational notes:
 - `crossSessionTargeting: disabled` is the default-deny gate for explicit cross-session delegate return targeting.
 - `contextPressureThreshold` is optional and must be `> 0` and `<= 1` when configured.
 - `earlyWarningBand` is shipped, defaults to `0.3125`, accepts `0` as opt-out, and is schema-validated as a unit-interval value.
+- `busySkipBackoff` (#990) tunes the consecutive busy-skip re-arm: a continuation wake that finds its seat busy (`requests-in-flight`/`draining`) re-arms after `baseMs`, growing by `factor` per consecutive busy-skip up to `ceilingMs`. This is a RATE-cap (give-up = rate-cap-forever): the flow is never dropped, it just polls more slowly and delivers the instant the seat quiets. All three fields are optional positive values (`factor > 1`); defaults are `1000` / `maxDelayMs` / `2`. It is not a safety invariant.
+- `orphanReapStaleCutoffMs` (#990) is the orphan-reap confidence-gate floor: a busy-deferred delegate flow whose parent subagent run is CONFIDENT-terminal (explicit `endedAt`, or unended past this cutoff) is reaped rather than rate-capped forever. Unset uses the subagent-registry stale cutoff (2h); a per-run explicit timeout is always respected, so a run is never reaped before its own timeout plus grace. The safety invariants are fixed and NOT tunable: same-session work never reaps (delegate-flow-gate), uncertain liveness always quiesces, and a wrongful reap never happens.
 - There is no `generationGuardTolerance` setting. Delayed work is not cancelled by unrelated channel noise.
 - tool-path delegate durability is unconditional; there is no delegate-store switch.
 - all shipped continuation runtime values are read at use time; changes take effect at the next enforcement point.
