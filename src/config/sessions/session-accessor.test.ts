@@ -381,6 +381,30 @@ describe("session accessor file-backed seam", () => {
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
   });
 
+  it("appends to an explicit transcript artifact without a session key", async () => {
+    const scope = {
+      sessionFile: transcriptPath,
+      sessionId: "session-1",
+      storePath,
+    };
+    const event = {
+      payload: { value: "keyless" },
+      type: "metadata",
+    };
+
+    await appendTranscriptEvent(scope, event);
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
+    // Explicit-artifact writes never touch entry metadata: no entry appears.
+    expect(listSessionEntries({ storePath })).toEqual([]);
+  });
+
+  it("rejects transcript writes without a session key or explicit file", async () => {
+    await expect(
+      appendTranscriptEvent({ sessionId: "session-1", storePath }, { type: "metadata" }),
+    ).rejects.toThrow(/session key or explicit session file/);
+  });
+
   it("rejects raw message transcript events", async () => {
     const scope = {
       sessionFile: transcriptPath,

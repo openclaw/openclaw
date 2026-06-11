@@ -68,8 +68,13 @@ export type SessionTranscriptReadScope = Omit<SessionAccessScope, "sessionKey"> 
 };
 
 export type SessionTranscriptAccessScope = SessionTranscriptReadScope & {
-  /** Required for writes because write paths may update entry metadata. */
-  sessionKey: string;
+  /**
+   * Identifies the owning entry when the transcript target must be resolved
+   * (and possibly persisted) through the session store. May be omitted only
+   * when an explicit sessionFile binds the operation to a concrete artifact;
+   * such writes never read or update entry metadata.
+   */
+  sessionKey?: string;
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
@@ -414,24 +419,33 @@ async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Prom
   if (scope.sessionFile?.trim()) {
     return { sessionFile: scope.sessionFile };
   }
-  if (!scope.sessionId) {
-    throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
+  // Past this point resolution goes through the session entry, so the owning
+  // key is mandatory; explicit-artifact writes returned above never need it.
+  const scopeSessionKey = scope.sessionKey?.trim();
+  if (!scopeSessionKey) {
+    throw new Error(
+      "Cannot resolve a transcript write scope without a session key or explicit session file",
+    );
   }
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!scope.sessionId) {
+    throw new Error(`Cannot resolve transcript scope without a session id: ${scopeSessionKey}`);
+  }
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scopeSessionKey);
   if (!agentId) {
-    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scopeSessionKey}`);
   }
   const sessionStore = scope.storePath
     ? loadSessionStore(scope.storePath, { skipCache: true })
     : undefined;
   const resolvedStoreEntry = sessionStore
-    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scopeSessionKey })
     : undefined;
-  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
-  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  const sessionEntry =
+    resolvedStoreEntry?.existing ?? loadSessionEntry({ ...scope, sessionKey: scopeSessionKey });
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scopeSessionKey;
   if (sessionStore && scope.storePath) {
     const sessionsDir = path.dirname(path.resolve(scope.storePath));
-    const threadId = scope.threadId ?? parseSessionThreadInfo(scope.sessionKey).threadId;
+    const threadId = scope.threadId ?? parseSessionThreadInfo(scopeSessionKey).threadId;
     const fallbackSessionFile =
       !sessionEntry?.sessionFile && threadId !== undefined
         ? resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId)
@@ -451,7 +465,7 @@ async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Prom
     agentId,
     sessionEntry,
     sessionId: scope.sessionId,
-    sessionKey: scope.sessionKey,
+    sessionKey: scopeSessionKey,
     ...(sessionStore ? { sessionStore } : {}),
     ...(scope.storePath ? { storePath: scope.storePath } : {}),
     ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
