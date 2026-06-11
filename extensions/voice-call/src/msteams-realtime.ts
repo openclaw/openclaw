@@ -675,7 +675,11 @@ export function createMsteamsRealtimeCall(params: {
         // Deterministic verbal interrupt ("stop" / "hold on" / "never mind"): flush the worker's
         // playback queue immediately instead of waiting for the model's own interruption handling —
         // the model is mid-generation when these arrive, so this is what makes the cut feel instant.
-        if (role === "user" && Date.now() < playbackEndAt && isVerbalInterrupt(text)) {
+        if (
+          role === "user" &&
+          Date.now() < playbackEndAt &&
+          isVerbalInterrupt(text, deps.groupCallGate?.wakePhrases)
+        ) {
           logger?.debug?.(`MsteamsRealtime: verbal interrupt on ${callId} — flushing playback`);
           turnId += 1;
           try {
