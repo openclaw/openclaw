@@ -617,6 +617,7 @@ export function runAgentAttempt(params: {
         timeoutMs: params.timeoutMs,
         runTimeoutOverrideMs: params.runTimeoutOverrideMs,
         runId: params.runId,
+        lane: params.opts.lane,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
         cliSessionId: nextCliSessionId,
