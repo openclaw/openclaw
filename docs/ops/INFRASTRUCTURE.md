@@ -1,10 +1,17 @@
-# AgentGlob / OpenClaw — Infrastructure Map
+# AgentGlob / OpenClaw — System Architecture & Infrastructure
 
-**Last updated:** 2026-06-05 · **Status:** living document · **Scope:** all servers + GCP + edge.
+**Last updated:** 2026-06-11 · **Status:** canonical living document · **Scope:** system architecture + all servers + GCP + edge.
 
-> Generated from a live read of every host (`docker ps`, `ss`, configs, ops scripts) plus
-> GCP (`gcloud`) and public DNS. Where a fact is inferred rather than directly observed it
-> is marked _(inferred)_. Keep this in sync after fleet/topology changes.
+> **This is the canonical system-architecture & design file for AgentGlob.** It is the single
+> source of truth for how the system is built and run, and the index to every feature / process
+> plan (§3). **Read it before you plan or deploy any new feature or capability, and update it
+> — plus the plan it points to — as part of the same task.** The architecture _of record_ lives
+> here; detailed designs live in the referenced plan docs and are summarised, not duplicated.
+>
+> The infra facts below are generated from a live read of every host (`docker ps`, `ss`,
+> configs, ops scripts) plus GCP (`gcloud`) and public DNS. Where a fact is inferred rather
+> than directly observed it is marked _(inferred)_. Keep this in sync after any
+> architecture/fleet/topology change.
 
 ---
 
@@ -33,7 +40,140 @@
 
 ---
 
-## 2. Hosts (Hetzner — SSH key `~/.ssh/hetzner-openclaw`)
+## 2. Application architecture (system of record)
+
+> Folded in from `openclaw-dashboard/AGENTGLOB_SYSTEM_V1_ARCHITECTURE.md` (the long-form V1
+> design + rollout narrative, which remains the detailed reference). The architecture of record
+> is here; that doc holds the full phase plans and the identity/Clerk write-up linked in §3.
+
+**V1 goal.** A stable system where agents (1) chat reliably, (2) use platform-native
+capabilities (wallet, Rain, …) through one shared runtime pattern, (3) deploy/redeploy with no
+config drift, (4) are observable with fast rollback.
+
+**Principles:** one deploy path · one secret model (`workspace_secrets`) · one runtime-auth
+model for all `/api/runtime/*` routes · one integration pattern (skill + optional MCP +
+secret-gated activation) · protocol/chain specifics live in dashboard runtime adapters, not in
+agents.
+
+### 2.1 Two planes
+
+| Plane             | Repo / runtime                          | Responsibilities                                                                                                                                                                                                                                                                          |
+| ----------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Control plane** | `openclaw-dashboard` — Cloud Run (§5)   | Agent CRUD + deploy orchestration; Secrets (`workspace_secrets`); runtime auth (`lib/runtime-auth.ts`); runtime adapters — wallet (`/api/runtime/wallet/*`) and Rain (`/api/runtime/rain/*`); injects `AGENTGLOB_RUNTIME_URL` + `AGENTGLOB_RUNTIME_TOKEN` into each agent's `docker.env`. |
+| **Data plane**    | `openclaw` gateway — Hetzner fleet (§6) | Gateway/chat execution; skill install + execution; per-agent isolation in `/root/.openclaw/agents/<agent>`; calls control-plane runtime routes for privileged ops (wallet/Rain).                                                                                                          |
+
+The control-plane → data-plane wire is the same public `http(s)://<host-ip>:<agent-port>` +
+gateway-token path documented in §9.
+
+### 2.2 Canonical integration pattern (wallet, Rain, future)
+
+1. Credential lives in **Secrets** — no per-feature credential CRUD.
+2. Activation depends on the skill's **category** (below).
+3. If active, deploy ensures the skill exists in the agent workspace and injects runtime
+   URL/token env.
+4. Agent skill calls `/api/runtime/<integration>/*`.
+5. Dashboard route validates runtime auth (bearer token + allowlist) and runs adapter logic,
+   returning explicit `400/401/403/502` errors.
+
+Live today for **wallet** and **Rain**. A new native integration should need only these 5
+steps — no custom credential storage.
+
+| Category                                        | Source                                             | Activation                                                                                  |
+| ----------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| **A — OpenClaw-bundled**                        | runtime image `/opt/openclaw/skills/`              | may be default-on per agent template                                                        |
+| **B1 — workspace-shared** (`wallet`)            | `openclaw/skills/<name>` + `/api/runtime/<name>/*` | **loose** — workspace-secret presence activates for all agents in the workspace             |
+| **B2 — per-agent** (`rain`, future `ostium`, …) | `openclaw/skills/<name>` + `/api/runtime/<name>/*` | **strict** — explicit per-agent selection required; secret presence alone does not activate |
+
+Full activation matrix + required dashboard changes:
+`openclaw-dashboard/PLATFORM_INTEGRATIONS_V1_ARCHITECTURE.md` §1a.
+
+### 2.3 Identity & user management — 4-layer model
+
+| #   | Layer                               | Who                                                | Auth (today)                            | Store                             |
+| --- | ----------------------------------- | -------------------------------------------------- | --------------------------------------- | --------------------------------- |
+| 1   | Platform                            | AgentGlob staff (`system_owner`, `platform_admin`) | NextAuth v5 JWT                         | Firestore `users`                 |
+| 2   | Org / workspace                     | Agent owners (`owner`, `admin`)                    | NextAuth v5 (Google + email/pw)         | `workspaces`, `workspace_members` |
+| 3   | Agent collaborators                 | `maintainer` / `operator` / `viewer`               | NextAuth (same session)                 | `agent_role_assignments`          |
+| 4   | **Bot members** — agents' end-users | custom `jose` HS256 JWT + bcrypt                   | `bot_members*`, `channel_verifications` |
+
+Layers 1–3 are stable. **Layer 4 is in PLAN:** move end-user auth to a managed IdP (Clerk, with
+**Better Auth** as the OSS/self-hosted fallback) over a 6-phase rollout; NextAuth stays for
+L1–3. **Three owner decisions are still open** — managed vs self-hosted, single Clerk instance
+vs per-workspace keys, and the canonical `userId`. **Phase 3 (runtime trust / re-key) must
+agree a canonical `userId` with the Havaya per-user-file plan** (§3) before the writer ships.
+Full write-up: `openclaw-dashboard/AGENTGLOB_SYSTEM_V1_ARCHITECTURE.md` → "Identity & user
+management".
+
+### 2.4 V1 contracts & acceptance
+
+- **Deploy contract:** dashboard writes deterministic runtime env; redeploy preserves
+  integration secrets; no per-agent manual edits for normal operation.
+- **Runtime contract:** every privileged action goes through a runtime route with bearer token
+  - allowlist; errors are explicit and user-safe.
+- **Skill contract:** degrade gracefully on missing secret/auth and show actionable
+  remediation ("set secret X", "redeploy agent").
+- **Done when:** chat is stable across deploy/restart/redeploy; wallet + Rain share one
+  activation+runtime pattern; a new native integration needs only the §2.2 pattern; failures
+  are detectable with a rollback path. Remaining stability-hardening work (pre-deploy
+  validation, boot health checks, auto-rollback on failed post-deploy health) is tracked as
+  Phase 3 in the V1 doc.
+
+---
+
+## 3. Plans & feature docs (index)
+
+> When you plan or ship a feature, **link its design/plan doc here and update the matching
+> architecture section above.** Paths are repo-relative; `dash:` = `openclaw-dashboard`,
+> `oc:` = `openclaw` (this repo).
+
+**System & integrations**
+
+- `dash:AGENTGLOB_SYSTEM_V1_ARCHITECTURE.md` — long-form V1 design, rollout phases, task lanes, full identity/Clerk plan. _(summarised in §2)_
+- `dash:PLATFORM_INTEGRATIONS_V1_ARCHITECTURE.md` — integration activation matrix + required dashboard changes. _(see §2.2)_
+- `dash:HANDOVER_CLAUDE_SYSTEM_V1.md` — V1 status & cross-repo handover.
+
+**Rain (B2 integration)**
+
+- `dash:RAIN_V2_ARCHITECTURE.md` — Rain V2 design (largest plan).
+- `dash:RAIN_INTEGRATION_PLAN.md` — integration steps.
+- `dash:docs/api/rain-runtime.md` — Rain runtime API contract.
+- `dash:docs/ops/rain-v1-cutover.md` — Rain V1 cutover checklist.
+- `oc:docs/plans/rain-skill-rewrite.md` — Rain skill rewrite + create-market split.
+
+**Wallet (B1 integration)**
+
+- `dash:docs/api/wallet-runtime.md` — wallet runtime API.
+
+**Identity (Layer 4) — PLAN**
+
+- `dash:AGENTGLOB_SYSTEM_V1_ARCHITECTURE.md` → "Identity & user management" — 4-layer model + Clerk/Better Auth rollout. _(summarised in §2.3)_
+
+**Per-user memory / user-file**
+
+- `oc:ops/graphiti-life/` — Graphiti per-user memory deploy + runbook. _(deployed; see §8)_
+- `dash:docs/peruser-user-file-plan.md` / `dash:docs/peruser-user-file-asbuilt.md` — Havaya per-user user-file API.
+
+**Skills & platform**
+
+- `oc:docs/plans/canonical-skill-registry.md` — canonical skill registry.
+
+**Group behavior**
+
+- `dash:GROUP_BEHAVIOR_POLICY_PLAN.md` — bot-group model + group behavior policies + project coordination.
+
+**Ops / release / status**
+
+- `oc:docs/ops/agentglob-gateway-release.md` — gateway build/push/deploy/rollback. _(see §10)_
+- `oc:STATUS.md` — current dev status · `oc:ROADMAP.md` · `oc:VISION.md`.
+
+**Gateway internals (reference)**
+
+- `oc:docs/concepts/architecture.md` — gateway architecture.
+- `oc:docs/refactor/*` — clawnet, exec-host, plugin-sdk, strict-config, outbound-session-mirroring.
+
+---
+
+## 4. Hosts (Hetzner — SSH key `~/.ssh/hetzner-openclaw`)
 
 | Role            | IP                | SSH alias¹           | Specs            | Disk         | Uptime | What runs                                                                                                        |
 | --------------- | ----------------- | -------------------- | ---------------- | ------------ | ------ | ---------------------------------------------------------------------------------------------------------------- |
@@ -50,15 +190,16 @@ All three Hetzner hosts run Ubuntu (Linux 6.8.x).
 A separate **Coolify** host (not part of the Hetzner agent fleet, not the dev box). It hosts
 **all AgentGlob-related websites and apps** — frontends tied to `cryptolir/openclaw` and
 `cryptolir/openclaw-dashboard` — **and `havaya.me` / `www.havaya.me` / `app.havaya.me`** (all
-resolve here). Havaya release path: dev (204.168.223.245) → git (`cryptolir/Havaya.me`, push to
-`main`) → Coolify auto-deploy via webhook
-`http://178.104.184.3:8000/api/v1/deploy?uuid=<REDACTED — stored in deploy config>&force=false`.
-(Deploy-webhook uuid is a secret; not stored in this repo. The Coolify install on the dev
-host is legacy/inactive — this is the live one.)
+resolve here). Havaya deploy: run `./deploy.sh patch|minor|major` on the dev server →
+`git push origin main --follow-tags` → **GitHub webhook fires Coolify automatically** →
+Coolify pulls + rebuilds. The Coolify deploy-webhook URL is a **manual force-redeploy
+fallback** only — not the normal deploy path (uuid is a secret, stored in deploy config,
+never in this repo). The Coolify install on the dev host is legacy/inactive — this is
+the live one.
 
 ---
 
-## 3. GCP layer (project `gold-verve-459312-e7`, number `296319693396`)
+## 5. GCP layer (project `gold-verve-459312-e7`, number `296319693396`)
 
 | Service                             | Type              | Region       | Endpoint / purpose                                                                                                                                      |
 | ----------------------------------- | ----------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -71,7 +212,7 @@ host is legacy/inactive — this is the live one.)
 
 ---
 
-## 4. Agent fleet (24 live gateways)
+## 6. Agent fleet (24 live gateways)
 
 Each agent = its own `docker compose` project named after the agent. The gateway container
 `<agent>-openclaw-gateway-1` listens on container port `18789` (WS), published to a unique
@@ -87,11 +228,11 @@ host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with s
 `agentav, bob-the-project-manager, designer, familyorganizer, gems, jim-the-ceo, life, projectmanager, raingame, social-bob, thebook, vcode1bot` (productguy deleted 2026-06-10 — invalid bot token)
 
 > `testingbot` (EU) is the safe smoke-test target (config-empty, no MCP deps).
-> `life` (US) carries the per-user memory subsystem (§6).
+> `life` (US) carries the per-user memory subsystem (§8).
 
 ---
 
-## 5. Data stores
+## 7. Data stores
 
 | Store                                                                     | Host         | Exposure                          | Purpose                                          |
 | ------------------------------------------------------------------------- | ------------ | --------------------------------- | ------------------------------------------------ |
@@ -103,10 +244,16 @@ host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with s
 
 ---
 
-## 6. Per-user memory subsystem (Graphiti) — US host
+## 8. Integrations
 
-Gives the `life` agent durable, per-user memory. Full deploy + runbook in
-[`ops/graphiti-life/`](../../ops/graphiti-life/) (compose, proxy, hook, tests).
+Cross-system integrations: where an agent, the dashboard, and an external app are wired
+together into one product. Architecture of record here; details live in the linked docs.
+
+### 8.1 Havaya.me agent (`life`) — per-user memory (Graphiti) — US host
+
+Gives the `life` agent durable, per-user memory across Telegram and the Havaya app. Full
+deploy + runbook in [`ops/graphiti-life/`](../../ops/graphiti-life/) (compose, proxy, hook,
+tests); plan in `docs/experiments/plans/life-per-user-memory.md`.
 
 ```
 life gateway ──(mcp-bridge)──► graphiti-proxy (capability boundary, stdio)
@@ -114,15 +261,62 @@ life gateway ──(mcp-bridge)──► graphiti-proxy (capability boundary, st
 ```
 
 - Stack: `/opt/graphiti` (compose project `graphiti-life`); `graphiti-mcp` bound to
-  `172.17.0.1:8000` (never public); `life` container joined to the `graphiti-life_graphiti`
-  network so it resolves `graphiti-mcp` by name.
-- Per-user scope (`tg_<peer>` / `app_<appUserId>`) is injected server-side by a
-  `before_tool_call` typed hook; the proxy hard-pins it and hides destructive tools.
+  `172.17.0.1:8000` (never public). Reachability from `life` is **declarative**:
+  `graphiti-mcp` joins the external `life_default` network in compose (PR #59) — the old
+  imperative `docker network connect` did not survive container recreation and broke
+  memory silently on 2026-06-10. `falkordb` stays internal-only.
+- Per-user scope (`group_id = tg_<peer>` for Telegram DMs / `app_<appUserId>` for the app)
+  is injected server-side by a `before_tool_call` typed hook (`life-memory-scope` plugin);
+  the proxy hard-pins it, fails closed if absent, exposes only `add_memory` /
+  `search_memory_facts` / `search_nodes` / `get_episodes`, and hides destructive tools.
 - LLM/embedder: OpenAI (`gpt-4o-mini` + `text-embedding-3-small`), key from `life/docker.env`.
+- Memory protocol prompt (Hebrew, TAL voice) in `life` `workspace/AGENTS.md`.
+- Webchat sessions have no per-user identity → no memory scope (by design; test via
+  Telegram or the app, not webchat).
+
+### 8.2 Havaya app ↔ AgentGlob (agents + dashboard)
+
+The Havaya app (`cryptolir/app.havaya` — Next.js + Clerk auth + own Postgres, served from
+the Coolify host at `app.havaya.me`) is a **consumer of the AgentGlob public API**; the
+`life` agent is its brain. As-built spec: `app.havaya` repo →
+`AGENTGLOB_INTEGRATION_STATUS.md` (+ `ARCHITECTURE.md`).
+
+```
+Havaya app (Coolify) ──HTTPS──► dashboard /api/public/chat/life (Cloud Run)
+   │   chat:      POST {message, sessionKey app:havaya:<clerkUserId>:<convId>, appUserId}
+   │   user-file: GET  /user-file?userId=<clerkUserId>&section=… (Bearer AGENTGLOB_APP_API_KEY)
+   ▼
+dashboard ──ws/token──► life gateway (US host)
+                          ├─ chat.send carries appUserId → persisted on the session
+                          ├─ save_user_section tool → workspace/users/<clerkUserId>.md
+                          └─ Graphiti memory scoped group_id = app_<clerkUserId>  (§8.1)
+```
+
+- **Chat:** browser → Havaya same-origin `/api/chat` proxy (Clerk auth, per-user rate
+  limit, transcript mirrored in Havaya's own DB) → dashboard public chat API →
+  `life` gateway. No CORS, no streaming on this route, 3 000-char message cap; the
+  dashboard forwards `appUserId` into gateway `chat.send` (dashboard PR #108,
+  gateway PR #49).
+- **Per-user visible file (two directions, same file):** the agent writes via the
+  `save_user_section` tool (allowlisted sections `User_D_Prompt`, `app_note`) into
+  `workspace/users/<clerkUserId>.md` on the gateway; Havaya reads it back via the
+  dashboard `GET …/user-file` endpoint (`lib/user-file-core.ts`, dashboard PR #107,
+  app-key auth) to render the home-hub prompts panel + owner note. Lazy provisioning —
+  404 until the agent first writes.
+- **Identity, one id everywhere:** the Clerk `userId` is the canonical app identity —
+  it keys the sessionKey, the user-file name (raw, lowercased) and the Graphiti memory
+  scope `app_<id>`. Telegram users are a parallel scope (`tg_<peer>`); same human on
+  both channels = two scopes in v1. Phase 5 (pending): generalize `save_user_section`
+  to the canonical userId so Telegram users also get a visible file.
+- **Not synced with the dashboard UI:** Havaya does not use dashboard threads/voice;
+  it owns its UX and persists its own transcripts (the public chat API has no
+  history-fetch).
+- **Havaya marketing site** (`cryptolir/Havaya.me`) is a separate static Next.js site on
+  the same Coolify host — no AgentGlob API usage; deploys per §4 (git push → Coolify).
 
 ---
 
-## 7. Networking & ingress
+## 9. Networking & ingress
 
 - **Public chat / control:** browser/app → `app.agentglob.com` (Cloud Run dashboard) → the
   dashboard connects to the target agent's gateway at **`http(s)://<host-ip>:<agent-port>`**
@@ -136,7 +330,7 @@ life gateway ──(mcp-bridge)──► graphiti-proxy (capability boundary, st
 
 ---
 
-## 8. CI/CD & deploy flow
+## 10. CI/CD & deploy flow
 
 **Dashboard / web (Cloud Run):** auto-deploy from source on merge (`cloud-run-source-deploy`).
 
@@ -178,21 +372,24 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
 
 ---
 
-## 9. Source repositories (on the dev host, GitHub org `cryptolir`)
+## 11. Source repositories (on the dev host, GitHub org `cryptolir`)
 
-| Path                                | Repo                           | Purpose                            |
-| ----------------------------------- | ------------------------------ | ---------------------------------- |
-| `/root/projects/openclaw`           | `cryptolir/openclaw`           | Worker / gateway / MCP (this repo) |
-| `/root/projects/oc-gw-build`        | `cryptolir/openclaw`           | Gateway image build tree           |
-| `/root/projects/openclaw-dashboard` | `cryptolir/openclaw-dashboard` | Dashboard (Cloud Run)              |
-| `/root/projects/Havaya.me`          | `cryptolir/Havaya.me`          | Havaya marketing site              |
-| `/root/projects/Havaya_App`         | `cryptolir/app.havaya`         | Havaya app                         |
-| `/root/projects/Panama-KYC`         | `cryptolir/Panama-KYC`         | KYC service (cf. `kycbot` agent)   |
-| `/root/projects/Mn_agents`          | (no git remote)                | misc agent material                |
+| Path                                      | Repo                           | Purpose                                                                                                |
+| ----------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `/root/AgentGlob_Apps/openclaw`           | `cryptolir/openclaw`           | Worker / gateway / MCP (this repo); also the gateway image build tree (`build-and-push.sh` `REPO_DIR`) |
+| `/root/AgentGlob_Apps/openclaw-dashboard` | `cryptolir/openclaw-dashboard` | Dashboard (Cloud Run)                                                                                  |
+| `/root/projects/Havaya.me`                | `cryptolir/Havaya.me`          | Havaya marketing site                                                                                  |
+| `/root/projects/Havaya_App`               | `cryptolir/app.havaya`         | Havaya app                                                                                             |
+| `/root/projects/Panama-KYC`               | `cryptolir/Panama-KYC`         | KYC service (cf. `kycbot` agent)                                                                       |
+| `/root/projects/Mn_agents`                | (no git remote)                | misc agent material                                                                                    |
+
+> Moved 2026-06-11: `openclaw` + `openclaw-dashboard` live under `/root/AgentGlob_Apps/`
+> (previously `/root/projects/`). The standalone `oc-gw-build` tree is retired —
+> `build-and-push.sh` builds directly from `/root/AgentGlob_Apps/openclaw`.
 
 ---
 
-## 10. Domains & DNS
+## 12. Domains & DNS
 
 | Domain                                | Resolves to            | Served by                                                  |
 | ------------------------------------- | ---------------------- | ---------------------------------------------------------- |
@@ -203,9 +400,10 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
 
 ---
 
-## 11. Risks & open items
+## 13. Risks & open items
 
 > **Ops changes 2026-06-10** (bug-list sweep — see `scripts/ops/bug_list.md` for full detail):
+>
 > - **US docker daemon** now has `/etc/docker/daemon.json` with json-file rotation (10m×3) +
 >   `live-restore` (same as EU); all 12 US agent containers recreated so rotation is live.
 >   ⚠️ Staging rule learned the hard way: recreate/boot gateways in batches of ~3 on the
@@ -251,7 +449,7 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
 
 ---
 
-## 12. Operator quick-reference
+## 14. Operator quick-reference
 
 ```bash
 # SSH (laptop)
