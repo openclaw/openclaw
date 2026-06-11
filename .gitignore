@@ -199,6 +199,14 @@ apps/swabble/build/
 dist/protocol.schema.json
 .ant-colony/
 
+# Angel Claw project-local gbrain runtime state. Keep config/schema files, but
+# do not commit the mutable PGLite DB, locks, or audit/runtime files.
+data/gbrain/.gbrain/brain.pglite/
+data/gbrain/.gbrain/.locks/
+data/gbrain/.gbrain/audit/
+data/gbrain/.gbrain/last-update-check
+data/gbrain/.gbrain/.gitignore
+
 # Eclipse
 **/.project
 **/.classpath

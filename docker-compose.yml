@@ -1,7 +1,12 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
-    build: .
+    build:
+      context: .
+      args:
+        OPENCLAW_EXTENSIONS: ${OPENCLAW_EXTENSIONS:-memory-wiki,memory-lancedb}
+        OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB: ${OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB:-4096}
+
     env_file:
       - path: .env
         required: false
@@ -23,7 +28,7 @@ services:
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       # Empty means auto: Bonjour disables itself in detected containers.
       # Set 0 only on host/macvlan/mDNS-capable networks; set 1 to force off.
-      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-}
+      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
       # OpenTelemetry export is outbound OTLP/HTTP from the Gateway. Prometheus
       # uses the existing authenticated Gateway route; it does not need a port.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
@@ -39,9 +44,16 @@ services:
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
-      - ${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw
+      - ${OPENCLAW_CONFIG_DIR:-./config}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./workspace}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-./secrets}:/home/node/.config/openclaw
+      # Session transcripts on a Linux-VM named volume (ext4) instead of the
+      # macOS bind mount. The embedded agent's session-lock guard compares
+      # nanosecond mtime/ctime; macOS osxfs/virtiofs reports jittery sub-second
+      # timestamps, which falsely trips EmbeddedAttemptSessionTakeoverError when
+      # the lock is released for a slow gbrain MCP call. ext4 timestamps are
+      # stable, so the daemon completes brain-backed turns reliably.
+      - openclaw_sessions:/home/node/.openclaw/agents/main/sessions
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -54,16 +66,15 @@ services:
     # http://host.docker.internal:<port>. Docker Desktop usually provides this
     # alias; the host-gateway mapping makes it work on Linux Docker Engine too.
     cap_drop:
-      - NET_RAW
-      - NET_ADMIN
+      - ALL
     security_opt:
       - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
-      - "${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "127.0.0.1:${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
     init: true
     restart: unless-stopped
     command:
@@ -72,7 +83,7 @@ services:
         "dist/index.js",
         "gateway",
         "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "${OPENCLAW_GATEWAY_BIND:-loopback}",
         "--port",
         "18789",
       ]
@@ -91,13 +102,18 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build:
+      context: .
+      args:
+        OPENCLAW_EXTENSIONS: ${OPENCLAW_EXTENSIONS:-memory-wiki,memory-lancedb}
+        OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB: ${OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB:-4096}
+
     network_mode: "service:openclaw-gateway"
     env_file:
       - path: .env
         required: false
     cap_drop:
-      - NET_RAW
-      - NET_ADMIN
+      - ALL
     security_opt:
       - no-new-privileges:true
     environment:
@@ -118,12 +134,18 @@ services:
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
-      - ${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw
+      - ${OPENCLAW_CONFIG_DIR:-./config}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./workspace}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-./secrets}:/home/node/.config/openclaw
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+volumes:
+  # Pre-created + chowned to node (uid 1000) before first use; see the gateway
+  # service comment for why session transcripts live off the macOS bind mount.
+  openclaw_sessions:
+    external: true

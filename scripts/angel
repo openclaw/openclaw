@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OPENCLAW_DIR="/Users/yishinn/Desktop/opcsandbox/openclaw"
+
+cd "$OPENCLAW_DIR"
+
+case "${1:-start}" in
+  start)
+    docker compose up -d openclaw-gateway
+    docker compose ps
+    ;;
+  stop)
+    docker compose stop openclaw-gateway
+    ;;
+  restart)
+    docker compose restart openclaw-gateway
+    docker compose ps
+    ;;
+  status)
+    docker compose ps
+    ;;
+  logs)
+    docker compose logs -f openclaw-gateway
+    ;;
+  *)
+    cat <<'USAGE'
+Usage: angel [start|stop|restart|status|logs]
+
+Default: angel start
+USAGE
+    exit 2
+    ;;
+esac

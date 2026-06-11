@@ -1,0 +1,566 @@
+# gbrain-base-v2 — 15-type DRY/MECE canonical taxonomy
+#
+# v0.42 (T22) — the response to issue #1479. A production gbrain brain
+# (186K pages) had accreted 94 distinct `pages.type` values in 9 clusters
+# of redundancy. This pack collapses them to 14 canonical types plus
+# `note` as the catch-all (15 total) using subtypes/aliases/mapping_rules.
+#
+# STANDALONE pack (D11/F1): NO `extends:` field. Declaring inheritance
+# would compose gbrain-base's 24 types on top of the 15 declared here,
+# breaking the "14 canonical types" claim. Old types are reached via
+# the alias graph (query closure) plus the catch-all retype rule (data
+# migration).
+#
+# Pack-upgrade declaration (D7): `migration_from: {pack: gbrain-base,
+# version: 1.x}` fires the `pack_upgrade_available` onboard check for
+# brains on gbrain-base@1.0.0 → 1.x.x.
+#
+# Mapping rules (D11+D12) drive the unify-types Minion handler:
+#   - retype: change pages.type from from_type to to_type (with optional
+#     subtype JSONB stamp + legacy_type preservation per D8)
+#   - page_to_link: convert edge-shaped pages to real link rows
+#   - page_to_alias: convert redirect-shaped pages to slug_aliases rows
+#   - catch-all retype (from_type: '*unknown*') retypes any page whose
+#     type isn't declared here AND isn't the target of any explicit rule
+#     to `note` with frontmatter.legacy_type = <original_type>.
+
+api_version: gbrain-schema-pack-v1
+name: angel-claw-climate
+version: 0.1.0
+description: Angel Claw climate schema pack forked from gbrain-base-v2. Adds climate pillars, targets, cities, emission profiles, vulnerabilities, and source provenance.
+gbrain_min_version: 0.42.0
+extends: null
+borrow_from: []
+takes_kinds:
+  - fact
+  - take
+  - bet
+  - hunch
+
+migration_from:
+  pack: gbrain-base-v2
+  version: "1.x"
+
+page_types:
+  - name: person
+    primitive: entity
+    path_prefixes:
+      - people/
+      - person/
+    aliases: []
+    extractable: false
+    expert_routing: true
+
+  - name: company
+    primitive: entity
+    path_prefixes:
+      - companies/
+      - company/
+      - products/
+      - orgs/
+    subtypes:
+      - name: company
+        when:
+          path_pattern: "^companies/"
+      - name: product
+        when:
+          path_pattern: "^products/"
+      - name: org
+        when:
+          path_pattern: "^orgs/"
+    aliases: []
+    extractable: false
+    expert_routing: true
+
+  - name: media
+    primitive: media
+    path_prefixes:
+      - media/
+      - videos/
+      - articles/
+      - essays/
+      - books/
+      - podcasts/
+      - blog/
+      - posts/
+    subtypes:
+      - name: video
+        when:
+          path_pattern: "^videos/"
+      - name: article
+        when:
+          path_pattern: "^articles/"
+      - name: essay
+        when:
+          path_pattern: "^essays/"
+      - name: book
+        when:
+          path_pattern: "^books/"
+      - name: podcast
+        when:
+          path_pattern: "^podcasts/"
+      - name: blog
+        when:
+          path_pattern: "^(blog|posts)/"
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: tweet
+    primitive: media
+    path_prefixes:
+      - tweets/
+      - twitter/
+    subtypes:
+      - name: single
+        when:
+          frontmatter_field: thread_length
+          frontmatter_value: 1
+      - name: bundle
+        when:
+          frontmatter_field: bundle
+          frontmatter_value: true
+      - name: stub
+        when:
+          frontmatter_field: stub
+          frontmatter_value: true
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: social-digest
+    primitive: temporal
+    path_prefixes:
+      - digests/social/
+    subtypes:
+      - name: daily
+        when:
+          path_pattern: "/daily/"
+      - name: monthly
+        when:
+          path_pattern: "/monthly/"
+    aliases: []
+    extractable: false
+    expert_routing: false
+
+  - name: analysis
+    primitive: media
+    path_prefixes:
+      - wiki/analysis/
+      - analysis/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: atom
+    primitive: annotation
+    path_prefixes:
+      - atoms/
+    subtypes:
+      - name: extraction
+        when:
+          frontmatter_field: origin
+          frontmatter_value: extraction
+      - name: manual
+        when:
+          frontmatter_field: origin
+          frontmatter_value: manual
+      - name: lore
+        when:
+          frontmatter_field: origin
+          frontmatter_value: lore
+    aliases: []
+    extractable: false
+    expert_routing: false
+
+  - name: concept
+    primitive: concept
+    path_prefixes:
+      - wiki/concepts/
+      - wiki/concept/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: pillar
+    primitive: concept
+    path_prefixes:
+      - climate/pillars/
+    aliases: []
+    extractable: true
+    expert_routing: true
+
+  - name: target
+    primitive: concept
+    path_prefixes:
+      - climate/targets/
+    aliases: []
+    extractable: true
+    expert_routing: true
+
+  - name: city
+    primitive: entity
+    path_prefixes:
+      - climate/cities/
+    aliases: []
+    extractable: true
+    expert_routing: true
+
+  - name: emission-profile
+    primitive: temporal
+    path_prefixes:
+      - climate/emission-profiles/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: vulnerability
+    primitive: concept
+    path_prefixes:
+      - climate/vulnerabilities/
+    aliases: []
+    extractable: true
+    expert_routing: true
+
+  - name: source
+    primitive: media
+    path_prefixes:
+      - climate/sources/
+      - sources/
+      - source/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: deal
+    primitive: temporal
+    path_prefixes:
+      - deals/
+      - deal/
+    aliases: []
+    extractable: false
+    expert_routing: false
+
+  - name: email
+    primitive: temporal
+    path_prefixes:
+      - emails/
+      - email/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: slack
+    primitive: temporal
+    path_prefixes:
+      - slack/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: writing
+    primitive: media
+    path_prefixes:
+      - writing/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+  - name: project
+    primitive: concept
+    path_prefixes:
+      - projects/
+      - project/
+    aliases: []
+    extractable: false
+    expert_routing: false
+
+  - name: note
+    primitive: concept
+    path_prefixes:
+      - notes/
+      - note/
+    aliases: []
+    extractable: true
+    expert_routing: false
+
+link_types:
+  - name: partner_of
+    inverse: partner_of
+  - name: relates_to
+    inverse: relates_to
+  - name: mentions
+  - name: discusses
+  - name: founded
+    inverse: founded_by
+  - name: works_at
+    inverse: employs
+  - name: invested_in
+    inverse: investor_of
+  - name: sourced_from
+  - name: derived_from
+  - name: supersedes
+  - name: redirects_to
+  - name: attended
+    inverse: attended_by
+  - name: authored
+    inverse: authored_by
+  - name: attributed_to
+  - name: has_target
+    inverse: target_of
+    inference:
+      page_type: pillar
+      target_type: target
+  - name: addresses
+    inverse: addressed_by
+    inference:
+      page_type: target
+      target_type: vulnerability
+  - name: discloses
+    inverse: disclosed_by
+    inference:
+      page_type: city
+      target_type: emission-profile
+  - name: cites
+    inverse: cited_by
+    inference:
+      page_type: emission-profile
+      target_type: source
+
+frontmatter_links:
+  - page_type: pillar
+    fields:
+      - targets
+      - has_target
+    link_type: has_target
+  - page_type: target
+    fields:
+      - addresses
+      - vulnerabilities
+    link_type: addresses
+  - page_type: city
+    fields:
+      - discloses
+      - emission_profiles
+    link_type: discloses
+  - page_type: emission-profile
+    fields:
+      - cites
+      - sources
+      - source
+    link_type: cites
+
+mapping_rules:
+  # All retype rules write frontmatter.legacy_type per D8 (unless
+  # subtype_field IS legacy_type, in which case it supplies legacy_type
+  # directly via the cluster-8 pattern).
+
+  # Cluster 1: tweet family (~106K pages, 7 types → 1 with subtype)
+  - kind: retype
+    from_type: tweet-single
+    to_type: tweet
+    subtype: single
+  - kind: retype
+    from_type: tweet-thread
+    to_type: tweet
+    subtype: bundle
+  - kind: retype
+    from_type: tweet-bundle
+    to_type: tweet
+    subtype: bundle
+  - kind: retype
+    from_type: tweet-stub
+    to_type: tweet
+    subtype: stub
+  - kind: retype
+    from_type: media/x-tweet/bundle
+    to_type: tweet
+    subtype: bundle
+  - kind: retype
+    from_type: media/x-account
+    to_type: social-digest
+  - kind: retype
+    from_type: media/x-account/daily
+    to_type: social-digest
+    subtype: daily
+  - kind: retype
+    from_type: media/x-account/monthly
+    to_type: social-digest
+    subtype: monthly
+
+  # Cluster 2: articles (~3.6K pages, 5 types → 1 with subtype)
+  - kind: retype
+    from_type: article
+    to_type: media
+    subtype: article
+  - kind: retype
+    from_type: media/article
+    to_type: media
+    subtype: article
+  - kind: retype
+    from_type: sources/article
+    to_type: source
+  - kind: retype
+    from_type: source/article
+    to_type: source
+
+  # Cluster 3: companies (~13.5K pages, 4 types → 1 with subtype)
+  - kind: retype
+    from_type: yc-company
+    to_type: company
+    subtype: company
+  - kind: retype
+    from_type: product
+    to_type: company
+    subtype: product
+  - kind: retype
+    from_type: organization
+    to_type: company
+    subtype: org
+
+  # Cluster 4: atoms (~18K pages, 6 types → 1 with subtype + edge cases to links)
+  - kind: retype
+    from_type: atom-extraction
+    to_type: atom
+    subtype: extraction
+  - kind: retype
+    from_type: content-atom
+    to_type: atom
+    subtype: manual
+  - kind: retype
+    from_type: lore
+    to_type: atom
+    subtype: lore
+  - kind: page_to_link
+    from_type: atom-partner-link
+    link_type: partner_of
+    source_slug_from:
+      frontmatter_field: source
+    target_slug_from:
+      frontmatter_field: target
+  - kind: page_to_link
+    from_type: partner-atom-link
+    link_type: partner_of
+    source_slug_from:
+      frontmatter_field: source
+    target_slug_from:
+      frontmatter_field: target
+
+  # Cluster 5: media/content (~8.7K pages, 8 types → 1 with subtype)
+  - kind: retype
+    from_type: video
+    to_type: media
+    subtype: video
+  - kind: retype
+    from_type: youtube-video
+    to_type: media
+    subtype: video
+  - kind: retype
+    from_type: essay
+    to_type: media
+    subtype: essay
+  - kind: retype
+    from_type: blog-post
+    to_type: media
+    subtype: blog
+  - kind: retype
+    from_type: book
+    to_type: media
+    subtype: book
+  - kind: retype
+    from_type: podcast
+    to_type: media
+    subtype: podcast
+
+  # Cluster 6: analysis (~40 pages, 8 types → 1)
+  - kind: retype
+    from_type: media/analysis
+    to_type: analysis
+  - kind: retype
+    from_type: media-analysis
+    to_type: analysis
+  - kind: retype
+    from_type: media/x-account/analysis
+    to_type: analysis
+  - kind: retype
+    from_type: research
+    to_type: analysis
+  - kind: retype
+    from_type: organization-research
+    to_type: analysis
+  - kind: retype
+    from_type: competitive-intel
+    to_type: analysis
+  - kind: retype
+    from_type: yc/competitive-intel
+    to_type: analysis
+
+  # Cluster 7: concept-redirect → slug_aliases table (~5.5K pages → 0 pages + 5.5K alias rows)
+  - kind: page_to_alias
+    from_type: concept-redirect
+    canonical_from: body_first_link
+    alias_slug_from: slug
+    notes_from: body_excerpt
+
+  # Cluster 8: documented one-off types → note with legacy_type
+  - kind: retype
+    from_type: civic
+    to_type: note
+    subtype_field: legacy_type
+    subtype: civic
+  - kind: retype
+    from_type: framework
+    to_type: note
+    subtype_field: legacy_type
+    subtype: framework
+  - kind: retype
+    from_type: insight
+    to_type: note
+    subtype_field: legacy_type
+    subtype: insight
+  - kind: retype
+    from_type: anecdote
+    to_type: note
+    subtype_field: legacy_type
+    subtype: anecdote
+  - kind: retype
+    from_type: principle
+    to_type: note
+    subtype_field: legacy_type
+    subtype: principle
+  - kind: retype
+    from_type: memo
+    to_type: note
+    subtype_field: legacy_type
+    subtype: memo
+
+  # Cluster 9: symlink family → links table
+  - kind: page_to_link
+    from_type: symlink
+    link_type: relates_to
+    source_slug_from: body_first_link
+    target_slug_from:
+      frontmatter_field: target
+  - kind: page_to_link
+    from_type: partner-symlink
+    link_type: partner_of
+    source_slug_from:
+      frontmatter_field: source
+    target_slug_from:
+      frontmatter_field: target
+  - kind: page_to_link
+    from_type: symlink-manifest
+    link_type: relates_to
+    source_slug_from: body_first_link
+    target_slug_from:
+      frontmatter_field: target
+
+  # D12 catch-all: any type not declared in page_types AND not the
+  # target of any prior retype rule gets retyped to `note` with
+  # frontmatter.legacy_type = <original_type> via the
+  # ORIGINAL_TYPE_SENTINEL substitution. Must fire LAST.
+  - kind: retype
+    from_type: "*unknown*"
+    to_type: note
+    subtype_field: legacy_type
+    subtype: "*original_type*"

@@ -9,6 +9,7 @@
 # Build stages use full bookworm; the runtime image is always bookworm-slim.
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
+ARG OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB=4096
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
@@ -49,6 +50,7 @@ FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 ARG OPENCLAW_EXTENSIONS
+ARG OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB
 
 # Copy pinned Bun binary from the official image instead of fetching via curl.
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
@@ -116,7 +118,11 @@ RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
      echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
      echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
-RUN NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker
+RUN OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=${OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB} \
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
+    NODE_OPTIONS=--max-old-space-size=${OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB} \
+    pnpm_config_verify_deps_before_run=false \
+    pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm_config_verify_deps_before_run=false pnpm ui:build
@@ -288,9 +294,22 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+# Install Go and build blogwatcher, then clean up Go compiler to keep image small
+RUN apt-get update && apt-get install -y --no-install-recommends golang-go \
+ && GOPATH=/tmp/go go install github.com/Hyaxia/blogwatcher/cmd/blogwatcher@latest \
+ && mv /tmp/go/bin/blogwatcher /usr/local/bin/blogwatcher \
+ && rm -rf /tmp/go \
+ && apt-get purge -y golang-go \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install @steipete/summarize globally
+RUN npm install -g @steipete/summarize
+
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
+
 
 # Pre-create default named-volume mount points so first-run Docker volumes copy
 # node ownership from the image instead of starting as root-owned directories.

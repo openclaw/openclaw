@@ -196,8 +196,14 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
 
     expect(dockerfile).toContain(
-      "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
+      "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=${OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB}",
     );
+    expect(dockerfile).toContain("OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1");
+    expect(dockerfile).toContain(
+      "NODE_OPTIONS=--max-old-space-size=${OPENCLAW_DOCKER_TSDOWN_MAX_OLD_SPACE_MB}",
+    );
+    expect(dockerfile).toContain("pnpm_config_verify_deps_before_run=false");
+    expect(dockerfile).toContain("pnpm build:docker");
     expect(dockerfile).toContain(
       "pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle",
     );

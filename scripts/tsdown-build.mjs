@@ -26,6 +26,7 @@ const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
+const TSDOWN_MAX_OLD_SPACE_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const CGROUP_MEMORY_LIMIT_PATHS = [
   "/sys/fs/cgroup/memory.max",
   "/sys/fs/cgroup/memory/memory.limit_in_bytes",
@@ -400,21 +401,29 @@ function resolveTsdownMaxOldSpaceMb(params = {}) {
     (params.platform ?? process.platform) === "win32"
       ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
       : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  const envCap = parseMaxOldSpaceSizeMb(
+    (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_ENV],
+    defaultMaxOldSpaceMb,
+  );
+  const requestedMaxOldSpaceMb = Math.min(
+    defaultMaxOldSpaceMb,
+    Math.max(MIN_TSDOWN_MAX_OLD_SPACE_MB, envCap),
+  );
   const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
   if (limitBytes === null) {
-    return defaultMaxOldSpaceMb;
+    return requestedMaxOldSpaceMb;
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
   if (limitMb <= 0) {
-    return defaultMaxOldSpaceMb;
+    return requestedMaxOldSpaceMb;
   }
 
   const cgroupCap = Math.max(
     MIN_TSDOWN_MAX_OLD_SPACE_MB,
     limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB,
   );
-  return Math.min(defaultMaxOldSpaceMb, cgroupCap);
+  return Math.min(requestedMaxOldSpaceMb, cgroupCap);
 }
 
 function parseMaxOldSpaceSizeMb(value, fallbackMb) {

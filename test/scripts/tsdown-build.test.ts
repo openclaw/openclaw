@@ -156,6 +156,21 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
+  it("honors an explicit tsdown heap cap from the environment", () => {
+    const result = resolveTsdownBuildInvocation({
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {
+        NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192",
+        OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "3072",
+      },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=3072");
+  });
+
   it("raises split inherited lower tsdown heap settings to the build default", () => {
     const result = resolveTsdownBuildInvocation({
       platform: "linux",
