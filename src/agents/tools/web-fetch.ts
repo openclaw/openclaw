@@ -341,7 +341,7 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
  * parser percent-encodes those characters correctly per RFC 3986.
  */
 export function sanitizeWebFetchUrl(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = raw.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
   return trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
 }
 
