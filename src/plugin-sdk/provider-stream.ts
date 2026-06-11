@@ -130,6 +130,8 @@ export function buildProviderStreamFamilyHooks(
           nextStreamFn = createCodexNativeWebSearchWrapper(nextStreamFn, {
             config: ctx.config,
             agentDir: ctx.agentDir,
+            agentId: ctx.agentId,
+            nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
           });
           nextStreamFn = createOpenAIStringContentWrapper(nextStreamFn);
           return createOpenAIResponsesContextManagementWrapper(

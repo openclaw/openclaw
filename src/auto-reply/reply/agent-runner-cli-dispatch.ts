@@ -7,13 +7,20 @@ import {
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession } from "../../agents/cli-session.js";
+import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
+import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
+import { formatToolAggregate } from "../tool-meta.js";
+
+function isClaudeCliProvider(provider: string): boolean {
+  return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
+}
 
 function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
-  return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
+  return isClaudeCliProvider(provider);
 }
 
 function createAgentEventBridge<T>(params: {
@@ -58,6 +65,25 @@ function createAgentEventBridge<T>(params: {
   };
 }
 
+type AgentEventBridge = {
+  unsubscribe: () => void;
+  drain: () => Promise<void>;
+};
+
+type CommentaryTextPayload = {
+  text: string;
+  itemId?: string;
+};
+
+async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
+  for (const bridge of bridges) {
+    bridge.unsubscribe();
+  }
+  for (const bridge of bridges) {
+    await bridge.drain();
+  }
+}
+
 function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
@@ -82,10 +108,24 @@ function createAssistantTextBridge(params: {
   });
 }
 
+function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayload | undefined {
+  if (evt.stream !== "item" || evt.data.kind !== "preamble") {
+    return undefined;
+  }
+  const text = typeof evt.data.progressText === "string" ? evt.data.progressText.trim() : "";
+  if (!text) {
+    return undefined;
+  }
+  return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
+}
+
 export type CliToolEventPayload = {
   name: string | undefined;
-  phase: "start" | "update";
+  phase: "start" | "update" | "result";
   args: Record<string, unknown> | undefined;
+  toolCallId?: string;
+  isError?: boolean;
+  result?: unknown;
 };
 
 export function keepCliSessionBindingOnlyWhenReused(params: {
@@ -160,16 +200,91 @@ function createToolEventBridge(params: {
         return undefined;
       }
       const phaseValue = evt.data.phase;
-      if (phaseValue !== "start" && phaseValue !== "update") {
+      if (phaseValue !== "start" && phaseValue !== "update" && phaseValue !== "result") {
         return undefined;
       }
-      const phase: CliToolEventPayload["phase"] = phaseValue === "start" ? "start" : "update";
+      const phase: CliToolEventPayload["phase"] =
+        phaseValue === "start" ? "start" : phaseValue === "update" ? "update" : "result";
       return {
         name: typeof evt.data.name === "string" ? evt.data.name : undefined,
         phase,
         args: isRecord(evt.data.args) ? evt.data.args : undefined,
+        toolCallId: typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+        ...(phase === "result"
+          ? {
+              isError: evt.data.isError === true,
+              result: evt.data.result,
+            }
+          : {}),
       };
     },
+  });
+}
+
+/**
+ * Tracks CLI tool start/result events and renders the same durable tool
+ * summaries the embedded runner emits: a formatToolAggregate line per result
+ * (args-derived meta captured at start), plus the output block under full
+ * verbose. Keeps CLI runs at tool-summary parity with embedded runs.
+ */
+export function createCliToolSummaryTracker(params: {
+  detailMode?: "explain" | "raw";
+  shouldEmitToolResult: () => boolean;
+  shouldEmitToolOutput: () => boolean;
+  deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
+}) {
+  const metaByCallId = new Map<string, string | undefined>();
+  return {
+    noteToolEvent: async (payload: CliToolEventPayload): Promise<void> => {
+      if (payload.phase === "start") {
+        if (payload.toolCallId && payload.name) {
+          metaByCallId.set(
+            payload.toolCallId,
+            inferToolMetaFromArgs(payload.name, payload.args, {
+              detailMode: params.detailMode ?? "explain",
+            }),
+          );
+        }
+        return;
+      }
+      if (payload.phase !== "result") {
+        return;
+      }
+      const meta = payload.toolCallId ? metaByCallId.get(payload.toolCallId) : undefined;
+      if (payload.toolCallId) {
+        metaByCallId.delete(payload.toolCallId);
+      }
+      if (!params.shouldEmitToolResult()) {
+        return;
+      }
+      const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
+        markdown: true,
+      });
+      let text = aggregate;
+      if (params.shouldEmitToolOutput()) {
+        const output = extractToolResultText(payload.result)?.trim();
+        if (output) {
+          text = `${aggregate}\n\`\`\`txt\n${output}\n\`\`\``;
+        }
+      }
+      if (!text.trim()) {
+        return;
+      }
+      await params.deliver({ text, ...(payload.isError === true ? { isError: true } : {}) });
+    },
+  };
+}
+
+function createCommentaryEventBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: (payload: CommentaryTextPayload) => Promise<void>;
+}) {
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    read: readCommentaryTextPayload,
   });
 }
 
@@ -185,6 +300,7 @@ export async function runCliAgentWithLifecycle(params: {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
+  onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
 }): Promise<EmbeddedAgentRunResult> {
@@ -219,16 +335,22 @@ export async function runCliAgentWithLifecycle(params: {
     suppressed: params.suppressAssistantBridge,
     deliver: params.onToolEvent,
   });
+  const commentaryBridge = createCommentaryEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: params.onCommentaryText,
+  });
+  const bridges = [assistantBridge, reasoningBridge, toolBridge, commentaryBridge].filter(
+    (bridge): bridge is AgentEventBridge => bridge !== undefined,
+  );
   let lifecycleTerminalEmitted = false;
   try {
-    const rawResult = await runCliAgent(params.runParams);
+    const rawResult = await runCliAgent({
+      ...params.runParams,
+      emitCommentaryText: Boolean(params.onCommentaryText),
+    });
     const result = params.transformResult?.(rawResult) ?? rawResult;
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
+    await stopAgentEventBridges(bridges);
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
     if (cliText) {
@@ -253,12 +375,7 @@ export async function runCliAgentWithLifecycle(params: {
     }
     return result;
   } catch (err) {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
+    await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
       emitAgentEvent({
@@ -275,9 +392,9 @@ export async function runCliAgentWithLifecycle(params: {
     }
     throw err;
   } finally {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
+    for (const bridge of bridges) {
+      bridge.unsubscribe();
+    }
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,

@@ -1322,17 +1322,10 @@ function createRawOllamaStreamFn(
             }
 
             accumulatedVisibleContent = nextVisibleContent;
-            const partial = buildStreamAssistantMessage({
-              model: modelInfo,
-              content: buildCurrentContent(),
-              stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
-            });
             stream.push({
               type: "text_delta",
               contentIndex: textContentIndex(),
               delta,
-              partial,
             });
           };
 
