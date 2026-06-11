@@ -20,6 +20,7 @@ import {
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
   isResponsesTextContentPartType,
+  resolveResponsesMessageSnapshotCollapse,
 } from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -579,6 +580,11 @@ export async function processResponsesStream<TApi extends Api>(
     | null = null;
   let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null =
     null;
+  let lastTextBlock: {
+    block: TextContent;
+    index: number;
+    phase: TextSignatureV1["phase"] | undefined;
+  } | null = null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
 
@@ -587,6 +593,11 @@ export async function processResponsesStream<TApi extends Api>(
       output.responseId = event.response.id;
     } else if (event.type === "response.output_item.added") {
       const item = event.item;
+      if (item.type !== "message") {
+        // Snapshot collapse only applies to back-to-back message items; any
+        // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
+        lastTextBlock = null;
+      }
       if (item.type === "reasoning") {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
@@ -754,6 +765,9 @@ export async function processResponsesStream<TApi extends Api>(
       }
     } else if (event.type === "response.output_item.done") {
       const item = event.item;
+      if (item.type !== "message") {
+        lastTextBlock = null;
+      }
 
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
@@ -772,13 +786,36 @@ export async function processResponsesStream<TApi extends Api>(
         currentBlock.text = item.content
           .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
           .join("");
-        currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
-        stream.push({
-          type: "text_end",
-          contentIndex: blockIndex(),
-          content: currentBlock.text,
-          partial: output,
+        const phase = item.phase ?? undefined;
+        const collapse = resolveResponsesMessageSnapshotCollapse({
+          prior: lastTextBlock && { text: lastTextBlock.block.text, phase: lastTextBlock.phase },
+          nextText: currentBlock.text,
+          nextPhase: phase,
         });
+        if (collapse.kind === "keep") {
+          currentBlock.textSignature = encodeTextSignatureV1(item.id, phase);
+          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          stream.push({
+            type: "text_end",
+            contentIndex: blockIndex(),
+            content: currentBlock.text,
+            partial: output,
+          });
+        } else if (lastTextBlock) {
+          // Cumulative snapshot of the prior message item: replace its text
+          // instead of appending another copy. The first item's signature is
+          // kept so replay and stream-item identity stay stable (#91959).
+          blocks.pop();
+          if (collapse.kind === "extend") {
+            lastTextBlock.block.text = collapse.text;
+            stream.push({
+              type: "text_end",
+              contentIndex: lastTextBlock.index,
+              content: collapse.text,
+              partial: output,
+            });
+          }
+        }
         currentBlock = null;
       } else if (item.type === "function_call") {
         const args =

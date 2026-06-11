@@ -38,6 +38,7 @@ import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-
 import {
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
+  resolveResponsesMessageSnapshotCollapse,
 } from "../shared/openai-responses-stream-compat.js";
 import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
@@ -1474,6 +1475,11 @@ async function processResponsesStream(
 ) {
   let currentItem: Record<string, unknown> | null = null;
   let currentBlock: Record<string, unknown> | null = null;
+  let lastTextBlock: {
+    block: Record<string, unknown>;
+    index: number;
+    phase: "commentary" | "final_answer" | undefined;
+  } | null = null;
   const streamStartedAt = Date.now();
   let eventCount = 0;
   const eventTypes = new Map<string, number>();
@@ -1484,15 +1490,36 @@ async function processResponsesStream(
     if (!text) {
       return;
     }
+    const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+    const collapse = resolveResponsesMessageSnapshotCollapse({
+      prior: lastTextBlock && {
+        text: stringifyUnknown(lastTextBlock.block.text),
+        phase: lastTextBlock.phase,
+      },
+      nextText: text,
+      nextPhase: phase,
+    });
+    if (collapse.kind === "drop") {
+      return;
+    }
+    if (collapse.kind === "extend" && lastTextBlock) {
+      // Cumulative snapshot of the prior message item: replace, don't append (#91959).
+      lastTextBlock.block.text = collapse.text;
+      stream.push({
+        type: "text_end",
+        contentIndex: lastTextBlock.index,
+        content: collapse.text,
+        partial: output,
+      });
+      return;
+    }
     const block: Record<string, unknown> = {
       type: "text",
       text,
-      textSignature: encodeTextSignatureV1(
-        stringifyUnknown(item.id),
-        (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
-      ),
+      textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase),
     };
     output.content.push(block);
+    lastTextBlock = { block, index: blockIndex(), phase };
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({
       type: "text_end",
@@ -1502,6 +1529,8 @@ async function processResponsesStream(
     });
   };
   const appendCompletedResponseToolCallItem = (item: Record<string, unknown>) => {
+    // A tool call is a real message boundary; never collapse text across it.
+    lastTextBlock = null;
     const args = parseStreamingJson(stringifyJsonLike(item.arguments, "{}"));
     const block = {
       type: "toolCall",
@@ -1569,6 +1598,11 @@ async function processResponsesStream(
       output.responseId = stringifyUnknown((event.response as { id?: string } | undefined)?.id);
     } else if (type === "response.output_item.added") {
       const item = event.item as Record<string, unknown>;
+      if (item.type !== "message") {
+        // Snapshot collapse only applies to back-to-back message items; any
+        // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
+        lastTextBlock = null;
+      }
       if (item.type === "reasoning") {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
@@ -1623,6 +1657,9 @@ async function processResponsesStream(
       }
     } else if (type === "response.output_item.done") {
       const item = event.item as Record<string, unknown>;
+      if (item.type !== "message") {
+        lastTextBlock = null;
+      }
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
           ? item.summary
@@ -1658,16 +1695,39 @@ async function processResponsesStream(
               : (contentPart.refusal ?? "");
           })
           .join("");
-        currentBlock.textSignature = encodeTextSignatureV1(
-          stringifyUnknown(item.id),
-          (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
-        );
-        stream.push({
-          type: "text_end",
-          contentIndex: blockIndex(),
-          content: stringifyUnknown(currentBlock.text),
-          partial: output,
+        const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+        const collapse = resolveResponsesMessageSnapshotCollapse({
+          prior: lastTextBlock && {
+            text: stringifyUnknown(lastTextBlock.block.text),
+            phase: lastTextBlock.phase,
+          },
+          nextText: stringifyUnknown(currentBlock.text),
+          nextPhase: phase,
         });
+        if (collapse.kind === "keep") {
+          currentBlock.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
+          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          stream.push({
+            type: "text_end",
+            contentIndex: blockIndex(),
+            content: stringifyUnknown(currentBlock.text),
+            partial: output,
+          });
+        } else if (lastTextBlock) {
+          // Cumulative snapshot of the prior message item: replace its text
+          // instead of appending another copy. The first item's signature is
+          // kept so replay and stream-item identity stay stable (#91959).
+          output.content.pop();
+          if (collapse.kind === "extend") {
+            lastTextBlock.block.text = collapse.text;
+            stream.push({
+              type: "text_end",
+              contentIndex: lastTextBlock.index,
+              content: collapse.text,
+              partial: output,
+            });
+          }
+        }
         currentBlock = null;
       } else if (item.type === "function_call") {
         const args =
