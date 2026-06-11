@@ -1334,6 +1334,75 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 
+  it("stops patching released pinned session extensions after registry removal", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "session-release-fixture",
+        name: "Session Release Fixture",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "Released workflow state",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    pinActivePluginSessionExtensionRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    await withHostHookState(
+      "openclaw-host-hooks-session-release-",
+      async ({ storePath, tempConfig }) => {
+        await updateSessionStore(storePath, (store) => {
+          store["agent:main:main"] = {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+          };
+          return undefined;
+        });
+
+        await expect(
+          patchPluginSessionExtension({
+            cfg: tempConfig,
+            sessionKey: "agent:main:main",
+            pluginId: "session-release-fixture",
+            namespace: "workflow",
+            value: { state: "before-release" },
+          }),
+        ).resolves.toEqual({
+          ok: true,
+          key: "agent:main:main",
+          value: { state: "before-release" },
+        });
+
+        releasePinnedPluginSessionExtensionRegistry(registry.registry);
+
+        await expect(
+          patchPluginSessionExtension({
+            cfg: tempConfig,
+            sessionKey: "agent:main:main",
+            pluginId: "session-release-fixture",
+            namespace: "workflow",
+            value: { state: "after-release" },
+          }),
+        ).resolves.toEqual({
+          ok: false,
+          error: "unknown plugin session extension: session-release-fixture/workflow",
+        });
+
+        const entry = loadSessionStore(storePath)["agent:main:main"];
+        expect(entry).toBeDefined();
+        expect(
+          projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry }),
+        ).toEqual([]);
+      },
+    );
+  });
+
   it("models queued next-turn injections and agent_turn_prepare as one prompt context", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
