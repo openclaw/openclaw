@@ -12,6 +12,7 @@ import type {
   ChannelDoctorEmptyAllowlistAccountContext,
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
+import { resolveCommandConfigWithSecrets } from "../../../cli/command-config-resolution.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 type ChannelDoctorEntry = {
@@ -361,9 +362,27 @@ export async function collectChannelDoctorPreviewWarnings(params: {
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
+  const channelIds = collectConfiguredChannelIds(params.cfg);
+  let resolvedCfg = params.cfg;
+  if (channelIds.length > 0) {
+    try {
+      const resolved = await resolveCommandConfigWithSecrets({
+        config: params.cfg,
+        commandName: "doctor",
+        targetIds: new Set(channelIds),
+        mode: "read_only_status",
+        env: params.env,
+      });
+      resolvedCfg = resolved.effectiveConfig;
+    } catch {
+      // Fall back to original config if secret resolution is unavailable
+      // (e.g. no gateway running). Channel adapters that genuinely need a
+      // resolved secret can still surface a focused warning of their own.
+    }
+  }
   const warnings: string[] = [];
-  for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), {
-    cfg: params.cfg,
+  for (const entry of listChannelDoctorEntries(channelIds, {
+    cfg: resolvedCfg,
     env: params.env,
   })) {
     const lines = await entry.doctor.collectPreviewWarnings?.(params);
