@@ -213,6 +213,20 @@ describe("plugin runtime route registry", () => {
     );
   });
 
+  it("keeps non-empty pinned session extension registries authoritative over active extensions", () => {
+    const startupRegistry = createRegistryWithSessionExtension("startup", "presence");
+    const laterRegistry = createRegistryWithSessionExtension("later", "presence");
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginSessionExtensionRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginSessionExtensionRegistry()).toBe(startupRegistry);
+    expect(
+      getActivePluginSessionExtensionRegistry()?.sessionExtensions?.map((entry) => entry.pluginId),
+    ).toEqual(["startup"]);
+  });
+
   it("resolves the gateway command registry from pinned startup surfaces before active churn", () => {
     const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
     startupRegistry.commands.push({
