@@ -73,6 +73,7 @@ function createHost(request: ReturnType<typeof vi.fn> = vi.fn()): ChannelsAction
     nostrProfileAccountId: null,
     nostrProfileFormState: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     settings: {},
     updateStatusBanner: null,
     updateRunning: false,

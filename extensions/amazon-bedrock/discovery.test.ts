@@ -166,6 +166,65 @@ describe("bedrock discovery", () => {
     });
   });
 
+  it("marks known Fable inference profile fallbacks as reasoning capable", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.anthropic.claude-fable-5",
+            inferenceProfileName: "US Claude Fable 5",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-fable-5",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "us.anthropic.claude-fable-5",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    });
+  });
+
+  it("skips Mythos Preview inference profiles because Mantle owns that route", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.anthropic.claude-mythos-preview",
+            inferenceProfileName: "US Claude Mythos Preview",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-mythos-preview",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expect(models).toEqual([]);
+  });
+
   it("normalizes region-prefixed versioned model ids when resolving context windows", async () => {
     sendMock
       .mockResolvedValueOnce({

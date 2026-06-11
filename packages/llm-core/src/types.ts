@@ -606,6 +606,8 @@ export interface Model<TApi extends Api = Api> {
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
   headers?: Record<string, string>;
+  /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
+  authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat

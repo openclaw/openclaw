@@ -19,6 +19,7 @@ type RealtimeServerEvent = {
   name?: string;
   delta?: string;
   transcript?: string;
+  text?: string;
   arguments?: string;
   error?: unknown;
   response?: {
@@ -239,20 +240,16 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
           }
         }
         return;
+      case "conversation.output_transcript.delta":
+      case "response.output_text.delta":
+      case "response.audio_transcript.delta":
+      case "response.output_audio_transcript.delta":
+        this.emitAssistantTranscript(event, false);
+        return;
+      case "response.output_text.done":
       case "response.audio_transcript.done":
-        if (event.transcript) {
-          this.ctx.callbacks.onTranscript?.({
-            role: "assistant",
-            text: event.transcript,
-            final: true,
-          });
-          this.emitTalkEvent({
-            type: "output.text.done",
-            final: true,
-            itemId: event.item_id,
-            payload: { text: event.transcript },
-          });
-        }
+      case "response.output_audio_transcript.done":
+        this.emitAssistantTranscript(event, true);
         return;
       case "response.function_call_arguments.delta":
         this.bufferToolDelta(event);
@@ -305,6 +302,24 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private extractResponseStatus(event: RealtimeServerEvent): string | undefined {
     const status = event.response?.status;
     return status && status !== "completed" ? `Response ${status}` : undefined;
+  }
+
+  private emitAssistantTranscript(event: RealtimeServerEvent, final: boolean): void {
+    const text = final ? (event.transcript ?? event.text) : event.delta;
+    if (!text) {
+      return;
+    }
+    this.ctx.callbacks.onTranscript?.({
+      role: "assistant",
+      text,
+      final,
+    });
+    this.emitTalkEvent({
+      type: final ? "output.text.done" : "output.text.delta",
+      final,
+      itemId: event.item_id,
+      payload: { text },
+    });
   }
 
   private extractErrorDetail(error: unknown): string {
