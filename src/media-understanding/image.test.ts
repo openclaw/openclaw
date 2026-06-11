@@ -766,6 +766,47 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("respects explicit input: ['text'] in models.providers and rejects image use", async () => {
+    // When the user explicitly sets input: ["text"] in their
+    // models.providers entry, the bundled catalog must NOT override
+    // that choice. (#92104)
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "google",
+        id: "gemini-3.5-flash",
+        api: "google-generative-ai",
+        input: ["text"],
+        baseUrl: "https://generativelanguage.googleapis.com",
+      })),
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                apiKey: "test-key",
+                models: [{ id: "gemini-3.5-flash", input: ["text"] }],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "google",
+        model: "gemini-3.5-flash",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(
+      "Model does not support images: google/gemini-3.5-flash",
+    );
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
   it("passes image prompt as system instructions for codex image requests", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
