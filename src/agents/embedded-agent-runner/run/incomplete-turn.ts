@@ -565,7 +565,10 @@ function isEmptyResponseAssistantTurn(params: {
   if (params.payloadCount !== 0) {
     return false;
   }
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+  if (
+    !hasOnlySilentAssistantReply(params.attempt.assistantTexts) &&
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0
+  ) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
@@ -600,7 +603,10 @@ function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   if (params.payloadCount !== 0) {
     return false;
   }
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+  if (
+    !hasOnlySilentAssistantReply(params.attempt.assistantTexts) &&
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0
+  ) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
