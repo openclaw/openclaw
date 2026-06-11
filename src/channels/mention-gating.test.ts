@@ -6,6 +6,7 @@ import {
   resolveMentionGating,
   resolveMentionGatingWithBypass,
 } from "./mention-gating.js";
+import { resolveMentionPatternPolicy } from "./mention-pattern-policy.js";
 
 describe("resolveMentionGating", () => {
   it("combines explicit, implicit, and bypass mentions", () => {
@@ -60,6 +61,80 @@ describe("resolveMentionGatingWithBypass", () => {
     });
     expect(res.shouldBypassMention).toBe(shouldBypassMention);
     expect(res.shouldSkip).toBe(shouldSkip);
+  });
+});
+
+describe("resolveMentionPatternPolicy", () => {
+  it("keeps regex mention patterns enabled when no provider policy is configured", () => {
+    const res = resolveMentionPatternPolicy({
+      provider: "matrix",
+      conversationId: "!room:example.test",
+    });
+    expect(res.enabled).toBe(true);
+  });
+
+  it("keeps regex mention patterns enabled for an empty provider policy", () => {
+    const res = resolveMentionPatternPolicy({
+      providerPolicy: {},
+      conversationId: "!room:example.test",
+    });
+    expect(res.enabled).toBe(true);
+  });
+
+  it("requires allowIn to match when provider policy explicitly uses allow mode", () => {
+    const res = resolveMentionPatternPolicy({
+      providerPolicy: {
+        mode: "allow",
+        allowIn: ["!the-donghouse:example.test"],
+      },
+      conversationId: "!bottoy:example.test",
+    });
+    expect(res.allowMatched).toBe(false);
+    expect(res.enabled).toBe(false);
+  });
+
+  it("enables explicit allow mode when allowIn matches", () => {
+    const res = resolveMentionPatternPolicy({
+      providerPolicy: {
+        mode: "allow",
+        allowIn: ["!the-donghouse:example.test"],
+      },
+      conversationId: "!the-donghouse:example.test",
+    });
+    expect(res.allowMatched).toBe(true);
+    expect(res.enabled).toBe(true);
+  });
+
+  it("keeps denyIn precedence over explicit allow mode matches", () => {
+    const res = resolveMentionPatternPolicy({
+      providerPolicy: {
+        mode: "allow",
+        allowIn: ["!the-donghouse:example.test"],
+        denyIn: ["!the-donghouse:example.test"],
+      },
+      conversationId: "!the-donghouse:example.test",
+    });
+    expect(res.allowMatched).toBe(true);
+    expect(res.denyMatched).toBe(true);
+    expect(res.enabled).toBe(false);
+  });
+
+  it("resolves provider policy from OpenClaw config", () => {
+    const res = resolveMentionPatternPolicy({
+      cfg: {
+        channels: {
+          matrix: {
+            mentionPatterns: {
+              mode: "allow",
+              allowIn: ["!the-donghouse:example.test", "!scoob-admin:example.test"],
+            },
+          },
+        },
+      },
+      provider: "matrix",
+      conversationId: "!bottoy:example.test",
+    });
+    expect(res.enabled).toBe(false);
   });
 });
 

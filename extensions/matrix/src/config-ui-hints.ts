@@ -8,11 +8,11 @@ export const matrixChannelConfigUiHints = {
   },
   "mentionPatterns.mode": {
     label: "Matrix Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+    help: '"allow" enables configured regex mention patterns only when allowIn matches; "deny" also requires allowIn. denyIn always wins.',
   },
   "mentionPatterns.allowIn": {
     label: "Matrix Mention Pattern Allowlist",
-    help: "Matrix room IDs where configured regex mention patterns are enabled when mode is deny.",
+    help: "Matrix room IDs where configured regex mention patterns are enabled for scoped provider policies.",
   },
   "mentionPatterns.denyIn": {
     label: "Matrix Mention Pattern Denylist",

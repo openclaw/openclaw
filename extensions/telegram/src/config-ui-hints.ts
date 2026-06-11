@@ -28,11 +28,11 @@ export const telegramChannelConfigUiHints = {
   },
   "mentionPatterns.mode": {
     label: "Telegram Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+    help: '"allow" enables configured regex mention patterns only when allowIn matches; "deny" also requires allowIn. denyIn always wins.',
   },
   "mentionPatterns.allowIn": {
     label: "Telegram Mention Pattern Allowlist",
-    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are enabled when mode is deny.",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are enabled for scoped provider policies.",
   },
   "mentionPatterns.denyIn": {
     label: "Telegram Mention Pattern Denylist",
