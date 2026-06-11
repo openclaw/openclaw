@@ -1808,6 +1808,7 @@ export async function runEmbeddedAttempt(
         defaultModel: defaultModelLabel,
         shell: detectRuntimeShell(),
         channel: runtimeChannel,
+        chatType: params.chatType,
         capabilities: runtimeCapabilities,
         channelActions,
         activeProcessSessions,

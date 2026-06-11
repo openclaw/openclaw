@@ -25,7 +25,10 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
-import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import {
+  resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
+} from "./cli-runner/helpers.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
@@ -2030,5 +2033,58 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       trigger: "cron",
     });
     expect(timeoutMs).toBe(480_000);
+  });
+
+  it("lets explicit embedded run timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      runTimeoutOverrideMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
+
+  it("lets configured agent default timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      runTimeoutOverrideMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
+
+  it("keeps inherited user resume timeouts on the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(180_000);
+  });
+});
+
+describe("resolveCliRunTimeoutOverrideMs", () => {
+  it("preserves configured timeouts for normal channel runs", () => {
+    expect(
+      resolveCliRunTimeoutOverrideMs({
+        config: { agents: { defaults: { timeoutSeconds: 600 } } },
+        timeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("does not treat configured timeouts as subagent overrides", () => {
+    expect(
+      resolveCliRunTimeoutOverrideMs({
+        config: { agents: { defaults: { timeoutSeconds: 600 } } },
+        lane: "subagent",
+        timeoutMs: 600_000,
+      }),
+    ).toBeUndefined();
   });
 });

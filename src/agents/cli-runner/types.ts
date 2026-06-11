@@ -53,6 +53,11 @@ export type RunCliAgentParams = {
   model?: string;
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
+  /**
+   * Explicit run timeout, in milliseconds, when the caller can distinguish a
+   * deliberate timeout override from the inherited agent default.
+   */
+  runTimeoutOverrideMs?: number;
   runId: string;
   lane?: string;
   jobId?: string;

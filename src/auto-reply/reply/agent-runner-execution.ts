@@ -93,6 +93,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
@@ -2105,6 +2106,14 @@ export async function runAgentTurnWithFallback(params: {
               const cliCurrentMessageId = isRestartSentinelContinuation
                 ? params.sessionCtx.ReplyToId
                 : (params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid);
+              const cliToolSummaryTracker = createCliToolSummaryTracker({
+                detailMode: params.toolProgressDetail,
+                shouldEmitToolResult: params.shouldEmitToolResult,
+                shouldEmitToolOutput: params.shouldEmitToolOutput,
+                deliver: async (payload) => {
+                  await params.opts?.onToolResult?.(payload);
+                },
+              });
               const result = await agentTurnTiming.measure("cli_run", () =>
                 runCliAgentWithLifecycle({
                   runId,
@@ -2121,7 +2130,12 @@ export async function runAgentTurnWithFallback(params: {
                   onReasoningText: async (text) => {
                     await params.opts?.onReasoningStream?.({ text });
                   },
-                  onToolEvent: async ({ name, phase, args }) => {
+                  onToolEvent: async (payload) => {
+                    await cliToolSummaryTracker.noteToolEvent(payload);
+                    if (payload.phase === "result") {
+                      return;
+                    }
+                    const { name, phase, args } = payload;
                     await Promise.all([
                       params.typingSignals.signalToolStart(),
                       params.opts?.onToolStart?.({
@@ -2188,6 +2202,7 @@ export async function runAgentTurnWithFallback(params: {
                     classifyCommentaryText: params.opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: params.followupRun.run.thinkLevel,
                     timeoutMs: params.followupRun.run.timeoutMs,
+                    runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
                     runId,
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,

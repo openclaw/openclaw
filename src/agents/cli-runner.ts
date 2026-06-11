@@ -882,6 +882,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     model: params.model ?? "opus",
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,

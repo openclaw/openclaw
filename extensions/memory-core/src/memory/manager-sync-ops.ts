@@ -398,6 +398,13 @@ export abstract class MemoryManagerSyncOps {
     return row?.found === 1;
   }
 
+  protected hasSemanticChunks(): boolean {
+    const row = this.db
+      .prepare(`SELECT 1 as found FROM chunks WHERE model != 'fts-only' LIMIT 1`)
+      .get() as { found?: number } | undefined;
+    return row?.found === 1;
+  }
+
   protected resolveCurrentIndexIdentityState(params?: {
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
@@ -2074,9 +2081,24 @@ export abstract class MemoryManagerSyncOps {
     const hasIndexedChunks = this.hasIndexedChunks();
     const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
     // Missing metadata cannot prove whether existing chunks were semantic.
-    // Wait for the configured provider before replacing them with a rebuilt index.
+    // Wait for the configured provider before replacing them with a rebuilt index,
+    // unless every existing chunk is FTS-only — in that case rebuilding as
+    // FTS-only is safe even without a provider because no semantic data is lost.
+    // Gate the chunk-model scan: only compute when identity is missing,
+    // chunks exist, and the provider is unavailable (no target session files
+    // is already checked by needsMissingIdentityReindex below).
+    const needsFtsOnlyClassification =
+      indexIdentity.status === "missing" &&
+      hasIndexedChunks &&
+      this.provider === null &&
+      this.settings.provider &&
+      this.settings.provider !== "none";
+    const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
     const canRebuildMissingIdentity =
-      this.provider !== null || !this.settings.provider || this.settings.provider === "none";
+      this.provider !== null ||
+      !this.settings.provider ||
+      this.settings.provider === "none" ||
+      hasOnlyFtsChunks;
     const needsMissingIdentityReindex =
       indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =

@@ -2404,6 +2404,53 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
+  it("parses repeated DeepSeek DSML name attributes consistently", async () => {
+    // Guards the cached attribute matchers: repeated parses must stay identical
+    // (no stale RegExp lastIndex) across separate stream invocations.
+    const model = createDeepSeekCompletionsModel();
+    const content =
+      '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+
+    const runOnce = async () => {
+      const output = createAssistantOutput(model);
+      await testing.processOpenAICompletionsStream(
+        streamChunks([
+          {
+            id: "chatcmpl-deepseek-dsml-repeat",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            choices: [
+              {
+                index: 0,
+                delta: { content },
+                logprobs: null,
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push() {} },
+      );
+      return output.content;
+    };
+
+    const first = await runOnce();
+    const second = await runOnce();
+    expect(second).toEqual(first);
+    expect(first).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+  });
+
   it("recovers split DeepSeek DSML JSON tool calls emitted as text", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
@@ -10136,9 +10183,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   });
 
   it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
-    const assistant = getAssistantMessage(
-      buildReplayParams(gemma4Model, "reasoning_content"),
-    );
+    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");

@@ -58,8 +58,12 @@ function isClaudeFable5Model(modelId: string): boolean {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
+function isClaudeMythos5Model(modelId: string): boolean {
+  return /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
+}
+
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId });
+  return supportsClaudeAdaptiveThinking({ id: modelId }) || isClaudeMythos5Model(modelId);
 }
 
 function mapAnthropicAdaptiveEffort(
@@ -82,10 +86,13 @@ function mapAnthropicAdaptiveEffort(
     high: "high",
     xhigh: isClaudeFable5Model(modelId)
       ? "xhigh"
-      : isClaudeOpus47OrNewerModel(modelId)
+      : isClaudeOpus47OrNewerModel(modelId) || isClaudeMythos5Model(modelId)
         ? "xhigh"
         : "high",
-    max: supportsClaudeNativeMaxEffort({ id: modelId }) ? "max" : "high",
+    max:
+      supportsClaudeNativeMaxEffort({ id: modelId }) || isClaudeMythos5Model(modelId)
+        ? "max"
+        : "high",
   };
   return effortMap[resolvedReasoning] ?? "high";
 }
@@ -173,11 +180,16 @@ export function createAnthropicVertexStreamFn(
     });
     const contractModelId = resolveClaudeModelIdentity(model);
     const fable5 = isClaudeFable5Model(contractModelId);
-    const reasoning = options?.reasoning as ModelThinkingLevel | undefined;
+    const mandatoryAdaptiveThinking = fable5 || isClaudeMythos5Model(contractModelId);
+    const reasoning =
+      (options?.reasoning as ModelThinkingLevel | undefined) ??
+      (mandatoryAdaptiveThinking ? "high" : undefined);
     const adaptiveThinking =
-      fable5 || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
+      mandatoryAdaptiveThinking || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
     const temperature =
-      adaptiveThinking || isClaudeOpus47OrNewerModel(contractModelId)
+      adaptiveThinking ||
+      isClaudeOpus47OrNewerModel(contractModelId) ||
+      isClaudeMythos5Model(contractModelId)
         ? undefined
         : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {

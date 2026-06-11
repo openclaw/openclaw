@@ -2141,6 +2141,7 @@ describe("scripts/test-projects full-suite sharding", () => {
         "test/vitest/vitest.full-core-unit-ui.config.ts",
         "test/vitest/vitest.full-core-unit-support.config.ts",
         "test/vitest/vitest.full-core-support-boundary.config.ts",
+        "test/vitest/vitest.full-core-tooling.config.ts",
         "test/vitest/vitest.full-core-contracts.config.ts",
         "test/vitest/vitest.full-core-bundled.config.ts",
         "test/vitest/vitest.full-core-runtime.config.ts",

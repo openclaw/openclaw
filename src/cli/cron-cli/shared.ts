@@ -18,6 +18,7 @@ import {
   isOffsetlessIsoDateTime,
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
+import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
@@ -70,7 +71,19 @@ export const getCronChannelOptions = () => {
   return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
 };
 
-function addCronRunCauseFields(value: unknown): unknown {
+function toLocalIsoTime(value: unknown): string | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? formatTimestamp(new Date(value), { style: "long" })
+    : undefined;
+}
+
+/**
+ * CLI-only display enrichment for `cron runs` history entries: adds a short
+ * `cause` alias for `errorReason` plus readable local-offset ISO mirrors of the
+ * numeric timestamps (matching the diagnostic log `time` format). Stored data
+ * and the gateway protocol stay unchanged; raw numeric fields are preserved.
+ */
+function enrichCronRunEntriesForDisplay(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -84,17 +97,33 @@ function addCronRunCauseFields(value: unknown): unknown {
       return entry;
     }
     const item = entry as Record<string, unknown>;
-    if (item.action !== "finished" || typeof item.errorReason !== "string") {
+    if (item.action !== "finished") {
       return item;
     }
-    const cause = item.errorReason.trim();
-    return cause ? Object.assign({}, item, { cause }) : item;
+    const extra: Record<string, unknown> = {};
+    const cause = typeof item.errorReason === "string" ? item.errorReason.trim() : "";
+    if (cause) {
+      extra.cause = cause;
+    }
+    const tsIso = toLocalIsoTime(item.ts);
+    if (tsIso) {
+      extra.tsIso = tsIso;
+    }
+    const runAtIso = toLocalIsoTime(item.runAtMs);
+    if (runAtIso) {
+      extra.runAtIso = runAtIso;
+    }
+    const nextRunAtIso = toLocalIsoTime(item.nextRunAtMs);
+    if (nextRunAtIso) {
+      extra.nextRunAtIso = nextRunAtIso;
+    }
+    return Object.keys(extra).length > 0 ? Object.assign({}, item, extra) : item;
   });
   return { ...record, entries: nextEntries };
 }
 
 export function printCronJson(value: unknown) {
-  defaultRuntime.writeJson(addCronRunCauseFields(value));
+  defaultRuntime.writeJson(enrichCronRunEntriesForDisplay(value));
 }
 
 /**
