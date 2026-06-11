@@ -201,22 +201,25 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("resolves a registered non-docker backend", async () => {
-    const restore = registerSandboxBackend("test-backend", async () => ({
-      id: "test-backend",
-      runtimeId: "test-runtime",
-      runtimeLabel: "Test Runtime",
-      workdir: "/workspace",
-      buildExecSpec: async () => ({
-        argv: ["test-backend", "exec"],
-        env: process.env,
-        stdinMode: "pipe-closed",
+    const restore = registerSandboxBackend("test-backend", {
+      factory: async () => ({
+        id: "test-backend",
+        runtimeId: "test-runtime",
+        runtimeLabel: "Test Runtime",
+        workdir: "/runtime/workspace",
+        buildExecSpec: async () => ({
+          argv: ["test-backend", "exec"],
+          env: process.env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
-    }));
+      resolveWorkdir: () => "/runtime/workspace",
+    });
     try {
       const cfg: OpenClawConfig = {
         agents: {
@@ -242,6 +245,13 @@ describe("resolveSandboxContext", () => {
       expect(result?.runtimeId).toBe("test-runtime");
       expect(result?.containerName).toBe("test-runtime");
       expect(result?.backend?.id).toBe("test-backend");
+
+      const workspace = await ensureSandboxWorkspaceForSession({
+        config: cfg,
+        sessionKey: "agent:worker:task",
+        workspaceDir: "/tmp/openclaw-test",
+      });
+      expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
     } finally {
       restore();
     }
@@ -409,9 +419,48 @@ describe("resolveSandboxContext", () => {
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
     expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(result?.skillsWorkspaceDir).toBe(syncOptions?.targetWorkspaceDir);
+    expect(result?.workspaceAccess).toBe("rw");
+    expect(result?.skillsEligibility).toEqual({ remote: { note: "test-remote" } });
     await expect(
       fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
     ).resolves.toBe("# User owned\n");
+  }, 15_000);
+
+  it("uses the SSH backend remote workspace for sandbox workspace info", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("ssh-workspace");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "ssh",
+            scope: "session",
+            workspaceAccess: "rw",
+            ssh: {
+              target: "ssh.example.test",
+              workspaceRoot: "/remote/openclaw",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    expect(result?.containerWorkdir).toMatch(
+      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-[a-f0-9]{8}\/workspace$/,
+    );
+    expect(result?.containerWorkdir).not.toBe("/workspace");
+    expect(result?.skillsWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
   }, 15_000);
 
   it("materializes skills for shared writable sandboxes even when roots match", async () => {

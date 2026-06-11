@@ -13,6 +13,9 @@ import type { StreamFn } from "../agents/runtime/index.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
 
 type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 

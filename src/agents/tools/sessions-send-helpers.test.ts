@@ -3,7 +3,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { resolveAnnounceTargetFromKey, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentMessageContext,
+  buildAgentToAgentReplyContext,
+  resolveAnnounceTargetFromKey,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
@@ -90,5 +95,40 @@ describe("resolvePingPongTurns", () => {
     expect(
       resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 50 } } } as never),
     ).toBe(20);
+  });
+});
+
+describe("agent-to-agent prompt context", () => {
+  it("keeps volatile routing identifiers out of system prompt context", () => {
+    const context = buildAgentToAgentMessageContext({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      requesterChannel: "slack",
+      targetSessionKey: "agent:worker:discord:channel:ops:run:run-123",
+    });
+
+    expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
+    expect(context).toContain("Agent 1 (requester) channel: slack.");
+    expect(context).toContain("Agent 2 (target) session: <TARGET_SESSION>.");
+    expect(context).not.toContain("agent:main:slack:channel:C123:thread:171.222");
+    expect(context).not.toContain("agent:worker:discord:channel:ops:run:run-123");
+  });
+
+  it("preserves optional session line shape with concrete channel values", () => {
+    const context = buildAgentToAgentReplyContext({
+      requesterSessionKey: "agent:requester:main",
+      targetSessionKey: "agent:target:main",
+      targetChannel: "telegram",
+      currentRole: "target",
+      turn: 2,
+      maxTurns: 5,
+    });
+
+    expect(context).toContain("Current agent: Agent 2 (target).");
+    expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
+    expect(context).not.toContain("Agent 1 (requester) channel:");
+    expect(context).toContain("Agent 2 (target) session: <TARGET_SESSION>.");
+    expect(context).toContain("Agent 2 (target) channel: telegram.");
+    expect(context).not.toContain("agent:requester:main");
+    expect(context).not.toContain("agent:target:main");
   });
 });

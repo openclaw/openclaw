@@ -18,7 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
-import { requireSandboxBackendFactory } from "./backend.js";
+import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_STATE_DIR } from "./constants.js";
@@ -178,6 +178,24 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
   return { rawSessionKey, runtime, cfg };
 }
 
+function resolveSandboxWorkspaceInfoWorkdir(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  rawSessionKey: string;
+  scopeKey: string;
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir: string;
+}): string | undefined {
+  return getSandboxBackendWorkdirResolver(params.cfg.backend)?.({
+    sessionKey: params.rawSessionKey,
+    scopeKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
+    cfg: params.cfg,
+  });
+}
+
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -308,16 +326,28 @@ export async function ensureSandboxWorkspaceForSession(params: {
   }
   const { rawSessionKey, cfg, runtime } = resolved;
 
-  const { workspaceDir } = await ensureSandboxWorkspaceLayout({
-    cfg,
-    agentId: runtime.agentId,
-    rawSessionKey,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const { agentWorkspaceDir, scopeKey, skillsEligibility, skillsWorkspaceDir, workspaceDir } =
+    await ensureSandboxWorkspaceLayout({
+      cfg,
+      agentId: runtime.agentId,
+      rawSessionKey,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    });
 
+  const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
+    cfg,
+    rawSessionKey,
+    scopeKey,
+    workspaceDir,
+    agentWorkspaceDir,
+    skillsWorkspaceDir,
+  });
   return {
     workspaceDir,
-    containerWorkdir: cfg.docker.workdir,
+    ...(containerWorkdir ? { containerWorkdir } : {}),
+    skillsWorkspaceDir,
+    ...(skillsEligibility ? { skillsEligibility } : {}),
+    workspaceAccess: cfg.workspaceAccess,
   };
 }

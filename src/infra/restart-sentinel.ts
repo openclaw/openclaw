@@ -126,6 +126,9 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
     }
     const stats = payload.stats ? { ...payload.stats } : {};
     const after = isPlainRecord(stats.after) ? { ...stats.after } : {};
+    if (after.version === version) {
+      return null;
+    }
     after.version = version;
     stats.after = after;
     return {

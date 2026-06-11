@@ -44,18 +44,23 @@ export type SandboxBackendFactory = (
   params: CreateSandboxBackendParams,
 ) => Promise<SandboxBackendHandle>;
 
+/** Resolve the runtime workdir without creating or starting the backend. */
+export type SandboxBackendWorkdirResolver = (params: CreateSandboxBackendParams) => string;
+
 /** Registry input accepted for sandbox backend registration. */
 export type SandboxBackendRegistration =
   | SandboxBackendFactory
   | {
       factory: SandboxBackendFactory;
       manager?: SandboxBackendManager;
+      resolveWorkdir?: SandboxBackendWorkdirResolver;
     };
 
 /** Normalized backend registration stored in the sandbox backend registry. */
 export type RegisteredSandboxBackend = {
   factory: SandboxBackendFactory;
   manager?: SandboxBackendManager;
+  resolveWorkdir?: SandboxBackendWorkdirResolver;
 };
 
 export type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";

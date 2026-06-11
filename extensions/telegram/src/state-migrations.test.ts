@@ -461,6 +461,12 @@ describe("telegram state migrations", () => {
           [replayKey]: now,
         },
       });
+      legacyStore.register("legacy-bucket-lock", {
+        scopeKey: "old-session-store",
+        namespace: "ops:lock",
+        bucketId: "00",
+        entries: {},
+      });
 
       const cfg = {
         channels: {
@@ -485,6 +491,7 @@ describe("telegram state migrations", () => {
         kind: "plugin-state-import",
         pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
         namespace: dispatchNamespace,
+        cleanupWhenEmpty: true,
       });
       if (!plan || plan.kind !== "plugin-state-import") {
         throw new Error("expected Telegram message dispatch plugin-state import plan");
@@ -520,9 +527,23 @@ describe("telegram state migrations", () => {
         );
       }
 
+      // The plan stays detectable while legacy bucket rows remain so doctor --fix
+      // can finish by deleting the retired source namespace.
       const plansAfterImport = await detectTelegramLegacyStateMigrations({ cfg, env });
       expect(
         plansAfterImport.some(
+          (candidate) =>
+            candidate.kind === "plugin-state-import" &&
+            candidate.sourcePath === "plugin state:telegram.message-dispatch-dedupe:ops",
+        ),
+      ).toBe(true);
+
+      await plan.removeSource?.();
+      expect(legacyStore.entries()).toHaveLength(0);
+
+      const plansAfterCleanup = await detectTelegramLegacyStateMigrations({ cfg, env });
+      expect(
+        plansAfterCleanup.some(
           (candidate) =>
             candidate.kind === "plugin-state-import" &&
             candidate.sourcePath === "plugin state:telegram.message-dispatch-dedupe:ops",

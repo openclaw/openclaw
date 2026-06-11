@@ -42,6 +42,7 @@ export type AgentRunContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
+  senderId?: string | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };

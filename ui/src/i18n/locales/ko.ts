@@ -1593,6 +1593,8 @@ export const ko: TranslationMap = {
     },
     jobDetail: {
       system: "시스템",
+      command: "Command",
+      cwd: "CWD",
       prompt: "프롬프트",
       delivery: "전달",
       agent: "에이전트",

@@ -453,6 +453,7 @@ export async function runAgentAttempt(params: {
   resolvedThinkLevel: ThinkLevel;
   fastMode?: boolean;
   timeoutMs: number;
+  runTimeoutOverrideMs?: number;
   runId: string;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
@@ -624,7 +625,9 @@ export async function runAgentAttempt(params: {
           model: params.modelOverride,
           thinkLevel: params.resolvedThinkLevel,
           timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
           runId: params.runId,
+          lane: params.opts.lane,
           extraSystemPrompt: params.opts.extraSystemPrompt,
           inputProvenance: params.opts.inputProvenance,
           cliSessionId: nextCliSessionId,
@@ -645,6 +648,7 @@ export async function runAgentAttempt(params: {
           currentThreadTs: params.runContext.currentThreadTs,
           currentInboundAudio: params.runContext.currentInboundAudio,
           agentAccountId: params.runContext.accountId,
+          senderId: params.runContext.senderId,
           senderIsOwner: params.opts.senderIsOwner,
           toolsAllow: params.opts.toolsAllow,
           cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,

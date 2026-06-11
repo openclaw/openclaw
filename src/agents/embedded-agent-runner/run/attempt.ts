@@ -1843,6 +1843,7 @@ export async function runEmbeddedAttempt(
         defaultModel: defaultModelLabel,
         shell: detectRuntimeShell(),
         channel: runtimeChannel,
+        chatType: params.chatType,
         capabilities: runtimeCapabilities,
         channelActions,
         activeProcessSessions,
@@ -3368,6 +3369,7 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        getLastAssistantTextMessageIndex,
         toolMetas,
         getAcceptedSessionSpawns,
         runToolLifecycle,
@@ -5287,6 +5289,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot,
         ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
         assistantTexts,
+        lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
         toolMetas: toolMetasNormalized,
         acceptedSessionSpawns,
         lastAssistant,
