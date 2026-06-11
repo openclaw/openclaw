@@ -86,7 +86,11 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
       reply: { text: "plugin reply" },
     });
 
-    const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
+    const result = await getReplyFromConfig(
+      buildGetReplyGroupCtx({ SenderId: "telegram-user-42" }),
+      undefined,
+      {},
+    );
 
     expect(result).toEqual({ text: "plugin reply" });
     expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
@@ -99,6 +103,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
           sessionId?: string;
           workspaceDir?: string;
           messageProvider?: string;
+          senderId?: string;
           trigger?: string;
           channelId?: string;
         },
@@ -110,6 +115,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     expect(hookCtx.sessionId).toBe("session-1");
     expect(hookCtx.workspaceDir).toBe("/tmp/workspace");
     expect(hookCtx.messageProvider).toBe("telegram");
+    expect(hookCtx.senderId).toBe("telegram-user-42");
     expect(hookCtx.trigger).toBe("user");
     expect(hookCtx.channelId).toBe("-100123");
     expect(mocks.handleInlineActions.mock.invocationCallOrder[0]).toBeLessThan(

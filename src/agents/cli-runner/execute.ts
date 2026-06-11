@@ -31,6 +31,7 @@ import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-l
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   buildCliSupervisorScopeKey,
+  buildClaudeOwnerKey,
   buildCliArgs,
   resolveCliRunQueueKey,
   enqueueCliRun,
@@ -374,6 +375,13 @@ export async function executePreparedCliRun(
     runId: params.runId,
     workspaceDir: context.workspaceDir,
     cliSessionId: useResume ? resolvedSessionId : undefined,
+    ownerKey: buildClaudeOwnerKey({
+      agentAccountId: params.agentAccountId,
+      agentId: params.agentId,
+      authProfileId: context.effectiveAuthProfileId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    }),
   });
 
   try {

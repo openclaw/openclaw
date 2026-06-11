@@ -312,6 +312,133 @@ describe("listThinkingLevels", () => {
     ).toBe("high");
   });
 
+  it("exposes Claude Opus xhigh on custom anthropic-messages providers without a plugin profile", () => {
+    // Regression for openclaw#91975: a renamed provider serving Claude Opus over
+    // anthropic-messages used to fall back to a base profile (no xhigh) and silently
+    // clamp `--thinking xhigh` to `off`.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "adaptive",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("xhigh");
+  });
+
+  it("does not invent xhigh for non-Claude models on anthropic-messages routes", () => {
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("intentionally suppresses compat-driven xhigh for non-Claude anthropic-messages rows", () => {
+    // Even when the catalog explicitly advertises xhigh via compat, a non-Claude
+    // model on the anthropic-messages transport stays on the Claude base set.
+    // The transport itself doesn't carry a generic xhigh contract — only Claude
+    // families do — so the catalog signal is intentionally suppressed here.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).not.toContain(
+      "xhigh",
+    );
+  });
+
+  it("does not infer the Claude profile without an anthropic-messages catalog row", () => {
+    // Same provider id, but the catalog row says openai-completions — must NOT
+    // grant Claude levels to a non-Anthropic transport.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "openai-completions",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("matches native Anthropic max parity for adaptive Claude on custom anthropic-messages providers", () => {
+    // Adaptive Claude families (e.g. claude-sonnet-4-6) take the adaptive-default
+    // branch in resolveClaudeThinkingProfile, which only exposes `max` when
+    // includeNativeMax is set. The fallback must pass the same option the
+    // bundled anthropic plugin uses, otherwise custom providers silently lose
+    // `max` parity with the native Anthropic policy.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-sonnet-4-6", catalog)).toContain("max");
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-sonnet-4-6",
+        level: "max",
+        catalog,
+      }),
+    ).toBe(true);
+  });
+
   it("preserves provider-specific profiles for Fable Messages routes", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low" }],
@@ -638,6 +765,27 @@ describe("resolveThinkingDefaultForModel", () => {
         provider: "openai",
         model: "gpt-4.1-mini",
         catalog: [{ provider: "openai", id: "gpt-4.1-mini", reasoning: false }],
+      }),
+    ).toBe("off");
+  });
+
+  it("respects provider-declared 'off' default for reasoning-capable models", () => {
+    // Providers like Ollama declare defaultLevel:"off" even for reasoning=true models
+    // because thinking must be explicitly opted in, not activated by the global default.
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "ollama"
+        ? {
+            levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+            defaultLevel: "off",
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "ollama",
+        model: "gemma4",
+        catalog: [{ provider: "ollama", id: "gemma4", reasoning: true }],
       }),
     ).toBe("off");
   });

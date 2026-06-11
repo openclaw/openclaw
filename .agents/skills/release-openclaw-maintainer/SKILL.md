@@ -317,6 +317,23 @@ pnpm release:check
 pnpm test:install:smoke
 ```
 
+- Before tagging, diff publishable plugin package manifests against the last
+  reachable stable/beta release tag. For every newly publishable package
+  (`openclaw.release.publishToNpm: true` or `publishToClawHub: true`) whose
+  package name did not exist in the base tag, verify the target registry package
+  already exists in npm/ClawHub or stop and help the owner mint/prepublish the
+  package first. Do not hide or disable release surfaces just to unblock a
+  train unless the owner explicitly decides the plugin should not ship in that
+  release; first-package registry ownership is release prep, not product
+  rollback. The mint/prepublish path must either be the real release publish
+  path for the auto-bumped beta version, or a deliberately non-consuming
+  registry-prep step that cannot occupy the next beta version/tag. Confirm
+  registry owner, npm scope/package-creation permission, provenance path, and
+  first-package publish plan before the full release publish continues. Useful
+  npm probe:
+  `npm view <package-name> version dist-tags --json --prefer-online`; a 404 for
+  a package newly added to the release is a release-prep blocker, not something
+  to discover from the publish job.
 - Use `pnpm qa:otel:smoke` when release validation needs telemetry coverage.
   It starts a local OTLP/HTTP trace receiver, runs QA-lab's
   `otel-trace-smoke`, and checks span names plus content/identifier redaction
@@ -562,7 +579,11 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - Use `NPM_TOKEN` only for explicit npm dist-tag management modes, because npm
   does not support trusted publishing for `npm dist-tag add`.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
-- Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
+- Publishable plugins that are new to npm require owner-led first-package
+  minting before the full release publish. Do not consume the next beta version
+  with an ad-hoc manual package publish; use the release-owned auto-bumped
+  version path, or a non-consuming registry setup/preflight step. Bundled
+  disk-tree-only plugins stay unpublished.
 
 ## Fallback local mac publish
 
@@ -619,7 +640,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     mac app, signing, notarization, and appcast path.
 12. Confirm the target npm version is not already published.
 13. Create and push the git tag from the release branch.
-14. Create or refresh the matching GitHub release.
+14. Do not create or publish the matching GitHub release page yet. The real
+    publish workflow creates or undrafts it only after postpublish verification
+    and release evidence upload pass.
 15. Dispatch Actions > `QA-Lab - All Lanes` against the release tag and wait
     for the mock parity, live Matrix, and live Telegram credentialed-channel
     lanes to pass.
@@ -642,20 +665,29 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     with `preflight_only=true` and wait for it to pass. Save that run id because
     the real publish requires it to reuse the notarized mac artifacts.
 21. If any preflight or validation run fails, fix the issue on a new commit,
-    delete the tag and matching GitHub release, recreate them from the fixed
-    commit, and rerun all relevant preflights from scratch before continuing.
-    Never reuse old preflight results after the commit changes. For pushed or
-    published beta tags, do not delete/recreate; increment to the next beta tag.
-    For preflight-only failures where npm did not publish the beta version,
-    delete/recreate the same beta tag and prerelease at the fixed commit instead
-    of skipping a prerelease number.
+    delete the tag and any accidental draft/incomplete GitHub release, recreate
+    the tag from the fixed commit, and rerun all relevant preflights from
+    scratch before continuing. Never reuse old preflight results after the
+    commit changes. Once the npm version exists, do not rerun the publish
+    workflow for that same version; finalize the existing draft/evidence state
+    manually or cut a correction tag. For pushed or published beta tags, do not
+    delete/recreate; increment to the next beta tag. For preflight-only failures
+    where npm did not publish the beta version, delete/recreate the same beta
+    tag and any accidental draft/incomplete prerelease at the fixed commit
+    instead of skipping a prerelease number.
 22. Start `.github/workflows/openclaw-npm-release.yml` from the same branch with
     the same tag for the real publish, choose `npm_dist_tag` (`beta` default,
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
     `preflight_run_id`.
 23. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
-24. Run postpublish verification:
+24. Wait for the real publish workflow to run postpublish verification,
+    create or update the GitHub release as a draft, upload dependency evidence,
+    append release verification proof, and only then undraft/publish it. If a
+    waited plugin publish fails after OpenClaw npm succeeds, the workflow keeps
+    the release draft with OpenClaw npm evidence and exits red; do not undraft
+    until the plugin publish gap is repaired. The standalone verifier command
+    remains the recovery probe:
     `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>`.
 25. Run the post-published beta verification roster. First scan current `main`
     for critical fixes that landed after the release branch cut; backport only

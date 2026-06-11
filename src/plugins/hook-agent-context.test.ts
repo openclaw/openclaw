@@ -64,10 +64,29 @@ describe("buildAgentHookContextChannelFields", () => {
         sessionKey: "agent:main:discord:channel:c1",
         messageChannel: "discord",
         messageProvider: "discord",
+        senderId: "user-123",
       }),
     ).toEqual({
+      channel: "discord",
       messageProvider: "discord",
       channelId: "c1",
+      chatId: "c1",
+      senderId: "user-123",
+    });
+  });
+
+  it("uses the provider as channel when message channel is a target id", () => {
+    expect(
+      buildAgentHookContextChannelFields({
+        messageChannel: "channel:1472750640760623226",
+        messageProvider: "discord",
+      }),
+    ).toEqual({
+      channel: "discord",
+      messageProvider: "discord",
+      channelId: "1472750640760623226",
+      chatId: "1472750640760623226",
+      senderId: undefined,
     });
   });
 });

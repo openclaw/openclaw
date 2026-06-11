@@ -1,9 +1,6 @@
-import {
-  CLAUDE_FABLE_5_THINKING_PROFILE,
-  resolveClaudeFable5ModelIdentity,
-} from "@openclaw/llm-core";
 // Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -201,15 +198,18 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     context: providerContext,
   });
-  const fableProfile =
-    context.api === "anthropic-messages" &&
-    resolveClaudeFable5ModelIdentity({
-      id: context.modelId,
-      params: context.params,
-    })
-      ? CLAUDE_FABLE_5_THINKING_PROFILE
+  // Any anthropic-messages catalog row routes through the canonical Claude
+  // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
+  // non-Claude models on the anthropic-messages transport collapse to the Claude
+  // base set, deliberately bypassing the later compat-driven xhigh upgrade —
+  // anthropic-messages does not carry a generic xhigh contract.
+  const anthropicMessagesProfile =
+    context.api === "anthropic-messages"
+      ? resolveClaudeThinkingProfile(context.modelId, context.params, {
+          includeNativeMax: true,
+        })
       : undefined;
-  const pluginProfile = providerProfile ?? fableProfile;
+  const pluginProfile = providerProfile ?? anthropicMessagesProfile;
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
     if (
