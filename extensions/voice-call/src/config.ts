@@ -542,7 +542,10 @@ export const VoiceCallConfigSchema = z
     toNumber: E164Schema.optional(),
 
     /** Inbound call policy */
-    inboundPolicy: InboundPolicySchema.default("disabled"),
+    // Optional (not .default) so resolve can see "operator didn't set it" and apply the
+    // provider-specific default — msteams → "allowlist" (safe inbound-first), others → "disabled".
+    // A baked-in schema default would make that resolve branch dead code.
+    inboundPolicy: InboundPolicySchema.optional(),
 
     /** Allowlist for inbound calls: E.164 phone numbers or Teams AAD object ids. */
     allowFrom: z.array(AllowFromEntrySchema).default([]),
@@ -951,6 +954,8 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   if (resolved.provider === "msteams" && config.inboundPolicy === undefined) {
     resolved.inboundPolicy = "allowlist";
   }
+  // Every other provider keeps the conservative closed default when unset.
+  resolved.inboundPolicy = resolved.inboundPolicy ?? "disabled";
 
   return normalizeVoiceCallConfig(resolved);
 }
