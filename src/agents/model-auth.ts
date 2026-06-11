@@ -336,6 +336,19 @@ export function resolveUsableCustomProviderApiKey(params: {
       source: "models.json (local marker)",
     };
   }
+  if (customKey === NON_ENV_SECRETREF_MARKER) {
+    const runtimeConfig = getRuntimeConfigSnapshot();
+    if (runtimeConfig && runtimeConfig !== params.cfg) {
+      const runtimeProviderConfig = resolveProviderConfig(runtimeConfig, params.provider);
+      const runtimeApiKey = normalizeOptionalSecretInput(runtimeProviderConfig?.apiKey);
+      if (runtimeApiKey && !isNonSecretApiKeyMarker(runtimeApiKey)) {
+        return {
+          apiKey: runtimeApiKey,
+          source: "runtime config snapshot (secretref)",
+        };
+      }
+    }
+  }
   return null;
 }
 
