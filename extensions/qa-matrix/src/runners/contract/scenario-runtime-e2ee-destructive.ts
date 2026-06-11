@@ -1,6 +1,6 @@
 // Qa Matrix plugin module implements scenario runtime e2ee destructive behavior.
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -583,10 +583,24 @@ async function corruptMatrixQaCliIdbSnapshot(params: {
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
-  const idbSnapshotPath = path.join(accountRoot, "crypto-idb-snapshot.json");
-  await stat(idbSnapshotPath);
-  await writeFile(idbSnapshotPath, "{ this is not valid indexeddb json\n", "utf8");
-  return idbSnapshotPath;
+  const matrixRuntime = await loadMatrixQaE2eeRuntime();
+  try {
+    createPluginStateSyncKeyedStoreForTests<unknown>(
+      "matrix",
+      matrixRuntime.openMatrixIdbSnapshotStoreOptions(accountRoot),
+    ).register("current:meta", {
+      kind: "meta",
+      version: 1,
+      generation: "corrupt",
+      chunkCount: 1,
+      digest: "corrupt",
+      databaseCount: 1,
+      persistedAt: new Date().toISOString(),
+    });
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+  return "matrix/idb-snapshot/current:meta";
 }
 
 async function deleteMatrixQaServerRoomKeyBackup(params: {
@@ -1134,8 +1148,8 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
         restoreTotal: repaired.payload.total,
       },
       details: [
-        "corrupted crypto-idb-snapshot.json was repaired by explicit backup restore",
-        `corrupted path: ${corruptedPath}`,
+        "corrupted Matrix IDB snapshot state was repaired by explicit backup restore",
+        `corrupted state: ${corruptedPath}`,
         `restore imported/total: ${repaired.payload.imported ?? 0}/${repaired.payload.total ?? 0}`,
       ].join("\n"),
     };

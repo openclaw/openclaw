@@ -5,11 +5,28 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost } from "../llm/model-utils.js";
+import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
 import type { AnthropicOptions } from "../llm/providers/anthropic.js";
-import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
+import type {
+  AssistantMessageDiagnostic,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  ThinkingLevel,
+} from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import {
+  resolveClaudeNativeThinkingLevelMap,
+  requiresClaudeAdaptiveThinking,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+} from "../shared/anthropic-model-contract.js";
+import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
+import { notifyLlmRequestActivity } from "../shared/llm-request-activity.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -102,6 +119,7 @@ type MutableAssistantOutput = {
   api: "anthropic-messages";
   provider: string;
   model: string;
+  responseModel?: string;
   usage: {
     input: number;
     output: number;
@@ -114,46 +132,58 @@ type MutableAssistantOutput = {
   timestamp: number;
   responseId?: string;
   errorMessage?: string;
+  diagnostics?: AssistantMessageDiagnostic[];
 };
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
-function isClaudeOpus47OrNewerModel(modelId: string): boolean {
-  return (
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("opus-4-7") ||
-    modelId.includes("opus-4.7")
-  );
+function normalizeAnthropicToolChoice(
+  model: AnthropicTransportModel,
+  toolChoice: AnthropicTransportOptions["toolChoice"],
+) {
+  if (
+    requiresClaudeAdaptiveThinking(model) &&
+    (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
+  ) {
+    return { type: "auto" as const };
+  }
+  return typeof toolChoice === "string" ? { type: toolChoice } : toolChoice;
 }
 
-function isClaudeOpus46Model(modelId: string): boolean {
-  return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
+function supportsNativeXhighEffort(model: AnthropicTransportModel): boolean {
+  return supportsClaudeNativeXhighEffort(model);
 }
 
-function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    isClaudeOpus47OrNewerModel(modelId) ||
-    isClaudeOpus46Model(modelId) ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+function supportsAdaptiveThinking(model: AnthropicTransportModel): boolean {
+  return supportsClaudeAdaptiveThinking(model);
 }
 
-function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): AnthropicAdaptiveEffort {
-  switch (level) {
+function mapThinkingLevelToEffort(
+  level: ThinkingLevel | "off",
+  model: AnthropicTransportModel,
+): AnthropicAdaptiveEffort {
+  const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
+  const clampModel = {
+    ...model,
+    ...(typeof model.params?.canonicalModelId === "string" ? { reasoning: true } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+  };
+  const resolvedLevel = clampThinkingLevel(clampModel, level);
+  const mapped = thinkingLevelMap?.[resolvedLevel];
+  if (typeof mapped === "string") {
+    return mapped as AnthropicAdaptiveEffort;
+  }
+  switch (resolvedLevel) {
+    case "off":
     case "minimal":
     case "low":
       return "low";
     case "medium":
       return "medium";
     case "xhigh":
-      if (isClaudeOpus47OrNewerModel(modelId)) {
-        return "xhigh";
-      }
-      return isClaudeOpus46Model(modelId) ? "max" : "high";
+      return supportsNativeXhighEffort(model) ? "xhigh" : "high";
     case "max":
-      return isClaudeOpus47OrNewerModel(modelId) ? "max" : "high";
+      return supportsClaudeNativeMaxEffort(model) ? "max" : "high";
     default:
       return "high";
   }
@@ -208,6 +238,39 @@ function adjustMaxTokensForThinking(params: {
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
+}
+
+function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
+  if (!headers) {
+    return false;
+  }
+  return Object.entries(headers).some(
+    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+  );
+}
+
+function usesFoundryBearerAuth(model: AnthropicTransportModel): boolean {
+  return (
+    model.provider === "microsoft-foundry" &&
+    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
+  );
+}
+
+function omitFoundryBearerCredentialHeaders(
+  headers?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {
+      continue;
+    }
+    next[key] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
@@ -383,25 +446,28 @@ function convertAnthropicMessages(
             });
             continue;
           }
-          if (block.thinking.trim().length === 0) {
+          const thinkingSignature = block.thinkingSignature?.trim();
+          const hasNativeThinkingSignature =
+            Boolean(thinkingSignature) && thinkingSignature !== "reasoning_content";
+          if (block.thinking.trim().length === 0 && !hasNativeThinkingSignature) {
             continue;
           }
-          if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
+          if (!thinkingSignature) {
             blocks.push({
               type: "text",
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
             const thinking =
-              block.thinkingSignature === "reasoning_content"
+              thinkingSignature === "reasoning_content"
                 ? sanitizeTransportPayloadText(block.thinking)
                 : block.thinking;
-            if (block.thinkingSignature === "reasoning_content") {
+            if (thinkingSignature === "reasoning_content") {
               if (allowReasoningContentReplay) {
                 blocks.push({
                   type: "thinking",
                   thinking,
-                  signature: block.thinkingSignature,
+                  signature: thinkingSignature,
                 });
                 reasoningContent.push(thinking);
               }
@@ -410,7 +476,7 @@ function convertAnthropicMessages(
             blocks.push({
               type: "thinking",
               thinking,
-              signature: block.thinkingSignature,
+              signature: thinkingSignature,
             });
           }
           continue;
@@ -727,7 +793,7 @@ function createAnthropicTransportClient(params: {
 }) {
   const { model, context, apiKey, options } = params;
   const needsInterleavedBeta =
-    (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
+    (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model);
   // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
   // the OpenAI SDK compatibility sanitizer can stall before the text block.
   const fetch =
@@ -752,6 +818,27 @@ function createAnthropicTransportClient(params: {
             messages: context.messages,
             hasImages: hasCopilotVisionInput(context.messages),
           }),
+          options?.headers,
+        ),
+        fetch,
+      }),
+      isOAuthToken: false,
+    };
+  }
+  if (usesFoundryBearerAuth(model)) {
+    const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
+    return {
+      client: createAnthropicMessagesClient({
+        apiKey: null,
+        authToken: apiKey,
+        baseURL: model.baseUrl,
+        defaultHeaders: mergeTransportHeaders(
+          {
+            accept: "application/json",
+            "anthropic-dangerous-direct-browser-access": "true",
+            ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
+          },
+          omitFoundryBearerCredentialHeaders(model.headers),
           options?.headers,
         ),
         fetch,
@@ -861,7 +948,11 @@ function buildAnthropicParams(
       },
     ];
   }
-  if (options?.temperature !== undefined && !options.thinkingEnabled) {
+  if (
+    options?.temperature !== undefined &&
+    !options.thinkingEnabled &&
+    !supportsNativeXhighEffort(model)
+  ) {
     params.temperature = options.temperature;
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
@@ -870,17 +961,21 @@ function buildAnthropicParams(
   if (context.tools) {
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
   }
-  if (model.reasoning) {
-    if (options?.thinkingEnabled) {
-      if (supportsAdaptiveThinking(model.id)) {
-        params.thinking = { type: "adaptive" };
-        if (options.effort) {
-          params.output_config = { effort: options.effort };
+  const fable5 = usesClaudeFable5MessagesContract(model);
+  if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
+    if (fable5 || options?.thinkingEnabled) {
+      if (supportsAdaptiveThinking(model)) {
+        params.thinking = fable5
+          ? { type: "adaptive", display: "summarized" }
+          : { type: "adaptive" };
+        const effort = options?.effort ?? (fable5 ? "high" : undefined);
+        if (effort) {
+          params.output_config = { effort };
         }
       } else {
         params.thinking = {
           type: "enabled",
-          budget_tokens: options.thinkingBudgetTokens || 1024,
+          budget_tokens: options?.thinkingBudgetTokens || 1024,
         };
       }
     } else if (options?.thinkingEnabled === false) {
@@ -891,8 +986,7 @@ function buildAnthropicParams(
     params.metadata = { user_id: options.metadata.user_id };
   }
   if (options?.toolChoice) {
-    params.tool_choice =
-      typeof options.toolChoice === "string" ? { type: options.toolChoice } : options.toolChoice;
+    params.tool_choice = normalizeAnthropicToolChoice(model, options.toolChoice);
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
   return params;
@@ -932,12 +1026,15 @@ function resolveAnthropicTransportOptions(
     reasoning: options?.reasoning,
   };
   if (!options?.reasoning) {
-    resolved.thinkingEnabled = false;
+    resolved.thinkingEnabled = requiresClaudeAdaptiveThinking(model);
+    if (resolved.thinkingEnabled) {
+      resolved.effort = "high";
+    }
     return resolved;
   }
-  if (supportsAdaptiveThinking(model.id)) {
+  if (supportsAdaptiveThinking(model)) {
     resolved.thinkingEnabled = true;
-    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model.id) as NonNullable<
+    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model) as NonNullable<
       AnthropicOptions["effort"]
     >;
     return resolved;
@@ -971,6 +1068,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         stopReason: "stop",
         timestamp: Date.now(),
       };
+      // Fable classifiers can refuse after partial generation, so no event is
+      // safe to expose until the terminal stop reason is known.
+      const refusalBuffer = usesClaudeFable5MessagesContract(model)
+        ? createDeferredEventBuffer<unknown>(stream, () =>
+            notifyLlmRequestActivity(options?.signal),
+          )
+        : undefined;
+      const eventSink = refusalBuffer ?? stream;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -997,6 +1102,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
+        let sawMessageStop = false;
         const eventIndexKey = (eventIndex: unknown) =>
           typeof eventIndex === "number" ? eventIndex : -1;
         const appendReasoningContentThinkingDelta = (
@@ -1021,7 +1127,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             output.content.push(block);
             contentIndex = output.content.length - 1;
             reasoningContentThinkingBlocks.set(key, contentIndex);
-            stream.push({
+            eventSink.push({
               type: "thinking_start",
               contentIndex,
               partial: output as never,
@@ -1029,7 +1135,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           block.thinking += text;
           block.thinkingSignature = "reasoning_content";
-          stream.push({
+          eventSink.push({
             type: "thinking_delta",
             contentIndex,
             delta: text,
@@ -1059,14 +1165,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             output.content.push(block);
             contentIndex = output.content.length - 1;
             reasoningContentTextBlocks.set(key, contentIndex);
-            stream.push({
+            eventSink.push({
               type: "text_start",
               contentIndex,
               partial: output as never,
             });
           }
           block.text += text;
-          stream.push({
+          eventSink.push({
             type: "text_delta",
             contentIndex,
             delta: text,
@@ -1081,7 +1187,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             reasoningContentThinkingBlocks.delete(key);
             const block = output.content[thinkingContentIndex];
             if (block?.type === "thinking") {
-              stream.push({
+              eventSink.push({
                 type: "thinking_end",
                 contentIndex: thinkingContentIndex,
                 content: block.thinking,
@@ -1096,7 +1202,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           reasoningContentTextBlocks.delete(key);
           const block = output.content[textContentIndex];
           if (block?.type === "text") {
-            stream.push({
+            eventSink.push({
               type: "text_end",
               contentIndex: textContentIndex,
               content: block.text,
@@ -1111,10 +1217,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "message_start") {
             const message = event.message as
-              | { id?: string; usage?: Record<string, unknown> }
+              | { id?: string; model?: string; usage?: Record<string, unknown> }
               | undefined;
             const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
+            output.responseModel = typeof message?.model === "string" ? message.model : undefined;
             output.usage.input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
             output.usage.output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
             output.usage.cacheRead =
@@ -1133,7 +1240,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             // (e.g. invalid thinking signatures) arrive before any non-error event
             // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
             // and allowing the thinking-block recovery retry to fire.
-            stream.push({ type: "start", partial: output as never });
+            eventSink.push({ type: "start", partial: output as never });
+            continue;
+          }
+          if (event.type === "message_stop") {
+            sawMessageStop = true;
             continue;
           }
           if (event.type === "content_block_start") {
@@ -1147,13 +1258,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               const block: TransportContentBlock = { type: "text", text, index };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
-              stream.push({
+              eventSink.push({
                 type: "text_start",
                 contentIndex,
                 partial: output as never,
               });
               if (text.length > 0) {
-                stream.push({
+                eventSink.push({
                   type: "text_delta",
                   contentIndex,
                   delta: text,
@@ -1174,13 +1285,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
-              stream.push({
+              eventSink.push({
                 type: "thinking_start",
                 contentIndex,
                 partial: output as never,
               });
               if (thinking.length > 0) {
-                stream.push({
+                eventSink.push({
                   type: "thinking_delta",
                   contentIndex,
                   delta: thinking,
@@ -1198,7 +1309,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
-              stream.push({
+              eventSink.push({
                 type: "thinking_start",
                 contentIndex: output.content.length - 1,
                 partial: output as never,
@@ -1223,7 +1334,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
-              stream.push({
+              eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
                 partial: output as never,
@@ -1255,7 +1366,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 if (text.length > 0) {
                   if (block?.type === "text") {
                     block.text += text;
-                    stream.push({
+                    eventSink.push({
                       type: "text_delta",
                       contentIndex: index,
                       delta: text,
@@ -1276,7 +1387,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               block = { type: "text", text: "", index: recoveredIndex };
               output.content.push(block);
               index = output.content.length - 1;
-              stream.push({
+              eventSink.push({
                 type: "text_start",
                 contentIndex: index,
                 partial: output as never,
@@ -1288,7 +1399,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               typeof delta.text === "string"
             ) {
               block.text += delta.text;
-              stream.push({
+              eventSink.push({
                 type: "text_delta",
                 contentIndex: index,
                 delta: delta.text,
@@ -1302,7 +1413,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               typeof delta.thinking === "string"
             ) {
               block.thinking += delta.thinking;
-              stream.push({
+              eventSink.push({
                 type: "thinking_delta",
                 contentIndex: index,
                 delta: delta.thinking,
@@ -1318,7 +1429,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
               block.partialJson = partialJson;
               block.arguments = parseAnthropicToolCallArguments(partialJson);
-              stream.push({
+              eventSink.push({
                 type: "toolcall_delta",
                 contentIndex: index,
                 delta: delta.partial_json,
@@ -1349,7 +1460,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             }
             delete block.index;
             if (block.type === "text") {
-              stream.push({
+              eventSink.push({
                 type: "text_end",
                 contentIndex: index,
                 content: block.text,
@@ -1359,7 +1470,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "thinking") {
-              stream.push({
+              eventSink.push({
                 type: "thinking_end",
                 contentIndex: index,
                 content: block.thinking,
@@ -1373,7 +1484,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 block.arguments = parseAnthropicToolCallArguments(block.partialJson);
               }
               delete block.partialJson;
-              stream.push({
+              eventSink.push({
                 type: "toolcall_end",
                 contentIndex: index,
                 toolCall: block as never,
@@ -1384,10 +1495,16 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "message_delta") {
-            const delta = event.delta as { stop_reason?: string } | undefined;
+            const delta = event.delta as
+              | { stop_reason?: string; stop_details?: unknown }
+              | undefined;
             const usage = event.usage as Record<string, unknown> | undefined;
             if (delta?.stop_reason) {
-              output.stopReason = mapStopReason(delta.stop_reason);
+              if (delta.stop_reason === "refusal") {
+                applyAnthropicRefusal(output, delta.stop_details, model.provider);
+              } else {
+                output.stopReason = mapStopReason(delta.stop_reason);
+              }
             }
             if (typeof usage?.input_tokens === "number") {
               output.usage.input = usage.input_tokens;
@@ -1409,8 +1526,22 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
-        finalizeTransportStream({ stream, output, signal: transportOptions.signal });
+        if (refusalBuffer && !sawMessageStop) {
+          throw new Error("Anthropic stream ended before message_stop");
+        }
+        if (transportOptions.signal?.aborted) {
+          throw new Error("Request was aborted");
+        }
+        if (output.stopReason === "aborted" || output.stopReason === "error") {
+          throw new Error(output.errorMessage ?? "An unknown error occurred");
+        }
+        refusalBuffer?.flush();
+        finalizeTransportStream({ stream, output });
       } catch (error) {
+        if (refusalBuffer) {
+          refusalBuffer.discard();
+          output.content = [];
+        }
         failTransportStream({
           stream,
           output,

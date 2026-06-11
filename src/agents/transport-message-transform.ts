@@ -4,6 +4,7 @@
  * strict provider tool-result gaps when supported.
  */
 import type { Api, Context, Model } from "../llm/types.js";
+import { resolveModelBoundThinkingReplayMode } from "../shared/anthropic-model-contract.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -74,8 +75,23 @@ export function transformTransportMessages(
     if (msg.role !== "assistant") {
       return msg;
     }
+    const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
+      source: {
+        provider: msg.provider,
+        api: msg.api,
+        modelId: msg.model,
+        responseModelId: msg.responseModel,
+      },
+      target: {
+        provider: model.provider,
+        api: model.api,
+        modelId: model.id,
+        modelParams: model.params,
+      },
+    });
     const isSameModel =
-      msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
+      modelBoundThinkingReplayMode === "preserve" ||
+      (msg.provider === model.provider && msg.api === model.api && msg.model === model.id);
     const sourceContent = Array.isArray(msg.content)
       ? msg.content
       : msg.content != null && typeof msg.content === "object"
@@ -84,6 +100,9 @@ export function transformTransportMessages(
     const content: typeof msg.content = [];
     for (const block of sourceContent) {
       if (block.type === "thinking") {
+        if (modelBoundThinkingReplayMode === "drop") {
+          continue;
+        }
         if (block.redacted) {
           if (isSameModel) {
             content.push(block);
