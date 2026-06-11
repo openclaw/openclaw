@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
+  markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
   type PackageUpdateStepResult,
 } from "./package-update-steps.js";
@@ -73,6 +74,21 @@ function createRootRunner(globalRoot: string): CommandRunner {
     throw new Error(`unexpected command: ${argv.join(" ")}`);
   };
 }
+
+describe("markPackagePostInstallDoctorAdvisory", () => {
+  it("does not mark timed-out doctor exits as advisory when they report a code", () => {
+    const step = markPackagePostInstallDoctorAdvisory({
+      exitCode: 124,
+      stderrTail: "doctor timed out",
+      signal: null,
+      killed: true,
+      termination: "timeout" as const,
+    });
+
+    expect(step.advisory).toBeUndefined();
+    expect(step.stderrTail).toBe("doctor timed out");
+  });
+});
 
 describe("runGlobalPackageUpdateSteps", () => {
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {

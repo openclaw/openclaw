@@ -2784,7 +2784,7 @@ describe("update-cli", () => {
         return {
           stdout: "",
           stderr: "doctor timed out",
-          code: null,
+          code: 124,
           signal: null,
           killed: true,
           termination: "timeout",
@@ -2800,12 +2800,17 @@ describe("update-cli", () => {
       };
     });
 
-    await updateCommand({ yes: true, restart: false });
+    await updateCommand({ yes: true, restart: false, json: true });
 
     const doctorCall = doctorCommandCall();
     expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
     expect(spawn).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+    const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
+    expect(doctorStep?.exitCode).toBe(124);
+    expect(doctorStep?.advisory).toBeUndefined();
+    expect(doctorStep?.termination).toBe("timeout");
     expect(
       vi
         .mocked(defaultRuntime.log)

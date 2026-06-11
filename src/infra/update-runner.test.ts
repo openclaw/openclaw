@@ -22,8 +22,22 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
-type CommandResult = { stdout: string; stderr: string; code: number | null };
+type CommandResponse = {
+  stdout?: string;
+  stderr?: string;
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+};
+type CommandResult = {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+};
 const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
 
@@ -32,6 +46,9 @@ function toCommandResult(response?: CommandResponse): CommandResult {
     stdout: response?.stdout ?? "",
     stderr: response?.stderr ?? "",
     code: response?.code ?? 0,
+    signal: response?.signal,
+    killed: response?.killed,
+    termination: response?.termination,
   };
 }
 
@@ -2043,7 +2060,7 @@ describe("runGatewayUpdate", () => {
     );
   });
 
-  it("fails global npm updates when the post-update doctor exits without a code", async () => {
+  it("fails global npm updates when the post-update doctor times out with a nonzero code", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     await seedGlobalPackageRoot(pkgRoot);
@@ -2067,7 +2084,14 @@ describe("runGatewayUpdate", () => {
       const key = argv.join(" ");
       if (key === doctorCommand) {
         calls.push(key);
-        return { stdout: "", stderr: "doctor timed out", code: null };
+        return {
+          stdout: "",
+          stderr: "doctor timed out",
+          code: 124,
+          signal: null,
+          killed: true,
+          termination: "timeout",
+        };
       }
       return runCommand(argv, options);
     };
@@ -2079,8 +2103,9 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(doctorCommand);
     const lastStep = result.steps.at(-1);
     expect(lastStep?.name).toBe("openclaw doctor");
-    expect(lastStep?.exitCode).toBeNull();
+    expect(lastStep?.exitCode).toBe(124);
     expect(lastStep?.advisory).toBeUndefined();
+    expect(lastStep?.termination).toBe("timeout");
     expect(lastStep?.stderrTail).toBe("doctor timed out");
   });
 

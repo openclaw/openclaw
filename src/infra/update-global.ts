@@ -27,7 +27,14 @@ export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 export type CommandRunner = (
   argv: string[],
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
-) => Promise<{ stdout: string; stderr: string; code: number | null }>;
+) => Promise<{
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+}>;
 
 type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;

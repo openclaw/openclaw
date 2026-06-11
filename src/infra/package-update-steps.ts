@@ -33,6 +33,9 @@ export type PackageUpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
   advisory?: PackageUpdateStepAdvisory;
 };
 
@@ -81,14 +84,31 @@ function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
 }
 
+function isNormalProcessExit(step: {
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+}): boolean {
+  return (
+    step.termination !== "timeout" &&
+    step.termination !== "no-output-timeout" &&
+    step.termination !== "signal" &&
+    step.killed !== true &&
+    (step.signal === undefined || step.signal === null)
+  );
+}
+
 export function markPackagePostInstallDoctorAdvisory<
   T extends {
     exitCode: number | null;
     stderrTail?: string | null;
+    signal?: NodeJS.Signals | null;
+    killed?: boolean;
+    termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
     advisory?: PackageUpdateStepAdvisory;
   },
 >(step: T): T {
-  if (step.exitCode === 0 || step.exitCode === null) {
+  if (step.exitCode === 0 || step.exitCode === null || !isNormalProcessExit(step)) {
     return step;
   }
   const advisoryTail = [step.stderrTail, PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message]
