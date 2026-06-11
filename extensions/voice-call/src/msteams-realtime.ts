@@ -366,6 +366,12 @@ export interface MsteamsRealtimeDeps {
   instructions?: string;
   /** Instruction used to open the call (model speaks first). Empty/undefined = silent join. */
   greetingInstructions?: string;
+  /**
+   * Speak the greeting only once recording goes active (i.e. the callee actually ANSWERED), not when
+   * the realtime session connects. Required for outbound call-backs: the bridge connects while the
+   * phone is still ringing, so greeting-on-ready delivers the result to a not-yet-connected callee.
+   */
+  greetingOnRecordingActive?: boolean;
   /** Notify mode: invoked once after the model finishes its first response (outbound result delivery). */
   onDeliveryComplete?: () => void;
   /** Realtime tools exposed to the model (e.g. openclaw_agent_consult). */
@@ -519,6 +525,8 @@ export function createMsteamsRealtimeCall(params: {
   let groupGateOpen = true;
   /** Active speaker (unmixed-audio worker); labels the caller turn the model transcribes next. */
   let currentSpeakerName: string | undefined;
+  /** Outbound greeting fires once, on answer (setRecordingActive); guards against a re-trigger. */
+  let greetingTriggered = false;
 
   function recordTranscript(role: "user" | "assistant", text: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
@@ -634,7 +642,9 @@ export function createMsteamsRealtimeCall(params: {
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: withGroupGateInstruction(deps.instructions, deps.groupCallGate),
     initialGreetingInstructions: deps.greetingInstructions,
-    triggerGreetingOnReady: Boolean(deps.greetingInstructions),
+    // Outbound call-backs greet on ANSWER (setRecordingActive), not on connect — the bridge is ready
+    // while the phone still rings, so greeting-on-ready would deliver the result to nobody.
+    triggerGreetingOnReady: Boolean(deps.greetingInstructions) && !deps.greetingOnRecordingActive,
     autoRespondToAudio: true,
     interruptResponseOnInputAudio: true,
     tools: bridgeTools,
@@ -1421,6 +1431,23 @@ export function createMsteamsRealtimeCall(params: {
     },
     setRecordingActive: (active: boolean) => {
       recordingActive = active;
+      // Outbound call-back: the callee has now ANSWERED — speak the deferred greeting (the delivered
+      // result), so it isn't lost to a ringing phone and the model doesn't sit idle free-associating.
+      if (
+        active &&
+        deps.greetingOnRecordingActive &&
+        deps.greetingInstructions &&
+        !greetingTriggered
+      ) {
+        greetingTriggered = true;
+        try {
+          realtime.triggerGreeting(deps.greetingInstructions);
+        } catch (err) {
+          logger?.warn(
+            `MsteamsRealtime: deferred greeting failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     },
     close: (reason?: string) => {
       if (closed) {

@@ -77,11 +77,13 @@ function createMockProvider(): {
   submitToolResult: ReturnType<typeof vi.fn>;
   sendAudio: ReturnType<typeof vi.fn>;
   sendImage: ReturnType<typeof vi.fn>;
+  triggerGreeting: ReturnType<typeof vi.fn>;
 } {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
   const submitToolResult = vi.fn();
   const sendAudio = vi.fn();
   const sendImage = vi.fn();
+  const triggerGreeting = vi.fn();
 
   const bridge: RealtimeVoiceBridge = {
     supportsToolResultContinuation: true,
@@ -91,6 +93,7 @@ function createMockProvider(): {
     setMediaTimestamp: () => {},
     submitToolResult,
     acknowledgeMark: () => {},
+    triggerGreeting,
     close: () => {},
     isConnected: () => true,
   };
@@ -116,6 +119,7 @@ function createMockProvider(): {
     submitToolResult,
     sendAudio,
     sendImage,
+    triggerGreeting,
   };
 }
 
@@ -582,6 +586,29 @@ describe("createMsteamsRealtimeCall", () => {
     const opts = consultSpy.mock.calls[0]?.[0] as { args?: { question?: string } } | undefined;
     expect(String(opts?.args?.question)).toContain("meeting minutes");
     expect(String(opts?.args?.question)).toContain("shipping friday");
+  });
+
+  it("outbound greeting fires on answer (recording active), not on connect", () => {
+    const ctx = createMockSession("inactive"); // ringing — not yet answered
+    const mock = createMockProvider();
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        greetingInstructions: "Deliver the Dubai time.",
+        greetingOnRecordingActive: true,
+      },
+    });
+    mock.getRequest();
+
+    // Still ringing (no recording.status yet) → the greeting must not have been spoken...
+    expect(mock.triggerGreeting).not.toHaveBeenCalled();
+    // ...and only on answer (recording active) is it spoken, exactly once across repeats.
+    call.setRecordingActive(true);
+    call.setRecordingActive(true);
+    expect(mock.triggerGreeting).toHaveBeenCalledTimes(1);
+    expect(mock.triggerGreeting).toHaveBeenCalledWith("Deliver the Dubai time.");
   });
 
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {

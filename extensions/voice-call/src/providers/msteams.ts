@@ -576,6 +576,10 @@ export class MsteamsProvider implements VoiceCallProvider {
         // callee shares video on the call-back.
         getLatestFrame: (source) => this.getLatestVideoFrame(providerCallId, source),
         getFrameHistory: (limit) => this.vision.getHistory(providerCallId, limit),
+        // Outbound call-back: don't speak the delivered result until the callee answers (recording
+        // active). Greeting-on-connect would deliver it to a ringing phone, then the model would sit
+        // idle and free-associate from its context on pickup.
+        greetingOnRecordingActive: Boolean(pending.message),
         // Notify mode: once the model has delivered the result (its first turn, after its audio has
         // drained) hang up after a short grace, instead of lingering in conversation.
         onDeliveryComplete: notify
@@ -584,7 +588,26 @@ export class MsteamsProvider implements VoiceCallProvider {
                 this.logger?.info(
                   `MsteamsProvider: notify-mode auto-hangup for ${providerCallId} after delivery`,
                 );
-                void this.manager?.endCall(pending.internalCallId);
+                void this.manager
+                  ?.endCall(pending.internalCallId)
+                  .then((r) => {
+                    if (!r.success) {
+                      this.logger?.warn(
+                        `MsteamsProvider: notify auto-hangup endCall failed for ${providerCallId} — ${r.error}; tearing down directly`,
+                      );
+                      // endCall couldn't reach the call (e.g. record not in a connected state) — make
+                      // sure the Teams session is still closed so the call doesn't linger.
+                      this.teardownCall(providerCallId, {
+                        closeSession: true,
+                        reason: "notify-complete",
+                      });
+                    }
+                  })
+                  .catch((err: unknown) => {
+                    this.logger?.warn(
+                      `MsteamsProvider: notify auto-hangup error for ${providerCallId} — ${err instanceof Error ? err.message : String(err)}`,
+                    );
+                  });
               }, notifyHangupDelayMs);
               timer.unref?.();
             }
