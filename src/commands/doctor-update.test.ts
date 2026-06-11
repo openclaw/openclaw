@@ -6,9 +6,14 @@ import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 const originalStdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 const mocks = vi.hoisted(() => ({
+  createUpdateProgress: vi.fn(),
   note: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   runGatewayUpdate: vi.fn(),
+}));
+
+vi.mock("../cli/update-cli/progress.js", () => ({
+  createUpdateProgress: mocks.createUpdateProgress,
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -38,6 +43,8 @@ async function runOffer(params?: {
 }
 
 beforeEach(async () => {
+  mocks.createUpdateProgress.mockReset();
+  mocks.createUpdateProgress.mockReturnValue({ progress: {}, stop: vi.fn() });
   mocks.note.mockReset();
   mocks.runCommandWithTimeout.mockReset();
   mocks.runGatewayUpdate.mockReset();
@@ -86,6 +93,29 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       expect.stringContaining("This install is not a git checkout."),
       "Update",
     );
+  });
+
+  it("passes step progress to the updater and stops the spinner when the update throws", async () => {
+    const stop = vi.fn();
+    const progress = {};
+    mocks.createUpdateProgress.mockReturnValue({ progress, stop });
+    vi.spyOn(fs, "realpath").mockImplementation(async (candidate) => String(candidate));
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      stdout: "/repo/link\n",
+      stderr: "",
+      code: 0,
+      killed: false,
+      signal: null,
+      termination: "exit",
+      noOutputTimedOut: false,
+    });
+    mocks.runGatewayUpdate.mockRejectedValue(new Error("update exploded"));
+
+    const confirm = vi.fn().mockResolvedValue(true);
+    await expect(runOffer({ root: "/repo/link", confirm })).rejects.toThrow("update exploded");
+
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining({ progress }));
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 
   it("keeps package-manager guidance when git reports a different checkout", async () => {
