@@ -134,6 +134,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
   store: Record<string, SessionEntry>;
   stem: string;
   archivedOwnerAgentId?: string;
+  ownerAgentId?: string;
   allowQmdSlugFallback?: boolean;
 }): string[] {
   const { store } = params;
@@ -181,8 +182,10 @@ export function resolveTranscriptStemToSessionKeys(params: {
   if (normalizedDeduped.length > 0) {
     return normalizedDeduped.length === 1 ? normalizedDeduped : [];
   }
-  const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
-  return archivedOwnerAgentId
-    ? [`agent:${normalizeAgentId(archivedOwnerAgentId)}:${params.stem}`]
+  const fallbackOwnerAgentId = normalizeOptionalString(
+    params.ownerAgentId ?? params.archivedOwnerAgentId,
+  );
+  return fallbackOwnerAgentId
+    ? [`agent:${normalizeAgentId(fallbackOwnerAgentId)}:${params.stem}`]
     : [];
 }
