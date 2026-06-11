@@ -16,6 +16,7 @@ import {
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
@@ -486,6 +487,7 @@ function buildMessagingSection(params: {
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
   runtimeChannel?: string;
+  runtimeChatType?: ChatType;
   messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -496,6 +498,10 @@ function buildMessagingSection(params: {
   }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
+  const discordGroupMessageToolOnly =
+    messageToolOnly &&
+    params.runtimeChannel === "discord" &&
+    (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
@@ -524,6 +530,9 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
+          discordGroupMessageToolOnly
+            ? "- Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output. For stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction or no channel message; post only when you have concrete value to add."
+            : "",
           messageToolOnly
             ? "- For `action=send`, include `message`. The target defaults to the current source channel; include `target` only when sending somewhere else."
             : "- For `action=send`, include `target` and `message`.",
@@ -708,6 +717,7 @@ export function buildAgentSystemPrompt(params: {
     defaultModel?: string;
     shell?: string;
     channel?: string;
+    chatType?: string;
     capabilities?: string[];
     repoRoot?: string;
     activeProcessSessions?: ActiveProcessSessionReference[];
@@ -887,6 +897,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeInfo = params.runtimeInfo;
   const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
+  const runtimeChatType = normalizeChatType(runtimeInfo?.chatType);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
@@ -1263,6 +1274,7 @@ export function buildAgentSystemPrompt(params: {
       availableTools,
       inlineButtonsEnabled,
       runtimeChannel,
+      runtimeChatType,
       messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

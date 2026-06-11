@@ -119,6 +119,88 @@ describe("discord doctor", () => {
     expect(mainTts?.edge).toBeUndefined();
   });
 
+  it("does not move unsupported root and account tts provider aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            tts: {
+              edge: {
+                voice: "en-US-RootNeural",
+              },
+            },
+            voice: {
+              tts: {
+                edge: {
+                  voice: "en-US-VoiceNeural",
+                },
+              },
+            },
+            accounts: {
+              main: {
+                tts: {
+                  edge: {
+                    voice: "en-US-AccountNeural",
+                  },
+                },
+                voice: {
+                  tts: {
+                    edge: {
+                      voice: "en-US-AccountVoiceNeural",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
+      "Moved channels.discord.voice.tts.edge → channels.discord.voice.tts.providers.microsoft.",
+    ]);
+    const discordConfig = result.config.channels?.discord as
+      | {
+          tts?: Record<string, unknown>;
+          voice?: { tts?: Record<string, unknown> };
+          accounts?: {
+            main?: {
+              tts?: Record<string, unknown>;
+              voice?: { tts?: Record<string, unknown> };
+            };
+          };
+        }
+      | undefined;
+    expect(discordConfig?.tts).toEqual({
+      edge: {
+        voice: "en-US-RootNeural",
+      },
+    });
+    expect(discordConfig?.accounts?.main?.tts).toEqual({
+      edge: {
+        voice: "en-US-AccountNeural",
+      },
+    });
+    expect(discordConfig?.voice?.tts).toEqual({
+      providers: {
+        microsoft: {
+          voice: "en-US-VoiceNeural",
+        },
+      },
+    });
+    expect(discordConfig?.accounts?.main?.voice?.tts).toEqual({
+      providers: {
+        microsoft: {
+          voice: "en-US-AccountVoiceNeural",
+        },
+      },
+    });
+  });
+
   it("removes unsupported Discord realtime wake names", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 

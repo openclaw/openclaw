@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -121,6 +120,7 @@ type RuntimeParityTranscriptRecord = {
 };
 
 type RuntimeParityMockRequestSnapshot = {
+  allInputText?: string;
   plannedToolName?: string;
   plannedToolArgs?: unknown;
   toolOutput?: string;
@@ -799,6 +799,20 @@ function resolveRuntimeParityToolCalls(params: {
   return params.mockToolCalls;
 }
 
+function filterMockRequestsForParentPrompt(
+  requests: RuntimeParityMockRequestSnapshot[],
+  parentPrompt: string,
+) {
+  const normalizedParentPrompt = normalizeTextForParity(parentPrompt);
+  if (!normalizedParentPrompt) {
+    return requests;
+  }
+  const matching = requests.filter((request) =>
+    normalizeTextForParity(request.allInputText ?? "").includes(normalizedParentPrompt),
+  );
+  return matching.length > 0 ? matching : requests;
+}
+
 function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFinding[]) {
   if (findings.length === 0) {
     return undefined;
@@ -938,14 +952,16 @@ async function readRuntimeParitySessionEntries(params: {
     "sessions",
     "sessions.json",
   );
-  const parsed = loadSessionStore(storePath, { skipCache: true }) as Record<
-    string,
-    RuntimeParitySessionEntry
-  >;
-  const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
-  const rootEntries = entries.filter(isRuntimeParityRootSession);
-  const candidates = rootEntries.length > 0 ? rootEntries : entries;
-  return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  try {
+    const raw = await fs.readFile(storePath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, RuntimeParitySessionEntry>;
+    const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
+    const rootEntries = entries.filter(isRuntimeParityRootSession);
+    const candidates = rootEntries.length > 0 ? rootEntries : entries;
+    return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  } catch {
+    return [];
+  }
 }
 
 async function loadRuntimeParityTranscripts(params: {
@@ -992,6 +1008,7 @@ async function loadRuntimeParityTranscripts(params: {
 
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
+  parentPrompt: string,
 ): Promise<RuntimeParityToolCall[] | null> {
   const normalizedBaseUrl = mockBaseUrl?.trim().replace(/\/+$/u, "");
   if (!normalizedBaseUrl) {
@@ -1017,12 +1034,15 @@ async function loadRuntimeParityMockToolCalls(
     }
     const requests = payload.filter(isMessageRecord).map(
       (entry): RuntimeParityMockRequestSnapshot => ({
+        allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
         toolOutput: readNonEmptyString(entry.toolOutput) ?? "",
       }),
     );
-    return resolveToolCallOrderFromMockRequests(requests);
+    return resolveToolCallOrderFromMockRequests(
+      filterMockRequestsForParentPrompt(requests, parentPrompt),
+    );
   } catch {
     return null;
   }
@@ -1038,7 +1058,12 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
-  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
+  const parentPrompt =
+    transcriptRecords
+      .filter((record) => record.role === "user" && !isToolResultLikeMessage(record.message))
+      .map((record) => extractAssistantText(record.message))
+      .find(Boolean) ?? "";
+  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl, parentPrompt);
   const gatewayLogs = params.gateway.logs?.();
   const sentinelFindings = [
     ...scanGatewayLogSentinels(gatewayLogs),
@@ -1086,6 +1111,7 @@ export async function runRuntimeParityScenario(params: {
 
 export const testing = {
   classifyRuntimeParityCells,
+  filterMockRequestsForParentPrompt,
   resolveRuntimeParityToolCalls,
   resolveToolCallOrderFromMockRequests,
 };

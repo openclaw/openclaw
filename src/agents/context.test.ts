@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
+  ANTHROPIC_FABLE_CONTEXT_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
@@ -387,26 +388,33 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("returns 1M context for Anthropic sonnet 4 even when config reports 200k", () => {
-    const result = resolveContextTokensForModel({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              models: [testModelContextWindow("claude-sonnet-4-6", 200_000)],
+  it.each([
+    ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
+  ])(
+    "returns the fixed context for %s model %s even when config reports 200k",
+    (provider, modelId, expectedContextTokens) => {
+      const result = resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://api.anthropic.com",
+                models: [testModelContextWindow(modelId, 200_000)],
+              },
             },
           },
         },
-      },
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackContextTokens: 200_000,
-      allowAsyncLoad: false,
-    });
+        provider,
+        model: modelId,
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      });
 
-    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
-  });
+      expect(result).toBe(expectedContextTokens);
+    },
+  );
 
   it("keeps older Anthropic Sonnet 4.x models at the configured window when context1m is set", () => {
     const result = resolveContextTokensForModel({

@@ -421,6 +421,22 @@ describe("control UI routing", () => {
     expect([...nav.classList]).toEqual(["shell-nav"]);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
+    const drawerClose = expectElement(
+      app,
+      ".sidebar-shell__header .nav-collapse-toggle",
+      HTMLButtonElement,
+    );
+    expect(drawerClose.getAttribute("aria-label")).toBe("Collapse sidebar");
+    drawerClose.click();
+    await app.updateComplete;
+
+    expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    toggle.click();
+    await app.updateComplete;
+    expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--nav-drawer-open"]);
+
     const link = expectElement(app, 'a.nav-item[href="/config"]', HTMLAnchorElement);
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 

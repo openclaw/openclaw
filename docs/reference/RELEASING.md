@@ -23,16 +23,24 @@ OpenClaw has three public release lanes:
   - Git tag: `vYYYY.M.PATCH-beta.N`
 - Do not zero-pad month or patch
 - Starting with the June 2026 release process update, the third component is a
-  monthly patch counter, not a calendar day. Pre-update tags and npm versions
-  keep their existing names and remain valid; release automation continues to
+  sequential monthly release-train number, not a calendar day. Stable and beta
+  releases determine the current train; alpha-only tags do not consume or
+  advance the beta/stable patch number. Pre-update tags and npm versions keep
+  their existing names and remain valid; release automation continues to
   compare them by year, month, patch, channel, and prerelease or correction
   number.
+- Alpha/nightly builds use the next unreleased patch train and increment only
+  `alpha.N` for repeated builds. Once that patch has a beta, new alpha builds
+  move to the following patch. Ignore legacy alpha-only tags with higher patch
+  numbers when selecting a beta or stable train.
 - npm versions are immutable. If a beta tag has already been published, do not
   delete, republish, or reuse it; cut the next beta number or the next monthly
   patch instead. Because `2026.6.5-beta.1` was already published during the
   transition, June 2026 release trains must use patch `5` or higher. Do not
   publish new June 2026 stable or beta trains as `2026.6.2`, `2026.6.3`, or
   `2026.6.4`.
+- After stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even
+  if automated alpha-only tags with higher patch numbers already exist.
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
 - Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
@@ -209,13 +217,15 @@ vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helpe
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
   - `custom`: exact `docker_lanes` selection for a focused rerun
-- Run the manual `CI` workflow directly when you only need full normal CI
-  coverage for the release candidate. Manual CI dispatches bypass changed
+- Run the manual `CI` workflow directly when you only need deterministic normal
+  CI coverage for the release candidate. Manual CI dispatches bypass changed
   scoping and force the Linux Node shards, bundled-plugin shards, plugin and
   channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`,
-  built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
-  Android, and Control UI i18n lanes.
-  Example: `gh workflow run ci.yml --ref release/YYYY.M.PATCH`
+  built-artifact smoke checks, docs checks, Python skills, Windows, macOS, and
+  Control UI i18n lanes. Standalone manual CI runs Android only when dispatched
+  with `include_android=true`; `Full Release Validation` passes that input for
+  its CI child.
+  Example with Android: `gh workflow run ci.yml --ref release/YYYY.M.PATCH -f include_android=true`
 - Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
   QA-lab through a local OTLP/HTTP receiver and verifies trace, metric, and log
   export plus bounded trace attributes and content/identifier redaction without
@@ -392,9 +402,10 @@ dispatches standalone package Telegram E2E when `release_profile=full` with
 `npm_telegram_package_spec` is set. `OpenClaw Release
 Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
 release-path coverage when soak is enabled, Package Acceptance with Telegram
-package QA, QA Lab parity, live Matrix, and live Telegram. A full run is only acceptable when the
-`Full Release Validation`
-summary shows `normal_ci` and `release_checks` as successful. In full/all mode,
+package QA, QA Lab parity, live Matrix, and live Telegram. A full/all run is
+only acceptable when the `Full Release Validation` summary shows `normal_ci`,
+`plugin_prerelease`, and `release_checks` as successful, unless a focused rerun
+intentionally skipped the separate `Plugin Prerelease` child. In full/all mode,
 the `npm_telegram` child must also be successful; outside full/all it is skipped
 unless a published `release_package_spec` or `npm_telegram_package_spec` was
 provided. The final
@@ -501,7 +512,9 @@ bypasses changed scoping and forces the normal test graph for the release
 candidate: Linux Node shards, bundled-plugin shards, plugin and channel contract
 shards, Node 22 compatibility, `check-*`, `check-additional-*`,
 built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
-Android, and Control UI i18n.
+and Control UI i18n. Android is included when `Full Release Validation` runs the
+box because the umbrella passes `include_android=true`; standalone manual CI
+requires `include_android=true` for Android coverage.
 
 Use this box to answer "did the source tree pass the full normal test suite?"
 It is not the same as release-path product validation. Evidence to keep:
@@ -513,10 +526,13 @@ It is not the same as release-path product validation. Evidence to keep:
   a run needs performance analysis
 
 Run manual CI directly only when the release needs deterministic normal CI but
-not the Docker, QA Lab, live, cross-OS, or package boxes:
+not the Docker, QA Lab, live, cross-OS, or package boxes. Use the first command
+for non-Android direct CI. Add `include_android=true` when direct
+release-candidate CI must cover Android:
 
 ```bash
 gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH
+gh workflow run ci.yml --ref main -f target_ref=release/YYYY.M.PATCH -f include_android=true
 ```
 
 ### Docker

@@ -102,6 +102,14 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /**
+   * Called before dispatch with a live getter for whether verbose standalone
+   * progress messages are active for this run. Channels that render tool or
+   * commentary progress inside an ephemeral streaming draft should yield those
+   * draft lines while the getter returns true, so progress is not rendered in
+   * both lanes at once.
+   */
+  onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */

@@ -232,12 +232,35 @@ function resolveQmdStoreWriteLockOptions(updateTimeoutMs: number, embedTimeoutMs
   );
 }
 
-function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
-  const normalized = path.normalize(watchPath);
-  const parts = normalized
+function hasIgnoredMemoryWatchSegment(relativePath: string): boolean {
+  const parts = relativePath
     .split(path.sep)
-    .map((segment) => normalizeLowercaseStringOrEmpty(segment));
+    .map((segment) => normalizeLowercaseStringOrEmpty(segment))
+    .filter(Boolean);
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
+}
+
+function shouldIgnoreMemoryWatchPath(watchPath: string, roots: readonly string[]): boolean {
+  const normalized = path.normalize(watchPath);
+  let matchedRelative: string | null = null;
+  let matchedRootLength = -1;
+  for (const watchRoot of roots) {
+    const normalizedRoot = path.normalize(watchRoot);
+    const relative = path.relative(normalizedRoot, normalized);
+    if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      if (normalizedRoot.length > matchedRootLength) {
+        matchedRelative = relative;
+        matchedRootLength = normalizedRoot.length;
+      }
+    }
+  }
+  if (matchedRelative !== null) {
+    if (matchedRelative === "") {
+      return false;
+    }
+    return hasIgnoredMemoryWatchSegment(matchedRelative);
+  }
+  return hasIgnoredMemoryWatchSegment(normalized);
 }
 
 type CollectionRoot = {
@@ -376,6 +399,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private queuedForcedRuns = 0;
   private dirty = false;
   private closed = false;
+  private mode: QmdManagerMode = "full";
   private readonly closeSignal: Promise<void>;
   private resolveCloseSignal!: () => void;
   private db: SqliteDatabase | null = null;
@@ -449,6 +473,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async initialize(mode: QmdManagerMode): Promise<void> {
+    this.mode = mode;
     const startTime = Date.now();
     this.bootstrapCollections();
     if (mode === "status") {
@@ -1651,10 +1676,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     const watchPaths = new Set<string>();
+    const watchRoots = new Set<string>();
     for (const collection of this.qmd.collections) {
       if (collection.kind === "sessions") {
         continue;
       }
+      watchRoots.add(path.normalize(collection.path));
       watchPaths.add(this.resolveCollectionWatchPath(collection));
     }
     if (watchPaths.size === 0) {
@@ -1663,9 +1690,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     const watchPathList = Array.from(watchPaths);
     const startTime = Date.now();
     log.info(`qmd watcher starting for agent "${this.agentId}" paths=${watchPathList.length}`);
+    const watchRootList = Array.from(watchRoots);
     const watcher = chokidar.watch(watchPathList, {
       ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
+      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath, watchRootList),
     });
     this.watcher = watcher;
     const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
@@ -1729,6 +1757,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async maybeWarmSession(sessionKey?: string): Promise<void> {
+    if (this.mode === "cli") {
+      return;
+    }
     if (!this.syncSettings?.onSessionStart) {
       return;
     }
@@ -1743,6 +1774,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async maybeSyncDirtySearchState(): Promise<void> {
+    if (this.mode === "cli") {
+      return;
+    }
     if (!this.syncSettings?.onSearch || !this.dirty) {
       return;
     }

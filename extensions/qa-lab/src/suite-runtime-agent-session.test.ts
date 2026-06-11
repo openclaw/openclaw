@@ -1,7 +1,6 @@
 // Qa Lab tests cover suite runtime agent session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
@@ -41,27 +40,6 @@ describe("qa suite runtime agent session helpers", () => {
       throw new Error("expected gateway call");
     }
     return call;
-  }
-
-  async function writeQaSessionStore(
-    storeDir: string,
-    store: Record<string, Record<string, unknown>>,
-  ) {
-    await fs.mkdir(storeDir, { recursive: true });
-    const now = Date.now();
-    await saveSessionStore(
-      path.join(storeDir, "sessions.json"),
-      Object.fromEntries(
-        Object.entries(store).map(([key, entry]) => [
-          key,
-          {
-            updatedAt: now,
-            ...entry,
-          },
-        ]),
-      ) as never,
-      { skipMaintenance: true },
-    );
   }
 
   it("creates sessions and trims the returned key", async () => {
@@ -146,25 +124,33 @@ describe("qa suite runtime agent session helpers", () => {
   it("reads the raw qa session store from disk", async () => {
     const tempRoot = await makeTempDir("qa-session-store-");
     const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
-    await writeQaSessionStore(storeDir, {
-      "session-1": { sessionId: "session-1", status: "ready" },
-    });
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({ "session-1": { sessionId: "session-1", status: "ready" } }),
+      "utf8",
+    );
 
     await expect(
       readRawQaSessionStore({
         gateway: { tempRoot },
       } as never),
     ).resolves.toEqual({
-      "session-1": { sessionId: "session-1", status: "ready", updatedAt: expect.any(Number) },
+      "session-1": { sessionId: "session-1", status: "ready" },
     });
   });
 
   it("summarizes a QA session transcript by session key", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-");
     const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
-    await writeQaSessionStore(storeDir, {
-      "agent:qa:webchat": { sessionId: "session-1", sessionFile: "session-1.jsonl" },
-    });
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({
+        "agent:qa:webchat": { sessionId: "session-1", sessionFile: "session-1.jsonl" },
+      }),
+      "utf8",
+    );
     await fs.writeFile(
       path.join(storeDir, "session-1.jsonl"),
       [
@@ -201,9 +187,14 @@ describe("qa suite runtime agent session helpers", () => {
   it("streams QA session transcript summaries across read chunk boundaries", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-stream-");
     const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
-    await writeQaSessionStore(storeDir, {
-      "agent:qa:stream": { sessionId: "session-stream", sessionFile: "stream.jsonl" },
-    });
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({
+        "agent:qa:stream": { sessionId: "session-stream", sessionFile: "stream.jsonl" },
+      }),
+      "utf8",
+    );
     await fs.writeFile(
       path.join(storeDir, "stream.jsonl"),
       [
@@ -242,9 +233,14 @@ describe("qa suite runtime agent session helpers", () => {
   it("fails closed when a QA session transcript line is oversized", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-long-line-");
     const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
-    await writeQaSessionStore(storeDir, {
-      "agent:qa:long-line": { sessionId: "session-long-line", sessionFile: "long-line.jsonl" },
-    });
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({
+        "agent:qa:long-line": { sessionId: "session-long-line", sessionFile: "long-line.jsonl" },
+      }),
+      "utf8",
+    );
     await fs.writeFile(path.join(storeDir, "long-line.jsonl"), "x".repeat(1024 * 1024 + 1), "utf8");
 
     await expect(
