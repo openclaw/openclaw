@@ -1,6 +1,6 @@
-import type { CommandResolution } from "./exec-command-resolution.js";
 // Shared exec approval analysis types and Windows-only shell enforcement helpers.
 import { rebuildWindowsShellCommandFromSource, windowsEscapeArg } from "./windows-shell-command.js";
+import type { ExecCommandSegment } from "./exec-command-analysis-types.js";
 
 export { analyzeArgvCommand } from "./exec-argv-analysis.js";
 
@@ -31,22 +31,11 @@ export {
   tokenizeWindowsSegment,
   windowsEscapeArg,
 } from "./windows-shell-command.js";
-
-export type ExecCommandSegment = {
-  raw: string;
-  argv: string[];
-  sourceArgv?: string[];
-  resolution: CommandResolution | null;
-};
-
-export type ExecCommandAnalysis = {
-  ok: boolean;
-  reason?: string;
-  segments: ExecCommandSegment[];
-  chains?: ExecCommandSegment[][];
-};
-
-export type ShellChainOperator = "&&" | "||" | ";" | "&";
+export type {
+  ExecCommandAnalysis,
+  ExecCommandSegment,
+  ShellChainOperator,
+} from "./exec-command-analysis-types.js";
 
 function renderWindowsQuotedArgv(argv: readonly string[]):
   | { ok: true; rendered: string }

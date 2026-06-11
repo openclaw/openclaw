@@ -89,7 +89,7 @@ function buildExecApprovalRequestToolParams(
     ask: params.ask,
     warningText: params.warningText,
     commandSpans: params.commandSpans,
-    allowedDecisions: params.allowedDecisions,
+    ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,

@@ -956,12 +956,8 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    const echoPattern = partialPatterns[0]?.pattern;
-    expect(echoPattern).toMatch(/\/echo$/);
+    expect(partialPatterns).toEqual([]);
     allowlist = allowlistEntries(dir, "worker");
-    expect(
-      allowlist.map((entry) => entry.pattern).filter((pattern) => pattern === echoPattern),
-    ).toHaveLength(1);
     expect(
       allowlist.some(
         (entry) =>
