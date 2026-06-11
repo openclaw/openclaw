@@ -521,6 +521,7 @@ export function createSubagentRunManager(params: {
     runTimeoutSeconds?: number;
     preserveFrozenResultFallback?: boolean;
     transcriptFile?: string;
+    task?: string;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -570,9 +571,24 @@ export function createSubagentRunManager(params: {
       ) ?? 0;
 
     const sourceCompletion = ensureCompletionState(source);
+    // Prefer the caller-supplied task (the text actually dispatched to the
+    // child session during steer/wake/orphan-resume) over the previous run's
+    // stale `task`. Falling back to the prior task preserves behavior for any
+    // caller that does not pass a replacement message. The post-restart
+    // orphan recovery path (`recoverOrphanedSubagentSessions` ->
+    // `resumeOrphanedSession` / `buildResumeMessage` in
+    // `subagent-orphan-recovery.ts`) rewraps the persisted `task` into the
+    // `[Subagent Task]` block after a gateway crash; using stale text would
+    // silently re-run the original instruction and lose the user's steer
+    // update.
+    const nextTask =
+      typeof replaceParams.task === "string" && replaceParams.task.length > 0
+        ? replaceParams.task
+        : source.task;
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
+      task: nextTask,
       createdAt: now,
       startedAt: now,
       sessionStartedAt,
