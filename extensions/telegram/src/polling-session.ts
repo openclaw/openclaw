@@ -281,7 +281,7 @@ type DeferredSpooledUpdateClaimState = {
 const deferredSpooledUpdateClaimsByKey = new Map<string, DeferredSpooledUpdateClaimState>();
 
 function buildDeferredSpooledUpdateClaimKey(update: ClaimedTelegramSpooledUpdate): string {
-  return `${update.pendingPath}:${update.claim.claimToken}`;
+  return `${update.pendingPath}:${update.claim?.claimToken ?? update.claim?.processId ?? "claimed"}`;
 }
 
 type SpooledUpdateDrainResult = {

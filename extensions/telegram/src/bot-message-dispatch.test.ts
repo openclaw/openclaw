@@ -2407,7 +2407,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("returns retryable when spooled replay suppresses fallback after non-silent delivery skip", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "failed" });
+      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });
       return { queuedFinal: false };
     });
 
