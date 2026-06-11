@@ -174,6 +174,40 @@ async function writeTuiPtyFixtureScript(dir: string) {
           }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
           const isXaiLimitProof = opts.message === "xai limit proof";
+          const isToolProgressProof = opts.message === "tool progress proof";
+          if (isToolProgressProof) {
+            setTimeout(() => {
+              this.onEvent?.({
+                event: "agent",
+                payload: {
+                  runId,
+                  stream: "tool",
+                  data: {
+                    phase: "start",
+                    toolCallId: "tool-progress-proof-1",
+                    name: "apply_patch",
+                    args: {},
+                  },
+                },
+              });
+            }, 5);
+            setTimeout(() => {
+              this.onEvent?.({
+                event: "agent",
+                payload: {
+                  runId,
+                  stream: "tool",
+                  data: {
+                    phase: "result",
+                    toolCallId: "tool-progress-proof-1",
+                    name: "apply_patch",
+                    args: {},
+                    result: { content: [{ type: "text", text: "Success. Updated files." }] },
+                  },
+                },
+              });
+            }, 15);
+          }
           setTimeout(() => {
             if (isXaiLimitProof) {
               this.onEvent?.({
@@ -409,6 +443,22 @@ describe.sequential("TUI PTY harness", () => {
         (entry) =>
           entry.method === "sourceReplyMetadata" &&
           objectFieldEquals(entry, "text", "VISIBLE_TUI_SOURCE_REPLY_PROOF"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders compact tool progress without control-plane technical labels",
+    async () => {
+      await fixture.run.write("tool progress proof\r");
+      await fixture.run.waitForOutput("发现文件变更");
+      await fixture.run.waitForOutput("PTY_RESPONSE: tool progress proof");
+      expect(fixture.run.output()).not.toContain("控制面 ·");
+      expect(fixture.run.output()).not.toContain("file_change_detected");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "tool progress proof"),
       );
     },
     TEST_TIMEOUT_MS,

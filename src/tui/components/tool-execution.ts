@@ -1,5 +1,5 @@
-// Tool execution component renders tool call status and output in the TUI.
-import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+// Tool execution component renders compact user-visible progress in the TUI.
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { markdownTheme, theme } from "../theme/theme.js";
@@ -94,7 +94,7 @@ type ControlNode = {
 
 function formatControlNode(nodeId: string, detail?: string): string {
   const label = CONTROL_NODE_LABELS[nodeId] ?? nodeId;
-  return detail ? `${nodeId} ${label}: ${detail}` : `${nodeId} ${label}`;
+  return detail ? `${label}：${detail}` : label;
 }
 
 function resolvePmNode(command: string, isPartial: boolean, isError: boolean): ControlNode | null {
@@ -249,9 +249,7 @@ function extractText(result?: ToolResult): string {
 
 /** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
-  private box: Box;
   private header: Text;
-  private argsLine: Text;
   private output: Markdown;
   private toolName: string;
   private args: unknown;
@@ -265,17 +263,13 @@ export class ToolExecutionComponent extends Container {
     super();
     this.toolName = toolName;
     this.args = args;
-    this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
     this.header = new Text("", 0, 0);
-    this.argsLine = new Text("", 0, 0);
     this.output = new Markdown("", 0, 0, markdownTheme, {
       color: (line) => theme.toolOutput(line),
     });
     this.addChild(new Spacer(1));
-    this.addChild(this.box);
-    this.box.addChild(this.header);
-    this.box.addChild(this.argsLine);
-    this.box.addChild(this.output);
+    this.addChild(this.header);
+    this.addChild(this.output);
     this.refresh();
   }
 
@@ -307,31 +301,22 @@ export class ToolExecutionComponent extends Container {
   }
 
   private refresh() {
-    const bg = this.isPartial
-      ? theme.toolPendingBg
-      : this.isError
-        ? theme.toolErrorBg
-        : theme.toolSuccessBg;
-    this.box.setBgFn((line) => bg(line));
-
     const display = resolveToolDisplay({
       name: this.toolName,
       args: this.args,
     });
-    const title = `控制面 · ${formatKeyNodeTitle(
+    const title = `${formatKeyNodeTitle(
       this.toolName,
       this.args,
       display.label,
       this.isPartial,
       this.isError,
-    )}${this.isPartial ? " (running)" : ""}`;
+    )}${this.isPartial ? "…" : ""}`;
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
-    const argLine = formatArgs(this.toolName, this.args);
-    this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
-
     const raw = extractText(this.result);
-    const text = raw || (this.isPartial ? "…" : "");
+    const argLine = formatArgs(this.toolName, this.args);
+    const text = this.expanded ? raw || argLine : "";
     if (!this.expanded && text) {
       const lines = text.split("\n");
       const preview =
