@@ -210,4 +210,18 @@ export type MSTeamsConfig = {
    * reads what was said. Off by default — it incurs an STT call per voice message.
    */
   transcribeVoiceMessages?: boolean;
+  /**
+   * DLP-aware outbound redaction (#16). When enabled, sensitive values (card numbers, national
+   * IDs, secrets, …) are scrubbed from text the bot sends to Teams so the agent can't leak data
+   * into a chat. Off by default.
+   */
+  dlp?: {
+    enabled?: boolean;
+    /** Built-in categories to redact (awsKey, secret, iban, email, ssn, creditCard, phone). Omitted = all. */
+    categories?: string[];
+    /** Extra org-specific regex rules; each match is redacted like a built-in category. */
+    customPatterns?: Array<{ name: string; pattern: string }>;
+    /** Replacement template; "{category}" is substituted. Default "[REDACTED:{category}]". */
+    placeholder?: string;
+  };
 };
