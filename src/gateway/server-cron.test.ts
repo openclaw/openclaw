@@ -9,6 +9,7 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 const {
   enqueueSystemEventMock,
+  consumeSelectedSystemEventEntriesMock,
   requestHeartbeatMock,
   runHeartbeatOnceMock,
   loadConfigMock,
@@ -21,6 +22,7 @@ const {
   retireSessionMcpRuntimeMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
+  consumeSelectedSystemEventEntriesMock: vi.fn((_sessionKey, entries) => entries ?? []),
   requestHeartbeatMock: vi.fn(),
   runHeartbeatOnceMock: vi.fn<
     (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
@@ -46,6 +48,21 @@ function enqueueSystemEvent(...args: unknown[]) {
   return enqueueSystemEventMock(...args);
 }
 
+function enqueueSystemEventEntry(...args: unknown[]) {
+  const result = enqueueSystemEventMock(...args);
+  if (result === false || result === null) {
+    return null;
+  }
+  return {
+    text: String(args[0] ?? ""),
+    ts: Date.now(),
+  };
+}
+
+function consumeSelectedSystemEventEntries(...args: unknown[]) {
+  return consumeSelectedSystemEventEntriesMock(...args);
+}
+
 function requestHeartbeat(...args: unknown[]) {
   return requestHeartbeatMock(...args);
 }
@@ -56,6 +73,8 @@ function runHeartbeatOnce(...args: unknown[]) {
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
+  enqueueSystemEventEntry,
+  consumeSelectedSystemEventEntries,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -204,6 +223,7 @@ function expectCleanupForSessionKeys(sessionKeys: string[]) {
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
+    consumeSelectedSystemEventEntriesMock.mockClear();
     requestHeartbeatMock.mockClear();
     runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
