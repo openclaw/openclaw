@@ -543,7 +543,14 @@ export async function runPreparedCliAgent(
           };
     const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const assistantText = output.text.trim();
-    if (!assistantText && params.allowEmptyAssistantReplyAsSilent !== true) {
+    // Skip empty_response fallback when the turn produced tool calls —
+    // tool calls (e.g. Telegram message tool) are the delivery mechanism and
+    // an empty text suffix is expected (#91302).
+    if (
+      !assistantText &&
+      params.allowEmptyAssistantReplyAsSilent !== true &&
+      !output.toolUseCount
+    ) {
       throw new FailoverError("CLI backend returned an empty response.", {
         reason: "empty_response",
         provider: params.provider,

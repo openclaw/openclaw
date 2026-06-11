@@ -466,11 +466,13 @@ export async function executePreparedCliRun(
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const hasJsonlOutput = outputMode === "jsonl";
         let observedCliActivity = false;
+        let toolUseCount = 0;
         const emitCliToolUseStart = (event: {
           toolCallId: string;
           name: string;
           args: Record<string, unknown>;
         }) => {
+          toolUseCount++;
           observedCliActivity = true;
           emitAgentEvent({
             runId: params.runId,
@@ -582,6 +584,7 @@ export async function executePreparedCliRun(
               rawText,
               context.backendResolved.textTransforms?.output,
             ),
+            toolUseCount,
           };
         }
         const streamingParser = hasJsonlOutput
@@ -864,6 +867,7 @@ export async function executePreparedCliRun(
             rawText,
             context.backendResolved.textTransforms?.output,
           ),
+          toolUseCount,
         };
       } finally {
         restoreSkillEnv?.();

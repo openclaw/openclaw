@@ -24,6 +24,8 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
   finalPromptText?: string;
+  /** Number of tool_use blocks started during this turn. */
+  toolUseCount?: number;
 };
 
 /** Incremental assistant text emitted while parsing a streaming CLI response. */
