@@ -661,100 +661,110 @@ describe("session MCP runtime", () => {
     expect(activeLeases).toBe(0);
   });
 
-  it("keeps MCP tools/list responses that exceed the connection timeout but finish within the internal catalog timeout", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
-    const serverPath = path.join(tempDir, "slow-list-tools.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    testing.setBundleMcpCatalogListTimeoutMsForTest(700);
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      delayMs: 250,
-    });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-slow-listtools-server-timeout",
-      sessionKey: "agent:test:session-slow-listtools-server-timeout",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            slowListTools: {
-              command: process.execPath,
-              args: [serverPath],
-              connectionTimeoutMs: 150,
-            },
-          },
-        },
-      },
-    });
-
-    try {
-      const catalog = await runtime.getCatalog();
-
-      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
-      expect(catalog.servers.slowListTools).toMatchObject({
-        serverName: "slowListTools",
-        toolCount: 1,
+  describe.sequential("bundle MCP catalog list timeouts", () => {
+    it("keeps MCP tools/list responses that exceed the connection timeout but finish within the internal catalog timeout", async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
+      const serverPath = path.join(tempDir, "slow-list-tools.mjs");
+      const logPath = path.join(tempDir, "server.log");
+      const connectionTimeoutMs = 400;
+      const delayMs = 600;
+      testing.setBundleMcpCatalogListTimeoutMsForTest(2_000);
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath,
+        delayMs,
       });
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 250");
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
 
-  it("times out default-config hung bundle MCP tools/list using the internal catalog timeout", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
-    const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    testing.setBundleMcpCatalogListTimeoutMsForTest(100);
-    await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-listtools-server-timeout",
-      sessionKey: "agent:test:session-listtools-server-timeout",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            hangingListTools: {
-              command: process.execPath,
-              args: [serverPath],
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-slow-listtools-server-timeout",
+        sessionKey: "agent:test:session-slow-listtools-server-timeout",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              slowListTools: {
+                command: process.execPath,
+                args: [serverPath],
+                connectionTimeoutMs,
+              },
             },
           },
         },
-      },
-    });
-    const catalogResult = runtime.getCatalog().then(
-      (catalog) => ({ status: "resolved" as const, catalog }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
+      });
 
-    try {
-      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
-      const result = await Promise.race([
-        catalogResult,
-        new Promise<{ status: "pending" }>((resolve) => {
-          setTimeout(() => resolve({ status: "pending" }), LIST_TOOLS_TEST_DEADLINE_MS);
-        }),
-      ]);
+      try {
+        const catalog = await runtime.getCatalog();
 
-      expect(result.status).toBe("resolved");
-      if (result.status === "resolved") {
-        expect(result.catalog.tools).toEqual([]);
-        expect(result.catalog.servers).toEqual({});
+        expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+        expect(catalog.servers.slowListTools).toMatchObject({
+          serverName: "slowListTools",
+          toolCount: 1,
+        });
+        await waitForFileText(
+          logPath,
+          `delay tools/list ${delayMs}`,
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+      } finally {
+        testing.setBundleMcpCatalogListTimeoutMsForTest();
+        await runtime.dispose();
+        await fs.rm(tempDir, { recursive: true, force: true });
       }
-    } finally {
-      await runtime.dispose();
-      await Promise.race([
-        catalogResult,
-        new Promise((resolve) => {
-          setTimeout(resolve, 1000);
-        }),
-      ]);
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    });
+
+    it("times out default-config hung bundle MCP tools/list using the internal catalog timeout", async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
+      const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
+      const logPath = path.join(tempDir, "server.log");
+      testing.setBundleMcpCatalogListTimeoutMsForTest(100);
+      await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-listtools-server-timeout",
+        sessionKey: "agent:test:session-listtools-server-timeout",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              hangingListTools: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+      const catalogResult = runtime.getCatalog().then(
+        (catalog) => ({ status: "resolved" as const, catalog }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+
+      try {
+        await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+        const result = await Promise.race([
+          catalogResult,
+          new Promise<{ status: "pending" }>((resolve) => {
+            setTimeout(() => resolve({ status: "pending" }), LIST_TOOLS_TEST_DEADLINE_MS);
+          }),
+        ]);
+
+        expect(result.status).toBe("resolved");
+        if (result.status === "resolved") {
+          expect(result.catalog.tools).toEqual([]);
+          expect(result.catalog.servers).toEqual({});
+        }
+      } finally {
+        testing.setBundleMcpCatalogListTimeoutMsForTest();
+        await runtime.dispose();
+        await Promise.race([
+          catalogResult,
+          new Promise((resolve) => {
+            setTimeout(resolve, 1000);
+          }),
+        ]);
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 
   it("records diagnostics when tools/list returns an invalid tool schema", async () => {
