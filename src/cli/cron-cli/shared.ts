@@ -176,11 +176,15 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
     const res = (await callGatewayFromCli("cron.status", opts, {})) as {
       enabled?: boolean;
       storePath?: string;
+      storage?: string;
+      sqlitePath?: string;
     };
     if (res?.enabled === true) {
       return;
     }
-    const store = typeof res?.storePath === "string" ? res.storePath : "";
+    const store = typeof res?.sqlitePath === "string" ? res.sqlitePath
+      : typeof res?.storePath === "string" ? res.storePath
+      : "";
     defaultRuntime.error(
       [
         "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
