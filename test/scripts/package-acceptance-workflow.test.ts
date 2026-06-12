@@ -1578,7 +1578,7 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("Pack ClawHub package artifact");
     expect(clawHubWorkflow).toContain("Upload ClawHub package artifact");
     expect(clawHubWorkflow).toContain(
-      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@pe/claw-277-package-publish-artifact-inputs",
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
