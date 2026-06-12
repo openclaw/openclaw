@@ -220,5 +220,21 @@ export function resolveBundledPluginPublicSurfacePath(params: {
       return candidate;
     }
   }
+
+  // Fall back to package dist output for packages like speech-core that are
+  // not bundled under extensions/ but ship as separate packages under packages/.
+  const packageSourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+    const packageCandidate = path.resolve(
+      params.rootDir,
+      "packages",
+      dirName,
+      "dist",
+      `${packageSourceBaseName}${ext}`,
+    );
+    if (fs.existsSync(packageCandidate)) {
+      return packageCandidate;
+    }
+  }
   return null;
 }
