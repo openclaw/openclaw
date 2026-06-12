@@ -852,7 +852,20 @@ describe("processGatewayAllowlist", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       }),
     );
-    expect(approvalsFile.agents).toEqual({});
+    expect(approvalsFile.agents).toEqual({
+      main: {
+        allowlist: [
+          expect.objectContaining({
+            pattern: "/usr/bin/git",
+            source: "allow-always",
+          }),
+          expect.objectContaining({
+            pattern: expect.stringMatching(/^=node-command:[0-9a-f]{16}$/),
+            source: "allow-always",
+          }),
+        ],
+      },
+    });
   });
 
   it("requests human approval when auto-review asks on an approval miss", async () => {
